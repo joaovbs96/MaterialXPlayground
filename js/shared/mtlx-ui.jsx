@@ -264,6 +264,7 @@ const RecordGifDialog = ({ open, onClose, viewRef, baseName, transparent }) => {
         const controller = new AbortController();
         abortRef.current = controller;
         try {
+            if (view.whenDisplacementSettled) await view.whenDisplacementSettled();
             const blob = await window.recordTurntableGif(view, {
                 width: outWidth,
                 height: outHeight,
@@ -601,9 +602,74 @@ const fullscreenPortalRoot = () => (document.fullscreenElement || document.body)
 
 // Approx SettingsDialog popover footprint (px) for the edge-clamp/flip
 // math below. Height is a safe over-estimate covering the built-in
-// Display + Force Transparency blocks plus one caller-supplied `children`
-// block; the cog sits at the top of the strip so the flip branch effectively never fires.
-const SETTINGS_DIALOG_W = 288, SETTINGS_DIALOG_H = 300;
+// Display + Force Transparency + Displacement + Subdivision blocks plus one
+// caller-supplied `children` block; the cog sits at the top of the strip so
+// the flip branch effectively never fires.
+const SETTINGS_DIALOG_W = 288, SETTINGS_DIALOG_H = 420;
+
+// Displacement + Subdivision rows, styled like SettingsDialog's own Force
+// Transparency block. Local state resyncs from the live mtlx-settings-changed
+// broadcast so every open instance (dialog, Viewer/Compare Rendering cards)
+// stays in step with a change made elsewhere.
+const DISPLACEMENT_SUBDIV_LABELS = { 0: 'Off', 1: '1', 2: '2', 3: '3' };
+const DisplacementSettingsRows = () => {
+    const [enabled, setEnabled] = React.useState(() => !!(window.getDisplacementEnabled && window.getDisplacementEnabled()));
+    const [level, setLevel] = React.useState(() => (window.getPreviewSubdivisionLevel ? window.getPreviewSubdivisionLevel() : 2));
+    React.useEffect(() => {
+        const onChanged = (e) => {
+            if (!e.detail) return;
+            if (e.detail.key === 'displacement') setEnabled(!!e.detail.value);
+            else if (e.detail.key === 'previewSubdivision') setLevel(e.detail.value);
+        };
+        window.addEventListener('mtlx-settings-changed', onChanged);
+        return () => window.removeEventListener('mtlx-settings-changed', onChanged);
+    }, []);
+    return (
+        <React.Fragment>
+            <div>
+                <div className="flex items-center justify-between gap-2">
+                    <span className="text-gray-200">Displacement</span>
+                    <button
+                        onClick={() => {
+                            const next = !enabled;
+                            setEnabled(next);
+                            window.setDisplacementEnabled && window.setDisplacementEnabled(next);
+                        }}
+                        title={enabled ? 'Disable displacement' : 'Enable displacement'}
+                        className={`h-5 px-2 rounded border transition-colors shrink-0 ${
+                            enabled ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300'
+                        }`}
+                    >
+                        {enabled ? 'On' : 'Off'}
+                    </button>
+                </div>
+                <div className="mt-1 text-[11px] text-gray-400">
+                    Moves the mesh by the material's displacement; the material itself is unchanged.
+                </div>
+            </div>
+            <div>
+                <div className="flex items-center justify-between gap-2">
+                    <span className="text-gray-200">Subdivision</span>
+                    <MtlxSelect
+                        value={level}
+                        options={[0, 1, 2, 3]}
+                        labels={DISPLACEMENT_SUBDIV_LABELS}
+                        onChange={(v) => {
+                            setLevel(v);
+                            window.setPreviewSubdivisionLevel && window.setPreviewSubdivisionLevel(v);
+                        }}
+                        defValue={2}
+                        title="Applied to preview geometry when the material has displacement; each level is 4x triangles, capped at 1.5M"
+                        size="sm"
+                    />
+                </div>
+                <div className="mt-1 text-[11px] text-gray-400">
+                    Applied to preview geometry when the material has displacement; each level is 4x triangles, capped at 1.5M.
+                </div>
+            </div>
+        </React.Fragment>
+    );
+};
 
 // Settings popover (cogwheel button in ViewportControls): mounted once
 // there so it's shared across docs/viewer/graph with zero per-app wiring.
@@ -717,6 +783,7 @@ function SettingsDialog({ anchorRef, open, onClose, children }) {
                         Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.
                     </div>
                 </div>
+                <DisplacementSettingsRows />
                 {children}
             </div>
         </div>,
@@ -1123,11 +1190,12 @@ const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotat
     const [envAvail, setEnvAvail] = React.useState(false);
     const [viewEpoch, setViewEpoch] = React.useState(0);
     const [isFullscreen, toggleFullscreen] = useFullscreen(viewportRef);
-    const takeScreenshot = () => {
+    const takeScreenshot = async () => {
         const view = viewRef.current;
         // Null/snapshot-less view → silent no-op, reproducing all three
         // pre-refactor call sites' guard.
         if (!view || !view.snapshot) return;
+        if (view.whenDisplacementSettled) await view.whenDisplacementSettled();
         downloadSnapshot(view, getSnapshotBase());
     };
     return {
@@ -3482,7 +3550,7 @@ Object.assign(window, {
     HUD_PILL, HUD_PILL_ACTIVE,
     GROUP_HEADER_CLASS,
     ICON_BTN_SM, ICON_BTN_SM_PRIMARY, ICON_BTN_SM_DANGER,
-    DialogFrame, PresetsDialog, SettingsDialog, MTLX_PRESETS, MTLX_PRESETS_BASE,
+    DialogFrame, PresetsDialog, SettingsDialog, DisplacementSettingsRows, MTLX_PRESETS, MTLX_PRESETS_BASE,
     RecordGifDialog,
     presetDocUrl, presetKey,
     fetchPresetFiles, fetchRemoteDocumentFiles, copyTextToClipboard, ShaderExportDialog,

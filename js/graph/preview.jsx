@@ -1009,6 +1009,9 @@
             activeRef.current = active;
             const [error, setError] = React.useState(null);
             const [notice, setNotice] = React.useState(null);
+            // Displacement diagnostics (subdivision cap/drop, evaluation
+            // failures) for the live view, non-blocking unlike `notice`.
+            const [dispNotices, setDispNotices] = React.useState([]);
             const [loading, setLoading] = React.useState(true);
             const [label, setLabel] = React.useState('');
             // `updating`: true while an in-place material swap (APPLY path,
@@ -1177,8 +1180,8 @@
                 isFullscreen, toggleFullscreen: toggleFullscreenView,
                 takeScreenshot: takeScreenshotRaw,
             } = useViewportControls(viewRef, viewportRef, () => snapshotBaseName(label, resolvedGeom || geomMode));
-            const takeScreenshot = () => {
-                try { takeScreenshotRaw(); } catch (e) { /* best-effort */ }
+            const takeScreenshot = async () => {
+                try { await takeScreenshotRaw(); } catch (e) { /* best-effort */ }
             };
 
             // Fullscreen "fit to ball" (setFullscreenFit, mtlx-engine.js): a
@@ -1215,6 +1218,18 @@
                     liveGeomRef.current = null;
                     if (viewRef) viewRef.current = null;
                 };
+            }, []);
+
+            // Displacement notices arrive asynchronously (settings toggle,
+            // a slow first-build eval settling later); filtered to THIS
+            // preview's own live view.
+            React.useEffect(() => {
+                const onDispStatus = (e) => {
+                    if (!e.detail || e.detail.view !== liveViewRef.current) return;
+                    setDispNotices(e.detail.notices || []);
+                };
+                window.addEventListener('mtlx-displacement-status', onDispStatus);
+                return () => window.removeEventListener('mtlx-displacement-status', onDispStatus);
             }, []);
 
             React.useEffect(() => {
@@ -1406,6 +1421,7 @@
                                 // Read by graph-app.jsx's tryFastUniformUpdate to
                                 // match promoted-uniform paths under the wrapper.
                                 live.__compoundRoot = compoundRoot;
+                                setDispNotices(live.getDisplacementState ? live.getDisplacementState().notices : []);
                                 const rep = bindDroppedTextures(live, fileMap || {});
                                 if (rep.missing.length) {
                                     mtlxWarn('node-graph preview texture file(s) not found among dropped files:', rep.missing);
@@ -1441,6 +1457,8 @@
                                 view = await createMtlxRenderView({
                                     canvas, mx, gen, genContext, renderable: built.renderable, lightData,
                                     label: built.label || parsed.label,
+                                    materialName: (built.renderable && built.renderable.getName)
+                                        ? built.renderable.getName() : null,
                                     needsLighting: true,
                                     geomName: wantGeom,
                                     // 3D geometries orbit by default; the full scene opts
@@ -1469,6 +1487,7 @@
                             // Read by graph-app.jsx's tryFastUniformUpdate to
                             // match promoted-uniform paths under the wrapper.
                             view.__compoundRoot = compoundRoot;
+                            setDispNotices(view.getDisplacementState ? view.getDisplacementState().notices : []);
                             liveGeomRef.current = wantGeomKey;
                             if (viewRef) viewRef.current = view;
                             setViewEpoch((n) => n + 1);
@@ -1620,6 +1639,17 @@
                             // material keeps rendering underneath, so this is a
                             // small corner badge rather than a full overlay/flash.
                             <div className="absolute bottom-1 right-1 z-10 text-[10px] px-1.5 py-0.5 rounded bg-gray-900/80 text-gray-300 pointer-events-none">{'Updating\u2026'}</div>
+                        )}
+                        {dispNotices.length > 0 && !loading && !notice && !error && (
+                            // Non-blocking displacement diagnostics (subdivision
+                            // cap/drop, evaluation failure) \u2014 a corner badge, not
+                            // a full overlay, so the rendered mesh stays visible.
+                            <div
+                                className="absolute bottom-1 left-1 z-10 max-w-[70%] text-[10px] px-1.5 py-0.5 rounded bg-gray-900/80 text-amber-300 pointer-events-none truncate"
+                                title={dispNotices.join('\n')}
+                            >
+                                {dispNotices[0]}
+                            </div>
                         )}
                         <LoadingOverlay
                             show={loading && !notice && !error}

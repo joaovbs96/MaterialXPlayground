@@ -84,6 +84,7 @@ const useCompareSlot = () => {
     const [status, setStatus] = React.useState(null);
     const [error, setError] = React.useState(null);
     const [texReport, setTexReport] = React.useState(null);
+    const [materialNotices, setMaterialNotices] = React.useState(null);
     const [viewEpoch, setViewEpoch] = React.useState(0);
     const viewRef = React.useRef(null);
     const canvasRef = React.useRef(null);
@@ -212,6 +213,7 @@ const useCompareSlot = () => {
         version, setVersion, renderedVersion, setRenderedVersion,
         busy, setBusy, status, setStatus, error, setError,
         texReport, setTexReport,
+        materialNotices, setMaterialNotices,
         viewRef, canvasRef, viewEpoch, setViewEpoch, loadedRef,
         ingest, onPickFiles, onPickFileList, loadDocument,
     };
@@ -233,6 +235,7 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
             if (slot.viewRef.current) { slot.viewRef.current.dispose(); slot.viewRef.current = null; }
             slot.setError(null);
             slot.setTexReport(null);
+            slot.setMaterialNotices(null);
             slot.setBusy(true);
             slot.setStatus('Generating shader…');
             try {
@@ -243,6 +246,7 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
                     renderable: target.node,
                     lightData: loaded.lightData,
                     label: 'compare-' + label,
+                    materialName: target.name,
                     needsLighting: true,
                     geomName: geom,
                     sceneOrbit: geom === 'shaderball-scene',
@@ -296,6 +300,7 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
                 slot.setRenderedVersion(loaded.version);
                 const report = bindDroppedTextures(view, slot.fileMapRef.current);
                 slot.setTexReport(report);
+                slot.setMaterialNotices(view.notices && view.notices.length ? view.notices : null);
                 slot.setStatus(null);
                 slot.setBusy(false);
             } catch (e2) {
@@ -992,12 +997,29 @@ function MaterialCompareApp({ active = true } = {}) {
     // gives both views time to repaint before it recomputes.
     React.useEffect(() => {
         const onSettingsChanged = (e) => {
-            if (!e.detail || e.detail.key !== 'forceTransparency') return;
+            if (!e.detail || (e.detail.key !== 'forceTransparency'
+                && e.detail.key !== 'displacement' && e.detail.key !== 'previewSubdivision')) return;
             statsDirtyRef.current = true;
             diffDirtyRef.current = true;
         };
         window.addEventListener('mtlx-settings-changed', onSettingsChanged);
         return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);
+    }, []);
+
+    // Per-slot displacement notices (subdivision cap/drop, evaluation
+    // failures) land asynchronously, mirrors viewer-app.jsx's listener.
+    React.useEffect(() => {
+        const onDispStatus = (e) => {
+            if (!e.detail) return;
+            for (const slot of [slotA, slotB]) {
+                const view = slot.viewRef.current;
+                if (view && e.detail.view === view) {
+                    slot.setMaterialNotices(view.notices && view.notices.length ? view.notices : null);
+                }
+            }
+        };
+        window.addEventListener('mtlx-displacement-status', onDispStatus);
+        return () => window.removeEventListener('mtlx-displacement-status', onDispStatus);
     }, []);
 
     // Stage resizes also invalidate the last computed stats.
@@ -1382,6 +1404,15 @@ function MaterialCompareApp({ active = true } = {}) {
                             </div>
                         ))}
                         <div className="text-xs text-gray-500">Only textures that failed to resolve are listed. This card disappears when everything loads.</div>
+                    </div>
+                )}
+                {slot.materialNotices && slot.materialNotices.length > 0 && (
+                    <div className="space-y-2">
+                        {slot.materialNotices.map((n, i) => (
+                            <div key={'n' + i} className="flex items-start gap-1 text-amber-300/90 font-mono text-xs break-all">
+                                <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-0.5" /><span>{n}</span>
+                            </div>
+                        ))}
                     </div>
                 )}
             </SectionCard>
@@ -1776,6 +1807,7 @@ function MaterialCompareApp({ active = true } = {}) {
                             <div className="mt-1 text-[11px] text-gray-400">
                                 Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.
                             </div>
+                            <DisplacementSettingsRows />
                         </SectionCard>
                     </div>
 
