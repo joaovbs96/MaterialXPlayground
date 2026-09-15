@@ -9278,6 +9278,14 @@ const createMtlxRenderView = async ({
                 // Finds (and caches) the ball assembly's world bounding
                 // sphere: 'shader_ball' by name, falling back to
                 // material_surface's parent, then sceneGroup (never throws).
+                // Framing always measures the undisplaced mesh, so displacement
+                // (sync on the first build or landing later) never moves the camera.
+                const withFramingGeometry = (fn) => {
+                    if (!mesh || !originalGeometry || mesh.geometry === originalGeometry) return fn();
+                    const current = mesh.geometry;
+                    mesh.geometry = originalGeometry;
+                    try { return fn(); } finally { mesh.geometry = current; }
+                };
                 const getBallBoundingSphere = () => {
                     if (ballBoundingSphere) return ballBoundingSphere;
                     if (!sceneGroup) return null;
@@ -9285,7 +9293,7 @@ const createMtlxRenderView = async ({
                         || (mesh && mesh.parent)
                         || sceneGroup;
                     ballNode.updateMatrixWorld(true);
-                    const box = new THREE.Box3().setFromObject(ballNode);
+                    const box = withFramingGeometry(() => new THREE.Box3().setFromObject(ballNode));
                     ballBoundingSphere = box.getBoundingSphere(new THREE.Sphere());
                     return ballBoundingSphere;
                 };
@@ -9693,12 +9701,7 @@ const createMtlxRenderView = async ({
                     geometry = g;
                     if (mesh) {
                         mesh.geometry = g;
-                        ballBoundingSphere = null;
                         updateStudioFloor();
-                        if (sceneOrbitFitRadius != null) {
-                            const sphere = getBallBoundingSphere();
-                            if (sphere) sceneOrbitFitRadius = sphere.radius;
-                        }
                     }
                     if (prevDisplaced && prevDisplaced !== g) {
                         try { prevDisplaced.dispose(); } catch (e) { /* already disposed/invalid */ }
@@ -9950,7 +9953,7 @@ const createMtlxRenderView = async ({
                     let fitCenter = null, fitRadius = null;
                     if (mesh) {
                         mesh.updateMatrixWorld(true);
-                        const bb = new THREE.Box3().setFromObject(mesh);
+                        const bb = withFramingGeometry(() => new THREE.Box3().setFromObject(mesh));
                         fitCenter = bb.getCenter(new THREE.Vector3());
                         const bs = bb.getSize(new THREE.Vector3());
                         fitRadius = Math.max(bs.x, bs.y, bs.z) / 2;

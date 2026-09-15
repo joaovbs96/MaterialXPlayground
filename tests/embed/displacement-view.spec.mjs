@@ -314,3 +314,41 @@ test.describe('displacement wired into createMtlxRenderView', () => {
     expect(after.state.state).toBe('none');
   });
 });
+
+// Framing measures the undisplaced mesh: turning displacement on after the
+// shaderball scene framed itself must not widen the fov on the next resize.
+test('displacement landing after the first framing keeps the shaderball scene fov', async ({ page, embedURL }) => {
+  await gotoEngine(page, embedURL);
+  const result = await page.evaluate(async ({ xml }) => {
+    window.setDisplacementEnabled(false, { persist: false });
+    const env = await window.getMxEnv();
+    const doc = env.mx.createDocument();
+    await window.mxExclusive(() => env.mx.readFromXmlString(doc, xml));
+    if (doc.setDataLibrary) doc.setDataLibrary(env.stdlib);
+    const { name: materialName, node: renderable } = window.listDocRenderables(doc)[0];
+    const canvas = document.createElement('canvas');
+    canvas.style.width = '320px';
+    canvas.style.height = '240px';
+    document.body.appendChild(canvas);
+    const view = await window.createMtlxRenderView({
+      canvas, mx: env.mx, gen: env.gen, genContext: env.genContext, renderable,
+      label: 'displacement-framing-test', geomName: 'shaderball-scene', sceneOrbit: true,
+      autoRotate: false, needsLighting: true, materialName, isMounted: () => true,
+    });
+    const camera = view.__debug().camera;
+    const fovBefore = camera.fov;
+    window.setDisplacementEnabled(true, { persist: false });
+    await view.whenDisplacementSettled();
+    const state = view.getDisplacementState().state;
+    canvas.style.width = '360px';
+    canvas.style.height = '240px';
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const fovAfter = camera.fov;
+    view.dispose();
+    canvas.remove();
+    window.setDisplacementEnabled(true, { persist: false });
+    return { state, fovBefore, fovAfter };
+  }, { xml: SCALE_A_MTLX });
+  expect(result.state).toBe('applied');
+  expect(Math.abs(result.fovAfter - result.fovBefore)).toBeLessThan(0.5);
+});

@@ -5093,12 +5093,29 @@ const createMtlxSceneView = async ({
             camera.aspect = w / h;
             camera.updateProjectionMatrix();
         };
+        // Auto-framing measures displaced meshes at their undisplaced positions,
+        // so a stage frames the same whether displacement is on or off at load.
+        const framingBox = () => {
+            const box = new THREE.Box3();
+            const point = new THREE.Vector3();
+            sceneRoot.updateMatrixWorld(true);
+            sceneRoot.traverse((object) => {
+                if (!object.isMesh || !object.geometry) return;
+                const source = object.geometry.userData && object.geometry.userData.mtlxDisplacementSource;
+                const positions = source && source.positions;
+                if (!positions || !positions.length) { box.expandByObject(object); return; }
+                for (let i = 0; i + 2 < positions.length; i += 3) {
+                    box.expandByPoint(point.set(positions[i], positions[i + 1], positions[i + 2]).applyMatrix4(object.matrixWorld));
+                }
+            });
+            return box;
+        };
         const frameAll = () => {
             // Backdrops/skyboxes are deliberately excluded from framing.
             // A USD camera may have left a non-default fov/aperture-derived
             // fov behind; the auto-framing entry always uses the plain 45.
             camera.fov = 45;
-            const box = new THREE.Box3().setFromObject(sceneRoot);
+            const box = framingBox();
             if (box.isEmpty()) return;
             const center = box.getCenter(new THREE.Vector3());
             const size = box.getSize(new THREE.Vector3());
