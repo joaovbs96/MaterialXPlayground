@@ -368,6 +368,15 @@ function copyMesh(mesh, assets, materials) {
   const matrix = arrayCopy(mesh.matrix, Float64Array);
   const hasInstanceMatrices = mesh.instanceMatrices != null;
   const instance = copyInstanceMatrices(mesh.instanceMatrices);
+  // The cage is the pre-subdivision mesh; copy its streams the same way as
+  // the subdivided ones so both survive the worker-to-main transfer.
+  const cage = mesh.cage ? {
+    positions: arrayCopy(mesh.cage.positions, Float32Array),
+    ...(mesh.cage.normals ? { normals: arrayCopy(mesh.cage.normals, Float32Array) } : {}),
+    ...(mesh.cage.uvs ? { uvs: arrayCopy(mesh.cage.uvs, Float32Array) } : {}),
+    ...(mesh.cage.indices ? { indices: arrayCopy(mesh.cage.indices, Uint32Array) } : {}),
+    ...(mesh.cage.subsets?.length ? { subsets: mesh.cage.subsets.map(copySubset) } : {}),
+  } : undefined;
   return {
     primPath: text(mesh.path) ?? text(mesh.primPath) ?? "",
     name: text(mesh.name) ?? "",
@@ -384,6 +393,9 @@ function copyMesh(mesh, assets, materials) {
       ...(instance.invalid ? { instanceMatricesInvalid: true } : {}),
     } : {}),
     ...(text(mesh.instanceOwnerPath) ? { instanceOwnerPath: text(mesh.instanceOwnerPath) } : {}),
+    ...(mesh.subdivisionScheme ? { subdivisionScheme: mesh.subdivisionScheme } : {}),
+    ...(Number.isFinite(mesh.subdivisionLevelsApplied) ? { subdivisionLevelsApplied: mesh.subdivisionLevelsApplied } : {}),
+    ...(cage ? { cage } : {}),
   };
 }
 
@@ -1119,6 +1131,9 @@ function copyStageResult(summary, draw, payloads, cameras, lights, metrics = nul
   };
   for (const mesh of meshes) {
     for (const key of ["positions", "normals", "uvs", "indices"]) if (mesh[key]) addTransfer(mesh[key].buffer);
+    if (mesh.cage) {
+      for (const key of ["positions", "normals", "uvs", "indices"]) if (mesh.cage[key]) addTransfer(mesh.cage[key].buffer);
+    }
   }
   for (const material of materialList) {
     for (const value of Object.values(material)) {
@@ -1338,6 +1353,16 @@ async function load(request) {
         }
         const subdivided = subdivideMesh(mesh, levels);
         if (!subdivided) continue;
+        // Keep the pre-subdivision cage so the Scene can re-subdivide at another
+        // level and displace displaced meshes without reloading the stage.
+        mesh.cage = {
+          positions: mesh.positions,
+          normals: mesh.normals,
+          uvs: mesh.uvs,
+          indices: mesh.indices,
+          subsets: Array.isArray(mesh.subsets) ? mesh.subsets.slice() : undefined,
+        };
+        mesh.subdivisionLevelsApplied = levels;
         stageTriangleTotal += subdivided.triangleCount - originalTriangles;
         mesh.positions = subdivided.positions;
         mesh.normals = subdivided.normals;
