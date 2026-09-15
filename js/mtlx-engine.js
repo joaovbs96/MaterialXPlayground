@@ -353,6 +353,91 @@ const setForceTransparency = (v, { persist = true } = {}) => {
 // syncMeshMaterialMode() gate the peel graph on FORCE_TRANSPARENCY &&
 // (this material's hwTransparency verdict), see PEEL_LAYERS/getDummyTex.
 
+// Accepts the loose boolean spellings the URL query params use (1/0,
+// true/false, on/off, yes/no, any case); returns null when unrecognized
+// so callers can fall back instead of misreading garbage as false.
+const parseBoolFlag = (raw) => {
+    const s = String(raw).trim().toLowerCase();
+    if (s === '1' || s === 'true' || s === 'on' || s === 'yes') return true;
+    if (s === '0' || s === 'false' || s === 'off' || s === 'no') return false;
+    return null;
+};
+
+// "Displacement" (Settings dialog, default on). Off skips the CPU-side
+// mesh displacement pass (js/shared/mesh-displacement.js) and previews
+// the undisplaced mesh. Same persist/{persist:false} contract as above.
+let DISPLACEMENT_ENABLED = (() => {
+    try {
+        const qs = new URLSearchParams(window.location.search);
+        if (qs.has('displacement')) {
+            const parsed = parseBoolFlag(qs.get('displacement'));
+            if (parsed !== null) return parsed;
+        }
+        return localStorage.getItem('mtlxDisplacement') !== '0';
+    } catch (e) { return true; }
+})();
+const getDisplacementEnabled = () => DISPLACEMENT_ENABLED;
+const setDisplacementEnabled = (v, { persist = true } = {}) => {
+    DISPLACEMENT_ENABLED = !!v;
+    if (persist && window.self === window.top) {
+        try { localStorage.setItem('mtlxDisplacement', DISPLACEMENT_ENABLED ? '1' : '0'); } catch (e) { /* best-effort */ }
+    }
+    LIVE_VIEWS.forEach((view) => { try { view.refreshDisplacement && view.refreshDisplacement(); } catch (e) { /* view mid-teardown */ } });
+    try { window.dispatchEvent(new CustomEvent('mtlx-settings-changed', { detail: { key: 'displacement', value: DISPLACEMENT_ENABLED } })); } catch (e) { /* best-effort */ }
+};
+
+// Preview subdivision level (Settings dialog, default 2, 0..3). Feeds
+// mesh-subdivision.js's Loop subdivision ahead of CPU displacement;
+// pickSubdivisionLevel below caps it per-mesh against a triangle budget.
+let PREVIEW_SUBDIVISION_LEVEL = (() => {
+    try {
+        const qs = new URLSearchParams(window.location.search);
+        if (qs.has('previewsubdivision')) {
+            const n = Number(qs.get('previewsubdivision'));
+            if (Number.isInteger(n) && n >= 0 && n <= 3) return n;
+        }
+        const raw = localStorage.getItem('mtlxPreviewSubdivision');
+        if (raw !== null) {
+            const stored = Number(raw);
+            if (Number.isInteger(stored) && stored >= 0 && stored <= 3) return stored;
+        }
+        return 2;
+    } catch (e) { return 2; }
+})();
+const getPreviewSubdivisionLevel = () => PREVIEW_SUBDIVISION_LEVEL;
+const setPreviewSubdivisionLevel = (level, { persist = true } = {}) => {
+    const n = Number(level);
+    if (!Number.isFinite(n)) return; // non-numeric input is ignored
+    const clamped = Math.min(3, Math.max(0, Math.round(n)));
+    PREVIEW_SUBDIVISION_LEVEL = clamped;
+    if (persist && window.self === window.top) {
+        try { localStorage.setItem('mtlxPreviewSubdivision', String(PREVIEW_SUBDIVISION_LEVEL)); } catch (e) { /* best-effort */ }
+    }
+    LIVE_VIEWS.forEach((view) => { try { view.refreshDisplacement && view.refreshDisplacement(); } catch (e) { /* view mid-teardown */ } });
+    try { window.dispatchEvent(new CustomEvent('mtlx-settings-changed', { detail: { key: 'previewSubdivision', value: PREVIEW_SUBDIVISION_LEVEL } })); } catch (e) { /* best-effort */ }
+};
+
+// Highest triangle count a preview mesh may reach after subdivision,
+// past which the GPU/CPU cost stops being worth the visual gain.
+const PREVIEW_TRIANGLE_BUDGET = 1500000;
+
+// Highest level <= requestedLevel keeping baseTriangles * 4^level under
+// budget (level 0 always allowed, even if baseTriangles alone exceeds it).
+const pickSubdivisionLevel = (baseTriangles, requestedLevel, budget = PREVIEW_TRIANGLE_BUDGET) => {
+    let level = 0;
+    let triangles = baseTriangles;
+    for (let l = 0; l <= requestedLevel; l++) {
+        const t = baseTriangles * Math.pow(4, l);
+        if (l === 0 || t <= budget) {
+            level = l;
+            triangles = t;
+        } else {
+            break;
+        }
+    }
+    return { level, capped: level < requestedLevel, triangles };
+};
+
 // Experimental, opt-in: mx_heighttonormal_vector3 (MaterialX 1.39) derives
 // its height gradient from screen-space derivatives divided by the UV
 // Jacobian, so on a high-resolution height texture a single-texel step
@@ -10281,6 +10366,9 @@ Object.assign(window, {
     getMxEnv, DEBUG_SHADERS, mtlxWarn, mxExclusive,
     MTLX_CLOCK, clockTick,
     getForceTransparency, setForceTransparency,
+    getDisplacementEnabled, setDisplacementEnabled,
+    getPreviewSubdivisionLevel, setPreviewSubdivisionLevel,
+    PREVIEW_TRIANGLE_BUDGET, pickSubdivisionLevel,
     getHeightToNormalTexel, setHeightToNormalTexel,
     parseUniforms, parseVertexInputs, stripVersion, encodeDisplay, countFragmentSamplers,
     mxErr, mxWriteValue, vecToArray,
