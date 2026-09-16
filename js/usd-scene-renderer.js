@@ -410,15 +410,15 @@ const formatSize = (bytes) => (bytes >= GIB ? formatGB(bytes) : formatMB(bytes))
 // way as the texture size cap above.
 const SCENE_SUBDIVISION_KEY = 'mtlx_scene_subdivision';
 const SCENE_SUBDIVISION_VALUES = [0, 1, 2];
-const SCENE_SUBDIVISION_DEFAULT = 1;
+const SCENE_SUBDIVISION_DEFAULT = 0;
 
 const storedSceneSubdivisionLevel = () => {
     if (window.top !== window) return SCENE_SUBDIVISION_DEFAULT;
     try {
         const raw = localStorage.getItem(SCENE_SUBDIVISION_KEY);
-        // Number(null) is 0, which silently disabled subdivision in a fresh
-        // profile. Preserve an explicit stored "0", while an unset/blank
-        // preference uses the documented default level 1.
+        // Number(null) is 0, so read the raw string: an unset or blank
+        // preference takes the default (off), and an explicit stored level
+        // still wins.
         if (raw === null || raw.trim() === '') return SCENE_SUBDIVISION_DEFAULT;
         const stored = Number(raw);
         return SCENE_SUBDIVISION_VALUES.includes(stored) ? stored : SCENE_SUBDIVISION_DEFAULT;
@@ -1190,9 +1190,81 @@ const sceneGeometry = (record) => {
     return g;
 };
 
+// Constant primvars the USD draw exposes, keyed by geomprop name. Only
+// displayColor arrives today, and always as a single colour.
+const sceneGeompropConstants = (record) => {
+    const color = record && record.displayColor;
+    if (!Array.isArray(color) || color.length < 3) return null;
+    return { displayColor: [Number(color[0]) || 0, Number(color[1]) || 0, Number(color[2]) || 0] };
+};
+
 const sceneNeutralMaterial = (label) => new THREE.MeshNormalMaterial({
     name: 'USD unsupported material: ' + String(label || 'unknown'),
 });
+
+// Small, fast, non-cryptographic hash (djb2) that folds a long string
+// (resolved MaterialX XML, serialized USD overrides) into a fixed-length
+// compile-cache-key component.
+const sceneDjb2 = (str) => {
+    let hash = 5381;
+    const s = String(str || '');
+    for (let i = 0; i < s.length; i += 1) hash = ((hash * 33) ^ s.charCodeAt(i)) >>> 0;
+    return hash.toString(36);
+};
+
+// Module-level compile cache shared by every scene view/reload, so
+// switching scenes or reloading the same one skips MaterialX codegen
+// whenever nothing that could change the generated source has changed.
+// Deliberately excludes display transform/exposure: encodeDisplay()
+// (js/mtlx-engine.js) turns both into uniforms (u_displayTransform,
+// u_displayExposure), so generated shader source never depends on them.
+// A future change baking either into source must add it to the key below.
+const SCENE_COMPILE_CACHE = new Map();
+const SCENE_COMPILE_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+const SCENE_COMPILE_CACHE_MAX_ENTRIES = 256;
+let sceneCompileCacheHits = 0;
+let sceneCompileCacheMisses = 0;
+
+const sceneCompileCacheKey = ({ version, sourceAsset, name, resolvedXml, overrides, sceneRgbt, lightTransport, samplerBudget, uniformVectorBudget }) => [
+    String(version || ''),
+    String(sourceAsset || ''),
+    String(name || ''),
+    sceneDjb2(resolvedXml),
+    sceneDjb2(JSON.stringify(overrides || [])),
+    // Both are literals today: the scene compile always passes sceneRgbt
+    // true, and the light-transport variant rides in the same entry. Key
+    // them properly if either ever varies per material.
+    'rgbt=' + sceneRgbt,
+    'lt=' + lightTransport,
+    'sb=' + samplerBudget,
+    'uv=' + uniformVectorBudget,
+    'h2n=' + (window.getHeightToNormalTexel ? window.getHeightToNormalTexel() : ''),
+].join('|');
+
+// Approximate resident size of one cache entry: both compiled variants'
+// generated source, in UTF-16 bytes (2 bytes/char).
+const sceneCompileCacheBytes = (compiled, transferCompiled) => {
+    const srcLen = (obj) => ((obj && obj.vs) || '').length + ((obj && obj.fs) || '').length;
+    return (srcLen(compiled) + srcLen(transferCompiled)) * 2;
+};
+
+const sceneCompileCacheEvict = () => {
+    let total = 0;
+    for (const entry of SCENE_COMPILE_CACHE.values()) total += entry.bytes;
+    for (const [key, entry] of SCENE_COMPILE_CACHE) {
+        if (total <= SCENE_COMPILE_CACHE_MAX_BYTES && SCENE_COMPILE_CACHE.size <= SCENE_COMPILE_CACHE_MAX_ENTRIES) break;
+        SCENE_COMPILE_CACHE.delete(key);
+        total -= entry.bytes;
+    }
+};
+
+// Test/debug escape hatch: drops every cached compile so the next material
+// build always regenerates from source.
+window.__mtlxClearSceneCompileCache = () => {
+    SCENE_COMPILE_CACHE.clear();
+    sceneCompileCacheHits = 0;
+    sceneCompileCacheMisses = 0;
+};
 
 const createMtlxSceneView = async ({
     container, stage, files = [], version, onProgress, isMounted = () => true,
@@ -1867,7 +1939,14 @@ const createMtlxSceneView = async ({
             // override; that layer normally sits beside the .mtlx, so try the
             // material's directory first and the stage root as a fallback.
             const candidates = baseDirs.map((dir) => sceneJoinPath(dir, ref));
-            return candidates.find((candidate) => fileMap[candidate]) || candidates[0];
+            const hit = candidates.find((candidate) => fileMap[candidate]);
+            if (hit) return hit;
+            // An inline payload declares no directory, so an asset stored
+            // beside the referencing layer misses every candidate above.
+            // Accept a unique basename match before giving up.
+            const base = String(ref).split('/').pop().toLowerCase();
+            const named = Object.keys(fileMap).filter((key) => key.split('/').pop().toLowerCase() === base);
+            return named.length === 1 ? named[0] : candidates[0];
         }
         if (/^\(.*\)$/.test(raw)) return raw.slice(1, -1).split(',').map((v) => v.trim()).join(', ');
         // USD writes bools as 1/0 or true/false; MaterialX parses only the words.
@@ -1979,21 +2058,247 @@ const createMtlxSceneView = async ({
         }
     };
 
-    const loadRenderable = async (record) => {
-        if (record && (record.renderable || record.node)) {
-            return { node: record.renderable || record.node, document: null };
+// The USD runtime's inline MaterialX can name an element after a nodedef id,
+// mistype multi-output and displacement nodes, and lose shader types on
+// mix/add/multiply. These repair it against the MaterialX libraries.
+const SCENE_SHADER_TYPES = new Set(['surfaceshader', 'displacementshader', 'volumeshader', 'BSDF', 'EDF', 'VDF']);
+const SCENE_MULTIOUTPUT_TAGS = new Set(['separate2', 'separate3', 'separate4']);
+const SCENE_STRUCTURAL_TAGS = new Set(['materialx', 'input', 'output', 'token', 'nodedef', 'nodegraph']);
+let sceneNodeDefIndex = null;
+const sceneNodeDefs = (stdlib) => {
+    if (sceneNodeDefIndex) return sceneNodeDefIndex;
+    const categories = new Set();
+    const byName = new Map();
+    const defs = [];
+    for (const def of window.vecToArray(window.mxSafe(() => stdlib.getNodeDefs(), []))) {
+        const name = window.mxSafe(() => String(def.getName()), '');
+        const category = window.mxSafe(() => String(def.getNodeString()), '');
+        const type = window.mxSafe(() => String(def.getType()), '');
+        if (!name || !category) continue;
+        const inputs = new Map();
+        const declared = window.vecToArray(window.mxSafe(
+            () => (def.getActiveInputs ? def.getActiveInputs() : def.getInputs()), []));
+        for (const input of declared) {
+            const inputName = window.mxSafe(() => String(input.getName()), '');
+            if (inputName) inputs.set(inputName, window.mxSafe(() => String(input.getType()), ''));
         }
+        const record = { name, category, type, inputs };
+        categories.add(category);
+        byName.set(name, record);
+        defs.push(record);
+    }
+    sceneNodeDefIndex = { categories, byName, defs };
+    return sceneNodeDefIndex;
+};
+// Opening tags with attributes, offsets, children and the matching close, so
+// a repair can edit tag names and attribute values by offset.
+const sceneScanMtlxElements = (xml) => {
+    const elements = [];
+    const stack = [];
+    const tagRe = /<(\/?)([A-Za-z0-9_]+)((?:[^>"]|"[^"]*")*?)(\/?)>/g;
+    const attrRe = /([A-Za-z0-9_:]+)\s*=\s*"([^"]*)"/g;
+    let match;
+    while ((match = tagRe.exec(xml)) !== null) {
+        const closing = match[1], tag = match[2], attrs = match[3], selfClose = match[4];
+        if (closing) {
+            const open = stack.pop();
+            if (open) { open.closeStart = match.index + 2; open.closeEnd = match.index + 2 + tag.length; }
+            continue;
+        }
+        const el = { tag, attrs, tagStart: match.index + 1, tagEnd: match.index + 1 + tag.length,
+            attrsStart: match.index + 1 + tag.length, children: [], a: {} };
+        attrRe.lastIndex = 0;
+        let attr;
+        while ((attr = attrRe.exec(attrs)) !== null) el.a[attr[1]] = attr[2];
+        if (stack.length) stack[stack.length - 1].children.push(el);
+        elements.push(el);
+        if (!selfClose) stack.push(el);
+    }
+    return elements;
+};
+const sceneAttrValueRange = (el, attr) => {
+    const match = new RegExp(attr + '\s*=\s*"([^"]*)"').exec(el.attrs);
+    if (!match) return null;
+    const start = el.attrsStart + match.index + match[0].indexOf('"') + 1;
+    return [start, start + match[1].length];
+};
+
+// Repairs one inline MaterialX document from the USD runtime and reports how
+// many edits were needed. Unknown shapes are left untouched.
+const sceneRepairInlineMaterialX = (xml, stdlib) => {
+    const index = sceneNodeDefs(stdlib);
+    let out = String(xml || '');
+    let repairs = 0;
+    for (let pass = 0; pass < 8; pass += 1) {
+        const nodes = sceneScanMtlxElements(out).filter((el) => !SCENE_STRUCTURAL_TAGS.has(el.tag));
+        const typeByName = new Map();
+        for (const el of nodes) if (el.a.name) typeByName.set(el.a.name, el.a.type);
+        // Who reads each node, so a consumer whose nodedef fixes an input
+        // type can decide the producer's type.
+        const consumersOf = new Map();
+        for (const el of nodes) {
+            for (const child of el.children) {
+                if (child.tag !== 'input' || !child.a.nodename || !child.a.name) continue;
+                if (!consumersOf.has(child.a.nodename)) consumersOf.set(child.a.nodename, []);
+                consumersOf.get(child.a.nodename).push({ el, inputName: child.a.name });
+            }
+        }
+        const edits = [];
+        for (const el of nodes) {
+            let category = el.tag;
+            let type = el.a.type;
+            if (!index.categories.has(category)) {
+                const direct = index.byName.get('ND_' + category);
+                let target = direct ? direct.category : null;
+                if (!target) {
+                    let base = category;
+                    while (base.indexOf('_') >= 0) {
+                        base = base.slice(0, base.lastIndexOf('_'));
+                        if (index.categories.has(base)) { target = base; break; }
+                    }
+                }
+                if (target) {
+                    edits.push([el.tagStart, el.tagEnd, target]);
+                    if (el.closeStart) edits.push([el.closeStart, el.closeEnd, target]);
+                    category = target;
+                }
+            }
+            const typeRange = sceneAttrValueRange(el, 'type');
+            if (typeRange && SCENE_MULTIOUTPUT_TAGS.has(category) && type !== 'multioutput') {
+                edits.push([typeRange[0], typeRange[1], 'multioutput']);
+                type = 'multioutput';
+            } else if (typeRange && category === 'displacement' && type && type !== 'displacementshader') {
+                edits.push([typeRange[0], typeRange[1], 'displacementshader']);
+                type = 'displacementshader';
+            }
+            if (/^(mix|add|multiply)$/.test(category)) {
+                let shaderType = null;
+                for (const child of el.children) {
+                    const target = typeByName.get(child.a.nodename);
+                    if (target && SCENE_SHADER_TYPES.has(target)) shaderType = target;
+                }
+                if (shaderType) {
+                    for (const child of el.children) {
+                        const target = typeByName.get(child.a.nodename);
+                        if (!target || !SCENE_SHADER_TYPES.has(target) || child.a.type === target) continue;
+                        const range = sceneAttrValueRange(child, 'type');
+                        if (range) edits.push([range[0], range[1], target]);
+                    }
+                    if (typeRange && type !== shaderType) {
+                        edits.push([typeRange[0], typeRange[1], shaderType]);
+                        type = shaderType;
+                    }
+                }
+            }
+            // Resolved before the type rules below, which read it.
+            const def = index.defs.find((d) => d.category === category && d.type === type)
+                || index.defs.find((d) => d.category === category);
+            // A consumer whose nodedef fixes an input type decides this
+            // node's type; later passes then settle its own inputs.
+            if (typeRange && el.a.name && type && !SCENE_SHADER_TYPES.has(type) && type !== 'multioutput') {
+                for (const consumer of consumersOf.get(el.a.name) || []) {
+                    const consumerDef = index.defs.find((d) => d.category === consumer.el.tag
+                        && d.type === consumer.el.a.type) || index.defs.find((d) => d.category === consumer.el.tag);
+                    const required = consumerDef && consumerDef.inputs.get(consumer.inputName);
+                    if (!required || SCENE_SHADER_TYPES.has(required) || required === type) continue;
+                    if (index.defs.some((d) => d.category === consumer.el.tag && d.inputs.get(consumer.inputName) === type)) continue;
+                    edits.push([typeRange[0], typeRange[1], required]);
+                    type = required;
+                    break;
+                }
+            }
+            // The runtime also loses ordinary value types on a connection.
+            // Follow what each input is fed by, then pick the nodedef
+            // variant that matches, so the engine's type check passes.
+            for (const child of el.children) {
+                if (child.tag !== 'input' || !child.a.nodename || !child.a.type) continue;
+                const sourceType = typeByName.get(child.a.nodename);
+                if (!sourceType || sourceType === 'multioutput' || sourceType === child.a.type) continue;
+                if (SCENE_SHADER_TYPES.has(child.a.type) || SCENE_SHADER_TYPES.has(sourceType)) continue;
+                const wanted = def && def.inputs.get(child.a.name);
+                if (wanted && wanted === child.a.type && !index.defs.some((d) => d.category === category
+                    && d.inputs.get(child.a.name) === sourceType)) continue;
+                const range = sceneAttrValueRange(child, 'type');
+                if (range) edits.push([range[0], range[1], sourceType]);
+                const primary = /^(add|multiply|clamp|separate2|separate3|separate4)$/.test(category)
+                    && (child.a.name === 'in' || child.a.name === 'in1');
+                if (primary && typeRange && type !== sourceType && type !== 'multioutput') {
+                    edits.push([typeRange[0], typeRange[1], sourceType]);
+                }
+            }
+            if (!def) continue;
+            for (const child of el.children) {
+                if (child.tag !== 'input' || !child.a.name || !child.a.type) continue;
+                const want = def.inputs.get(child.a.name);
+                if (want !== 'boolean' || child.a.type !== 'integer') continue;
+                const range = sceneAttrValueRange(child, 'type');
+                if (range) edits.push([range[0], range[1], 'boolean']);
+                const valueRange = sceneAttrValueRange(child, 'value');
+                if (valueRange && (child.a.value === '0' || child.a.value === '1')) {
+                    edits.push([valueRange[0], valueRange[1], child.a.value === '1' ? 'true' : 'false']);
+                }
+            }
+        }
+        if (!edits.length) break;
+        edits.sort((a, b) => b[0] - a[0]);
+        let next = out;
+        let last = Infinity;
+        for (const edit of edits) {
+            if (edit[1] > last) continue;
+            next = next.slice(0, edit[0]) + edit[2] + next.slice(edit[1]);
+            last = edit[0];
+            repairs += 1;
+        }
+        if (next === out) break;
+        out = next;
+    }
+    return { xml: out, repairs };
+};
+
+    // Reads and fully resolves one material's MaterialX source text: blob
+    // read, inline-payload repair, include resolution and filename
+    // canonicalization. No MaterialX/wasm work happens here, so this half
+    // is cheap enough to run before consulting the module compile cache.
+    const resolveRenderableSource = async (record) => {
         const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
         const source = sceneNormPath(record && record.sourceAsset);
         const blob = source && fileMap[source];
         if (!blob) throw new Error('MaterialX source asset is unavailable: ' + (record && record.sourceAsset || 'unknown'));
-        const raw = await blob.text();
+        let raw = await blob.text();
+        // The runtime's inline payloads need type repairs before MaterialX
+        // can resolve their nodedefs; authored .mtlx files are left alone.
+        if (/^__inline_/.test(String(source).split('/').pop() || '')) {
+            const fixed = await window.mxExclusive(() => {
+                try {
+                    return sceneRepairInlineMaterialX(raw, mxEnv.stdlib);
+                } catch (e) {
+                    // Never fail a material because the repair itself broke.
+                    const failure = '[info] Material network repair skipped for ' + label + ': ' + (e && e.message || e);
+                    if (!udimWarnings.has(failure)) { udimWarnings.add(failure); warnings.push(failure); }
+                    return null;
+                }
+            });
+            if (fixed && fixed.repairs) {
+                raw = fixed.xml;
+                const warning = '[info] Repaired ' + fixed.repairs + ' node type(s) in the USD material network for ' + label;
+                if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
+            }
+        }
         const resolved = canonicalizeSceneFilenameInputs(
             await resolveSceneIncludes(raw, sceneDir(source), fileMap, new Set([source]), warnings),
             source,
             fileMap,
             true,
         );
+        return { source, raw, resolved };
+    };
+
+    // Parses the resolved source into a MaterialX document, selects the
+    // requested renderable, applies USD overrides and records the document
+    // for the preview panel. Needs mxEnv/wasm; not itself cache-keyed.
+    const buildRenderableDocument = async (record, sourceInfo) => {
+        const { source, raw, resolved } = sourceInfo;
+        const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
         let doc = null;
         try {
             await window.mxExclusive(async () => {
@@ -2050,6 +2355,16 @@ const createMtlxSceneView = async ({
         }
     };
 
+    // Full path: resolve source, then build the document. A record already
+    // carrying a live renderable node (test/direct-node callers) skips both.
+    const loadRenderable = async (record) => {
+        if (record && (record.renderable || record.node)) {
+            return { node: record.renderable || record.node, document: null };
+        }
+        const sourceInfo = await resolveRenderableSource(record);
+        return buildRenderableDocument(record, sourceInfo);
+    };
+
     const applyObjectUniforms = (material, object) => {
         const u = material && material.uniforms;
         if (!u) return;
@@ -2073,8 +2388,11 @@ const createMtlxSceneView = async ({
     };
 
     // Compiles (or returns the cached compile for) one material record,
-    // without binding any texture. Returns null when compileMtlxSceneMaterial
-    // itself yields nothing (hard failure, caller skips the record), or
+    // without binding any texture. Consults the module-level
+    // SCENE_COMPILE_CACHE (before any MaterialX/wasm work) once the source
+    // is resolved, so switching scenes or reloading the same one can skip
+    // codegen entirely. Returns null when compileMtlxSceneMaterial itself
+    // yields nothing (hard failure, caller skips the record), or
     // { compiled: null } for a setup/compile error (caller falls back to a
     // neutral material), or { compiled, cacheKey } on success.
     const ensureCompiledMaterial = async (record, forceCompile = false) => {
@@ -2089,10 +2407,11 @@ const createMtlxSceneView = async ({
         if (compiled) return { compiled, cacheKey, transferCompiled: transferCompiledByPath.get(cacheKey) || null };
         report({ phase: 'material', path: record.path, label, status: 'start' });
         let sourceDocument = null;
+        let moduleKey = null;
+        // A record already carrying a live renderable node has no
+        // sourceAsset to hash, so it never goes through the module cache.
+        const hasDirectNode = !!(record && (record.renderable || record.node));
         try {
-            const loaded = await loadRenderable(record);
-            const renderable = loaded.node;
-            sourceDocument = loaded.document;
             let samplerBudget = null;
             let uniformVectorBudget = null;
             try {
@@ -2100,6 +2419,40 @@ const createMtlxSceneView = async ({
                 samplerBudget = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
                 uniformVectorBudget = gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS);
             } catch (e) { /* keep the engine's fallback defaults */ }
+            let renderable = null;
+            if (hasDirectNode) {
+                renderable = record.renderable || record.node;
+            } else {
+                const sourceInfo = await resolveRenderableSource(record);
+                moduleKey = sceneCompileCacheKey({
+                    version, sourceAsset: sourceInfo.source,
+                    name: record.subIdentifier || record.materialName || '',
+                    resolvedXml: sourceInfo.resolved, overrides: record.overrides,
+                    sceneRgbt: true, lightTransport: false, samplerBudget, uniformVectorBudget,
+                });
+                if (forceCompile) SCENE_COMPILE_CACHE.delete(moduleKey);
+                const cachedEntry = SCENE_COMPILE_CACHE.get(moduleKey);
+                if (cachedEntry) {
+                    SCENE_COMPILE_CACHE.delete(moduleKey);
+                    SCENE_COMPILE_CACHE.set(moduleKey, cachedEntry); // bump LRU order
+                    sceneCompileCacheHits += 1;
+                    // Shallow clone: the returned object gets mutated later
+                    // (mtlxSceneSurfaceMetadata, material.userData), so a
+                    // cache hit can never be poisoned by one view's use of it.
+                    compiled = Object.assign({}, cachedEntry.compiled);
+                    const transferCompiled = cachedEntry.transferCompiled ? Object.assign({}, cachedEntry.transferCompiled) : null;
+                    if (cachedEntry.materialDocument) materialDocuments.set(String(record.path || ''), cachedEntry.materialDocument);
+                    compiledByPath.set(cacheKey, compiled);
+                    transferCompiledByPath.set(cacheKey, transferCompiled);
+                    if (!programByKey.has(compiled.programKey)) programByKey.set(compiled.programKey, compiled);
+                    report({ phase: 'material', path: record.path, label, status: 'ready' });
+                    return { compiled, cacheKey, transferCompiled };
+                }
+                sceneCompileCacheMisses += 1;
+                const loaded = await buildRenderableDocument(record, sourceInfo);
+                renderable = loaded.node;
+                sourceDocument = loaded.document;
+            }
             compiled = await window.compileMtlxSceneMaterial({
                 mx: mxEnv.mx, gen: mxEnv.gen, genContext: mxEnv.genContext,
                 renderable, label, isMounted, document: sourceDocument, sceneRgbt: true, samplerBudget, uniformVectorBudget,
@@ -2159,6 +2512,15 @@ const createMtlxSceneView = async ({
             }
             compiledByPath.set(cacheKey, compiled);
             if (!programByKey.has(compiled.programKey)) programByKey.set(compiled.programKey, compiled);
+            if (moduleKey) {
+                SCENE_COMPILE_CACHE.delete(moduleKey);
+                SCENE_COMPILE_CACHE.set(moduleKey, {
+                    compiled, transferCompiled,
+                    materialDocument: materialDocuments.get(String(record.path || '')) || null,
+                    bytes: sceneCompileCacheBytes(compiled, transferCompiled),
+                });
+                sceneCompileCacheEvict();
+            }
             report({ phase: 'material', path: record.path, label, status: 'ready' });
             return { compiled, cacheKey, transferCompiled };
         } catch (e) {
@@ -2643,7 +3005,7 @@ const createMtlxSceneView = async ({
                     if (window.bindGeompropAttributes && bucketCompiled && bucketCompiled.geomprops) {
                         window.bindGeompropAttributes(geometry, bucketCompiled.geomprops, (text) => {
                             if (!warnings.includes(text)) warnings.push(text);
-                        });
+                        }, sceneGeompropConstants(record));
                     }
                     parts.push({ geometry, material });
                 });
@@ -4765,7 +5127,7 @@ const createMtlxSceneView = async ({
                     if (seen.size) {
                         window.bindGeompropAttributes(part.geometry, Array.from(seen.values()), (text) => {
                             if (!warnings.includes(text)) warnings.push(text);
-                        });
+                        }, sceneGeompropConstants(record));
                     }
                 }
                 if (part.material.userData && part.material.userData.mtlxScenePendingTextures) {
@@ -5763,6 +6125,13 @@ const createMtlxSceneView = async ({
                 },
             }),
             selectPrim: (primPath) => prims.find((o) => o.userData.primPath === primPath) || null,
+            // Module-level SCENE_COMPILE_CACHE stats (shared across every
+            // view/reload, not just this one), for probes and diagnostics.
+            getCompileCacheStats: () => {
+                let bytes = 0;
+                for (const entry of SCENE_COMPILE_CACHE.values()) bytes += entry.bytes;
+                return { entries: SCENE_COMPILE_CACHE.size, bytes, hits: sceneCompileCacheHits, misses: sceneCompileCacheMisses };
+            },
             // Resolved document plus the loose files it references, for the
             // graph/shaderball preview panel. UDIM refs match every file
             // starting with the prefix before <UDIM>.

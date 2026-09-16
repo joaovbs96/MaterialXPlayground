@@ -32,6 +32,44 @@ console.warn = (...args) => {
   originalConsoleWarn(...args);
 };
 
+// Input cache: this worker now persists across loads, but closeStage wipes
+// MEMFS, so createDataFile still runs every time. This only avoids re-reading
+// a File and re-decoding its text when the same identity reappears. Bytes and
+// text for one key are always evicted together (one LRU entry per key).
+const INPUT_CACHE_MAX_BYTES = 192 * 1024 * 1024;
+const INPUT_CACHE_BYTES_MAX_BYTES = 8 * 1024 * 1024;
+const INPUT_CACHE_TEXT_MAX_LENGTH = 32 * 1024 * 1024;
+const inputCache = new Map();
+let inputCacheBytes = 0;
+
+function inputCacheEntrySize(entry) {
+  return (entry.bytes ? entry.bytes.byteLength : 0) + (entry.text ? 2 * entry.text.length : 0);
+}
+
+function inputCacheGet(key) {
+  const entry = inputCache.get(key);
+  if (!entry) return undefined;
+  inputCache.delete(key);
+  inputCache.set(key, entry); // refresh recency
+  return entry;
+}
+
+function inputCacheAdmit(key, bytes, text) {
+  const entry = {};
+  if (bytes && bytes.byteLength <= INPUT_CACHE_BYTES_MAX_BYTES) entry.bytes = bytes;
+  if (typeof text === "string" && text.length <= INPUT_CACHE_TEXT_MAX_LENGTH) entry.text = text;
+  if (!entry.bytes && !entry.text) return;
+  const existing = inputCache.get(key);
+  if (existing) inputCacheBytes -= inputCacheEntrySize(existing);
+  inputCache.set(key, entry);
+  inputCacheBytes += inputCacheEntrySize(entry);
+  for (const [oldKey, oldEntry] of inputCache) {
+    if (inputCacheBytes <= INPUT_CACHE_MAX_BYTES) break;
+    inputCache.delete(oldKey);
+    inputCacheBytes -= inputCacheEntrySize(oldEntry);
+  }
+}
+
 function runtime() {
   if (!runtimePromise) {
     // The published convenience wrapper is browser-global by design. Giving
@@ -373,6 +411,9 @@ function copyMesh(mesh, assets, materials) {
   const normals = arrayCopy(mesh.normals, Float32Array);
   const uvs = arrayCopy(mesh.uvs, Float32Array);
   const indices = arrayCopy(mesh.indices, Uint32Array);
+  // The draw exposes displayColor as a single constant colour, never the
+  // authored per-vertex array; kept for geompropvalue fallbacks.
+  const displayColor = arrayCopy(mesh.displayColor, Float32Array);
   const material = copyMaterial(mesh.material, assets);
   const materialPath = text(mesh.materialPath) ?? text(mesh.material?.path);
   if (materialPath && material) materials.set(materialPath, material);
@@ -386,6 +427,7 @@ function copyMesh(mesh, assets, materials) {
     positions,
     ...(normals ? { normals } : {}),
     ...(uvs ? { uvs } : {}),
+    ...(displayColor && displayColor.length ? { displayColor: Array.from(displayColor) } : {}),
     ...(indices ? { indices } : {}),
     matrix: matrix ? Array.from(matrix) : [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
     orientation: mesh.orientation === "leftHanded" ? "leftHanded" : "rightHanded",
@@ -410,6 +452,7 @@ function snapshotDraw(draw) {
     const normals = arrayCopy(mesh.normals, Float32Array);
     const uvs = arrayCopy(mesh.uvs, Float32Array);
     const indices = arrayCopy(mesh.indices, Uint32Array);
+    const displayColor = arrayCopy(mesh.displayColor, Float32Array);
     const matrix = arrayCopy(mesh.matrix, Float64Array);
     const hasInstanceMatrices = mesh.instanceMatrices != null;
     const instance = copyInstanceMatrices(mesh.instanceMatrices);
@@ -419,6 +462,7 @@ function snapshotDraw(draw) {
       positions,
       ...(normals ? { normals } : {}),
       ...(uvs ? { uvs } : {}),
+      ...(displayColor && displayColor.length ? { displayColor: Array.from(displayColor) } : {}),
       ...(indices ? { indices } : {}),
       matrix,
       materialPath: text(mesh.materialPath) ?? text(mesh.material?.path),
@@ -1341,6 +1385,42 @@ function collectCameras(api, root, graph, warn) {
   return cameras;
 }
 
+// The camera relationship's first target on a UsdRender RenderSettings prim.
+// inspectPrimRelationships' exact wrapper shape (single entry vs an array of
+// one) is not guaranteed, so this tolerates both like collectPrototypeTargets.
+function findRenderSettingsCameraPath(api, root, primPath) {
+  let relEntries;
+  try { relEntries = arrayItems(api.inspectPrimRelationships(root, primPath)); } catch { return null; }
+  const entry = relEntries.find(item => text(item?.path) === primPath) ?? (relEntries.length === 1 ? relEntries[0] : null);
+  const relationships = entry ? arrayItems(entry.relationships) : relEntries;
+  for (const rel of relationships) {
+    if (String(rel?.name ?? "").toLowerCase() !== "camera") continue;
+    const targets = arrayItems(rel?.targets).map(text).filter(Boolean);
+    if (targets.length) return targets[0];
+  }
+  return null;
+}
+
+// Marks exactly one collected camera as the default: a RenderSettings prim's
+// camera relationship wins, otherwise the first camera in scene-graph order.
+function markDefaultCamera(api, root, graph, cameras) {
+  if (!cameras.length) return;
+  let defaultCamera = null;
+  if (typeof api.inspectPrimRelationships === "function") {
+    const renderSettingsEntries = graphEntriesOfType(graph, name => name === "rendersettings");
+    for (const entry of renderSettingsEntries) {
+      const primPath = text(entry.path);
+      if (!primPath) continue;
+      const cameraPath = findRenderSettingsCameraPath(api, root, primPath);
+      if (!cameraPath) continue;
+      const match = cameras.find(camera => camera.primPath === cameraPath);
+      if (match) { defaultCamera = match; break; }
+    }
+  }
+  if (!defaultCamera) defaultCamera = cameras[0];
+  defaultCamera.defaultCamera = true;
+}
+
 // UsdLux defaults for the attributes a dome light import reads, applied when
 // an attribute is unauthored. A DCC also writes declaration-only attributes
 // with no value at all, so an empty value text falls back the same way.
@@ -1956,7 +2036,21 @@ function copyStageResult(summary, draw, payloads, cameras, lights, metrics = nul
 }
 
 async function load(request) {
+  // A persistent worker must not let a second load inherit the first
+  // stage's warnings.
+  nativeWarnings.length = 0;
   const api = await runtime();
+  // Vendor closeStage unlinks every tracked MEMFS file, so the previous
+  // stage must be closed (and its driver released) before this load writes
+  // any new files, not after. This also stops scene A's assets resolving
+  // inside scene B.
+  if (activeStage) {
+    api.closeStage(activeStage);
+    api.deleteStageDriver?.(activeStage);
+    activeStage = undefined;
+  }
+  let inputCacheHits = 0;
+  let inputCacheMisses = 0;
   const fileTotal = (request.files ?? []).filter(file => file?.path).length;
   postMessage({ id: request.id, type: "progress", value: { phase: "worker", done: 0, total: fileTotal, fraction: 0.05, message: "Preparing input files" } });
   let loadedFiles = 0;
@@ -1979,32 +2073,52 @@ async function load(request) {
   const uploadedPaths = new Set();
   for (const file of request.files ?? []) {
     if (!file?.path) continue;
-    const source = typeof file.data?.arrayBuffer === "function"
-      ? await file.data.arrayBuffer()
-      : file.data;
-    const data = source instanceof ArrayBuffer
-      ? new Uint8Array(source)
-      : arrayCopy(source, Uint8Array);
+    const normalizedPath = normalizePath(file.path);
+    // MEMFS is wiped by closeStage on every load, so createDataFile always
+    // runs; this cache only avoids re-reading the File and re-decoding text.
+    const size = Number.isFinite(file.size) ? file.size : (typeof file.data?.size === "number" ? file.data.size : undefined);
+    const lastModified = Number.isFinite(file.lastModified) ? file.lastModified
+      : (typeof file.data?.lastModified === "number" ? file.data.lastModified : -1);
+    const cacheKey = `${normalizedPath}|${size ?? -1}|${lastModified}`;
+    const cached = inputCacheGet(cacheKey);
+    let data = cached?.bytes;
+    const cachedText = cached?.text;
+    if (data) {
+      inputCacheHits++;
+    } else {
+      inputCacheMisses++;
+      const source = typeof file.data?.arrayBuffer === "function"
+        ? await file.data.arrayBuffer()
+        : file.data;
+      data = source instanceof ArrayBuffer
+        ? new Uint8Array(source)
+        : arrayCopy(source, Uint8Array);
+    }
     if (!data) continue;
-    uploadedPaths.add(normalizePath(file.path));
-    if (normalizePath(file.path) === requestedRootPath) rootMetrics = parseRootUsdMetrics(data);
+    uploadedPaths.add(normalizedPath);
+    if (normalizedPath === requestedRootPath) rootMetrics = parseRootUsdMetrics(data);
     // Only text layers (#usda magic) under the cap are scanned; a binary
     // crate (PXR-USDC) decoded as a string can exceed V8's limit and kill
     // the tab before the stage loads (1.86 GB Lion crate, 2026-09-08).
+    let resolvedText;
     if (/\.usda?$/i.test(String(file.path))) {
       const isTextLayer = data.length >= 6 && data[0] === 0x23 && data[1] === 0x75 && data[2] === 0x73 && data[3] === 0x64 && data[4] === 0x61;
       if (isTextLayer && data.length <= OVERRIDE_SCAN_MAX_BYTES) {
         try {
-          const textLayer = new TextDecoder().decode(data);
-          usdaTexts.push({ path: file.path, text: textLayer });
+          resolvedText = cachedText !== undefined ? cachedText : new TextDecoder().decode(data);
+          usdaTexts.push({ path: file.path, text: resolvedText });
         } catch { /* skip */ }
       } else if (isTextLayer) {
         scanWarnings.push(`USD text layer too large to read material edits from: ${file.path} (${(data.length / 1048576).toFixed(1)} MB)`);
       }
     } else if (/\.mtlx$/i.test(String(file.path)) && data.length <= OVERRIDE_SCAN_MAX_BYTES) {
-      try { mtlxFileTextsByPath.set(normalizePath(file.path), new TextDecoder().decode(data)); } catch { /* skip */ }
+      try {
+        resolvedText = cachedText !== undefined ? cachedText : new TextDecoder().decode(data);
+        mtlxFileTextsByPath.set(normalizedPath, resolvedText);
+      } catch { /* skip */ }
     }
-    api.createDataFile(normalizePath(file.path), data);
+    inputCacheAdmit(cacheKey, data, resolvedText);
+    api.createDataFile(normalizedPath, data);
     loadedFiles++;
     postMessage({ id: request.id, type: "progress", value: {
       phase: "worker", done: loadedFiles, total: fileTotal,
@@ -2015,13 +2129,14 @@ async function load(request) {
   if (!loadedFiles) throw new Error("USD file buffers were empty or not transferable");
   const root = normalizePath(request.rootPath);
   if (!root) throw new Error("USD rootPath is required");
-  if (activeStage) api.closeStage(activeStage);
-  activeStage = root;
   postMessage({ id: request.id, type: "progress", value: { phase: "parse", done: 0, total: 0, fraction: 0.3, message: "Composing stage" } });
   stderrBuffer.length = 0;
   const summary = api.openStage(root, true);
   const openStageStderrLines = stderrBuffer.slice();
   if (summary?.error) throw new Error(summary.error);
+  // Only adopt the stage as active once openStage has succeeded, so a
+  // failed load never leaves a half-composed stage marked as closeable.
+  activeStage = root;
   const stageMetrics = resolveStageMetrics(summary, rootMetrics);
   postMessage({ id: request.id, type: "progress", value: { phase: "parse", done: 1, total: 1, fraction: 0.4, message: "Composed stage" } });
   if (!api.createStageDriver(root)) throw new Error("OpenUSD stage driver could not be created");
@@ -2103,7 +2218,7 @@ async function load(request) {
   // once here.
   for (const mesh of drawSnapshot.meshes) applyOrientation(mesh);
   {
-    const levels = Math.max(0, Math.min(2, Number.isFinite(request.subdivisionLevel) ? request.subdivisionLevel : 1));
+    const levels = Math.max(0, Math.min(2, Number.isFinite(request.subdivisionLevel) ? request.subdivisionLevel : 0));
     if (levels > 0) {
       const MESH_TRIANGLE_LIMIT = 600000;
       const STAGE_TRIANGLE_LIMIT = 6000000;
@@ -2166,6 +2281,7 @@ async function load(request) {
   } });
   const cameraWarnings = [];
   const cameras = collectCameras(api, root, graph, message => cameraWarnings.push(message));
+  markDefaultCamera(api, root, graph, cameras);
   const lightWarnings = [];
   const lights = collectLights(api, root, graph, message => lightWarnings.push(message));
   const result = copyStageResult(summary, drawSnapshot, payloadSnapshot, cameras, lights, stageMetrics);
@@ -2228,6 +2344,10 @@ async function load(request) {
       result.diagnostics = { unavailable: true };
     }
   }
+  result.diagnostics = {
+    ...(result.diagnostics ?? {}),
+    inputCache: { hits: inputCacheHits, misses: inputCacheMisses, bytes: inputCacheBytes },
+  };
   const transfer = result.transfer;
   delete result.transfer;
   try {

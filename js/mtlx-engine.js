@@ -4033,10 +4033,10 @@ const GEOMPROP_ITEM_SIZE = { float: 1, vec2: 2, vec3: 3, vec4: 4 };
 // already carry: vec2 aliases "uv", other float types get a zero-filled
 // attribute, integer types are skipped. `notify(text)` receives one notice
 // per unbound geomprop; callers dedupe and surface it to the user.
-const bindGeompropAttributes = (geometry, geomprops, notify) => {
+const bindGeompropAttributes = (geometry, geomprops, notify, constants = null) => {
     if (!geometry || !geomprops || !geomprops.length) return geometry;
     const uv = geometry.getAttribute('uv');
-    for (const { name, type } of geomprops) {
+    for (const { name, type, defaultValue } of geomprops) {
         const attrName = 'i_geomprop_' + name;
         if (geometry.getAttribute(attrName)) continue;
         if (type === 'vec2' && uv) {
@@ -4044,12 +4044,27 @@ const bindGeompropAttributes = (geometry, geomprops, notify) => {
             continue;
         }
         const itemSize = GEOMPROP_ITEM_SIZE[type];
+        // A constant the stage supplied wins, then the node's authored
+        // default; only a stream we know nothing about stays at zero.
+        const constant = constants && constants[name];
+        const fill = Array.isArray(constant) ? constant
+            : (Array.isArray(defaultValue) ? defaultValue : null);
+        let filled = '';
         if (itemSize) {
             const count = geometry.getAttribute('position') ? geometry.getAttribute('position').count : 0;
-            geometry.setAttribute(attrName, new THREE.BufferAttribute(new Float32Array(count * itemSize), itemSize));
+            const data = new Float32Array(count * itemSize);
+            if (fill && fill.length) {
+                for (let i = 0; i < count; i += 1) {
+                    for (let c = 0; c < itemSize; c += 1) data[i * itemSize + c] = Number(fill[Math.min(c, fill.length - 1)]) || 0;
+                }
+                filled = fill.slice(0, itemSize).join(', ');
+            }
+            geometry.setAttribute(attrName, new THREE.BufferAttribute(data, itemSize));
         }
         if (typeof notify === 'function') {
-            notify(`geompropvalue "${name}" (${type}) has no geometry stream in this viewer and reads zeros`);
+            notify(filled
+                ? `geompropvalue "${name}" (${type}) has no geometry stream in this viewer and reads ${filled}`
+                : `geompropvalue "${name}" (${type}) has no geometry stream in this viewer and reads zeros, so this material will not look as authored`);
         }
     }
     return geometry;
@@ -6347,9 +6362,31 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     let fs = stripVersion(mxShader.getSourceCode(PIXEL_STAGE));
     ({ vs, fs } = patchGeompropVaryings(vs, fs));
     const vertexInputs = parseVertexInputs(vs);
+    // geompropvalue nodes carry a `default` for when the stream is absent;
+    // collect it so binding can use it instead of zeros.
+    const geompropDefaults = new Map();
+    for (const node of vecToArray(mxSafe(() => colorspaceDoc && colorspaceDoc.getNodes(), []))) {
+        if (mxElCat(node) !== 'geompropvalue') continue;
+        const inputs = vecToArray(mxSafe(() => node.getInputs(), []));
+        let propName = '';
+        let value = '';
+        for (const input of inputs) {
+            const inputName = mxSafe(() => String(input.getName()), '');
+            const text = mxElAttr(input, 'value');
+            if (inputName === 'geomprop') propName = String(text || '');
+            else if (inputName === 'default') value = String(text || '');
+        }
+        if (!propName || !value) continue;
+        const parts = value.split(',').map((part) => Number(part.trim())).filter((part) => Number.isFinite(part));
+        if (parts.length) geompropDefaults.set(propName, parts);
+    }
     const geomprops = vertexInputs
         .filter((v) => v.name.startsWith('i_geomprop_'))
-        .map((v) => ({ name: v.name.slice('i_geomprop_'.length), type: v.type }));
+        .map((v) => {
+            const name = v.name.slice('i_geomprop_'.length);
+            const defaultValue = geompropDefaults.get(name) || null;
+            return defaultValue ? { name, type: v.type, defaultValue } : { name, type: v.type };
+        });
     const notices = [];
     if (colorspaceAliasResult) {
         for (const [key, count] of colorspaceAliasResult.rewrites) {

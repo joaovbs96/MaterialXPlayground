@@ -1,47 +1,178 @@
 const workerUrl = new URL("./usd-stage-worker.js", import.meta.url);
 let nextRequestId = 1;
 
+// The native usd-wg-webview runtime is an Emscripten wasm module that boots
+// slowly; this worker is now a persistent singleton reused across loads
+// instead of one Worker per call. It holds exactly one native stage, so
+// loads are queued strictly FIFO (see queueTail below).
+const IDLE_TIMEOUT_MS = 60000;
+const MAX_LOADS_PER_WORKER = 8;
+
+let worker = null;
+const pending = new Map(); // id -> { resolve, reject, onResult, onError, abort, onProgress, signal }
+let queueTail = Promise.resolve();
+let idleTimer = null;
+let loadsSinceBoot = 0;
+// path -> "size|lastModified" for the files used in the most recent load,
+// tracked from the caller's own file metadata (no I/O). A path that
+// reappears with a different identity means MEMFS or the worker's input
+// cache could otherwise serve stale bytes for it.
+let lastIdentity = new Map();
+const stats = { created: 0, discards: 0, loadsSinceBoot: 0 };
+
+function normalizePathForIdentity(path) {
+  return String(path ?? "").replaceAll("\\", "/").replace(/^\/+/, "");
+}
+
+function identityOf(file) {
+  return `${file?.size ?? -1}|${file?.lastModified ?? -1}`;
+}
+
+function clearIdleTimer() {
+  if (idleTimer === null) return;
+  clearTimeout(idleTimer);
+  idleTimer = null;
+}
+
+function armIdleTimer() {
+  clearIdleTimer();
+  idleTimer = setTimeout(() => discardWorker("idle timeout"), IDLE_TIMEOUT_MS);
+}
+
+// Terminates the worker (if any), clears state and rejects anything still
+// pending. Safe to call at any time, including with nothing in flight.
+function discardWorker(reason) {
+  clearIdleTimer();
+  const failed = worker;
+  worker = null;
+  if (failed) {
+    try { failed.terminate(); } catch { /* already gone */ }
+    stats.discards++;
+  }
+  loadsSinceBoot = 0;
+  stats.loadsSinceBoot = 0;
+  lastIdentity = new Map();
+  if (!pending.size) return;
+  const error = reason instanceof Error ? reason : new Error(`OpenUSD worker was discarded: ${reason}`);
+  const entries = Array.from(pending.values());
+  pending.clear();
+  for (const entry of entries) {
+    entry.signal?.removeEventListener("abort", entry.abort);
+    entry.reject(error);
+  }
+}
+
+export function resetUsdWorker() {
+  discardWorker("resetUsdWorker() was called");
+}
+
+export function usdWorkerStats() {
+  return { created: stats.created, discards: stats.discards, loadsSinceBoot: stats.loadsSinceBoot };
+}
+
+function ensureWorker() {
+  if (worker) return worker;
+  worker = new Worker(workerUrl, { type: "module", name: "openusd-stage" });
+  stats.created++;
+  worker.onmessage = event => {
+    const message = event.data;
+    const entry = message?.id != null ? pending.get(message.id) : undefined;
+    if (!entry) return;
+    if (message.type === "progress") entry.onProgress?.(message.value);
+    else if (message.type === "result") entry.onResult(message.result);
+    else if (message.type === "error") entry.onError(message.error);
+  };
+  // Any of these means the native runtime is in an unknown state; a fresh
+  // worker (and a fresh wasm boot) is the only safe recovery.
+  worker.onerror = event => discardWorker(event?.message || "OpenUSD worker failed");
+  worker.onmessageerror = () => discardWorker("OpenUSD worker message could not be deserialized");
+  return worker;
+}
+
+function runLoad(requestFiles, rootPath, onProgress, signal, purposePolicy, subdivisionLevel) {
+  if (signal?.aborted) return Promise.reject(new DOMException("USD stage load aborted", "AbortError"));
+
+  for (const file of requestFiles) {
+    if (!file?.path) continue;
+    const previous = lastIdentity.get(normalizePathForIdentity(file.path));
+    if (previous !== undefined && previous !== identityOf(file)) {
+      discardWorker("input file identity changed since the last load");
+      break;
+    }
+  }
+
+  clearIdleTimer();
+  const activeWorker = ensureWorker();
+  const id = nextRequestId++;
+
+  return new Promise((resolve, reject) => {
+    const entry = { onProgress, signal, resolve, reject };
+    const finish = (fn, value) => {
+      if (!pending.has(id)) return false;
+      pending.delete(id);
+      signal?.removeEventListener("abort", entry.abort);
+      if (!pending.size) armIdleTimer();
+      fn(value);
+      return true;
+    };
+    entry.abort = () => {
+      if (!finish(reject, new DOMException("USD stage load aborted", "AbortError"))) return;
+      // A native call cannot be interrupted, so an aborted load leaves a
+      // half-composed stage behind; the worker must be rebuilt.
+      discardWorker("load aborted");
+    };
+    entry.onResult = value => {
+      loadsSinceBoot++;
+      stats.loadsSinceBoot = loadsSinceBoot;
+      for (const file of requestFiles) {
+        if (file?.path) lastIdentity.set(normalizePathForIdentity(file.path), identityOf(file));
+      }
+      if (!finish(resolve, value)) return;
+      if (loadsSinceBoot >= MAX_LOADS_PER_WORKER) discardWorker("load budget reached");
+    };
+    entry.onError = message => {
+      if (finish(reject, new Error(message))) discardWorker("worker reported an error");
+    };
+    pending.set(id, entry);
+    if (signal?.aborted) { entry.abort(); return; }
+    signal?.addEventListener("abort", entry.abort, { once: true });
+    try {
+      // No transfer list: the caller keeps ownership of its buffers, since
+      // the same files are subsequently consumed by MaterialX.
+      activeWorker.postMessage({ id, type: "load", files: requestFiles, rootPath, purposePolicy, subdivisionLevel });
+    } catch (error) {
+      if (finish(reject, new Error(`OpenUSD request could not cross Worker boundary: ${error?.message ?? error}`))) {
+        discardWorker("postMessage failed");
+      }
+    }
+  });
+}
+
 /**
- * Compose and extract a USD/USDZ stage in a dedicated Worker.
+ * Compose and extract a USD/USDZ stage in a persistent, shared Worker.
  * Input ArrayBuffers are deliberately structured-cloned; the caller keeps
  * ownership because the same files are subsequently consumed by MaterialX.
  */
-export function loadUsdStage({ files, rootPath, onProgress, signal, purposePolicy = "defaultRender", subdivisionLevel = 1 }) {
+export function loadUsdStage({ files, rootPath, onProgress, signal, purposePolicy = "defaultRender", subdivisionLevel = 0 }) {
   if (!Array.isArray(files) || !files.length) return Promise.reject(new Error("USD files are required"));
   if (!rootPath) return Promise.reject(new Error("USD rootPath is required"));
-  const worker = new Worker(workerUrl, { type: "module", name: "openusd-stage" });
-  const id = nextRequestId++;
-  // Do not slice large buffers on the main thread. postMessage without a
-  // transfer list preserves caller ownership while the browser performs the
-  // structured clone; Blob/File values remain cheap handles until the Worker
-  // calls arrayBuffer().
-  const requestFiles = files.map(file => ({ path: file?.path, data: file?.data }));
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (fn, value) => {
-      if (settled) return;
-      settled = true;
-      signal?.removeEventListener("abort", abort);
-      worker.terminate();
-      fn(value);
+
+  const requestFiles = files.map(file => {
+    const data = file?.data;
+    return {
+      path: file?.path,
+      data,
+      size: typeof data?.size === "number" ? data.size : (typeof data?.byteLength === "number" ? data.byteLength : undefined),
+      lastModified: typeof data?.lastModified === "number" ? data.lastModified : undefined,
     };
-    const abort = () => finish(reject, new DOMException("USD stage load aborted", "AbortError"));
-    if (signal?.aborted) return abort();
-    signal?.addEventListener("abort", abort, { once: true });
-    worker.onmessage = event => {
-      const message = event.data;
-      if (message?.id !== id) return;
-      if (message.type === "progress") onProgress?.(message.value);
-      else if (message.type === "result") finish(resolve, message.result);
-      else if (message.type === "error") finish(reject, new Error(message.error));
-    };
-    worker.onerror = event => finish(reject, new Error(event.message || "OpenUSD worker failed"));
-    try {
-      worker.postMessage({ id, type: "load", files: requestFiles, rootPath, purposePolicy, subdivisionLevel });
-    } catch (error) {
-      finish(reject, new Error(`OpenUSD request could not cross Worker boundary: ${error?.message ?? error}`));
-    }
   });
+
+  // Strict FIFO: the worker holds exactly one native stage, so this request
+  // waits for every previously queued one to settle before it starts.
+  const runThisLoad = () => runLoad(requestFiles, rootPath, onProgress, signal, purposePolicy, subdivisionLevel);
+  const result = queueTail.then(runThisLoad, runThisLoad);
+  queueTail = result.then(() => {}, () => {});
+  return result;
 }
 
 export function usdRuntimeUrl() {

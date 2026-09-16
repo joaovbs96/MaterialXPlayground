@@ -68,11 +68,31 @@
     // else pulls in, then picks the shallowest unreferenced one so a folder
     // like the Teapot's (root usda referencing Geometry/* and Looks/*)
     // defaults to the actual root instead of leaving the picker empty.
+    // Keyed by the candidate set's own identity (path|size|lastModified per
+    // file, sorted and joined) so re-selecting the same folder skips the
+    // whole ASCII scan. Insertion-order eviction keeps this small.
+    const ROOT_LAYER_CACHE_MAX = 8;
+    const rootLayerCache = new Map();
+    const cacheRootLayer = (key, value) => {
+        if (rootLayerCache.size >= ROOT_LAYER_CACHE_MAX) rootLayerCache.delete(rootLayerCache.keys().next().value);
+        rootLayerCache.set(key, value);
+        return value;
+    };
     async function pickDefaultRootLayer(files) {
         const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
         const candidates = rootCandidates(files);
         if (candidates.length === 0) return '';
         if (candidates.length === 1) return candidates[0].path;
+        const cacheKey = candidates.map((f) => {
+            const size = f && f.data && typeof f.data.size === 'number' ? f.data.size : -1;
+            const modified = f && f.data && typeof f.data.lastModified === 'number' ? f.data.lastModified : -1;
+            return String(f.path) + '|' + size + '|' + modified;
+        }).sort().join(',');
+        if (rootLayerCache.has(cacheKey)) {
+            const elapsedMs = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt;
+            console.debug('pickDefaultRootLayer: scanned', candidates.length, 'candidates in', elapsedMs.toFixed(1) + 'ms (cached)');
+            return rootLayerCache.get(cacheKey);
+        }
         const candidateKeys = new Set(candidates.map((f) => String(f.path).replace(/\\/g, '/').toLowerCase()));
         const referenced = new Set();
         // Which OTHER candidates a layer references, keyed by the scanning
@@ -108,7 +128,7 @@
         const topLevel = candidates.filter((f) => !referenced.has(String(f.path).replace(/\\/g, '/').toLowerCase()));
         const elapsedMs = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt;
         console.debug('pickDefaultRootLayer: scanned', candidates.length, 'candidates in', elapsedMs.toFixed(1) + 'ms');
-        if (topLevel.length === 0) return oldDefaultRoot(candidates);
+        if (topLevel.length === 0) return cacheRootLayer(cacheKey, oldDefaultRoot(candidates));
         const isComposition = (f) => outgoing.has(String(f.path).replace(/\\/g, '/').toLowerCase());
         const isNamedRoot = (f) => rootNamePattern.test(f.path);
         topLevel.sort((a, b) => {
@@ -123,7 +143,16 @@
             const aPath = String(a.path), bPath = String(b.path);
             return aPath < bPath ? -1 : (aPath > bPath ? 1 : 0);
         });
-        return topLevel[0].path;
+        return cacheRootLayer(cacheKey, topLevel[0].path);
+    }
+    // The camera the picker should apply with no user interaction: the one
+    // the worker flags defaultCamera, else the first authored camera, else
+    // null (auto framing). Defensive since the flag may not exist yet.
+    function defaultCameraPathFor(cams) {
+        const list = Array.isArray(cams) ? cams : [];
+        if (list.length === 0) return null;
+        const flagged = list.find((c) => c && c.defaultCamera);
+        return (flagged || list[0]).primPath || null;
     }
     // Root-layer candidates from a shared upload often share one long
     // prefix (a zip's top folder), so the basename alone tells them apart
@@ -527,7 +556,10 @@
         const [dragOver, setDragOver] = React.useState(false);
         const [selectedPrim, setSelectedPrim] = React.useState('');
         const [selectedCamera, setSelectedCamera] = React.useState('default');
-        React.useEffect(() => { setSelectedCamera('default'); }, [stage]);
+        React.useEffect(() => {
+            const stageCameras = Array.isArray(stage && stage.cameras) ? stage.cameras : [];
+            setSelectedCamera(defaultCameraPathFor(stageCameras) || 'default');
+        }, [stage]);
         const [rootTouched, setRootTouched] = React.useState(false);
         const [envFileName, setEnvFileName] = React.useState('');
         const [envImportError, setEnvImportError] = React.useState(null);
@@ -536,7 +568,7 @@
         const [backdrop, setBackdrop] = React.useState('studio');
         const [textureSizeTick, setTextureSizeTick] = React.useState(0);
         const [subdivisionLevel, setSubdivisionLevel] = React.useState(
-            () => (typeof storedSceneSubdivisionLevel === 'function' ? storedSceneSubdivisionLevel() : 1)
+            () => (typeof storedSceneSubdivisionLevel === 'function' ? storedSceneSubdivisionLevel() : 0)
         );
         const subdivisionLevelRef = React.useRef(subdivisionLevel);
         subdivisionLevelRef.current = subdivisionLevel;
@@ -877,7 +909,12 @@
                     callHandle('setAutoRotate', settings.autoRotate);
                     if (currentEnvironmentRef.current && !useDome) callHandle('setEnvironment', currentEnvironmentRef.current);
                     setHandle(nextHandle); setStatus('rendered');
-                    if (nextHandle && nextHandle.frameAll) nextHandle.frameAll();
+                    // Apply the chosen camera up front instead of framing
+                    // first, so the view never visibly jumps; applyCamera
+                    // already falls back to frameAll when the path is missing.
+                    const initialCameraPath = defaultCameraPathFor(stage && stage.cameras);
+                    if (initialCameraPath && nextHandle.applyCamera) nextHandle.applyCamera(initialCameraPath);
+                    else if (nextHandle && nextHandle.frameAll) nextHandle.frameAll();
                 } catch (e) { if (live && mountedRef.current && generationRef.current === rendererGeneration && !rendererController?.signal?.aborted) { setError(String(e && e.message || e)); setStatus('error'); } }
             })();
             return () => { live = false; };
@@ -1404,7 +1441,7 @@
                 <SelectRow label="Subdivision"
                     control={
                         <MtlxSelect value={subdivisionLevel} options={[0, 1, 2]} labels={{ 0: 'Off', 1: '1', 2: '2' }}
-                            onChange={pickSubdivisionLevel} defValue={1} size="sm" disabled={busy} />
+                            onChange={pickSubdivisionLevel} defValue={0} size="sm" disabled={busy} />
                     }
                     description="Loop-subdivides catmullClark meshes for preview; the runtime cannot expose the cage, so this approximates the limit surface." />
             </React.Fragment>
@@ -1450,7 +1487,12 @@
                                     titles={rootTitles}
                                     title={rootPath || undefined}
                                     popWidth={320}
-                                    onChange={(v) => { setRootPath(v); setRootTouched(true); }}
+                                    onChange={(v) => {
+                                        setRootPath(v); setRootTouched(true);
+                                        // One-click scene switching: reload the newly picked root
+                                        // right away instead of waiting on the explicit Load button.
+                                        if (filesRef.current && filesRef.current.length > 0) load(filesRef.current, v);
+                                    }}
                                     defValue={null}
                                     size="lg"
                                     variant="field"
@@ -1462,9 +1504,10 @@
 
                     {cameras.length > 0 && (() => {
                         const cameraOptions = ['default', ...cameras.map((c) => c.primPath)];
-                        const cameraLabels = { default: 'Default (auto framing)' };
+                        const cameraLabels = { default: 'Auto framing' };
                         const cameraTitles = {};
                         cameras.forEach((c) => { cameraLabels[c.primPath] = c.name || c.primPath; cameraTitles[c.primPath] = c.primPath; });
+                        const defaultCameraPath = defaultCameraPathFor(cameras);
                         return (
                             <div data-testid="usd-scene-camera-select">
                                 <FieldLabel label="Camera" />
@@ -1474,6 +1517,7 @@
                                     labels={cameraLabels}
                                     titles={cameraTitles}
                                     onChange={selectCamera}
+                                    defValue={defaultCameraPath || 'default'}
                                     size="lg"
                                     variant="field"
                                     block
