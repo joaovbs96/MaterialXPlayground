@@ -474,6 +474,55 @@
     ];
     const KNOWN_ISSUES_POPOVER_W = 260;
 
+    // Named "quality" throughout, never "preset" alone: MTLX_PRESETS and
+    // MtlxPresetPicker already mean material presets app-wide.
+    // These reference the same top-level consts js/usd-scene-renderer.js
+    // declares (shared global scope, not window properties); the fallback
+    // only matters if that script somehow loads after this one.
+    const QUALITY_TEXTURE_MAX_SIZE_DEFAULT = (typeof SCENE_TEXTURE_MAX_SIZE_DEFAULT !== 'undefined')
+        ? SCENE_TEXTURE_MAX_SIZE_DEFAULT
+        : (typeof storedSceneTextureMaxSize === 'function' ? storedSceneTextureMaxSize() : 2048);
+    const QUALITY_TEXTURE_BUDGET_DEFAULT_GIB = (typeof SCENE_TEXTURE_BUDGET_DEFAULT_GIB !== 'undefined')
+        ? SCENE_TEXTURE_BUDGET_DEFAULT_GIB
+        : (typeof storedSceneTextureBudgetBytes === 'function' ? Math.round(storedSceneTextureBudgetBytes() / (1024 * 1024 * 1024)) : 1);
+    const QUALITY_SUBDIVISION_DEFAULT = (typeof SCENE_SUBDIVISION_DEFAULT !== 'undefined')
+        ? SCENE_SUBDIVISION_DEFAULT
+        : (typeof storedSceneSubdivisionLevel === 'function' ? storedSceneSubdivisionLevel() : 1);
+
+    // Not governed by a quality level, on purpose: stage lights (a lighting
+    // change, not a quality one); display transform, exposure, bloom,
+    // backdrop and env rotation (look, not cost); SSR (force-parked);
+    // heightToNormalTexel and the specular env method (engine-global,
+    // shared with other tools, no Scene UI); HDR presentation, MSAA sample
+    // count and FXAA (they live only on the renderer handle, so they cannot
+    // be set before a stage loads).
+    const SCENE_QUALITY_LEVELS = [
+        {
+            id: 'performance', label: 'Performance',
+            title: 'Lowest settings, fastest loading and drawing',
+            values: {
+                textureMaxSize: 512, textureBudgetGib: 1, subdivision: 0,
+                shadows: false, ao: false, skyVis: false, transparency: false,
+            },
+        },
+        {
+            id: 'default', label: 'Default',
+            title: 'Balanced quality and speed',
+            values: {
+                textureMaxSize: QUALITY_TEXTURE_MAX_SIZE_DEFAULT, textureBudgetGib: QUALITY_TEXTURE_BUDGET_DEFAULT_GIB, subdivision: QUALITY_SUBDIVISION_DEFAULT,
+                shadows: true, ao: true, skyVis: true, transparency: true,
+            },
+        },
+        {
+            id: 'quality', label: 'Quality',
+            title: 'Highest settings, slowest loading and drawing',
+            values: {
+                textureMaxSize: Infinity, textureBudgetGib: 4, subdivision: 2,
+                shadows: true, ao: true, skyVis: true, transparency: true,
+            },
+        },
+    ];
+
     function SceneViewerApp({ active = true }) {
         const narrow = useNarrowPane();
         const [sidebarOpen, setSidebarOpen] = React.useState(!narrow);
@@ -1190,6 +1239,41 @@
         // mutation that doesn't otherwise touch React state.
         void textureSizeTick;
 
+        // Kept next to SCENE_QUALITY_LEVELS's definition in spirit (see the
+        // module-level block above) so the table and this comparison cannot
+        // drift apart: whichever level matches every governed setting wins.
+        const activeQualityLevel = SCENE_QUALITY_LEVELS.find((level) => {
+            const v = level.values;
+            return Number(textureMaxSize) === v.textureMaxSize
+                && Number(textureBudgetGib) === v.textureBudgetGib
+                && Number(subdivisionLevel) === v.subdivision
+                && shadowsOn === v.shadows
+                && aoOn === v.ao
+                && skyVisOn === v.skyVis
+                && sceneTransparency === v.transparency;
+        });
+        const activeQualityPreset = activeQualityLevel ? activeQualityLevel.id : 'custom';
+        // Fans out through the existing handlers so each governed value keeps
+        // its usual setState + callHandle + localStorage write; never
+        // reimplements those writes. Order: textures, then booleans, then
+        // subdivision last (only it reloads the stage). Any step whose
+        // value already matches is skipped.
+        const applyQualityPreset = (id) => {
+            const level = SCENE_QUALITY_LEVELS.find((entry) => entry.id === id);
+            if (!level) return;
+            const v = level.values;
+            if (Number(textureMaxSize) !== v.textureMaxSize) pickTextureMaxSize(v.textureMaxSize);
+            if (Number(textureBudgetGib) !== v.textureBudgetGib) pickTextureBudgetGib(v.textureBudgetGib);
+            if (shadowsOn !== v.shadows) { setShadowsOn(v.shadows); callHandle('setShadowsEnabled', v.shadows); writeStoredSceneBool('mtlx_scene_shadows', v.shadows); }
+            if (aoOn !== v.ao) { setAoOn(v.ao); callHandle('setAmbientOcclusionEnabled', v.ao); writeStoredSceneBool('mtlx_scene_ao', v.ao); }
+            if (skyVisOn !== v.skyVis) { setSkyVisOn(v.skyVis); callHandle('setSkyVisibility', v.skyVis); writeStoredSceneBool('mtlx_scene_skyvis', v.skyVis); }
+            if (sceneTransparency !== v.transparency) {
+                setSceneTransparencyState(v.transparency);
+                if (window.setUsdSceneTransparency) window.setUsdSceneTransparency(v.transparency);
+            }
+            if (v.subdivision !== subdivisionLevel) pickSubdivisionLevel(v.subdivision);
+        };
+
         const fraction = progress.fraction;
         const phaseLabels = { ...Object.fromEntries(USD_SCENE_LOAD_PHASES.map((entry) => [entry.phase, entry.label])), 'gpu-program': 'Checking GPU programs' };
         const phaseIndex = USD_SCENE_LOAD_PHASES.findIndex((entry) => entry.phase === progress.phase);
@@ -1243,6 +1327,55 @@
                 {description ? <div className="mt-1 text-[11px] text-gray-400">{description}</div> : null}
             </div>
         );
+        // Three-way quality control shared by the toolbar and the popover.
+        // Kept local rather than moved into js/shared/mtlx-ui.jsx, which
+        // feeds the embed bundle where Tailwind utilities silently no-op.
+        const QUALITY_SEGMENT_TONES = {
+            hud: {
+                wrap: 'inline-flex rounded-lg border border-gray-600/50 overflow-hidden',
+                idle: 'bg-gray-900/70 backdrop-blur text-gray-300 hover:bg-gray-700 hover:text-gray-100',
+                active: 'bg-blue-600/80 text-white border-blue-500',
+            },
+            panel: {
+                wrap: 'flex flex-1 rounded-lg border border-gray-600/50 overflow-hidden',
+                idle: 'bg-gray-800/80 text-gray-300 hover:bg-gray-700/80',
+                active: 'bg-blue-500/[0.12] text-blue-300',
+            },
+        };
+        const QualitySegments = ({ value, onChange, disabled, tone }) => {
+            const cls = QUALITY_SEGMENT_TONES[tone] || QUALITY_SEGMENT_TONES.hud;
+            return (
+                <div
+                    role="group"
+                    aria-label="Render quality"
+                    data-testid={tone === 'panel' ? 'usd-scene-quality-popover' : 'usd-scene-quality-toolbar'}
+                    className={cls.wrap}
+                >
+                    {SCENE_QUALITY_LEVELS.map((level, i) => {
+                        const active = value === level.id;
+                        return (
+                            <button
+                                key={level.id}
+                                type="button"
+                                data-testid={'usd-scene-quality-' + level.id}
+                                data-active={active ? 'true' : undefined}
+                                aria-pressed={active}
+                                title={level.title}
+                                disabled={disabled}
+                                onClick={() => onChange(level.id)}
+                                className={'h-7 px-2.5 text-[11px] font-medium whitespace-nowrap transition-colors '
+                                    + 'first:rounded-l-[7px] last:rounded-r-[7px] disabled:opacity-60 disabled:cursor-not-allowed '
+                                    + (tone === 'panel' ? 'flex-1 ' : '')
+                                    + (i > 0 ? 'border-l border-gray-600/50 ' : '')
+                                    + (active ? cls.active : cls.idle)}
+                            >
+                                {level.label}
+                            </button>
+                        );
+                    })}
+                </div>
+            );
+        };
         const renderDisplayTab = () => (
             <React.Fragment>
                 <SelectRow
@@ -1793,6 +1926,7 @@
                             <MtlxIcon name="settings-cog" className="w-4 h-4" />
                             <span>Render settings</span>
                         </button>
+                        <QualitySegments tone="hud" value={activeQualityPreset} onChange={applyQualityPreset} disabled={busy} />
                     </div>
 
                     {renderSettingsMounted && (
@@ -1802,6 +1936,16 @@
                             className={(renderSettingsOpen ? '' : 'hidden ') + 'absolute z-30 top-11 left-2 flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden'}
                             style={{ width: 'min(560px, calc(100% - 16px))', maxHeight: 'calc(100% - 56px)' }}
                         >
+                            <div className="flex-none px-3 py-2 border-b border-gray-700">
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs font-medium text-gray-300">Quality</span>
+                                    <QualitySegments tone="panel" value={activeQualityPreset} onChange={applyQualityPreset} disabled={busy} />
+                                    {activeQualityPreset === 'custom' ? (
+                                        <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-gray-700/60 border border-gray-500/50 text-gray-300">Custom</span>
+                                    ) : null}
+                                </div>
+                                <div className="mt-1 text-[11px] text-gray-400">Changing any individual setting below switches this to Custom.</div>
+                            </div>
                             <div className="flex-none flex items-center gap-1 px-2 pt-2 border-b border-gray-700 overflow-x-auto">
                                 {RENDER_TABS.map((tab) => (
                                     <button
