@@ -538,9 +538,9 @@ function MaterialViewerApp({
   // The hook's takeScreenshot has no internal try/catch (the
   // previewers swallow failures silently); here it surfaces as
   // an error banner instead, so the wrapping stays local.
-  const takeScreenshot = () => {
+  const takeScreenshot = async () => {
     try {
-      takeScreenshotRaw();
+      await takeScreenshotRaw();
     } catch (e) {
       setError('Save PNG preview failed: ' + errMsg(e));
     }
@@ -1063,6 +1063,7 @@ function MaterialViewerApp({
           renderable: target.node,
           lightData: loaded.lightData,
           label: target.name,
+          materialName: target.name,
           needsLighting: true,
           geomName: geom,
           // Constrained orbit for the full scene; ignored for other geoms.
@@ -1127,6 +1128,15 @@ function MaterialViewerApp({
       }
     };
   }, [renderables, chosenMat, geom, customKey, glEpoch, displayTransform, heightToNormalTexel]);
+  React.useEffect(() => {
+    const onDisplacementStatus = e => {
+      const view = viewRef.current;
+      if (!view || !e.detail || e.detail.view !== view) return;
+      setMaterialNotices(view.notices && view.notices.length ? view.notices : null);
+    };
+    window.addEventListener('mtlx-displacement-status', onDisplacementStatus);
+    return () => window.removeEventListener('mtlx-displacement-status', onDisplacementStatus);
+  }, []);
 
   // Backs the Scene card's transparency-forcing toggle (browser
   // only): local mirror of the engine's persisted value, replacing
@@ -1566,7 +1576,7 @@ function MaterialViewerApp({
     }
   })), /*#__PURE__*/React.createElement("div", {
     className: "mt-1 text-[11px] text-gray-400"
-  }, "Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.")), texReport && texReport.missing.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
+  }, "Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews."), /*#__PURE__*/React.createElement(DisplacementSettingsRows, null)), texReport && texReport.missing.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
     icon: "alert-triangle",
     title: "Textures",
     summary: texReport.missing.length + ' unresolved',
