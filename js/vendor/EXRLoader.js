@@ -2133,7 +2133,10 @@
 					if ( true_y >= EXRDecoder.height ) break;
 					for ( let channelID = 0; channelID < EXRDecoder.channels; channelID ++ ) {
 
-						const cOff = channelOffsets[ EXRHeader.channels[ channelID ].name ];
+						// Local patch (2026-09-20, see js/vendor/VENDORED-CHANGES.md): the RGBA
+						// channelOffsets table only applies when the output is actually 4-channel;
+						// otherwise each channel writes to its own contiguous output slot.
+						const cOff = EXRDecoder.outputChannels === 4 ? channelOffsets[ EXRHeader.channels[ channelID ].name ] : channelID;
 						for ( let x = 0; x < EXRDecoder.width; x ++ ) {
 
 							tmpOffset.value = ( line_y * ( EXRDecoder.channels * EXRDecoder.width ) + channelID * EXRDecoder.width + x ) * EXRDecoder.inputSize;
