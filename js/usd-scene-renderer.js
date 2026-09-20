@@ -98,15 +98,32 @@ const storedSceneAoStrength = () => {
 };
 
 // Baked single-bounce diffuse light: blocker albedo times the blocker's own
-// sky visibility, on the sky bake's grid. Fills back in some of what the sky
-// visibility/AO volume terms occlude, since MaterialX's IBL has no bounce
-// light at all. Strictly bounded by the occlusion it replaces (see
-// mx_sky_bounce's min(1.0, ...) caller), so default-on is safe.
+// sky visibility, on the sky bake's grid, ADDED to the shaded colour as an
+// extra Lambertian contribution (patchDiffuseBounceAdd in
+// js/mtlx-engine.js), not folded into the "occlusion" scalar: canonical.md
+// (2026-09-20) found the analytic key light supplies most of a point's
+// diffuse irradiance and sits entirely outside occlusion's reach, so
+// scaling only the small residual it does multiply cannot recover a
+// Karma-sized indirect share. Sized against a reference irradiance
+// (computeBounceERef) that represents the whole scene's light, not just
+// that residual. Bounded by the [0,1] baked volume, the [0,1] strength
+// clamp and a non-negative E_ref, so it can only add light, never remove
+// it or invert sign; default-on is safe.
 const SCENE_BOUNCE_KEY = 'mtlx_scene_bounce';
 const SCENE_BOUNCE_STRENGTH_KEY = 'mtlx_scene_bounce_strength';
+// SAFETY OVERRIDE (2026-09-20): default OFF, not on. Verification on
+// egg_brown found a reproducible renderer hang (no console error, no
+// exception, the page just stops responding) whenever this setting is
+// actually enabled, on the real Scene material set; a real GLSL bug in
+// patchDiffuseBounceAdd's injection (splitting one statement into two by
+// appending after its semicolon) was found and fixed, but the hang
+// persisted after that fix and its root cause was not isolated within the
+// verification budget. Opt-in only (mtlx_scene_bounce=1) until this is
+// root-caused; do not flip the default back to true without a fresh,
+// successful headed capture confirming no hang.
 const storedSceneBounce = () => {
     if (window.top !== window) return false;
-    try { return localStorage.getItem(SCENE_BOUNCE_KEY) !== '0'; } catch (e) { return true; }
+    try { return localStorage.getItem(SCENE_BOUNCE_KEY) === '1'; } catch (e) { return false; }
 };
 const storedSceneBounceStrength = () => {
     if (window.top !== window) return 0.8;
@@ -1337,6 +1354,42 @@ const sceneBounceAlbedo = (object) => {
         return clampAlbedo(luminance(Number(displayColor[0]) || 0, Number(displayColor[1]) || 0, Number(displayColor[2]) || 0));
     }
     return 0.5;
+};
+
+// Reference irradiance for the additive diffuse bounce term
+// (patchDiffuseBounceAdd in js/mtlx-engine.js): the solid-angle-weighted
+// mean, over EVERY possible surface normal, of the FULL scene irradiance
+// (dome convolution mean plus the extracted key light's own contribution),
+// unclamped and with the key light included. canonical.md (2026-09-20)
+// found the key light supplies most of a typical point's diffuse
+// irradiance and sits entirely outside the "occlusion" scalar's reach, so
+// scaling the small IBL-only residual that scalar multiplies cannot reach
+// a Karma-sized indirect share; this reference has to represent the whole
+// picture instead.
+//
+// mean_n(E_key(n)) = intensity / 4 for a directional light of irradiance
+// `intensity` at normal incidence: the integral over the FULL sphere of
+// max(dot(n, L), 0) dOmega_n is the standard cosine-hemisphere integral
+// (equals pi, independent of L's direction by symmetry, since for every n
+// with dot(n,L)>0 there is an equal-measure set of directions by
+// rotational symmetry around L), so the solid-angle AVERAGE over the full
+// sphere (divide by the sphere's own solid angle, 4*pi) is pi / (4*pi) =
+// 1/4. mean_n(E_conv(n)) (env.irradianceConvolvedMean, computed once in
+// ensureConvolvedIrradiance from the same 64x32/128x64 convolution texel
+// data) is, by the matching identity (swap the order of integration over
+// the convolution's own hemisphere sum), exactly the solid-angle-weighted
+// mean radiance of the source environment map -- proved in that function's
+// own comment, not re-derived here.
+const computeBounceERef = (env, envExposure) => {
+    const luminance = (r, g, b) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const envMean = (env && Number.isFinite(env.irradianceConvolvedMean)) ? env.irradianceConvolvedMean : 0;
+    let keyMean = 0;
+    if (env && env.keyLight && Array.isArray(env.keyLight.color) && env.keyLight.color.length >= 3 && Number.isFinite(env.keyLight.intensity)) {
+        keyMean = luminance(env.keyLight.color[0], env.keyLight.color[1], env.keyLight.color[2]) * env.keyLight.intensity / 4;
+    }
+    const exposure = Number.isFinite(envExposure) ? Math.max(0, envExposure) : 1;
+    const value = (envMean + keyMean) * exposure;
+    return Number.isFinite(value) && value > 0 ? value : 0;
 };
 
 const sceneNeutralMaterial = (label) => new THREE.MeshNormalMaterial({
@@ -2780,6 +2833,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
             aoVolumeMap: aoEnabled ? aoVolumeTexture : null, aoVolumeMin, aoVolumeSize, aoVolumeStrength: aoStrength, aoVolumeCell,
             skyBounceMap: bounceEnabled ? skyBounceTexture : null, skyBounceMin, skyBounceSize, skyBounceStrength: bounceStrength, skyBounceCell,
+            bounceERef: bounceEnabled ? computeBounceERef(env, envExposure) : 0,
             envTilt,
             thicknessScale, refractionTwoSided: true, sceneRadius,
             environmentIndirectScale: shadowDiagnostic ? shadowDiagnostic.environmentIndirectScale : 1,
@@ -5404,9 +5458,11 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             }
         };
         // Pushes the baked bounce volume onto every live material. Strength
-        // is 0 whenever the setting is off or nothing is baked yet, which
-        // makes the injected mx_sky_bounce() early-return an exact no-op.
+        // and the reference irradiance are both 0 whenever the setting is
+        // off or nothing is baked yet, which makes the injected
+        // mx_diffuse_bounce_add() early-return an exact no-op.
         const applySkyBounce = () => {
+            const eRef = bounceEnabled ? computeBounceERef(env, envExposure) : 0;
             for (const material of materials) {
                 const u = material.uniforms;
                 if (!u) continue;
@@ -5415,6 +5471,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 if (u.u_skyBounceSize && skyBounceSize) u.u_skyBounceSize.value.copy(skyBounceSize);
                 if (u.u_skyBounceCell) u.u_skyBounceCell.value = skyBounceCell;
                 if (u.u_skyBounceStrength) u.u_skyBounceStrength.value = (bounceEnabled && skyBounceTexture) ? bounceStrength : 0;
+                if (u.u_bounceERef) u.u_bounceERef.value = (bounceEnabled && skyBounceTexture) ? eRef : 0;
             }
         };
         const applyShadowMatrix = () => {
@@ -5510,6 +5567,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
             aoVolumeMap: aoEnabled ? aoVolumeTexture : null, aoVolumeMin, aoVolumeSize, aoVolumeStrength: aoStrength, aoVolumeCell,
             skyBounceMap: bounceEnabled ? skyBounceTexture : null, skyBounceMin, skyBounceSize, skyBounceStrength: bounceStrength, skyBounceCell,
+            bounceERef: bounceEnabled ? computeBounceERef(env, envExposure) : 0,
                     envTilt,
                     thicknessScale, refractionTwoSided: true, sceneRadius,
                     envRotationRad, envExposure,

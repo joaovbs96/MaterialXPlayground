@@ -1,16 +1,18 @@
 // tests/embed/usd-scene-bounce.spec.mjs: "no effect outside the Scene" for
-// the diffuse bounce term (js/mtlx-engine.js's mx_sky_bounce, injected by
-// patchAmbientOcclusion; see bounce/implementation.md). Two independent
-// checks:
-//   1. a plain (non-Scene) #!viewer compile DOES get the mx_sky_bounce()
-//      call textually (needsLighting:true gives it the same
-//      positionWorld/normalWorld varyings the existing sky-visibility and
-//      AO-volume hooks already rely on there, and this one follows the
-//      identical pattern), but its u_skyBounceStrength uniform defaults to
-//      0, which is what actually makes it an exact no-op: the injected
-//      function's first line is "if (u_skyBounceStrength <= 0.0) return
-//      0.0;". This mirrors u_skyVisStrength/u_aoVolumeStrength, both of
-//      which are already 0 by default outside the Scene;
+// the diffuse bounce term (js/mtlx-engine.js's mx_diffuse_bounce_add,
+// injected by patchDiffuseBounceAdd; see bounce/implementation.md and its
+// v2 addendum). Two independent checks:
+//   1. a plain (non-Scene) #!viewer compile DOES get the
+//      mx_diffuse_bounce_add() call textually (needsLighting:true gives it
+//      the same positionWorld/normalWorld varyings the existing
+//      sky-visibility/AO-volume hooks already rely on there, and
+//      standard_surface's own generated code always has
+//      base_color_nonnegative_out in scope), but its u_skyBounceStrength
+//      AND u_bounceERef uniforms both default to 0, which is what actually
+//      makes it an exact no-op (the injected function's first line is "if
+//      (u_skyBounceStrength <= 0.0 || u_bounceERef <= 0.0) return
+//      vec3(0.0);"). This mirrors u_skyVisStrength/u_aoVolumeStrength,
+//      both already 0 by default outside the Scene;
 //   2. storedSceneBounce() (js/usd-scene-renderer.js), the setting's
 //      reader, returns false whenever window.top !== window, which is the
 //      guard that keeps every embed and the VS Code webview off by
@@ -50,19 +52,32 @@ test('a non-Scene compiled material has the bounce hook wired but its strength d
     });
     const material = view.__debug().material;
     const strengthUniform = material.uniforms && material.uniforms.u_skyBounceStrength;
+    const eRefUniform = material.uniforms && material.uniforms.u_bounceERef;
     return {
       fragmentShader: material.fragmentShader,
       strength: strengthUniform ? strengthUniform.value : null,
+      eRef: eRefUniform ? eRefUniform.value : null,
     };
   }, SIMPLE_MTLX);
 
   expect(typeof result.fragmentShader).toBe('string');
   // Same pattern as the existing sky-visibility/AO-volume hooks: present in
   // the source (needsLighting gives the Viewer the same world-position
-  // varyings the Scene uses), inert because the strength uniform is 0.
-  expect(result.fragmentShader).toContain('float mx_sky_bounce()');
-  expect(result.fragmentShader).toContain('if (u_skyBounceStrength <= 0.0) return 0.0;');
+  // varyings the Scene uses, and standard_surface always computes
+  // base_color_nonnegative_out), inert because both uniforms are 0.
+  expect(result.fragmentShader).toContain('vec3 mx_diffuse_bounce_add(vec3 albedo)');
+  expect(result.fragmentShader).toContain('if (u_skyBounceStrength <= 0.0 || u_bounceERef <= 0.0) return vec3(0.0);');
+  // Regression guard: the additive call must be part of the SAME statement
+  // as the original "shader_constructor_out.color += occlusion * ...
+  // response;" line, not appended after its semicolon (that split one
+  // statement into a bare "+ fn(...);" expression-statement, which hung
+  // the real GPU's shader compiler solid on a real asset with no console
+  // error at all -- caught only by an actual headed render, not by reading
+  // the source text alone, which is why this spec exists in the embed
+  // suite rather than only in the Node unit test).
+  expect(result.fragmentShader).toMatch(/shader_constructor_out\.color \+= occlusion \* \w+\.response \+ mx_diffuse_bounce_add\(base_color_nonnegative_out\);/);
   expect(result.strength).toBe(0);
+  expect(result.eRef).toBe(0);
 });
 
 test('storedSceneBounce() reads false inside an embed (window.top !== window)', async ({ page, embedURL }) => {

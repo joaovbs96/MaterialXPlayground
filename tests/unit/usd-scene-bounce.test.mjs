@@ -175,3 +175,137 @@ test('buildSkyBounce returns null unless both an albedo-baked voxel grid and vis
   const voxels = SkyVis.voxelizeStage([makeQuadMesh()], flatBox, { resolution: 4 }); // no albedo
   assert.equal(SkyVis.buildSkyBounce([], flatBox, { voxels, visibility: new Uint8Array(4) }), null);
 });
+
+// --- v2: additive irradiance term (bounce/gate-v2.md, canonical.md) -------
+// The design changed from scaling the "occlusion" scalar to adding a
+// Lambertian term (strength * B * E_ref * albedo / pi) to the shaded
+// colour directly, because canonical.md found the analytic key light
+// (most of a point's diffuse irradiance) sits entirely outside
+// occlusion's reach. These tests cover the two new pieces: E_ref's
+// derivation (js/usd-scene-renderer.js's computeBounceERef) and the
+// injected GLSL's formula/safe-fail behaviour (js/mtlx-engine.js's
+// patchDiffuseBounceAdd).
+
+function loadComputeBounceERef() {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const source = fs.readFileSync(path.join(root, 'js', 'usd-scene-renderer.js'), 'utf8');
+  const start = source.indexOf('const computeBounceERef =');
+  const end = source.indexOf('const sceneNeutralMaterial =', start);
+  assert.ok(start >= 0 && end > start, 'computeBounceERef is present in usd-scene-renderer.js');
+  const context = {};
+  vm.runInNewContext(source.slice(start, end) + '\nthis.computeBounceERef = computeBounceERef;', context, { filename: 'usd-scene-renderer.js' });
+  return context.computeBounceERef;
+}
+
+function loadPatchDiffuseBounceAdd() {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const source = fs.readFileSync(path.join(root, 'js', 'mtlx-engine.js'), 'utf8');
+  const start = source.indexOf('const patchDiffuseBounceAdd =');
+  const end = source.indexOf('const patchSceneThinWalledTransmission =', start);
+  assert.ok(start >= 0 && end > start, 'patchDiffuseBounceAdd is present in mtlx-engine.js');
+  const context = {};
+  vm.runInNewContext(source.slice(start, end) + '\nthis.patchDiffuseBounceAdd = patchDiffuseBounceAdd;', context, { filename: 'mtlx-engine.js' });
+  return context.patchDiffuseBounceAdd;
+}
+
+const computeBounceERef = loadComputeBounceERef();
+const patchDiffuseBounceAdd = loadPatchDiffuseBounceAdd();
+
+test('computeBounceERef on a synthetic uniform dome (no key light) equals E', () => {
+  // A perfectly uniform dome convolves to the SAME irradiance E at every
+  // normal (the cosine-hemisphere integral of a constant is that constant),
+  // so its solid-angle-weighted mean over all normals is also E, and a
+  // uniform dome extracts no key-light cluster (nothing stands out).
+  const E = 0.73;
+  const env = { irradianceConvolvedMean: E, keyLight: null };
+  assert.equal(computeBounceERef(env, 1), E);
+});
+
+test('computeBounceERef adds the key light\'s intensity/4 and applies exposure once', () => {
+  const envMean = 0.5;
+  const color = [1, 0.8, 0.6]; // normalized, max channel 1
+  const intensity = 2; // raw, pre-exposure
+  const luminance = 0.2126 * 1 + 0.7152 * 0.8 + 0.0722 * 0.6;
+  const expectedUnexposed = envMean + luminance * intensity / 4;
+  const exposure = 0.25;
+  const env = { irradianceConvolvedMean: envMean, keyLight: { color, intensity } };
+  const got = computeBounceERef(env, exposure);
+  assert.ok(Math.abs(got - expectedUnexposed * exposure) < 1e-9, `expected ${expectedUnexposed * exposure}, got ${got}`);
+});
+
+test('computeBounceERef safe-fails to 0 on missing/invalid environment data', () => {
+  assert.equal(computeBounceERef(null, 1), 0);
+  assert.equal(computeBounceERef({}, 1), 0);
+  assert.equal(computeBounceERef({ irradianceConvolvedMean: NaN }, 1), 0);
+  assert.equal(computeBounceERef({ irradianceConvolvedMean: -1 }, 1), 0);
+});
+
+const WORLD_POS_VARYINGS = 'in vec3 positionWorld;\nin vec3 normalWorld;\n';
+const ANCHOR_LINE = 'shader_constructor_out.color += occlusion * fuzz_layer_out.response;';
+const makeFragment = ({ worldPos = true, albedoVar = true } = {}) => [
+  'precision highp float;',
+  worldPos ? WORLD_POS_VARYINGS : '',
+  'void mainFn() {',
+  albedoVar ? '    vec3 base_color_nonnegative_out = vec3(0.5, 0.5, 0.5);' : '',
+  '    ' + ANCHOR_LINE,
+  '}',
+].join('\n');
+
+test('patchDiffuseBounceAdd injects the additive term INSIDE the same statement, not after its semicolon', () => {
+  const out = patchDiffuseBounceAdd(makeFragment(), {});
+  assert.notEqual(out, makeFragment(), 'shader should be patched');
+  // Regression guard for a real bug found during verification: appending
+  // " + mx_diffuse_bounce_add(...);" AFTER the anchor's own trailing `;`
+  // splits one statement into two, the second being a bare
+  // `+ fn(...);` expression-statement -- which hung the ANGLE/D3D11
+  // shader compiler solid on a real asset instead of failing loudly, with
+  // no console error and no exception, only a silent timeout. The fix
+  // must land the addition BEFORE the semicolon, in the SAME statement.
+  assert.ok(!out.includes(ANCHOR_LINE + ' + mx_diffuse_bounce_add'),
+    'must NOT append after the original statement\'s semicolon (the historical bug)');
+  assert.ok(out.includes('shader_constructor_out.color += occlusion * fuzz_layer_out.response + mx_diffuse_bounce_add(base_color_nonnegative_out);'),
+    'the addition must be part of the SAME statement, before the semicolon');
+  assert.equal((out.match(/shader_constructor_out\.color \+=[^;]*;/g) || []).length, 1,
+    'exactly one statement must touch shader_constructor_out.color at this anchor, not two');
+  assert.ok(out.includes('uniform float u_bounceERef;'));
+  assert.ok(out.includes('return clamp(u_skyBounceStrength, 0.0, 1.0) * b * u_bounceERef * albedo * MX_BOUNCE_PI_INV;'),
+    'the injected formula must be strength * B * E_ref * albedo * (1/pi)');
+  const constMatch = out.match(/const float MX_BOUNCE_PI_INV = ([0-9.]+);/);
+  assert.ok(constMatch, 'MX_BOUNCE_PI_INV must be declared');
+  assert.ok(Math.abs(Number(constMatch[1]) - 1 / Math.PI) < 1e-15, 'MX_BOUNCE_PI_INV must be exactly 1/pi to double precision');
+});
+
+test('patchDiffuseBounceAdd safe-fails (no injection) without base_color_nonnegative_out', () => {
+  const src = makeFragment({ albedoVar: false });
+  assert.equal(patchDiffuseBounceAdd(src, {}), src);
+});
+
+test('patchDiffuseBounceAdd safe-fails (no injection) without world-position varyings', () => {
+  const src = makeFragment({ worldPos: false });
+  assert.equal(patchDiffuseBounceAdd(src, {}), src);
+});
+
+test('patchDiffuseBounceAdd safe-fails (no injection) when skipSkyVis or skipBounce is set (sampler budget)', () => {
+  const src = makeFragment();
+  assert.equal(patchDiffuseBounceAdd(src, { skipSkyVis: true }), src);
+  assert.equal(patchDiffuseBounceAdd(src, { skipBounce: true }), src);
+});
+
+test('the additive term formula equals strength * B * E_ref * albedo / pi at a probe point', () => {
+  // Independent CPU re-implementation of mx_diffuse_bounce_add's algebra
+  // (not the GLSL itself, which needs a GPU; see the embed/headed
+  // verification for that), checking the documented formula is what was
+  // actually coded, including its clamps and early-return guards.
+  const reference = (strength, b, eRef, albedo) => {
+    if (strength <= 0 || eRef <= 0 || b <= 0) return albedo.map(() => 0);
+    const k = Math.min(1, Math.max(0, strength)) * b * eRef / Math.PI;
+    return albedo.map((a) => k * a);
+  };
+  const strength = 0.8, b = 0.6, eRef = 0.9, albedo = [0.5, 0.3, 0.1];
+  const expected = albedo.map((a) => strength * b * eRef * a / Math.PI);
+  const got = reference(strength, b, eRef, albedo);
+  for (let i = 0; i < 3; i++) assert.ok(Math.abs(got[i] - expected[i]) < 1e-12);
+  assert.deepEqual(reference(0, b, eRef, albedo), [0, 0, 0]);
+  assert.deepEqual(reference(strength, 0, eRef, albedo), [0, 0, 0]);
+  assert.deepEqual(reference(strength, b, 0, albedo), [0, 0, 0]);
+});

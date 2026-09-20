@@ -1661,7 +1661,7 @@ const patchAreaLightSourceCosine = (fs) => {
 //
 // Fail-soft: no anchor means no AO, and the default 1x1 white map with
 // strength 0 makes the injected code an exact no-op until a pass binds one.
-const patchAmbientOcclusion = (fs, { skipSkyVis = false, skipAoVolume = false, skipBounce = false } = {}) => {
+const patchAmbientOcclusion = (fs, { skipSkyVis = false, skipAoVolume = false } = {}) => {
     const anchor = /(\/\/ Ambient occlusion\s*\n\s*)occlusion = 1\.0;/;
     if (!anchor.test(fs)) return fs;
     // Sky visibility needs the world position; without that varying only the
@@ -1674,24 +1674,11 @@ const patchAmbientOcclusion = (fs, { skipSkyVis = false, skipAoVolume = false, s
     // separate sampler-budget drop from sky visibility; skipAoVolume falls
     // back to the sky-times-ssao combination without it.
     const useVolume = hasWorldPos && !skipAoVolume;
-    // The baked diffuse bounce (js/usd-scene-skyvis.js's marchBounce/
-    // buildSkyBounce) needs the same world position as sky visibility, and is
-    // its own sampler-budget drop on top of that.
-    const useBounce = hasWorldPos && !skipBounce;
-    // Bounce off (the common case: every tool but the Scene, and the Scene
-    // with the setting off or unbaked) keeps the exact original assignment
-    // text, since sky/volume/ssao are already each <= 1 and the min(1.0, ...)
-    // wrap would be a behavioural no-op anyway; not adding it keeps every
-    // non-Scene generated shader textually unchanged from before this patch.
     const assignment = !hasWorldPos
         ? 'occlusion = mx_ssao_occlusion();'
         : (useVolume
-            ? (useBounce
-                ? 'occlusion = min(1.0, mx_sky_visibility() * min(mx_volume_occlusion(), mx_ssao_occlusion()) + mx_sky_bounce());'
-                : 'occlusion = mx_sky_visibility() * min(mx_volume_occlusion(), mx_ssao_occlusion());')
-            : (useBounce
-                ? 'occlusion = min(1.0, mx_ssao_occlusion() * mx_sky_visibility() + mx_sky_bounce());'
-                : 'occlusion = mx_ssao_occlusion() * mx_sky_visibility();'));
+            ? 'occlusion = mx_sky_visibility() * min(mx_volume_occlusion(), mx_ssao_occlusion());'
+            : 'occlusion = mx_ssao_occlusion() * mx_sky_visibility();');
     const out = fs.replace(anchor, '$1' + assignment);
     const skyDecls = !hasWorldPos ? [] : [
         // Baked coarse visibility of the environment (js/usd-scene-skyvis.js).
@@ -1755,33 +1742,6 @@ const patchAmbientOcclusion = (fs, { skipSkyVis = false, skipAoVolume = false, s
         '    return mix(1.0, vis, clamp(u_aoVolumeStrength, 0.0, 1.0));',
         '}',
     ];
-    // Baked single-bounce estimate: blocker albedo times the blocker's own
-    // sky visibility, on the sky bake's grid (js/usd-scene-skyvis.js's
-    // marchBounce/buildSkyBounce). Added into the occlusion slot rather than
-    // multiplied, so it only fills back in on the fraction the sky term
-    // already lost; the caller's min(1.0, ...) keeps the combined factor from
-    // ever exceeding the unoccluded environment. Early return is 0.0 (not
-    // 1.0): the value is additive, so an unbound volume at strength 0 must be
-    // a no-op, not a fully-open sky.
-    const bounceDecls = !useBounce ? [] : [
-        'uniform highp sampler3D u_skyBounceMap;',
-        'uniform vec3 u_skyBounceMin;',
-        'uniform vec3 u_skyBounceSize;',
-        'uniform float u_skyBounceCell;',
-        'uniform float u_skyBounceStrength;',
-        'float mx_sky_bounce() {',
-        '    if (u_skyBounceStrength <= 0.0) return 0.0;',
-        '    vec3 bounceNormal = normalize(normalWorld);',
-        '    if (!gl_FrontFacing) bounceNormal = -bounceNormal;',
-        '    vec3 uvw = (positionWorld + bounceNormal * (1.5 * u_skyBounceCell) - u_skyBounceMin) / max(u_skyBounceSize, vec3(1e-6));',
-        '    if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0)))) return 0.0;',
-        '    vec4 moments = texture(u_skyBounceMap, uvw);',
-        '    float bounceMean = moments.r;',
-        '    vec3 bounceDirection = (moments.gba * 255.0 - vec3(128.0)) / 127.0;',
-        '    float b = clamp(bounceMean + dot(bounceDirection, bounceNormal), 0.0, 1.0);',
-        '    return b * clamp(u_skyBounceStrength, 0.0, 1.0);',
-        '}',
-    ];
     const decls = [
         'uniform sampler2D u_ssaoMap;',
         'uniform vec2 u_ssaoTexel;',
@@ -1793,7 +1753,7 @@ const patchAmbientOcclusion = (fs, { skipSkyVis = false, skipAoVolume = false, s
         '    vec2 aoSample = texture(u_ssaoMap, gl_FragCoord.xy * u_ssaoTexel).rg;',
         '    return mix(1.0, clamp(aoSample.r, 0.0, 1.0), clamp(u_ssaoStrength, 0.0, 1.0) * clamp(aoSample.g, 0.0, 1.0));',
         '}',
-    ].concat(skyDecls).concat(volumeDecls).concat(bounceDecls).concat(['']).join('\n');
+    ].concat(skyDecls).concat(volumeDecls).concat(['']).join('\n');
     // Must land before the FIRST function definition, not before main():
     // the generator emits the ambient-occlusion slot inside a surface
     // evaluation function that precedes main, so declaring the helper any
@@ -1803,6 +1763,99 @@ const patchAmbientOcclusion = (fs, { skipSkyVis = false, skipAoVolume = false, s
     const firstFn = out.search(/^(?:void|vec[234]|float|int|bool|mat[234])\s+\w+\s*\(/m);
     const at = firstFn !== -1 ? firstFn : out.indexOf('void main(');
     if (at === -1) return fs; // nothing recognisable: leave the shader untouched
+    return out.slice(0, at) + decls + out.slice(at);
+};
+
+// Diffuse bounce: a single-bounce estimate of light the room's own surfaces
+// reflect back onto each other, which MaterialX's IBL has no notion of at
+// all (its indirect closures only ever see the dome, never each other).
+// This is an ADDITIVE term on the shaded colour, not a multiplier on
+// `occlusion`: canonical.md (2026-09-20) found that at a typical Scene
+// shading point the analytic key light (a directional light extracted from
+// the dome's brightest cluster, see extractKeyLight) supplies most of the
+// diffuse irradiance and is evaluated in the ordinary light loop, entirely
+// outside the `occlusion` scalar's reach; only the residual environment-IBL
+// slice that `occlusion` actually multiplies is small. Scaling that slice
+// cannot recover a Karma-sized indirect share, so the bounce has to be
+// added to the shaded colour directly, sized against a reference
+// irradiance (`u_bounceERef`, see computeBounceERef in
+// js/usd-scene-renderer.js) that represents the FULL scene irradiance
+// (dome plus key light, unclamped, averaged over every possible normal),
+// not just the small IBL remainder.
+//
+// The physical shape is Lambertian: response = albedo/pi * E, where E is
+// the blocked-fraction-weighted reference irradiance (the same B(p) baked
+// volume the original occlusion-only design used: blocker albedo times
+// blocker sky visibility, js/usd-scene-skyvis.js's marchBounce). Reusing
+// `base_color_nonnegative_out`, standard_surface's own generated albedo
+// variable, keeps this literally the same material albedo standard_surface
+// itself diffuses with, so re-lighting, layering and the ACES display path
+// downstream all see one more ordinary linear-colour contribution, nothing
+// bespoke. Requires `base_color_nonnegative_out` to exist textually (every
+// MaterialEggs asset is standard_surface-based); safe-fails (no injection,
+// shader unchanged) on any other node graph shape.
+const patchDiffuseBounceAdd = (fs, { skipSkyVis = false, skipBounce = false } = {}) => {
+    // No trailing `;` in the capture: the addition must land INSIDE this
+    // statement, before the semicolon, not appended after it (appending
+    // after would split one statement into two, the second being a bare
+    // `+ mx_diffuse_bounce_add(...);` expression-statement -- syntactically
+    // dubious enough that it hung the ANGLE/D3D11 shader compiler solid on
+    // this asset's standard_surface network instead of failing loudly).
+    const anchor = /shader_constructor_out\.color \+= occlusion \* (\w+)\.response;/;
+    const match = fs.match(anchor);
+    if (!match) return fs;
+    const hasWorldPos = !skipSkyVis && !skipBounce
+        && /\bin\s+vec3\s+positionWorld\s*;/.test(fs) && /\bin\s+vec3\s+normalWorld\s*;/.test(fs);
+    if (!hasWorldPos) return fs;
+    // Needs the surface's own diffuse albedo in scope at the injection
+    // point; standard_surface's generated indirect block always computes
+    // this before combining layers. Anything else (a bespoke node graph, a
+    // future codegen contract change) safe-fails to no injection.
+    if (!/\bvec3\s+base_color_nonnegative_out\b/.test(fs)) return fs;
+    // base_color_nonnegative_out is a LOCAL variable inside the function
+    // that contains this statement, not reachable from a separately
+    // declared global function; pass it as an argument at the call site
+    // instead, where it is still in scope.
+    const out = fs.replace(anchor, 'shader_constructor_out.color += occlusion * $1.response + mx_diffuse_bounce_add(base_color_nonnegative_out);');
+    const decls = [
+        // Same baked volume as the sky/AO bakes: blocker albedo times
+        // blocker sky visibility (js/usd-scene-skyvis.js's marchBounce),
+        // sampled the same normal-biased way as mx_sky_visibility.
+        'uniform highp sampler3D u_skyBounceMap;',
+        'uniform vec3 u_skyBounceMin;',
+        'uniform vec3 u_skyBounceSize;',
+        'uniform float u_skyBounceCell;',
+        'uniform float u_skyBounceStrength;',
+        // Reference irradiance: solid-angle-weighted mean of the FULL
+        // scene irradiance (dome convolution mean plus the extracted key
+        // light's own mean-over-normals, intensity/4; see
+        // computeBounceERef). Zero when unavailable, an exact no-op.
+        'uniform float u_bounceERef;',
+        'const float MX_BOUNCE_PI_INV = 0.31830988618379067;',
+        'float mx_diffuse_bounce_b() {',
+        '    vec3 bounceNormal = normalize(normalWorld);',
+        '    if (!gl_FrontFacing) bounceNormal = -bounceNormal;',
+        '    vec3 uvw = (positionWorld + bounceNormal * (1.5 * u_skyBounceCell) - u_skyBounceMin) / max(u_skyBounceSize, vec3(1e-6));',
+        '    if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0)))) return 0.0;',
+        '    vec4 moments = texture(u_skyBounceMap, uvw);',
+        '    float bounceMean = moments.r;',
+        '    vec3 bounceDirection = (moments.gba * 255.0 - vec3(128.0)) / 127.0;',
+        '    return clamp(bounceMean + dot(bounceDirection, bounceNormal), 0.0, 1.0);',
+        '}',
+        'vec3 mx_diffuse_bounce_add(vec3 albedo) {',
+        '    if (u_skyBounceStrength <= 0.0 || u_bounceERef <= 0.0) return vec3(0.0);',
+        '    float b = mx_diffuse_bounce_b();',
+        '    if (b <= 0.0) return vec3(0.0);',
+        '    return clamp(u_skyBounceStrength, 0.0, 1.0) * b * u_bounceERef * albedo * MX_BOUNCE_PI_INV;',
+        '}',
+        '',
+    ].join('\n');
+    // Same "before the first function definition" anchor patchAmbientOcclusion
+    // uses: the assignment this patches lives inside a function that precedes
+    // main(), so the helper has to be declared before that function starts.
+    const firstFn = out.search(/^(?:void|vec[234]|float|int|bool|mat[234])\s+\w+\s*\(/m);
+    const at = firstFn !== -1 ? firstFn : out.indexOf('void main(');
+    if (at === -1) return fs;
     return out.slice(0, at) + decls + out.slice(at);
 };
 
@@ -6243,6 +6296,31 @@ const ensureConvolvedIrradiance = (renderer, env) => {
         renderer.render(scene, camera);
         const pixels = new Float32Array(IRRADIANCE_OUT_W * IRRADIANCE_OUT_H * 4);
         renderer.readRenderTargetPixels(target, 0, 0, IRRADIANCE_OUT_W, IRRADIANCE_OUT_H, pixels);
+        // Solid-angle-weighted mean of this convolution map, i.e. of E(n)
+        // over every possible normal n. By the standard cosine-hemisphere
+        // identity (integral of cos(theta) over a hemisphere is pi, used
+        // twice: once for the diffuse convolution itself, once for this
+        // mean), the solid-angle average of a cosine-convolved irradiance
+        // map over ALL normals equals the plain solid-angle average
+        // radiance of the source environment: swapping the order of
+        // integration, integral_n E(n) dOmega_n = integral_w L(w) *
+        // [integral_{n: dot(n,w)>0} dot(n,w) dOmega_n] dOmega_w / pi =
+        // integral_w L(w) * pi dOmega_w / pi = integral_w L(w) dOmega_w.
+        // Used by computeBounceERef in js/usd-scene-renderer.js for the
+        // diffuse bounce term's reference irradiance; a plain row-weighted
+        // (sin(theta)) average of this map is exactly that mean, computed
+        // once here from the same texel data rather than re-integrated.
+        let sumW = 0, sumLW = 0;
+        for (let y = 0; y < IRRADIANCE_OUT_H; y++) {
+            const theta = Math.PI * (y + 0.5) / IRRADIANCE_OUT_H;
+            const w = Math.sin(theta);
+            for (let x = 0; x < IRRADIANCE_OUT_W; x++) {
+                const i = (y * IRRADIANCE_OUT_W + x) * 4;
+                const L = 0.2126 * pixels[i] + 0.7152 * pixels[i + 1] + 0.0722 * pixels[i + 2];
+                sumW += w; sumLW += L * w;
+            }
+        }
+        env.irradianceConvolvedMean = sumW > 0 ? sumLW / sumW : 0;
         const half = new Uint16Array(pixels.length);
         for (let i = 0; i < half.length; i++) half[i] = floatToHalf(pixels[i]);
         const tex = new THREE.DataTexture(half, IRRADIANCE_OUT_W, IRRADIANCE_OUT_H, THREE.RGBAFormat, THREE.HalfFloatType);
@@ -6926,7 +7004,8 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     fs = patchShadowLightScope(fs, { skipTransmittance });
     fs = patchLightSourceKindStruct(fs);
     fs = patchAreaLightSourceCosine(fs);
-    fs = patchAmbientOcclusion(fs, { skipSkyVis, skipAoVolume, skipBounce });
+    fs = patchAmbientOcclusion(fs, { skipSkyVis, skipAoVolume });
+    fs = patchDiffuseBounceAdd(fs, { skipSkyVis, skipBounce });
     fs = patchTransmissionThickness(fs, { dropThicknessMap });
     // Depth-peel machinery: baked into every fragment shader
     // UNCONDITIONALLY (not just when Force Transparency is on), see
@@ -7267,7 +7346,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
 // independent world/normal matrices and MaterialX values.
 const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, sceneRadius = 1, envTilt = null, envRotationRad = 0, envExposure = 1, environmentIndirectScale = 1, environmentKeyScale = 1, lightScales = null, shadowDiagnosticVisibilityScale = 1, displayTransform = null, shadowAtlas = null, shadowMatrices = null, shadowTiles = null, shadowDepthPlanes = null, shadowDepthRanges = null, shadowSourceRadii = null, shadowTexelSizes = null, shadowFaceOrigins = null, shadowFaceValid = null, shadowFaceBasisX = null, shadowFaceBasisY = null, shadowFaceBasisZ = null, shadowSlotFace = null, shadowSlotFaceCount = null, shadowTransmittance = null, shadowRecordCells = null, skyVisMap = null, skyVisMin = null, skyVisSize = null, skyVisStrength = 1, skyVisCell = 0,
     aoVolumeMap = null, aoVolumeMin = null, aoVolumeSize = null, aoVolumeStrength = 1, aoVolumeCell = 0,
-    skyBounceMap = null, skyBounceMin = null, skyBounceSize = null, skyBounceStrength = 0, skyBounceCell = 0 }) => {
+    skyBounceMap = null, skyBounceMin = null, skyBounceSize = null, skyBounceStrength = 0, skyBounceCell = 0, bounceERef = 0 }) => {
     if (!compiled) throw new Error('Cannot create scene uniforms without compiled MaterialX source.');
     const uniforms = {
         u_worldMatrix: { value: new THREE.Matrix4() },
@@ -7353,6 +7432,10 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
         u_skyBounceSize: { value: skyBounceSize ? skyBounceSize.clone() : new THREE.Vector3(1, 1, 1) },
         u_skyBounceCell: { value: skyBounceCell || 0 },
         u_skyBounceStrength: { value: skyBounceMap ? skyBounceStrength : 0 },
+        // Reference irradiance for the additive bounce term (see
+        // patchDiffuseBounceAdd, computeBounceERef): 0 is an exact no-op
+        // regardless of strength or the baked volume's readiness.
+        u_bounceERef: { value: Number.isFinite(bounceERef) ? Math.max(0, bounceERef) : 0 },
     };
     if (compiled.payloadSupported) {
         // Scene RGB-T is opt-in at compile time and remains inactive until
@@ -10583,6 +10666,7 @@ const createMtlxRenderView = async ({
                         u_skyBounceSize: { value: new THREE.Vector3(1, 1, 1) },
                         u_skyBounceCell: { value: 0 },
                         u_skyBounceStrength: { value: 0 },
+                        u_bounceERef: { value: 0 },
                     };
 
                     // GLSL ES 3.0 forbids uniform initializers, so the app
