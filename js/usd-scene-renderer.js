@@ -67,6 +67,20 @@ const storedSceneMaterialWorkspace = () => {
     } catch (e) { return SCENE_MATERIAL_WORKSPACE_DEFAULT; }
 };
 
+// Geometric specular anti-aliasing (see patchSpecularAA in mtlx-engine.js):
+// widens the anisotropic GGX alpha pair by the screen-space variance of the
+// shading normal and of the roughness input, stopping specular fireflies on
+// materials whose roughness is itself a fine procedural noise field (e.g.
+// egg_brushed_steel). Default on for the Scene; never on in an embed
+// (window.top !== window), same guard shape as the other Scene-only shading
+// settings above. Requires a shader recompile (see setSceneSpecularAA), not
+// a uniform flip, because it changes generated GLSL text.
+const SCENE_SPECULAR_AA_KEY = 'mtlx_scene_specular_aa';
+const storedSceneSpecularAA = () => {
+    if (window.top !== window) return false;
+    try { return localStorage.getItem(SCENE_SPECULAR_AA_KEY) !== '0'; } catch (e) { return true; }
+};
+
 // Baked sky visibility: the room-scale half of the same missing visibility
 // term. Screen space AO handles contacts, this handles walls. Default on,
 // because an interior lit by a dome is wrong without it and the bake is a
@@ -1824,6 +1838,7 @@ const createMtlxSceneView = async ({
     let localEnvDirty = false;
     let sceneDisplayTransform = storedSceneDisplayTransform();
     let materialWorkspace = storedSceneMaterialWorkspace();
+    let specularAAEnabled = storedSceneSpecularAA();
     let shadowsEnabled = storedSceneShadows();
     // Ambient occlusion resources. Unlike the shadow map these are rebuilt
     // every frame the camera moves, because the whole term is screen space.
@@ -2840,7 +2855,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             }
             compiled = await window.compileMtlxSceneMaterial({
                 mx: mxEnv.mx, gen: mxEnv.gen, genContext: mxEnv.genContext,
-                renderable, label, materialName, isMounted, document: sourceDocument, sceneRgbt: true, samplerBudget, uniformVectorBudget, materialWorkspace,
+                renderable, label, materialName, isMounted, document: sourceDocument, sceneRgbt: true, samplerBudget, uniformVectorBudget, materialWorkspace, specularAA: specularAAEnabled,
             });
             if (!compiled) return null;
             // Uniform paths alone cannot distinguish a direct
@@ -6974,6 +6989,22 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             if (queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
             return materialWorkspace;
         };
+        // Recompiles every material for the same reason setSceneMaterialWorkspace
+        // does: this changes what the fragment patch pass sees (patchSpecularAA
+        // in mtlx-engine.js), a shader source-text change, not a uniform.
+        const getSceneSpecularAA = () => specularAAEnabled;
+        const setSceneSpecularAA = (on) => {
+            const next = !!on;
+            if (next === specularAAEnabled) return specularAAEnabled;
+            specularAAEnabled = next;
+            try {
+                if (window.top === window) localStorage.setItem(SCENE_SPECULAR_AA_KEY, specularAAEnabled ? '1' : '0');
+            } catch (e) { /* privacy mode */ }
+            displayDirty = true;
+            displayRevision += 1;
+            if (queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
+            return specularAAEnabled;
+        };
         const setSkyVisibility = (on) => {
             const next = !!on;
             if (next === skyVisEnabled) return skyVisEnabled;
@@ -7267,6 +7298,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             setLocalReflections, setLocalReflectionStrength, getLocalReflections,
             getSceneDisplayTransform, setSceneDisplayTransform,
             getSceneMaterialWorkspace, setSceneMaterialWorkspace,
+            getSceneSpecularAA, setSceneSpecularAA,
             setSkyVisibility, setSkyVisibilityStrength, getSkyVisibility,
             setEnvironment, setEnvRotation, setEnvExposure,
             // getTextureMaxSize/setTextureMaxSize expose the ordinary-texture

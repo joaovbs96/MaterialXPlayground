@@ -1673,6 +1673,88 @@ const patchAreaLightSourceCosine = (fs) => {
     return out;
 };
 
+// Geometric specular anti-aliasing. standard_surface's generated GLSL
+// evaluates the anisotropic GGX lobe at whatever roughness the shading
+// point's alpha pair carries, one sample per fragment. When that alpha
+// comes from a fine procedural noise network (a fractal3d chain feeding
+// specular_roughness at high object-space frequency, as in
+// egg_brushed_steel), it can vary faster than the pixel footprint, and a
+// single-sample rasterizer turns that into isolated bright specular
+// fireflies a multi-sample path tracer (Karma at 32 spp) integrates away.
+// See scratchpad/displacement-verified/brushed-steel/report.md section 3-4.
+//
+// Widens the alpha pair by the screen-space variance of the shading
+// normal AND of the roughness input that feeds mx_roughness_anisotropy,
+// both taken from dFdx/dFdy (core in GLSL ES 3.00 fragment shaders, no
+// extension needed). A flat normal and a constant roughness leave both
+// variance terms at (near) zero, so smooth, non-noisy materials are left
+// essentially unchanged (verified on the gray sphere, see
+// specular-aa/implementation.md).
+//
+// Insertion anchor: immediately after mx_roughness_anisotropy's MAIN call
+// (not the coat or transmission ones), whose argument/output names are
+// fixed by the standard_surface impl graph across every material using it
+// (not user-authored, same kind of structural name patchDiffuseBounceAdd
+// relies on for base_color_nonnegative_out). Patching after this call
+// widens exactly the alpha pair the generated closures read for both
+// direct and indirect specular, without touching stdlib GLSL.
+//
+// Idempotent: checks for its own marker function name. Safe-fail: no
+// anchor match (a shader shape without this exact standard_surface
+// anisotropy call) leaves the shader untouched.
+const patchSpecularAA = (fs, { specularAA = false } = {}) => {
+    if (!specularAA) return fs;
+    if (fs.indexOf('mx_specular_aa_widen') !== -1) return fs;
+    const anchor = /mx_roughness_anisotropy\(coat_affected_roughness_out,\s*specular_anisotropy,\s*main_roughness_out\);/;
+    if (!anchor.test(fs)) return fs;
+    let out = fs.replace(anchor, (m) => m
+        + '\n    main_roughness_out = mx_specular_aa_widen(main_roughness_out, normal, coat_affected_roughness_out);');
+    const decl = [
+        // sigma2 in variance space: normal-slope variance plus roughness-
+        // input variance, both from screen-space derivatives, summed and
+        // clamped before being added to alpha^2 (variance-space widening,
+        // not a linear roughness add, so a near-zero base alpha does not
+        // get disproportionately blown out).
+        //
+        // Both constants are far below the textbook geometric-specular-AA
+        // values (Filament's "specularAntiAliasingVariance"/"...Threshold"
+        // defaults, 0.15/0.18): measured on the real engine
+        // (specular-aa/implementation.md), the textbook scale saturated the
+        // threshold almost everywhere on egg_brushed_steel's egg, not just
+        // at the aliasing pixels, because the material's fractal3d
+        // roughness noise is fine-grained across essentially the WHOLE
+        // surface (it is at the aliasing frequency by design, not merely at
+        // isolated outliers), and the analytic-displacement shading normal
+        // is likewise a fine per-vertex signal rather than ordinary
+        // curvature. Two prior attempts (1.0/1.0 and 0.15/0.18) both made
+        // the measured speckle metric WORSE than specularAA off, not
+        // better; the smaller scale here is the one that stays a true
+        // localized correction instead of a blanket roughening.
+        'const float MX_SPECULAR_AA_NORMAL_SCALE = 0.002;',
+        'const float MX_SPECULAR_AA_ROUGHNESS_SCALE = 0.005;',
+        'const float MX_SPECULAR_AA_THRESHOLD = 0.01;',
+        'vec2 mx_specular_aa_widen(vec2 alpha, vec3 aaNormal, float aaRoughness) {',
+        '    vec3 dNx = dFdx(aaNormal);',
+        '    vec3 dNy = dFdy(aaNormal);',
+        '    float dRx = dFdx(aaRoughness);',
+        '    float dRy = dFdy(aaRoughness);',
+        '    float normalVariance = dot(dNx, dNx) + dot(dNy, dNy);',
+        '    float roughnessVariance = dRx * dRx + dRy * dRy;',
+        '    float kernelRoughness = min(MX_SPECULAR_AA_NORMAL_SCALE * normalVariance + MX_SPECULAR_AA_ROUGHNESS_SCALE * roughnessVariance, MX_SPECULAR_AA_THRESHOLD);',
+        '    vec2 alpha2 = clamp(alpha * alpha + vec2(kernelRoughness), 0.0, 1.0);',
+        '    return sqrt(alpha2);',
+        '}',
+        '',
+    ].join('\n');
+    // Same "before the first function definition" anchor as the other
+    // fragment patches: the call site lives inside a function that
+    // precedes main(), so the helper must be declared earlier still.
+    const firstFn = out.search(/^(?:void|vec[234]|float|int|bool|mat[234])\s+\w+\s*\(/m);
+    const at = firstFn !== -1 ? firstFn : out.indexOf('void main(');
+    if (at === -1) return fs;
+    return out.slice(0, at) + decl + out.slice(at);
+};
+
 // Feeds a screen-space ambient occlusion factor into the slot MaterialX
 // already reserves for it. The generator emits, verbatim:
 //
@@ -7132,6 +7214,11 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // Screen-space reflections are parked (see SCENE_SSR_PARKED in the renderer): skip the patch.
     const skipSsr = true || !!(sceneFeatureOptions && sceneFeatureOptions.skipSsr);
     const skipLocalEnv = !!(sceneFeatureOptions && sceneFeatureOptions.skipLocalEnv);
+    // Off by default (Viewer/Compare/Builder/Graph previews and every
+    // embed leave sceneFeatureOptions.specularAA unset); the Scene's own
+    // compile path (compileMtlxSceneMaterial) is the only caller that
+    // sets it explicitly, defaulting to true there.
+    const specularAA = !!(sceneFeatureOptions && sceneFeatureOptions.specularAA);
     // OFFICIAL PARITY: per-material generation options on SHARED
     // module-scope genContext. hwTransparency is reset FIRST,
     // unconditionally, else a failed detection leaks A's stale value onto B.
@@ -7315,6 +7402,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     fs = patchAreaLightSourceCosine(fs);
     fs = patchAmbientOcclusion(fs, { skipSkyVis, skipAoVolume });
     fs = patchDiffuseBounceAdd(fs, { skipSkyVis, skipBounce });
+    fs = patchSpecularAA(fs, { specularAA });
     fs = patchTransmissionThickness(fs, { dropThicknessMap });
     // Depth-peel machinery: baked into every fragment shader
     // UNCONDITIONALLY (not just when Force Transparency is on), see
@@ -7605,7 +7693,7 @@ const generatePreviewSourcesWithinBudget = async (args) => {
 // instances for each object that uses that source.
 const DEFAULT_UNIFORM_VECTOR_BUDGET = 1024;
 
-const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label = 'material', materialName = null, isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, samplerBudget = null, uniformVectorBudget = null, materialWorkspace = 'rec709' }) => {
+const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label = 'material', materialName = null, isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, samplerBudget = null, uniformVectorBudget = null, materialWorkspace = 'rec709', specularAA = true }) => {
     if (!renderable) throw new Error('MaterialX scene material is missing its renderable surface.');
     // Test-only override wins over the caller's live GL limit, so a headless
     // spec can force a tight budget without a real ANGLE context.
@@ -7618,7 +7706,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
     let srcs = null;
     let samplerInfo = null;
     for (let attempt = 0; ; attempt++) {
-        const sceneFeatureOptions = { materialWorkspace };
+        const sceneFeatureOptions = { materialWorkspace, specularAA };
         for (const d of dropped) sceneFeatureOptions[d.key] = true;
         srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, materialName, isMounted, document: documentArg, sceneRgbt, lightTransport, sceneFeatureOptions });
         if (!srcs) return null;

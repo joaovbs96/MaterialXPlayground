@@ -600,6 +600,11 @@
         // this viewer treats the same numbers as linear Rec.709. Scene-only,
         // recompiles every material when toggled (see setSceneMaterialWorkspace).
         const [materialWorkspace, setMaterialWorkspaceState] = React.useState('rec709');
+        // Widens the anisotropic specular alpha by screen-space normal/roughness
+        // variance to stop procedural-roughness fireflies (see patchSpecularAA in
+        // mtlx-engine.js). Scene-only, recompiles every material when toggled
+        // (see setSceneSpecularAA); default on.
+        const [specularAAOn, setSpecularAAOn] = React.useState(true);
         const [displayExposure, setDisplayExposureState] = React.useState(
             () => (window.getDisplayExposure ? window.getDisplayExposure() : 0)
         );
@@ -925,6 +930,7 @@
                     if (nextHandle.getPresentation) setPresentation(nextHandle.getPresentation());
                     if (nextHandle.getSceneDisplayTransform) setDisplayTransformState(nextHandle.getSceneDisplayTransform());
                     if (nextHandle.getSceneMaterialWorkspace) setMaterialWorkspaceState(nextHandle.getSceneMaterialWorkspace());
+                    if (nextHandle.getSceneSpecularAA) setSpecularAAOn(nextHandle.getSceneSpecularAA());
                     if (nextHandle.getSkyVisibility) {
                         const sky = nextHandle.getSkyVisibility();
                         setSkyVisOn(sky.enabled);
@@ -1418,6 +1424,10 @@
                     }
                     description="How untagged colour numbers in the material (constants, interface values, USD overrides, displayColor) are read. Rec.709 takes them literally; ACEScg treats them as Houdini/Karma's scene-linear space and converts them, which matches Karma's albedo more closely. Tagged textures and colorspace-tagged inputs are unaffected."
                 />
+                <ToggleRow label="Specular anti-aliasing" experimental checked={specularAAOn}
+                    title={specularAAOn ? 'Turn off geometric specular anti-aliasing' : 'Widen specular roughness where it is changing fast on screen'}
+                    onChange={(next) => { setSpecularAAOn(next); callHandle('setSceneSpecularAA', next); writeStoredSceneBool('mtlx_scene_specular_aa', next); }}
+                    description="Widens anisotropic specular roughness by the screen-space variance of the shading normal and of the roughness input, so a fine procedural roughness noise network does not sparkle under a single-sample rasterizer the way a multi-sample path tracer would not. Smooth, constant-roughness materials are essentially unaffected." />
                 <SliderRow description="Scales the whole image before the display transform, the way a camera would. The Environment card's exposure only gains the image based lighting.">
                     <SliderField label="Camera exposure" unit="EV" value={displayExposure} min={-8} max={8} step={0.25}
                         onSlider={applyDisplayExposure} onNumber={applyDisplayExposure} />
