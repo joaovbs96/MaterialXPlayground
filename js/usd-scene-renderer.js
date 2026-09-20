@@ -3425,6 +3425,10 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             geometryRevision++;
             return true;
         };
+        // Tracks the single displacement-normals status line so a rebuild
+        // replaces it instead of appending a duplicate, mirroring
+        // replaceThicknessWarning's swap pattern.
+        let displacementNormalsNotice = null;
         // Evaluates each displaced (part, material) pair once, then welds and
         // averages the results BY POSITION across every part of the record
         // so material/UDIM borders stay closed; failures warn and skip.
@@ -3554,6 +3558,22 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 for (let c = 0; c < cornerCount; c++) indicesAll[cornerCursor + c] = (index ? index.getX(c) : c) + vOff;
                 cornerCursor += cornerCount;
             });
+            // Analytic shading normals (see js/shared/mesh-displacement.js)
+            // need the same tangent-offset re-evaluations and frame that
+            // evaluateDisplacement already returns per range; aggregate them
+            // alongside offsetsAll only when every compatible range has them
+            // and the resolved mode is 'float' (the only mode they apply to).
+            const wantAnalyticAgg = aggregateMode === 'float' && compatibleRanges.every((range) => {
+                const key = range.partIndex + '|' + range.material.uuid;
+                const result = evalResults.get(key);
+                return result && result.offsetsTangent && result.offsetsBitangent && result.analyticFrame;
+            });
+            const offsetsTangentAll = wantAnalyticAgg ? new Float32Array(totalVertices * 3) : null;
+            const offsetsBitangentAll = wantAnalyticAgg ? new Float32Array(totalVertices * 3) : null;
+            const frameTangentAll = wantAnalyticAgg ? new Float32Array(totalVertices * 3) : null;
+            const frameBitangentAll = wantAnalyticAgg ? new Float32Array(totalVertices * 3) : null;
+            const frameEpsAll = wantAnalyticAgg ? new Float32Array(totalVertices) : null;
+
             let anyValid = false;
             for (const range of compatibleRanges) {
                 const key = range.partIndex + '|' + range.material.uuid;
@@ -3569,6 +3589,21 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                     offsetsAll[gv * 3] = result.offsets[v * 3];
                     offsetsAll[gv * 3 + 1] = result.offsets[v * 3 + 1];
                     offsetsAll[gv * 3 + 2] = result.offsets[v * 3 + 2];
+                    if (wantAnalyticAgg) {
+                        offsetsTangentAll[gv * 3] = result.offsetsTangent[v * 3];
+                        offsetsTangentAll[gv * 3 + 1] = result.offsetsTangent[v * 3 + 1];
+                        offsetsTangentAll[gv * 3 + 2] = result.offsetsTangent[v * 3 + 2];
+                        offsetsBitangentAll[gv * 3] = result.offsetsBitangent[v * 3];
+                        offsetsBitangentAll[gv * 3 + 1] = result.offsetsBitangent[v * 3 + 1];
+                        offsetsBitangentAll[gv * 3 + 2] = result.offsetsBitangent[v * 3 + 2];
+                        frameTangentAll[gv * 3] = result.analyticFrame.tangent[v * 3];
+                        frameTangentAll[gv * 3 + 1] = result.analyticFrame.tangent[v * 3 + 1];
+                        frameTangentAll[gv * 3 + 2] = result.analyticFrame.tangent[v * 3 + 2];
+                        frameBitangentAll[gv * 3] = result.analyticFrame.bitangent[v * 3];
+                        frameBitangentAll[gv * 3 + 1] = result.analyticFrame.bitangent[v * 3 + 1];
+                        frameBitangentAll[gv * 3 + 2] = result.analyticFrame.bitangent[v * 3 + 2];
+                        frameEpsAll[gv] = result.analyticFrame.eps[v];
+                    }
                     vertexMask[gv] = 1;
                     anyValid = true;
                 }
@@ -3578,7 +3613,26 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             const computed = window.MtlxMeshDisplacement.computeDisplacedAttributes({
                 positions: positionsAll, normals: normalsAll, tangents: tangentsAll, bitangents: bitangentsAll,
                 indices: indicesAll, offsets: offsetsAll, mode, vertexMask,
+                offsetsTangent: offsetsTangentAll, offsetsBitangent: offsetsBitangentAll,
+                analyticFrame: wantAnalyticAgg ? { tangent: frameTangentAll, bitangent: frameBitangentAll, eps: frameEpsAll } : null,
+                displacementNormals: window.getDisplacementNormalsMode ? window.getDisplacementNormalsMode() : 'analytic',
             });
+            // Surface the resolved normals mode/fallback count on `warnings`,
+            // which the capture diagnostics already forward verbatim, so a
+            // capture JSON can prove which path actually ran.
+            if (computed.stats) {
+                const nextNotice = '[info] Displacement normals: ' + computed.stats.normalsMode
+                    + ' (' + computed.stats.analyticFallbacks + ' fallback' + (computed.stats.analyticFallbacks === 1 ? '' : 's')
+                    + ' of ' + computed.stats.vertices + ' vertices)';
+                if (nextNotice !== displacementNormalsNotice) {
+                    if (displacementNormalsNotice) {
+                        const index = warnings.indexOf(displacementNormalsNotice);
+                        if (index >= 0) warnings.splice(index, 1);
+                    }
+                    warnings.push(nextNotice);
+                    displacementNormalsNotice = nextNotice;
+                }
+            }
             parts.forEach((part, partIndex) => {
                 const geometry = part.geometry;
                 const posAttr = geometry.getAttribute('position');
