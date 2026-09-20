@@ -5,10 +5,10 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
-function loadDisplacement() {
+function loadDisplacement(sandboxOverrides) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
   const source = fs.readFileSync(path.join(root, 'js', 'shared', 'mesh-displacement.js'), 'utf8');
-  const sandbox = {};
+  const sandbox = sandboxOverrides || {};
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox);
   return sandbox.MtlxMeshDisplacement;
@@ -186,4 +186,48 @@ test('the displacementNormals switch selects the old mesh-recompute path on requ
   });
   assert.equal(analyticDefault.stats.normalsMode, 'analytic', 'analytic is the default when the frame is supplied and no switch is given');
   assert.notDeepEqual(Array.from(analyticDefault.normals), Array.from(forcedMesh.normals));
+});
+
+test('the analytic-normal eps factor is configurable and defaults to 0.25', () => {
+  const grid = buildGrid(6, 1.2);
+
+  // No window at all (worker-like environment): default factor, no throw.
+  const noWindow = loadDisplacement();
+  assert.equal(noWindow.getDisplacementNormalEpsFactor(), 0.25);
+  const defaultFrame = noWindow.computeAnalyticNormalFrame({
+    positions: grid.positions, normals: grid.normals, tangents: null, bitangents: null, indices: grid.indices,
+  });
+  assert.equal(defaultFrame.stats.epsFactor, 0.25);
+
+  // window.MTLX_DISPLACEMENT_NORMAL_EPS override.
+  const windowOverride = loadDisplacement({ window: { MTLX_DISPLACEMENT_NORMAL_EPS: 0.5 } });
+  assert.equal(windowOverride.getDisplacementNormalEpsFactor(), 0.5);
+  const windowFrame = windowOverride.computeAnalyticNormalFrame({
+    positions: grid.positions, normals: grid.normals, tangents: null, bitangents: null, indices: grid.indices,
+  });
+  assert.equal(windowFrame.stats.epsFactor, 0.5);
+  // An interior vertex's eps must scale linearly with the factor (both are
+  // above the bbox-diagonal floor for this grid).
+  const v = 14; // an interior vertex of the 6x6 grid
+  assert.ok(Math.abs(windowFrame.eps[v] / defaultFrame.eps[v] - 2) < 1e-6);
+
+  // query-parameter override (?displacementNormalEps=1).
+  const queryOverride = loadDisplacement({
+    window: { location: { search: '?displacementNormalEps=1' } },
+    URLSearchParams,
+  });
+  assert.equal(queryOverride.getDisplacementNormalEpsFactor(), 1);
+
+  // localStorage override.
+  const store = new Map([['mtlxDisplacementNormalEps', '0.75']]);
+  const localStorageOverride = loadDisplacement({
+    window: {},
+    localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null) },
+  });
+  assert.equal(localStorageOverride.getDisplacementNormalEpsFactor(), 0.75);
+
+  // Invalid/non-positive overrides fall back to the default rather than
+  // producing a degenerate or negative eps.
+  const invalidOverride = loadDisplacement({ window: { MTLX_DISPLACEMENT_NORMAL_EPS: -1 } });
+  assert.equal(invalidOverride.getDisplacementNormalEpsFactor(), 0.25);
 });

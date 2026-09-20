@@ -84,13 +84,42 @@ function computeLocalEdgeLength(positions, triVertex, vertexCount, triangleCount
   return out;
 }
 
+// Optional runtime override for the eps factor below (default 0.25). Same
+// override pattern as getDisplacementNormalsMode in mtlx-engine.js (global,
+// then query param, then localStorage), but read locally here since this
+// file has no window/DOM dependency otherwise and must stay worker-safe;
+// every lookup is best-effort and falls through to the 0.25 default.
+function getDisplacementNormalEpsFactor() {
+  try {
+    if (typeof window === 'undefined') return 0.25;
+    const override = window.MTLX_DISPLACEMENT_NORMAL_EPS;
+    if (typeof override === 'number' && Number.isFinite(override) && override > 0) return override;
+    if (window.location && typeof window.location.search === 'string') {
+      const qs = new URLSearchParams(window.location.search);
+      if (qs.has('displacementNormalEps')) {
+        const v = parseFloat(qs.get('displacementNormalEps'));
+        if (Number.isFinite(v) && v > 0) return v;
+      }
+    }
+    if (typeof localStorage !== 'undefined') {
+      const raw = localStorage.getItem('mtlxDisplacementNormalEps');
+      if (raw != null) {
+        const v = parseFloat(raw);
+        if (Number.isFinite(v) && v > 0) return v;
+      }
+    }
+  } catch (e) { /* best-effort, fall through to default */ }
+  return 0.25;
+}
+
 // Per-vertex tangent-plane frame (tangent, bitangent, eps) for the
 // analytic-normal GPU passes: the caller (evaluateDisplacement) offsets
 // each vertex's position by eps*tangent and eps*bitangent, re-evaluates
 // the displacement network at both, and computeDisplacedAttributes turns
-// the three scalar results into a cross-product normal. eps is a quarter
-// of the vertex's own mean incident-edge length, floored against the mesh
-// bounding diagonal so a degenerate/isolated vertex never yields eps=0.
+// the three scalar results into a cross-product normal. eps is a factor
+// (default 0.25, see getDisplacementNormalEpsFactor above) of the vertex's
+// own mean incident-edge length, floored against the mesh bounding
+// diagonal so a degenerate/isolated vertex never yields eps=0.
 // A vertex whose tangent frame is degenerate (a pole, a zero-length
 // normal) gets eps=0 and an all-zero tangent/bitangent, which the caller
 // reads as "fall back to the mesh recompute for this vertex".
@@ -124,6 +153,7 @@ function computeAnalyticNormalFrame(input) {
   const tangent = new Float32Array(vertexCount * 3);
   const bitangent = new Float32Array(vertexCount * 3);
   const eps = new Float32Array(vertexCount);
+  const epsFactor = getDisplacementNormalEpsFactor();
   let degenerateFrames = 0;
   for (let v = 0; v < vertexCount; v++) {
     const n = vnorm(normals[v * 3], normals[v * 3 + 1], normals[v * 3 + 2]);
@@ -141,9 +171,9 @@ function computeAnalyticNormalFrame(input) {
     }
     tangent[v * 3] = t[0]; tangent[v * 3 + 1] = t[1]; tangent[v * 3 + 2] = t[2];
     bitangent[v * 3] = bt[0]; bitangent[v * 3 + 1] = bt[1]; bitangent[v * 3 + 2] = bt[2];
-    eps[v] = Math.max(edgeLen[v] * 0.25, epsFloor);
+    eps[v] = Math.max(edgeLen[v] * epsFactor, epsFloor);
   }
-  return { tangent, bitangent, eps, stats: { vertices: vertexCount, degenerateFrames } };
+  return { tangent, bitangent, eps, stats: { vertices: vertexCount, degenerateFrames, epsFactor } };
 }
 
 // Interior angle between two edges leaving one corner, from their (possibly
@@ -427,9 +457,10 @@ function computeDisplacedAttributes(input) {
       tangentFallback,
       normalsMode: wantAnalytic ? 'analytic' : 'mesh',
       analyticFallbacks,
+      analyticEpsFactor: wantAnalytic && analyticFrame.stats ? analyticFrame.stats.epsFactor : undefined,
     },
   };
 }
 
-  globalThis.MtlxMeshDisplacement = { computeDisplacedAttributes, computeAnalyticNormalFrame };
+  globalThis.MtlxMeshDisplacement = { computeDisplacedAttributes, computeAnalyticNormalFrame, getDisplacementNormalEpsFactor };
 })();
