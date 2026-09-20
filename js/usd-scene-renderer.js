@@ -111,19 +111,29 @@ const storedSceneAoStrength = () => {
 // it or invert sign; default-on is safe.
 const SCENE_BOUNCE_KEY = 'mtlx_scene_bounce';
 const SCENE_BOUNCE_STRENGTH_KEY = 'mtlx_scene_bounce_strength';
-// SAFETY OVERRIDE (2026-09-20): default OFF, not on. Verification on
-// egg_brown found a reproducible renderer hang (no console error, no
-// exception, the page just stops responding) whenever this setting is
-// actually enabled, on the real Scene material set; a real GLSL bug in
-// patchDiffuseBounceAdd's injection (splitting one statement into two by
-// appending after its semicolon) was found and fixed, but the hang
-// persisted after that fix and its root cause was not isolated within the
-// verification budget. Opt-in only (mtlx_scene_bounce=1) until this is
-// root-caused; do not flip the default back to true without a fresh,
-// successful headed capture confirming no hang.
+// Default ON (2026-09-20): the earlier "renderer hang" was not a hang at
+// all. A CDP-instrumented headed capture (scratchpad/displacement-verified/
+// color-parity/bounce/hang/hang-diagnostic.mjs, hang-stack.json) showed the
+// page staying fully responsive (rAF and the interval heartbeat both kept
+// ticking); the real fault was a plain ReferenceError ("envExposure is not
+// defined") thrown from makeMtlxMaterial's `computeBounceERef(env,
+// envExposure)` call (js/usd-scene-renderer.js:2844) during the initial
+// per-material precompile pass, which runs before this file's `let
+// envExposure` is reached; bounce OFF never evaluates that ternary branch,
+// so it was invisible until enabled. React's own catch stored the message
+// on UI state instead of logging it, which is why no console error or
+// exception was ever seen. Fixed at the three computeBounceERef call sites
+// (this function, applySkyBounce, and the displacement-subdivision-override
+// rebuild) with a typeof guard that falls back to the same dome-exposure
+// expression envExposure is itself initialized from. Re-verified headed on
+// egg_brown with bounce forced on: captured in ~33s (same order as bounce
+// off), 0 console errors, u_bounceERef read back live as ~1.13, chart
+// neutral / gray sphere / backdrop / floor ratios all lift by a small,
+// bounded amount versus bounce off, none newly crossing 1.1 (see
+// scratchpad/displacement-verified/color-parity/bounce/v2-fixed/).
 const storedSceneBounce = () => {
     if (window.top !== window) return false;
-    try { return localStorage.getItem(SCENE_BOUNCE_KEY) === '1'; } catch (e) { return false; }
+    try { return localStorage.getItem(SCENE_BOUNCE_KEY) !== '0'; } catch (e) { return true; }
 };
 const storedSceneBounceStrength = () => {
     if (window.top !== window) return 0.8;
@@ -2841,7 +2851,12 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
             aoVolumeMap: aoEnabled ? aoVolumeTexture : null, aoVolumeMin, aoVolumeSize, aoVolumeStrength: aoStrength, aoVolumeCell,
             skyBounceMap: bounceEnabled ? skyBounceTexture : null, skyBounceMin, skyBounceSize, skyBounceStrength: bounceStrength, skyBounceCell,
-            bounceERef: bounceEnabled ? computeBounceERef(env, envExposure) : 0,
+            // The initial per-material precompile pass (this function's caller,
+            // around the materialList loop) runs before `let envExposure` below
+            // is reached in this file's sequential setup, so that binding is not
+            // yet available here; fall back to the same dome-exposure expression
+            // envExposure is itself initialized from.
+            bounceERef: bounceEnabled ? computeBounceERef(env, typeof envExposure !== 'undefined' ? envExposure : (domeLight ? domeLight.exposure : 1)) : 0,
             envTilt,
             thicknessScale, refractionTwoSided: true, sceneRadius,
             environmentIndirectScale: shadowDiagnostic ? shadowDiagnostic.environmentIndirectScale : 1,
@@ -5472,7 +5487,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
         // off or nothing is baked yet, which makes the injected
         // mx_diffuse_bounce_add() early-return an exact no-op.
         const applySkyBounce = () => {
-            const eRef = bounceEnabled ? computeBounceERef(env, envExposure) : 0;
+            const eRef = bounceEnabled ? computeBounceERef(env, typeof envExposure !== 'undefined' ? envExposure : (domeLight ? domeLight.exposure : 1)) : 0;
             for (const material of materials) {
                 const u = material.uniforms;
                 if (!u) continue;
@@ -5577,7 +5592,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
             aoVolumeMap: aoEnabled ? aoVolumeTexture : null, aoVolumeMin, aoVolumeSize, aoVolumeStrength: aoStrength, aoVolumeCell,
             skyBounceMap: bounceEnabled ? skyBounceTexture : null, skyBounceMin, skyBounceSize, skyBounceStrength: bounceStrength, skyBounceCell,
-            bounceERef: bounceEnabled ? computeBounceERef(env, envExposure) : 0,
+            bounceERef: bounceEnabled ? computeBounceERef(env, typeof envExposure !== 'undefined' ? envExposure : (domeLight ? domeLight.exposure : 1)) : 0,
                     envTilt,
                     thicknessScale, refractionTwoSided: true, sceneRadius,
                     envRotationRad, envExposure,

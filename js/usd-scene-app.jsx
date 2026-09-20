@@ -608,7 +608,7 @@
         // Default OFF: see storedSceneBounce's safety-override comment in
         // js/usd-scene-renderer.js (an unresolved renderer hang was found
         // when this is enabled; opt-in only until root-caused).
-        const [bounceOn, setBounceOn] = React.useState(false);
+        const [bounceOn, setBounceOn] = React.useState(true);
         const [bounceStrength, setBounceStrength] = React.useState(0.8);
         // Screen-space reflections are parked: rows hidden, state and handlers kept.
         const SSR_ROWS_HIDDEN = true;
@@ -1455,7 +1455,7 @@
                 <ToggleRow label="Diffuse bounce" experimental checked={bounceOn}
                     title={bounceOn ? 'Turn the baked diffuse bounce off' : 'Bounce blocked sky light back off nearby surfaces'}
                     onChange={(next) => { setBounceOn(next); callHandle('setSceneBounceEnabled', next); writeStoredSceneBool('mtlx_scene_bounce', next); }}
-                    description="Environment light is not reflected back off the room, so shadowed sides and corners lose the light the walls and floor bounce onto them. This bakes a coarse estimate of that bounce and adds it back where the sky is blocked. Off by default: a renderer hang was found while verifying this feature and has not been root-caused, so it is opt-in only until fixed." />
+                    description="Environment light is not reflected back off the room, so shadowed sides and corners lose the light the walls and floor bounce onto them. This bakes a coarse estimate of that bounce and adds it back where the sky is blocked." />
                 {bounceOn ? (
                     <SliderRow description="How strongly the baked bounce term fills back in.">
                         <SliderField label="Diffuse bounce strength" value={bounceStrength} min={0} max={1} step={0.05}

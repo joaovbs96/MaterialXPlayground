@@ -110,3 +110,77 @@ test('storedSceneBounce() reads false inside an embed (window.top !== window)', 
   // page (window.top === window there) must reflect the '1' just written.
   expect(storedOnTop).toBe(true);
 });
+
+// A real Scene load with the setting ON: this is the case that hung on
+// 75ee6b4 (js/usd-scene-renderer.js:2844, inside makeMtlxMaterial's initial
+// per-material precompile pass -- "ReferenceError: envExposure is not
+// defined", thrown before `let envExposure` further down the same file's
+// setup is ever reached; the ternary in the same expression means bounce
+// OFF never evaluates that argument and so never hits it). The failure was
+// invisible to a source-text check (the compiled shader is identical on and
+// off) and to a console listener (the app's own catch stores the message on
+// React state instead of logging it) -- only a real createMtlxSceneView()
+// call surfaces it, as a rejected promise instead of the handle this test
+// expects.
+const bounceRoomXml = `<materialx version="1.39"><standard_surface name="surface" type="surfaceshader">
+  <input name="base_color" type="color3" value="0.6,0.6,0.6"/><input name="specular" type="float" value="0"/>
+</standard_surface><surfacematerial name="material" type="material"><input name="surfaceshader" type="surfaceshader" nodename="surface"/></surfacematerial></materialx>`;
+
+test('@scene diffuse bounce ON: a real Scene load renders instead of throwing on the envExposure reference', async ({ page, embedURL }) => {
+  await page.goto(embedURL + '/index.html#!scene');
+  await page.waitForFunction(() => window.createMtlxSceneView && window.getMxEnv, null, { timeout: 30000 });
+  const result = await page.evaluate(async ({ xml }) => {
+    window.localStorage.setItem('mtlx_scene_bounce', '1');
+    window.localStorage.setItem('mtlx_scene_skyvis', '1');
+    window.localStorage.setItem('mtlx_scene_shadows', '0');
+    const env = await window.getMxEnv();
+    const doc = env.mx.createDocument();
+    await window.mxExclusive(() => env.mx.readFromXmlString(doc, xml));
+    if (doc.setDataLibrary) doc.setDataLibrary(env.stdlib);
+    const node = window.listDocRenderables(doc)[0].node;
+    const holder = document.createElement('div');
+    holder.style.cssText = 'position:fixed;left:0;top:0;width:320px;height:240px';
+    document.body.appendChild(holder);
+    // A single floor quad plus a wall: enough for the sky-visibility bake
+    // buildSkyBounceVolume rides on to produce a non-degenerate grid.
+    const quad = (primPath, positions, normal) => ({
+      primPath, materialPath: '/Room', positions: new Float32Array(positions),
+      normals: new Float32Array(Array(4).fill(normal).flat()),
+      uvs: new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]), indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
+    });
+    const stage = {
+      upAxis: 'Y', metersPerUnit: 1,
+      meshes: [
+        quad('/Floor', [-2, -1, -2, 2, -1, -2, 2, -1, 2, -2, -1, 2], [0, 1, 0]),
+        quad('/WallZNeg', [-2, -1, -2, -2, 1, -2, 2, 1, -2, 2, -1, -2], [0, 0, 1]),
+      ],
+      materials: [{ path: '/Room', node }], lights: [],
+    };
+    let handle = null, thrown = null;
+    try {
+      handle = await window.createMtlxSceneView({ container: holder, stage, version: '1.39.5' });
+    } catch (e) { thrown = String(e && e.message || e); }
+    if (thrown) { holder.remove(); doc.delete(); return { thrown }; }
+    const renderer = handle.renderer; renderer.setPixelRatio(1); renderer.setSize(320, 240, false);
+    const gl = renderer.getContext();
+    handle.setBackdrop('none'); handle.setEnvironment(window.makeFlatEnvironment([0.6, 0.6, 0.6])); handle.setEnvExposure(1);
+    handle.camera.position.set(0, 0.3, 1.6);
+    handle.camera.lookAt(0, -0.4, 0);
+    handle.camera.updateProjectionMatrix();
+    handle.camera.updateMatrixWorld(true);
+    handle.renderNow();
+    const glError = gl.getError();
+    const raw = new Uint8Array(4);
+    gl.readPixels(160, 120, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+    const bounceOn = handle.getSceneBounce ? handle.getSceneBounce() : null;
+    handle.dispose(); holder.remove(); doc.delete();
+    return { thrown: null, glError, pixel: Array.from(raw), bounceOn };
+  }, { xml: bounceRoomXml });
+
+  expect(result.thrown).toBe(null);
+  expect(result.glError).toBe(0);
+  expect(result.bounceOn && result.bounceOn.enabled).toBe(true);
+  // Center pixel lands on the lit floor quad; a black or fully-transparent
+  // readback would mean the draw silently produced nothing.
+  expect(result.pixel[0] + result.pixel[1] + result.pixel[2]).toBeGreaterThan(0);
+});

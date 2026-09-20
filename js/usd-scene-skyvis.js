@@ -153,7 +153,16 @@
         let occupiedRun = false;
         let hitIndex = -1;
         const limit = maxT != null ? maxT : Infinity;
-        for (;;) {
+        // A degenerate direction or maxT cannot make this loop leave the grid
+        // (analytically it always does, within dimX+dimY+dimZ steps); this cap
+        // is a cheap safety net against any future regression, not a fix for
+        // a known non-termination.
+        const stepCap = dimX + dimY + dimZ + 4;
+        for (let steps = 0; ; steps++) {
+            if (steps > stepCap) {
+                console.error('[usd-scene-skyvis] escapeVisibilityHit exceeded ' + stepCap + ' steps, aborting the march early');
+                return { visibility, hitIndex };
+            }
             if (Math.min(tX, tY, tZ) > limit) return { visibility, hitIndex };
             if (tX < tY && tX < tZ) { x += stepX; tX += invX; } else if (tY < tZ) { y += stepY; tY += invY; } else { z += stepZ; tZ += invZ; }
             if (x < 0 || y < 0 || z < 0 || x >= dimX || y >= dimY || z >= dimZ) return { visibility, hitIndex };
