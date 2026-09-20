@@ -386,6 +386,33 @@ const setDisplacementEnabled = (v, { persist = true } = {}) => {
     try { window.dispatchEvent(new CustomEvent('mtlx-settings-changed', { detail: { key: 'displacement', value: DISPLACEMENT_ENABLED } })); } catch (e) { /* best-effort */ }
 };
 
+// Displacement shading-normal mode (Settings/test hook): 'analytic' derives
+// the normal from two extra tangent-offset evaluations of the displacement
+// network per vertex (crisp creases, matches the analytic surface); 'mesh'
+// keeps the older angle-weighted recompute over the displaced triangles.
+let DISPLACEMENT_NORMALS_MODE = (() => {
+    try {
+        const qs = new URLSearchParams(window.location.search);
+        if (qs.has('displacementnormals')) {
+            const v = qs.get('displacementnormals');
+            if (v === 'analytic' || v === 'mesh') return v;
+        }
+        const raw = localStorage.getItem('mtlxDisplacementNormals');
+        if (raw === 'analytic' || raw === 'mesh') return raw;
+        return 'analytic';
+    } catch (e) { return 'analytic'; }
+})();
+const getDisplacementNormalsMode = () => DISPLACEMENT_NORMALS_MODE;
+const setDisplacementNormalsMode = (v, { persist = true } = {}) => {
+    if (v !== 'analytic' && v !== 'mesh') return;
+    DISPLACEMENT_NORMALS_MODE = v;
+    if (persist && window.self === window.top) {
+        try { localStorage.setItem('mtlxDisplacementNormals', DISPLACEMENT_NORMALS_MODE); } catch (e) { /* best-effort */ }
+    }
+    LIVE_VIEWS.forEach((view) => { try { view.refreshDisplacement && view.refreshDisplacement(); } catch (e) { /* view mid-teardown */ } });
+    try { window.dispatchEvent(new CustomEvent('mtlx-settings-changed', { detail: { key: 'displacementNormals', value: DISPLACEMENT_NORMALS_MODE } })); } catch (e) { /* best-effort */ }
+};
+
 // Preview subdivision level (Settings dialog, default 2, 0..3). Feeds
 // mesh-subdivision.js's Loop subdivision ahead of CPU displacement;
 // pickSubdivisionLevel below caps it per-mesh against a triangle budget.
@@ -7856,26 +7883,76 @@ const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMat
                 return { offsets: null, mode, notices };
             }
 
-            const offsets = new Float32Array(N * 3);
             const pixels = new Uint8Array(W * H * 4);
             const byteView = new DataView(new ArrayBuffer(4));
             renderer.autoClear = false;
             renderer.setViewport(0, 0, W, H);
-            for (let c = 0; c < 3; c++) {
-                uniforms.u_dispComponent.value = c;
-                renderer.setRenderTarget(target);
-                renderer.setClearColor(0x000000, 0);
-                renderer.clear(true, true, true);
-                renderer.render(scene, camera);
-                renderer.readRenderTargetPixels(target, 0, 0, W, H, pixels);
-                for (let i = 0; i < N; i++) {
-                    const p = i * 4;
-                    byteView.setUint8(0, pixels[p]); byteView.setUint8(1, pixels[p + 1]);
-                    byteView.setUint8(2, pixels[p + 2]); byteView.setUint8(3, pixels[p + 3]);
-                    offsets[i * 3 + c] = byteView.getFloat32(0, true);
+            // One pass = 3 draws (x/y/z components) against whatever
+            // i_position is currently bound on evalGeometry; the analytic-
+            // normal frame below rebinds i_position twice more to sample
+            // the same network at two tangent-offset positions.
+            const runPass = () => {
+                const passOffsets = new Float32Array(N * 3);
+                for (let c = 0; c < 3; c++) {
+                    uniforms.u_dispComponent.value = c;
+                    renderer.setRenderTarget(target);
+                    renderer.setClearColor(0x000000, 0);
+                    renderer.clear(true, true, true);
+                    renderer.render(scene, camera);
+                    renderer.readRenderTargetPixels(target, 0, 0, W, H, pixels);
+                    for (let i = 0; i < N; i++) {
+                        const p = i * 4;
+                        byteView.setUint8(0, pixels[p]); byteView.setUint8(1, pixels[p + 1]);
+                        byteView.setUint8(2, pixels[p + 2]); byteView.setUint8(3, pixels[p + 3]);
+                        passOffsets[i * 3 + c] = byteView.getFloat32(0, true);
+                    }
+                }
+                return passOffsets;
+            };
+
+            const offsets = runPass();
+
+            let offsetsTangent = null, offsetsBitangent = null, analyticFrame = null;
+            const wantAnalytic = getDisplacementNormalsMode() !== 'mesh' && mode !== 'vector3';
+            if (wantAnalytic) {
+                try {
+                    const posAttr2 = evalGeometry.getAttribute('i_position') || evalGeometry.getAttribute('position');
+                    const normAttr2 = evalGeometry.getAttribute('i_normal') || evalGeometry.getAttribute('normal');
+                    const tanAttr2 = evalGeometry.getAttribute('i_tangent');
+                    const bitanAttr2 = evalGeometry.getAttribute('i_bitangent');
+                    const idx2 = baseGeometry.getIndex();
+                    if (posAttr2 && normAttr2 && posAttr2.count === N) {
+                        analyticFrame = MtlxMeshDisplacement.computeAnalyticNormalFrame({
+                            positions: posAttr2.array, normals: normAttr2.array,
+                            tangents: tanAttr2 ? tanAttr2.array : null,
+                            bitangents: bitanAttr2 ? bitanAttr2.array : null,
+                            indices: idx2 ? idx2.array : null,
+                        });
+                        const basePos = posAttr2.array;
+                        const posName = evalGeometry.getAttribute('i_position') ? 'i_position' : 'position';
+                        const buildOffsetPositions = (dir) => {
+                            const out = new Float32Array(N * 3);
+                            for (let i = 0; i < N; i++) {
+                                const e = analyticFrame.eps[i];
+                                out[i * 3] = basePos[i * 3] + dir[i * 3] * e;
+                                out[i * 3 + 1] = basePos[i * 3 + 1] + dir[i * 3 + 1] * e;
+                                out[i * 3 + 2] = basePos[i * 3 + 2] + dir[i * 3 + 2] * e;
+                            }
+                            return out;
+                        };
+                        evalGeometry.setAttribute(posName, new THREE.BufferAttribute(buildOffsetPositions(analyticFrame.tangent), 3));
+                        offsetsTangent = runPass();
+                        evalGeometry.setAttribute(posName, new THREE.BufferAttribute(buildOffsetPositions(analyticFrame.bitangent), 3));
+                        offsetsBitangent = runPass();
+                        evalGeometry.setAttribute(posName, new THREE.BufferAttribute(basePos, 3));
+                    }
+                } catch (e) {
+                    offsetsTangent = null; offsetsBitangent = null; analyticFrame = null;
+                    notices.push('Analytic displacement normals unavailable, using the mesh recompute: ' + (e && e.message ? e.message : String(e)));
                 }
             }
-            return { offsets, mode, notices };
+
+            return { offsets, offsetsTangent, offsetsBitangent, analyticFrame, mode, notices };
         } finally {
             restore();
         }
@@ -10367,6 +10444,10 @@ const createMtlxRenderView = async ({
                         indices: idxAttr ? idxAttr.array : null,
                         offsets: result.offsets,
                         mode: result.mode,
+                        offsetsTangent: result.offsetsTangent || null,
+                        offsetsBitangent: result.offsetsBitangent || null,
+                        analyticFrame: result.analyticFrame || null,
+                        displacementNormals: getDisplacementNormalsMode(),
                     });
                     const out = base.clone();
                     out.setAttribute('position', new THREE.BufferAttribute(computed.positions, 3));
@@ -11670,6 +11751,7 @@ Object.assign(window, {
     MTLX_CLOCK, clockTick,
     getForceTransparency, setForceTransparency,
     getDisplacementEnabled, setDisplacementEnabled,
+    getDisplacementNormalsMode, setDisplacementNormalsMode,
     getPreviewSubdivisionLevel, setPreviewSubdivisionLevel,
     PREVIEW_TRIANGLE_BUDGET, pickSubdivisionLevel,
     getHeightToNormalTexel, setHeightToNormalTexel,

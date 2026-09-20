@@ -36,6 +36,116 @@ function isZeroVec(v) {
   return v[0] === 0 && v[1] === 0 && v[2] === 0;
 }
 
+// Per-vertex orthonormal (tangent, bitangent) directions for a given unit
+// normal n: from authored tangent/bitangent when present, else the
+// branchless basis above. Shared by the vector3 displacement decode and
+// the analytic-normal derivative frame, so both agree on "the" tangent
+// plane at a vertex.
+function vertexTangentBasis(n, tx, ty, tz, hasTangent, tangentW, bx, by, bz, hasBitangent) {
+  let t, bt;
+  if (hasTangent) {
+    const dotNT = tx * n[0] + ty * n[1] + tz * n[2];
+    t = vnorm(tx - n[0] * dotNT, ty - n[1] * dotNT, tz - n[2] * dotNT);
+    if (hasBitangent) {
+      bt = vnorm(bx, by, bz);
+    } else {
+      const handedness = tangentW < 0 ? -1 : 1;
+      const c = vcross(n[0], n[1], n[2], t[0], t[1], t[2]);
+      bt = [c[0] * handedness, c[1] * handedness, c[2] * handedness];
+    }
+  } else {
+    const basis = orthonormalBasis(n[0], n[1], n[2]);
+    t = basis.t; bt = basis.bt;
+  }
+  return { t, bt };
+}
+
+// Local avg incident-edge length per vertex on the ORIGINAL (undisplaced)
+// mesh; drives the analytic-normal tangent step (eps). An isolated vertex
+// (no incident edges) gets 0, floored by the caller.
+function computeLocalEdgeLength(positions, triVertex, vertexCount, triangleCount) {
+  const sum = new Float64Array(vertexCount);
+  const count = new Int32Array(vertexCount);
+  const addEdge = (a, b) => {
+    const len = vlen(
+      positions[a * 3] - positions[b * 3],
+      positions[a * 3 + 1] - positions[b * 3 + 1],
+      positions[a * 3 + 2] - positions[b * 3 + 2]
+    );
+    sum[a] += len; count[a]++;
+    sum[b] += len; count[b]++;
+  };
+  for (let t = 0; t < triangleCount; t++) {
+    const ia = triVertex[t * 3], ib = triVertex[t * 3 + 1], ic = triVertex[t * 3 + 2];
+    addEdge(ia, ib); addEdge(ib, ic); addEdge(ic, ia);
+  }
+  const out = new Float64Array(vertexCount);
+  for (let v = 0; v < vertexCount; v++) out[v] = count[v] > 0 ? sum[v] / count[v] : 0;
+  return out;
+}
+
+// Per-vertex tangent-plane frame (tangent, bitangent, eps) for the
+// analytic-normal GPU passes: the caller (evaluateDisplacement) offsets
+// each vertex's position by eps*tangent and eps*bitangent, re-evaluates
+// the displacement network at both, and computeDisplacedAttributes turns
+// the three scalar results into a cross-product normal. eps is a quarter
+// of the vertex's own mean incident-edge length, floored against the mesh
+// bounding diagonal so a degenerate/isolated vertex never yields eps=0.
+// A vertex whose tangent frame is degenerate (a pole, a zero-length
+// normal) gets eps=0 and an all-zero tangent/bitangent, which the caller
+// reads as "fall back to the mesh recompute for this vertex".
+function computeAnalyticNormalFrame(input) {
+  const { positions, normals, tangents, bitangents, indices } = input;
+  const vertexCount = positions.length / 3;
+  const cornerCount = indices ? indices.length : vertexCount;
+  const triangleCount = Math.floor(cornerCount / 3);
+  const vertexAt = (c) => (indices ? indices[c] : c);
+  const triVertex = new Int32Array(triangleCount * 3);
+  for (let t = 0; t < triangleCount; t++) {
+    triVertex[t * 3] = vertexAt(t * 3);
+    triVertex[t * 3 + 1] = vertexAt(t * 3 + 1);
+    triVertex[t * 3 + 2] = vertexAt(t * 3 + 2);
+  }
+  const edgeLen = computeLocalEdgeLength(positions, triVertex, vertexCount, triangleCount);
+
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (let v = 0; v < vertexCount; v++) {
+    const x = positions[v * 3], y = positions[v * 3 + 1], z = positions[v * 3 + 2];
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (y < minY) minY = y; if (y > maxY) maxY = y;
+    if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+  }
+  const diagonal = vlen(maxX - minX, maxY - minY, maxZ - minZ);
+  const epsFloor = Math.max(1e-6 * diagonal, 1e-8);
+
+  const hasTangents = !!tangents;
+  const tangentStride = hasTangents ? Math.round(tangents.length / vertexCount) : 0;
+  const tangent = new Float32Array(vertexCount * 3);
+  const bitangent = new Float32Array(vertexCount * 3);
+  const eps = new Float32Array(vertexCount);
+  let degenerateFrames = 0;
+  for (let v = 0; v < vertexCount; v++) {
+    const n = vnorm(normals[v * 3], normals[v * 3 + 1], normals[v * 3 + 2]);
+    const { t, bt } = hasTangents
+      ? vertexTangentBasis(
+          n, tangents[v * tangentStride], tangents[v * tangentStride + 1], tangents[v * tangentStride + 2],
+          true, tangentStride === 4 ? tangents[v * 4 + 3] : 1,
+          bitangents ? bitangents[v * 3] : 0, bitangents ? bitangents[v * 3 + 1] : 0, bitangents ? bitangents[v * 3 + 2] : 0,
+          !!bitangents
+        )
+      : vertexTangentBasis(n, 0, 0, 0, false, 1, 0, 0, 0, false);
+    if (isZeroVec(t) || isZeroVec(bt) || isBadNumber(t[0]) || isBadNumber(bt[0])) {
+      degenerateFrames++;
+      continue; // leave this vertex's tangent/bitangent/eps at 0
+    }
+    tangent[v * 3] = t[0]; tangent[v * 3 + 1] = t[1]; tangent[v * 3 + 2] = t[2];
+    bitangent[v * 3] = bt[0]; bitangent[v * 3 + 1] = bt[1]; bitangent[v * 3 + 2] = bt[2];
+    eps[v] = Math.max(edgeLen[v] * 0.25, epsFloor);
+  }
+  return { tangent, bitangent, eps, stats: { vertices: vertexCount, degenerateFrames } };
+}
+
 // Interior angle between two edges leaving one corner, from their (possibly
 // zero-length) edge vectors. A degenerate edge contributes angle 0 so its
 // corner is skipped rather than producing a bogus acos input.
@@ -71,6 +181,7 @@ function computeDisplacedAttributes(input) {
   const {
     positions, normals, tangents, bitangents, indices, offsets,
     mode, vertexMask, weldTolerance,
+    offsetsTangent, offsetsBitangent, analyticFrame, displacementNormals,
   } = input;
 
   const vertexCount = positions.length / 3;
@@ -180,22 +291,14 @@ function computeDisplacedAttributes(input) {
       vecZ[v] = groupSmoothNormal[g * 3 + 2] * ox;
     } else {
       const n = vnorm(normals[v * 3], normals[v * 3 + 1], normals[v * 3 + 2]);
-      let t, bt;
-      if (hasTangents) {
-        const tx = tangents[v * tangentStride], ty = tangents[v * tangentStride + 1], tz = tangents[v * tangentStride + 2];
-        const dotNT = tx * n[0] + ty * n[1] + tz * n[2];
-        t = vnorm(tx - n[0] * dotNT, ty - n[1] * dotNT, tz - n[2] * dotNT);
-        if (bitangents) {
-          bt = vnorm(bitangents[v * 3], bitangents[v * 3 + 1], bitangents[v * 3 + 2]);
-        } else {
-          const handedness = tangentStride === 4 ? (tangents[v * 4 + 3] < 0 ? -1 : 1) : 1;
-          const c = vcross(n[0], n[1], n[2], t[0], t[1], t[2]);
-          bt = [c[0] * handedness, c[1] * handedness, c[2] * handedness];
-        }
-      } else {
-        const basis = orthonormalBasis(n[0], n[1], n[2]);
-        t = basis.t; bt = basis.bt;
-      }
+      const { t, bt } = hasTangents
+        ? vertexTangentBasis(
+            n, tangents[v * tangentStride], tangents[v * tangentStride + 1], tangents[v * tangentStride + 2],
+            true, tangentStride === 4 ? tangents[v * 4 + 3] : 1,
+            bitangents ? bitangents[v * 3] : 0, bitangents ? bitangents[v * 3 + 1] : 0, bitangents ? bitangents[v * 3 + 2] : 0,
+            !!bitangents
+          )
+        : vertexTangentBasis(n, 0, 0, 0, false, 1, 0, 0, 0, false);
       vecX[v] = t[0] * ox + bt[0] * oy + n[0] * oz;
       vecY[v] = t[1] * ox + bt[1] * oy + n[1] * oz;
       vecZ[v] = t[2] * ox + bt[2] * oy + n[2] * oz;
@@ -253,14 +356,62 @@ function computeDisplacedAttributes(input) {
       acc[0] += w[0]; acc[1] += w[1]; acc[2] += w[2];
     }
   }
-  const outNormals = new Float32Array(normals.length);
+  const meshNormals = new Float32Array(normals.length);
   for (let v = 0; v < vertexCount; v++) {
     const acc = normalAccum.get(sectorKeyOf(v));
     let n = acc ? vnorm(acc[0], acc[1], acc[2]) : [0, 0, 0];
     if (n[0] === 0 && n[1] === 0 && n[2] === 0) {
       n = [normals[v * 3], normals[v * 3 + 1], normals[v * 3 + 2]];
     }
-    outNormals[v * 3] = n[0]; outNormals[v * 3 + 1] = n[1]; outNormals[v * 3 + 2] = n[2];
+    meshNormals[v * 3] = n[0]; meshNormals[v * 3 + 1] = n[1]; meshNormals[v * 3 + 2] = n[2];
+  }
+
+  // Analytic normals (default): for scalar ('float') displacement, with
+  // the eval-time tangent/bitangent offset samples supplied, reconstruct
+  // dP/du and dP/dv from the network's own scalar output at p, p+eps*t
+  // and p+eps*bt (extruded along this vertex's own weld-group normal, the
+  // same one used to build the output position), then
+  // n = normalize(cross(dP/du, dP/dv)) oriented to that group normal.
+  // Falls back per-vertex to meshNormals when the tangent frame is
+  // degenerate (poles), an offset sample is missing/non-finite, or the
+  // cross product degenerates. 'vector3' mode and displacementNormals ===
+  // 'mesh' always use meshNormals.
+  const normalsMode = displacementNormals || 'analytic';
+  const wantAnalytic = normalsMode !== 'mesh' && resolvedMode === 'float'
+    && offsetsTangent && offsetsBitangent && analyticFrame;
+  const outNormals = new Float32Array(normals.length);
+  let analyticFallbacks = 0;
+  if (wantAnalytic) {
+    const frameT = analyticFrame.tangent, frameB = analyticFrame.bitangent, frameEps = analyticFrame.eps;
+    for (let v = 0; v < vertexCount; v++) {
+      const e = frameEps[v];
+      const ox = offsets[v * 3];
+      const oxT = offsetsTangent[v * 3];
+      const oxB = offsetsBitangent[v * 3];
+      let ok = e > 0 && Number.isFinite(ox) && Number.isFinite(oxT) && Number.isFinite(oxB);
+      let n = null;
+      if (ok) {
+        const g = groupOf[v];
+        const nx = groupSmoothNormal[g * 3], ny = groupSmoothNormal[g * 3 + 1], nz = groupSmoothNormal[g * 3 + 2];
+        const dOxT = (oxT - ox) / e, dOxB = (oxB - ox) / e;
+        const duX = frameT[v * 3] + nx * dOxT, duY = frameT[v * 3 + 1] + ny * dOxT, duZ = frameT[v * 3 + 2] + nz * dOxT;
+        const dvX = frameB[v * 3] + nx * dOxB, dvY = frameB[v * 3 + 1] + ny * dOxB, dvZ = frameB[v * 3 + 2] + nz * dOxB;
+        const cr = vcross(duX, duY, duZ, dvX, dvY, dvZ);
+        n = vnorm(cr[0], cr[1], cr[2]);
+        if (isZeroVec(n) || isBadNumber(n[0])) {
+          ok = false;
+        } else if (n[0] * nx + n[1] * ny + n[2] * nz < 0) {
+          n = [-n[0], -n[1], -n[2]];
+        }
+      }
+      if (!ok) {
+        analyticFallbacks++;
+        n = [meshNormals[v * 3], meshNormals[v * 3 + 1], meshNormals[v * 3 + 2]];
+      }
+      outNormals[v * 3] = n[0]; outNormals[v * 3 + 1] = n[1]; outNormals[v * 3 + 2] = n[2];
+    }
+  } else {
+    outNormals.set(meshNormals);
   }
 
   return {
@@ -274,9 +425,11 @@ function computeDisplacedAttributes(input) {
       invalidOffsets,
       isotropic,
       tangentFallback,
+      normalsMode: wantAnalytic ? 'analytic' : 'mesh',
+      analyticFallbacks,
     },
   };
 }
 
-  globalThis.MtlxMeshDisplacement = { computeDisplacedAttributes };
+  globalThis.MtlxMeshDisplacement = { computeDisplacedAttributes, computeAnalyticNormalFrame };
 })();
