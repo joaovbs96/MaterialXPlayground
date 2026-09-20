@@ -1661,7 +1661,7 @@ const patchAreaLightSourceCosine = (fs) => {
 //
 // Fail-soft: no anchor means no AO, and the default 1x1 white map with
 // strength 0 makes the injected code an exact no-op until a pass binds one.
-const patchAmbientOcclusion = (fs, { skipSkyVis = false, skipAoVolume = false } = {}) => {
+const patchAmbientOcclusion = (fs, { skipSkyVis = false, skipAoVolume = false, skipBounce = false } = {}) => {
     const anchor = /(\/\/ Ambient occlusion\s*\n\s*)occlusion = 1\.0;/;
     if (!anchor.test(fs)) return fs;
     // Sky visibility needs the world position; without that varying only the
@@ -1674,11 +1674,24 @@ const patchAmbientOcclusion = (fs, { skipSkyVis = false, skipAoVolume = false } 
     // separate sampler-budget drop from sky visibility; skipAoVolume falls
     // back to the sky-times-ssao combination without it.
     const useVolume = hasWorldPos && !skipAoVolume;
+    // The baked diffuse bounce (js/usd-scene-skyvis.js's marchBounce/
+    // buildSkyBounce) needs the same world position as sky visibility, and is
+    // its own sampler-budget drop on top of that.
+    const useBounce = hasWorldPos && !skipBounce;
+    // Bounce off (the common case: every tool but the Scene, and the Scene
+    // with the setting off or unbaked) keeps the exact original assignment
+    // text, since sky/volume/ssao are already each <= 1 and the min(1.0, ...)
+    // wrap would be a behavioural no-op anyway; not adding it keeps every
+    // non-Scene generated shader textually unchanged from before this patch.
     const assignment = !hasWorldPos
         ? 'occlusion = mx_ssao_occlusion();'
         : (useVolume
-            ? 'occlusion = mx_sky_visibility() * min(mx_volume_occlusion(), mx_ssao_occlusion());'
-            : 'occlusion = mx_ssao_occlusion() * mx_sky_visibility();');
+            ? (useBounce
+                ? 'occlusion = min(1.0, mx_sky_visibility() * min(mx_volume_occlusion(), mx_ssao_occlusion()) + mx_sky_bounce());'
+                : 'occlusion = mx_sky_visibility() * min(mx_volume_occlusion(), mx_ssao_occlusion());')
+            : (useBounce
+                ? 'occlusion = min(1.0, mx_ssao_occlusion() * mx_sky_visibility() + mx_sky_bounce());'
+                : 'occlusion = mx_ssao_occlusion() * mx_sky_visibility();'));
     const out = fs.replace(anchor, '$1' + assignment);
     const skyDecls = !hasWorldPos ? [] : [
         // Baked coarse visibility of the environment (js/usd-scene-skyvis.js).
@@ -1742,6 +1755,33 @@ const patchAmbientOcclusion = (fs, { skipSkyVis = false, skipAoVolume = false } 
         '    return mix(1.0, vis, clamp(u_aoVolumeStrength, 0.0, 1.0));',
         '}',
     ];
+    // Baked single-bounce estimate: blocker albedo times the blocker's own
+    // sky visibility, on the sky bake's grid (js/usd-scene-skyvis.js's
+    // marchBounce/buildSkyBounce). Added into the occlusion slot rather than
+    // multiplied, so it only fills back in on the fraction the sky term
+    // already lost; the caller's min(1.0, ...) keeps the combined factor from
+    // ever exceeding the unoccluded environment. Early return is 0.0 (not
+    // 1.0): the value is additive, so an unbound volume at strength 0 must be
+    // a no-op, not a fully-open sky.
+    const bounceDecls = !useBounce ? [] : [
+        'uniform highp sampler3D u_skyBounceMap;',
+        'uniform vec3 u_skyBounceMin;',
+        'uniform vec3 u_skyBounceSize;',
+        'uniform float u_skyBounceCell;',
+        'uniform float u_skyBounceStrength;',
+        'float mx_sky_bounce() {',
+        '    if (u_skyBounceStrength <= 0.0) return 0.0;',
+        '    vec3 bounceNormal = normalize(normalWorld);',
+        '    if (!gl_FrontFacing) bounceNormal = -bounceNormal;',
+        '    vec3 uvw = (positionWorld + bounceNormal * (1.5 * u_skyBounceCell) - u_skyBounceMin) / max(u_skyBounceSize, vec3(1e-6));',
+        '    if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0)))) return 0.0;',
+        '    vec4 moments = texture(u_skyBounceMap, uvw);',
+        '    float bounceMean = moments.r;',
+        '    vec3 bounceDirection = (moments.gba * 255.0 - vec3(128.0)) / 127.0;',
+        '    float b = clamp(bounceMean + dot(bounceDirection, bounceNormal), 0.0, 1.0);',
+        '    return b * clamp(u_skyBounceStrength, 0.0, 1.0);',
+        '}',
+    ];
     const decls = [
         'uniform sampler2D u_ssaoMap;',
         'uniform vec2 u_ssaoTexel;',
@@ -1753,7 +1793,7 @@ const patchAmbientOcclusion = (fs, { skipSkyVis = false, skipAoVolume = false } 
         '    vec2 aoSample = texture(u_ssaoMap, gl_FragCoord.xy * u_ssaoTexel).rg;',
         '    return mix(1.0, clamp(aoSample.r, 0.0, 1.0), clamp(u_ssaoStrength, 0.0, 1.0) * clamp(aoSample.g, 0.0, 1.0));',
         '}',
-    ].concat(skyDecls).concat(volumeDecls).concat(['']).join('\n');
+    ].concat(skyDecls).concat(volumeDecls).concat(bounceDecls).concat(['']).join('\n');
     // Must land before the FIRST function definition, not before main():
     // the generator emits the ambient-occlusion slot inside a surface
     // evaluation function that precedes main, so declaring the helper any
@@ -6717,6 +6757,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // recompile loop; every other caller keeps the full feature set.
     const skipSkyVis = !!(sceneFeatureOptions && sceneFeatureOptions.skipSkyVis);
     const skipAoVolume = !!(sceneFeatureOptions && sceneFeatureOptions.skipAoVolume);
+    const skipBounce = !!(sceneFeatureOptions && sceneFeatureOptions.skipBounce);
     const dropThicknessMap = !!(sceneFeatureOptions && sceneFeatureOptions.dropThicknessMap);
     const skipTransmittance = !!(sceneFeatureOptions && sceneFeatureOptions.skipTransmittance);
     const skipRefraction = !!(sceneFeatureOptions && sceneFeatureOptions.skipRefraction);
@@ -6885,7 +6926,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     fs = patchShadowLightScope(fs, { skipTransmittance });
     fs = patchLightSourceKindStruct(fs);
     fs = patchAreaLightSourceCosine(fs);
-    fs = patchAmbientOcclusion(fs, { skipSkyVis, skipAoVolume });
+    fs = patchAmbientOcclusion(fs, { skipSkyVis, skipAoVolume, skipBounce });
     fs = patchTransmissionThickness(fs, { dropThicknessMap });
     // Depth-peel machinery: baked into every fragment shader
     // UNCONDITIONALLY (not just when Force Transparency is on), see
@@ -7134,6 +7175,7 @@ const joinWithAnd = (items) => (items.length <= 1 ? items.join('')
 const SAMPLER_BUDGET_DROP_ORDER = [
     // Parked with screen-space reflections (always skipped for now).
     // { key: 'skipSsr', label: 'screen-space reflection (u_opaqueColor)' },
+    { key: 'skipBounce', label: 'bounce volume (u_skyBounceMap)', userLabel: 'diffuse bounce' },
     { key: 'skipAoVolume', label: 'occlusion volume (u_aoVolumeMap)', userLabel: 'ambient occlusion' },
     { key: 'skipSkyVis', label: 'sky visibility (u_skyVisMap)', userLabel: 'sky visibility' },
     { key: 'dropThicknessMap', label: 'thickness map (u_thicknessMap)', userLabel: 'transmission thickness' },
@@ -7224,7 +7266,8 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
 // fresh map, so meshes may share the compiled Three.js program while retaining
 // independent world/normal matrices and MaterialX values.
 const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, sceneRadius = 1, envTilt = null, envRotationRad = 0, envExposure = 1, environmentIndirectScale = 1, environmentKeyScale = 1, lightScales = null, shadowDiagnosticVisibilityScale = 1, displayTransform = null, shadowAtlas = null, shadowMatrices = null, shadowTiles = null, shadowDepthPlanes = null, shadowDepthRanges = null, shadowSourceRadii = null, shadowTexelSizes = null, shadowFaceOrigins = null, shadowFaceValid = null, shadowFaceBasisX = null, shadowFaceBasisY = null, shadowFaceBasisZ = null, shadowSlotFace = null, shadowSlotFaceCount = null, shadowTransmittance = null, shadowRecordCells = null, skyVisMap = null, skyVisMin = null, skyVisSize = null, skyVisStrength = 1, skyVisCell = 0,
-    aoVolumeMap = null, aoVolumeMin = null, aoVolumeSize = null, aoVolumeStrength = 1, aoVolumeCell = 0 }) => {
+    aoVolumeMap = null, aoVolumeMin = null, aoVolumeSize = null, aoVolumeStrength = 1, aoVolumeCell = 0,
+    skyBounceMap = null, skyBounceMin = null, skyBounceSize = null, skyBounceStrength = 0, skyBounceCell = 0 }) => {
     if (!compiled) throw new Error('Cannot create scene uniforms without compiled MaterialX source.');
     const uniforms = {
         u_worldMatrix: { value: new THREE.Matrix4() },
@@ -7301,6 +7344,15 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
         u_aoVolumeSize: { value: aoVolumeSize ? aoVolumeSize.clone() : new THREE.Vector3(1, 1, 1) },
         u_aoVolumeCell: { value: aoVolumeCell || 0 },
         u_aoVolumeStrength: { value: aoVolumeMap ? aoVolumeStrength : 0 },
+        // Baked diffuse bounce, same sampler-unit hazard as the two volumes
+        // above: seeded unconditionally. Default value is irrelevant at
+        // strength 0 (the additive term early-returns), so this reuses the
+        // same dummy white volume rather than allocating a second one.
+        u_skyBounceMap: { value: skyBounceMap || getDummyTex3DWhite() },
+        u_skyBounceMin: { value: skyBounceMin ? skyBounceMin.clone() : new THREE.Vector3() },
+        u_skyBounceSize: { value: skyBounceSize ? skyBounceSize.clone() : new THREE.Vector3(1, 1, 1) },
+        u_skyBounceCell: { value: skyBounceCell || 0 },
+        u_skyBounceStrength: { value: skyBounceMap ? skyBounceStrength : 0 },
     };
     if (compiled.payloadSupported) {
         // Scene RGB-T is opt-in at compile time and remains inactive until
@@ -10524,6 +10576,13 @@ const createMtlxRenderView = async ({
                         u_aoVolumeSize: { value: new THREE.Vector3(1, 1, 1) },
                         u_aoVolumeCell: { value: 0 },
                         u_aoVolumeStrength: { value: 0 },
+                        // No baked diffuse bounce in the Viewer either; same
+                        // sampler-unit hazard as u_skyVisMap above.
+                        u_skyBounceMap: { value: getDummyTex3DWhite() },
+                        u_skyBounceMin: { value: new THREE.Vector3() },
+                        u_skyBounceSize: { value: new THREE.Vector3(1, 1, 1) },
+                        u_skyBounceCell: { value: 0 },
+                        u_skyBounceStrength: { value: 0 },
                     };
 
                     // GLSL ES 3.0 forbids uniform initializers, so the app

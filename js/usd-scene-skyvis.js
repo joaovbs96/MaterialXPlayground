@@ -59,13 +59,18 @@
     // running an exact box overlap test: this feeds a visibility estimate, and
     // the sample count is derived from the triangle's own size in cells, so a
     // floor spanning the grid is still filled solidly.
-    function rasterizeTriangle(occ, dim, min, inv, ax, ay, az, bx, by, bz, cx, cy, cz, opacity) {
+    // alb is null unless the caller asked for an albedo bake (opts.albedo in
+    // voxelizeStage); albedo is the constant scalar for this triangle's mesh.
+    // Hoisting the null check out of the sample loop keeps the no-albedo path
+    // doing the exact same work as before (see the byte-identity guard test).
+    function rasterizeTriangle(occ, alb, dim, min, inv, ax, ay, az, bx, by, bz, cx, cy, cz, opacity, albedo) {
         const coverage = Math.max(0, Math.min(1, Number(opacity) || 0));
         const e1 = Math.max(Math.abs(bx - ax), Math.abs(by - ay), Math.abs(bz - az));
         const e2 = Math.max(Math.abs(cx - ax), Math.abs(cy - ay), Math.abs(cz - az));
         const cells = Math.max(e1, e2) * inv;
         const n = Math.max(1, Math.min(96, Math.ceil(cells * 1.5)));
         const dimX = dim[0], dimY = dim[1], dimZ = dim[2];
+        const hasAlbedo = !!alb;
         for (let i = 0; i <= n; i++) {
             const u = i / n;
             for (let j = 0; j <= n - i; j++) {
@@ -80,8 +85,12 @@
                 if (gx < 0 || gy < 0 || gz < 0 || gx >= dimX || gy >= dimY || gz >= dimZ) continue;
                 const cell = (gz * dimY + gy) * dimX + gx;
                 // Max merge keeps tessellation and duplicate back/front
-                // triangles from changing a cell's effective opacity.
-                occ[cell] = Math.max(occ[cell], coverage);
+                // triangles from changing a cell's effective opacity. The
+                // winning (raising) coverage also owns the albedo, when asked.
+                if (coverage > occ[cell]) {
+                    occ[cell] = coverage;
+                    if (hasAlbedo) alb[cell] = albedo;
+                }
             }
         }
     }
@@ -123,7 +132,42 @@
         }
     }
 
-    // meshes: [{ geometry, matrixWorld }]. box: THREE.Box3 of the stage.
+    // Same march as escapeVisibility, plus the index of the first occupied
+    // cell the ray entered (-1 when it escapes). Used by marchBounce to look
+    // up the blocker's own albedo and sky visibility at that cell. Kept as a
+    // separate function so escapeVisibility (and everything that calls it)
+    // stays untouched.
+    function escapeVisibilityHit(occ, dim, sx, sy, sz, dx, dy, dz, maxT) {
+        const dimX = dim[0], dimY = dim[1], dimZ = dim[2];
+        let x = sx, y = sy, z = sz;
+        const stepX = dx > 0 ? 1 : -1;
+        const stepY = dy > 0 ? 1 : -1;
+        const stepZ = dz > 0 ? 1 : -1;
+        const invX = dx !== 0 ? Math.abs(1 / dx) : Infinity;
+        const invY = dy !== 0 ? Math.abs(1 / dy) : Infinity;
+        const invZ = dz !== 0 ? Math.abs(1 / dz) : Infinity;
+        let tX = dx !== 0 ? invX * 0.5 : Infinity;
+        let tY = dy !== 0 ? invY * 0.5 : Infinity;
+        let tZ = dz !== 0 ? invZ * 0.5 : Infinity;
+        let visibility = 1;
+        let occupiedRun = false;
+        let hitIndex = -1;
+        const limit = maxT != null ? maxT : Infinity;
+        for (;;) {
+            if (Math.min(tX, tY, tZ) > limit) return { visibility, hitIndex };
+            if (tX < tY && tX < tZ) { x += stepX; tX += invX; } else if (tY < tZ) { y += stepY; tY += invY; } else { z += stepZ; tZ += invZ; }
+            if (x < 0 || y < 0 || z < 0 || x >= dimX || y >= dimY || z >= dimZ) return { visibility, hitIndex };
+            const idx = (z * dimY + y) * dimX + x;
+            const coverage = occ[idx];
+            if (coverage > 0) {
+                if (!occupiedRun) { visibility *= 1 - coverage; if (hitIndex === -1) hitIndex = idx; }
+                occupiedRun = true;
+                if (visibility <= 0) return { visibility: 0, hitIndex };
+            } else occupiedRun = false;
+        }
+    }
+
+    // meshes: [{ geometry, matrixWorld, albedo? }]. box: THREE.Box3 of the stage.
     // Returns { occ, dim, min, cell, occupiedFraction, triangles, stride,
     // sampledTriangles, structuralTriangles, subcellTriangles, resolution },
     // or null when the stage is degenerate. occ is a Float32Array of per-cell
@@ -151,6 +195,10 @@
         ];
         const total = dim[0] * dim[1] * dim[2];
         const occ = new Float32Array(total);
+        // Only allocated when a bounce bake asks for it: the byte-identity
+        // regression guard requires the no-albedo path to do no extra
+        // allocation and take no extra branch inside the inner raster loop.
+        const alb = opts.albedo ? new Float32Array(total) : null;
         const inv = 1 / cell;
 
         // Triangle budget. A global stride is unsafe: if a dense decorative
@@ -214,17 +262,19 @@
                 const structural = edgeSpan(world, a, b, c) * inv >= 1;
                 if (!structural && (subcellOrdinal++ % stride) !== 0) continue;
                 sampledTriangles++;
-                rasterizeTriangle(occ, dim, min, inv,
+                rasterizeTriangle(occ, alb, dim, min, inv,
                     world[a * 3], world[a * 3 + 1], world[a * 3 + 2],
                     world[b * 3], world[b * 3 + 1], world[b * 3 + 2],
-                    world[c * 3], world[c * 3 + 1], world[c * 3 + 2], item.mesh && item.mesh.opacity != null ? item.mesh.opacity : 1);
+                    world[c * 3], world[c * 3 + 1], world[c * 3 + 2],
+                    item.mesh && item.mesh.opacity != null ? item.mesh.opacity : 1,
+                    alb ? (item.mesh && item.mesh.albedo != null ? item.mesh.albedo : 0.5) : undefined);
             }
         }
 
         let occupied = 0;
         for (let i = 0; i < total; i++) if (occ[i]) occupied++;
 
-        return {
+        const result = {
             occ,
             dim,
             min,
@@ -237,6 +287,8 @@
             subcellTriangles,
             resolution,
         };
+        if (alb) result.alb = alb;
+        return result;
     }
 
     // voxels: a voxelizeStage() result. Casts rays from every cell (occupied
@@ -320,6 +372,84 @@
         };
     }
 
+    // voxels: a voxelizeStage() result baked WITH opts.albedo (needs its .alb
+    // array; returns null otherwise). visibilityData: the RGBA8 Uint8Array
+    // from the sky bake at the SAME voxel grid (marchVisibility's .data, or
+    // buildSkyVisibility's .data), used to look up each blocker's own sky
+    // visibility. For every cell and every one of the same ray directions
+    // marchVisibility casts, this reuses escapeVisibilityHit instead of
+    // escapeVisibility: a ray that escapes contributes nothing (the sky term
+    // already covers it, unoccluded), and a ray that hits a surface
+    // contributes that surface's own (albedo * sky visibility), weighted by
+    // how much of the ray's path was blocked. That keeps the sky term and
+    // the bounce term disjoint by construction: nothing is double counted.
+    function marchBounce(voxels, visibilityData, options) {
+        const opts = options || {};
+        const { occ, alb, dim, cell } = voxels;
+        if (!alb || !visibilityData) return null;
+        const requestedRays = Math.floor(Math.max(8, Math.min(128, Number(opts.rays) || 32)));
+        const rayCount = requestedRays % 2 === 0 ? requestedRays : (requestedRays < 128 ? requestedRays + 1 : requestedRays - 1);
+        const maxDistance = Number(opts.maxDistance);
+        const maxT = (Number.isFinite(maxDistance) && maxDistance > 0 && cell > 0) ? maxDistance / cell : Infinity;
+        const dirs = sphereDirections(rayCount);
+        const total = dim[0] * dim[1] * dim[2];
+        const data = new Uint8Array(total * 4);
+        for (let z = 0; z < dim[2]; z++) {
+            for (let y = 0; y < dim[1]; y++) {
+                for (let x = 0; x < dim[0]; x++) {
+                    const idx = (z * dim[1] + y) * dim[0] + x;
+                    let sum = 0, dirX = 0, dirY = 0, dirZ = 0;
+                    for (let r = 0; r < rayCount; r++) {
+                        const dx = dirs[r * 3], dy = dirs[r * 3 + 1], dz = dirs[r * 3 + 2];
+                        const hit = escapeVisibilityHit(occ, dim, x, y, z, dx, dy, dz, maxT);
+                        let contribution = 0;
+                        if (hit.hitIndex !== -1) {
+                            const blockerVisibility = visibilityData[hit.hitIndex * 4] / 255;
+                            contribution = (1 - hit.visibility) * alb[hit.hitIndex] * blockerVisibility;
+                        }
+                        sum += contribution;
+                        dirX += dx * contribution;
+                        dirY += dy * contribution;
+                        dirZ += dz * contribution;
+                    }
+                    const a = sum / rayCount;
+                    const encodeMoment = (s) => Math.round(128 + 127 * Math.max(-1, Math.min(1, 2 * s / rayCount)));
+                    const o = idx * 4;
+                    data[o] = Math.round(255 * Math.max(0, Math.min(1, a)));
+                    data[o + 1] = encodeMoment(dirX);
+                    data[o + 2] = encodeMoment(dirY);
+                    data[o + 3] = encodeMoment(dirZ);
+                }
+            }
+        }
+        return { data, rayCount };
+    }
+
+    // opts.voxels: the sky bake's own voxel grid, REBAKED with opts.albedo so
+    // it carries .alb (see buildSkyBounceVolume in usd-scene-renderer.js,
+    // which voxelizes once for both). opts.visibility: the sky bake's RGBA8
+    // data at that same grid. Returns null (never re-voxelizes on its own)
+    // when either is missing, matching buildSkyVisibility's shape otherwise.
+    function buildSkyBounce(meshes, box, options) {
+        const opts = options || {};
+        const voxels = opts.voxels;
+        const visibility = opts.visibility;
+        if (!voxels || !voxels.alb || !visibility) return null;
+        const marched = marchBounce(voxels, visibility, { rays: opts.rays, maxDistance: opts.maxDistance });
+        if (!marched) return null;
+        return {
+            data: marched.data,
+            channels: 4,
+            format: 'rgba8',
+            dim: voxels.dim,
+            min: voxels.min,
+            cell: voxels.cell,
+            size: [voxels.dim[0] * voxels.cell, voxels.dim[1] * voxels.cell, voxels.dim[2] * voxels.cell],
+            voxels,
+        };
+    }
+
     window.buildSkyVisibility = buildSkyVisibility;
-    window.UsdSceneSkyVisibility = { build: buildSkyVisibility, voxelizeStage, marchVisibility };
+    window.buildSkyBounce = buildSkyBounce;
+    window.UsdSceneSkyVisibility = { build: buildSkyVisibility, voxelizeStage, marchVisibility, marchBounce, buildSkyBounce };
 })();

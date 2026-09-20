@@ -605,6 +605,8 @@
         const [shadowsOn, setShadowsOn] = React.useState(true);
         const [aoOn, setAoOn] = React.useState(true);
         const [aoStrength, setAoStrength] = React.useState(0.85);
+        const [bounceOn, setBounceOn] = React.useState(true);
+        const [bounceStrength, setBounceStrength] = React.useState(0.8);
         // Screen-space reflections are parked: rows hidden, state and handlers kept.
         const SSR_ROWS_HIDDEN = true;
         const [ssrOn, setSsrOn] = React.useState(false);
@@ -908,6 +910,11 @@
                         setAoOn(ao.enabled);
                         setAoStrength(ao.strength);
                     }
+                    if (nextHandle.getSceneBounce) {
+                        const bounce = nextHandle.getSceneBounce();
+                        setBounceOn(bounce.enabled);
+                        setBounceStrength(bounce.strength);
+                    }
                     if (nextHandle.getScreenSpaceReflections) {
                         const ssr = nextHandle.getScreenSpaceReflections();
                         setSsrOn(ssr.enabled);
@@ -1114,6 +1121,12 @@
             if (!Number.isFinite(value)) return;
             setAoStrength(value);
             callHandle('setAmbientOcclusionStrength', value);
+        };
+        const applyBounceStrength = (raw) => {
+            const value = Math.max(0, Math.min(1, Number(raw)));
+            if (!Number.isFinite(value)) return;
+            setBounceStrength(value);
+            callHandle('setSceneBounceStrength', value);
         };
         const applySsrStrength = (raw) => {
             const value = Math.max(0, Math.min(1, Number(raw)));
@@ -1434,6 +1447,16 @@
                     <SliderRow description="How strongly the estimated occlusion darkens creases and corners.">
                         <SliderField label="Ambient occlusion strength" value={aoStrength} min={0} max={1} step={0.05}
                             onSlider={applyAoStrength} onNumber={applyAoStrength} />
+                    </SliderRow>
+                ) : null}
+                <ToggleRow label="Diffuse bounce" experimental checked={bounceOn}
+                    title={bounceOn ? 'Turn the baked diffuse bounce off' : 'Bounce blocked sky light back off nearby surfaces'}
+                    onChange={(next) => { setBounceOn(next); callHandle('setSceneBounceEnabled', next); writeStoredSceneBool('mtlx_scene_bounce', next); }}
+                    description="Environment light is not reflected back off the room, so shadowed sides and corners lose the light the walls and floor bounce onto them. This bakes a coarse estimate of that bounce and adds it back where the sky is blocked." />
+                {bounceOn ? (
+                    <SliderRow description="How strongly the baked bounce term fills back in.">
+                        <SliderField label="Diffuse bounce strength" value={bounceStrength} min={0} max={1} step={0.05}
+                            onSlider={applyBounceStrength} onNumber={applyBounceStrength} />
                     </SliderRow>
                 ) : null}
                 {SSR_ROWS_HIDDEN ? null : (<React.Fragment>

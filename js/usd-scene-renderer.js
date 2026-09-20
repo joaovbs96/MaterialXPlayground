@@ -97,6 +97,27 @@ const storedSceneAoStrength = () => {
     } catch (e) { return 0.7; }
 };
 
+// Baked single-bounce diffuse light: blocker albedo times the blocker's own
+// sky visibility, on the sky bake's grid. Fills back in some of what the sky
+// visibility/AO volume terms occlude, since MaterialX's IBL has no bounce
+// light at all. Strictly bounded by the occlusion it replaces (see
+// mx_sky_bounce's min(1.0, ...) caller), so default-on is safe.
+const SCENE_BOUNCE_KEY = 'mtlx_scene_bounce';
+const SCENE_BOUNCE_STRENGTH_KEY = 'mtlx_scene_bounce_strength';
+const storedSceneBounce = () => {
+    if (window.top !== window) return false;
+    try { return localStorage.getItem(SCENE_BOUNCE_KEY) !== '0'; } catch (e) { return true; }
+};
+const storedSceneBounceStrength = () => {
+    if (window.top !== window) return 0.8;
+    try {
+        const raw = localStorage.getItem(SCENE_BOUNCE_STRENGTH_KEY);
+        if (raw == null || raw === '') return 0.8;
+        const value = Number(raw);
+        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0.8;
+    } catch (e) { return 0.8; }
+};
+
 // Screen-space reflections: a history-reprojected trace for opaque
 // surfaces, image based (IBL) as the fallback. Parked while its artefacts
 // are investigated: forced off, setters kept; flip SCENE_SSR_PARKED to restore.
@@ -1289,6 +1310,35 @@ const sceneGeompropConstants = (record) => {
     return { displayColor: [Number(color[0]) || 0, Number(color[1]) || 0, Number(color[2]) || 0] };
 };
 
+// Per-mesh albedo estimate for the diffuse bounce bake (buildSkyBounceVolume).
+// MaterialX public uniforms are named after node paths, so there is no
+// reliable "u_base_color" to read; this is a heuristic, resolved in order and
+// clamped to a sane blocker albedo range so no single guess can blow up the
+// bounce term.
+const sceneBounceAlbedo = (object) => {
+    const luminance = (r, g, b) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const clampAlbedo = (v) => Math.max(0.04, Math.min(0.9, v));
+    if (object && object.userData && Number.isFinite(object.userData.mtlxBounceAlbedo)) {
+        return clampAlbedo(object.userData.mtlxBounceAlbedo);
+    }
+    const mats = object && object.material ? (Array.isArray(object.material) ? object.material : [object.material]) : [];
+    for (const material of mats) {
+        const uniforms = material && material.uniforms;
+        if (!uniforms) continue;
+        for (const key of Object.keys(uniforms)) {
+            if (!/(^|_)(base_color|diffuse_color|diffusecolor)$/i.test(key)) continue;
+            const v = uniforms[key] && uniforms[key].value;
+            if (v && v.isColor) return clampAlbedo(luminance(v.r, v.g, v.b));
+            if (v && v.isVector3) return clampAlbedo(luminance(v.x, v.y, v.z));
+        }
+    }
+    const displayColor = object && object.userData && object.userData.displayColor;
+    if (Array.isArray(displayColor) && displayColor.length >= 3) {
+        return clampAlbedo(luminance(Number(displayColor[0]) || 0, Number(displayColor[1]) || 0, Number(displayColor[2]) || 0));
+    }
+    return 0.5;
+};
+
 const sceneNeutralMaterial = (label) => new THREE.MeshNormalMaterial({
     name: 'USD unsupported material: ' + String(label || 'unknown'),
 });
@@ -1592,6 +1642,16 @@ const createMtlxSceneView = async ({
     let aoVolumeSize = null;
     let aoVolumeCell = 0;
     let aoVolumeInfo = null;
+    // Baked diffuse bounce volume (js/usd-scene-skyvis.js's marchBounce/
+    // buildSkyBounce). Shares the sky bake's own grid; rebuilt alongside it,
+    // never per frame.
+    let skyBounceTexture = null;
+    let skyBounceMin = null;
+    let skyBounceSize = null;
+    let skyBounceCell = 0;
+    let skyBounceInfo = null;
+    let bounceEnabled = storedSceneBounce();
+    let bounceStrength = storedSceneBounceStrength();
     let sceneDisplayTransform = storedSceneDisplayTransform();
     let shadowsEnabled = storedSceneShadows();
     // Ambient occlusion resources. Unlike the shadow map these are rebuilt
@@ -2719,6 +2779,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             shadowTransmittance: shadowsEnabled && shadowTransmittanceTarget ? shadowTransmittanceTarget.texture : null, shadowRecordCells: shadowCasterRecordCells(),
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
             aoVolumeMap: aoEnabled ? aoVolumeTexture : null, aoVolumeMin, aoVolumeSize, aoVolumeStrength: aoStrength, aoVolumeCell,
+            skyBounceMap: bounceEnabled ? skyBounceTexture : null, skyBounceMin, skyBounceSize, skyBounceStrength: bounceStrength, skyBounceCell,
             envTilt,
             thicknessScale, refractionTwoSided: true, sceneRadius,
             environmentIndirectScale: shadowDiagnostic ? shadowDiagnostic.environmentIndirectScale : 1,
@@ -5257,6 +5318,65 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             if (warnings.indexOf(note) < 0) warnings.push(note);
             return result;
         };
+        // Bakes the diffuse bounce volume: blocker albedo times the blocker's
+        // own sky visibility, on the SAME grid the sky bake used (skyResult
+        // is required; this never voxelizes the stage on its own). Modelled
+        // on buildAoVolume above, but voxelizes its own copy of the stage
+        // WITH per-mesh albedo, since the sky bake's own voxel grid does not
+        // carry it.
+        const buildSkyBounceVolume = (stageBox, skyResult) => {
+            if (skyBounceTexture) { try { skyBounceTexture.dispose(); } catch (e) {} }
+            skyBounceTexture = null;
+            skyBounceMin = null;
+            skyBounceSize = null;
+            skyBounceCell = 0;
+            skyBounceInfo = null;
+            if (!bounceEnabled || !window.UsdSceneSkyVisibility || !window.buildSkyBounce || !THREE.DataTexture3D) return null;
+            if (!skyResult || !skyResult.data || !skyResult.voxels) return null;
+            if (!sceneRoot || !stageBox || stageBox.isEmpty()) return null;
+            const meshes = [];
+            sceneRoot.traverse((object) => {
+                if (!object.isMesh || !object.geometry) return;
+                if (object.userData && object.userData.excludeFromFrame) return;
+                const opacity = sceneObjectPrepassCoverage(object);
+                if (opacity === 0) return;
+                meshes.push({ geometry: object.geometry, matrixWorld: object.matrixWorld, opacity, albedo: sceneBounceAlbedo(object) });
+            });
+            if (!meshes.length) return null;
+            const started = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+            let albedoVoxels = null;
+            let result = null;
+            try {
+                albedoVoxels = window.UsdSceneSkyVisibility.voxelizeStage(meshes, stageBox, { resolution: skyResult.voxels.resolution, albedo: true });
+                if (albedoVoxels) {
+                    result = window.buildSkyBounce(meshes, stageBox, { voxels: albedoVoxels, visibility: skyResult.data, rays: 32 });
+                }
+            } catch (error) {
+                const note = 'Diffuse bounce bake failed: ' + (error && error.message || error);
+                if (warnings.indexOf(note) < 0) warnings.push(note);
+                return null;
+            }
+            if (!result) return null;
+            const texture = new THREE.DataTexture3D(result.data, result.dim[0], result.dim[1], result.dim[2]);
+            texture.format = THREE.RGBAFormat;
+            texture.type = THREE.UnsignedByteType;
+            texture.minFilter = THREE.LinearFilter;
+            texture.magFilter = THREE.LinearFilter;
+            texture.wrapS = THREE.ClampToEdgeWrapping;
+            texture.wrapT = THREE.ClampToEdgeWrapping;
+            texture.wrapR = THREE.ClampToEdgeWrapping;
+            texture.unpackAlignment = 1;
+            texture.needsUpdate = true;
+            skyBounceTexture = texture;
+            skyBounceCell = result.cell;
+            skyBounceMin = new THREE.Vector3(result.min[0], result.min[1], result.min[2]);
+            skyBounceSize = new THREE.Vector3(result.size[0], result.size[1], result.size[2]);
+            const ms = ((typeof performance !== 'undefined' && performance.now) ? performance.now() - started : 0);
+            skyBounceInfo = { dim: result.dim.slice(), cell: result.cell, ms };
+            const note = '[info] Diffuse bounce baked at ' + result.dim.join('x') + ' in ' + Math.round(ms) + ' ms';
+            if (warnings.indexOf(note) < 0) warnings.push(note);
+            return result;
+        };
         // Pushes the baked volume onto every live material without a rebuild.
         const applySkyVisibility = () => {
             for (const material of materials) {
@@ -5281,6 +5401,20 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 if (u.u_aoVolumeSize && aoVolumeSize) u.u_aoVolumeSize.value.copy(aoVolumeSize);
                 if (u.u_aoVolumeCell) u.u_aoVolumeCell.value = aoVolumeCell;
                 if (u.u_aoVolumeStrength) u.u_aoVolumeStrength.value = aoEnabled ? aoStrength : 0;
+            }
+        };
+        // Pushes the baked bounce volume onto every live material. Strength
+        // is 0 whenever the setting is off or nothing is baked yet, which
+        // makes the injected mx_sky_bounce() early-return an exact no-op.
+        const applySkyBounce = () => {
+            for (const material of materials) {
+                const u = material.uniforms;
+                if (!u) continue;
+                if (u.u_skyBounceMap) u.u_skyBounceMap.value = (bounceEnabled && skyBounceTexture) ? skyBounceTexture : (window.getDummyTex3DWhite ? window.getDummyTex3DWhite() : u.u_skyBounceMap.value);
+                if (u.u_skyBounceMin && skyBounceMin) u.u_skyBounceMin.value.copy(skyBounceMin);
+                if (u.u_skyBounceSize && skyBounceSize) u.u_skyBounceSize.value.copy(skyBounceSize);
+                if (u.u_skyBounceCell) u.u_skyBounceCell.value = skyBounceCell;
+                if (u.u_skyBounceStrength) u.u_skyBounceStrength.value = (bounceEnabled && skyBounceTexture) ? bounceStrength : 0;
             }
         };
         const applyShadowMatrix = () => {
@@ -5375,6 +5509,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             shadowTransmittance: shadowsEnabled && shadowTransmittanceTarget ? shadowTransmittanceTarget.texture : null, shadowRecordCells: shadowCasterRecordCells(),
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
             aoVolumeMap: aoEnabled ? aoVolumeTexture : null, aoVolumeMin, aoVolumeSize, aoVolumeStrength: aoStrength, aoVolumeCell,
+            skyBounceMap: bounceEnabled ? skyBounceTexture : null, skyBounceMin, skyBounceSize, skyBounceStrength: bounceStrength, skyBounceCell,
                     envTilt,
                     thicknessScale, refractionTwoSided: true, sceneRadius,
                     envRotationRad, envExposure,
@@ -5678,6 +5813,10 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                         object.userData.instanceIndex = instanceMatrix ? instanceIndex : undefined;
                         object.userData.materialPath = String(record.materialPath || '');
                         object.userData.castsShadow = record.castsShadow !== false;
+                        // Fallback albedo source for the diffuse bounce bake
+                        // (sceneBounceAlbedo): the same authored constant
+                        // sceneGeompropConstants above already reads.
+                        if (Array.isArray(effectiveRecord.displayColor)) object.userData.displayColor = effectiveRecord.displayColor;
                         object.matrixAutoUpdate = false;
                         const worldMatrix = parentMatrix.clone();
                         if (instanceMatrix) worldMatrix.multiply(sceneMatrix(instanceMatrix));
@@ -5709,7 +5848,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
         // first frame rather than leaving the opening frames unshadowed.
         // Materials were built during the geometry pass, before the volume
         // existed, so push it onto them once it does.
-        const rendererStepTotal = 4 + (shadowsEnabled ? 1 : 0);
+        const rendererStepTotal = 5 + (shadowsEnabled ? 1 : 0);
         let rendererStepIndex = 0;
         const reportRendererStep = (step) => {
             rendererStepIndex += 1;
@@ -5739,6 +5878,9 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             if (emitProgress) reportRendererStep('occlusion-volume');
             buildAoVolume(stageBox, skyBakeResult);
             applyAoVolume();
+            if (emitProgress) reportRendererStep('bounce-volume');
+            buildSkyBounceVolume(stageBox, skyBakeResult);
+            applySkyBounce();
             if (shadowsEnabled) { if (emitProgress) reportRendererStep('shadow-atlas'); updateShadowMap(); }
             applyMaterialEnvironment();
         };
@@ -6439,9 +6581,11 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 const box = new THREE.Box3().setFromObject(sceneRoot);
                 const skyResult = buildSkyVisibilityVolume(box);
                 if (aoEnabled && !aoVolumeTexture) buildAoVolume(box, skyResult);
+                if (bounceEnabled && !skyBounceTexture) buildSkyBounceVolume(box, skyResult);
             }
             applySkyVisibility();
             applyAoVolume();
+            applySkyBounce();
             renderFrame();
             return skyVisEnabled;
         };
@@ -6450,6 +6594,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             try { if (window.top === window) localStorage.setItem(SCENE_SKYVIS_STRENGTH_KEY, String(skyVisStrength)); } catch (e) { /* privacy mode */ }
             applySkyVisibility();
             applyAoVolume();
+            applySkyBounce();
             renderFrame();
             return skyVisStrength;
         };
@@ -6464,6 +6609,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             try { if (window.top === window) localStorage.setItem(SCENE_AO_KEY, aoEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
             if (!aoEnabled) { applyAmbientOcclusion(null); disposeAoResources(); }
             applyAoVolume();
+            applySkyBounce();
             return aoEnabled;
         };
         const setAmbientOcclusionStrength = (value) => {
@@ -6471,6 +6617,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             aoStrength = Number.isFinite(next) ? Math.max(0, Math.min(1, next)) : 1;
             try { if (window.top === window) localStorage.setItem(SCENE_AO_STRENGTH_KEY, String(aoStrength)); } catch (e) { /* privacy mode */ }
             applyAoVolume();
+            applySkyBounce();
             return aoStrength;
         };
         const getAmbientOcclusion = () => ({
@@ -6482,6 +6629,38 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 cell: aoVolumeCell,
                 ms: aoVolumeInfo ? aoVolumeInfo.ms : null,
             },
+        });
+        const setSceneBounceEnabled = (on) => {
+            const next = !!on;
+            if (next === bounceEnabled) return bounceEnabled;
+            bounceEnabled = next;
+            try { if (window.top === window) localStorage.setItem(SCENE_BOUNCE_KEY, bounceEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            // Turning it back on has to re-bake: the volume is dropped when
+            // off. Needs the sky bake's own volume and RGBA data, so rebuild
+            // that first when it is not already held.
+            if (bounceEnabled && !skyBounceTexture && sceneRoot) {
+                const box = new THREE.Box3().setFromObject(sceneRoot);
+                const skyResult = (skyVisEnabled && skyVisTexture)
+                    ? buildSkyVisibilityVolume(box) : null;
+                if (skyResult) buildSkyBounceVolume(box, skyResult);
+            }
+            applySkyBounce();
+            renderFrame();
+            return bounceEnabled;
+        };
+        const setSceneBounceStrength = (value) => {
+            const next = Number(value);
+            bounceStrength = Number.isFinite(next) ? Math.max(0, Math.min(1, next)) : 0.8;
+            try { if (window.top === window) localStorage.setItem(SCENE_BOUNCE_STRENGTH_KEY, String(bounceStrength)); } catch (e) { /* privacy mode */ }
+            applySkyBounce();
+            renderFrame();
+            return bounceStrength;
+        };
+        const getSceneBounce = () => ({
+            enabled: bounceEnabled,
+            strength: bounceStrength,
+            ready: !!skyBounceTexture,
+            info: skyBounceInfo ? Object.assign({}, skyBounceInfo) : null,
         });
         const setScreenSpaceReflections = (on) => {
             ssrEnabled = !SCENE_SSR_PARKED && !!on;
@@ -6649,6 +6828,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             setStageLightsEnabled, setStageLightsEv, getStageLights,
             setShadowsEnabled, getShadows, setShadowDiagnostic, getShadowDiagnostic, getTransparentPrims,
             setAmbientOcclusionEnabled, setAmbientOcclusionStrength, getAmbientOcclusion,
+            setSceneBounceEnabled, setSceneBounceStrength, getSceneBounce,
             setScreenSpaceReflections, setScreenSpaceReflectionStrength, setScreenSpaceReflectionMaxRoughness, getScreenSpaceReflections,
             getSceneDisplayTransform, setSceneDisplayTransform,
             setSkyVisibility, setSkyVisibilityStrength, getSkyVisibility,
@@ -7060,6 +7240,11 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 const normal = (worldNormal.isVector3 ? worldNormal.clone() : new THREE.Vector3(worldNormal[0], worldNormal[1], worldNormal[2])).normalize();
                 const volume = probeBakedVisibility(aoVolumeTexture, aoVolumeMin, aoVolumeSize, aoVolumeCell, point, normal);
                 const sky = probeBakedVisibility(skyVisTexture, skyVisMin, skyVisSize, skyVisCell, point, normal);
+                // Unlike sky/volume (whose absence means "fully visible", 1),
+                // an unbaked bounce means "no bounce term", 0: probeBaked
+                // Visibility's generic no-texture fallback of 1 would read as
+                // maximum bounce, which is backwards for an additive term.
+                const bounce = skyBounceTexture ? probeBakedVisibility(skyBounceTexture, skyBounceMin, skyBounceSize, skyBounceCell, point, normal) : 0;
                 let ssao = { ao: 1, confidence: 0, x: -1, y: -1 };
                 if (aoBlurTarget && camera) {
                     const clip = point.clone().project(camera);
@@ -7072,7 +7257,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                         ssao = { ao: buf[0] / 255, confidence: buf[1] / 255, x, y };
                     }
                 }
-                return { volume, sky, ssao };
+                return { volume, sky, ssao, bounce };
             },
             __shadowDebug: () => {
                 if (!shadowTarget) return { ready: false };
