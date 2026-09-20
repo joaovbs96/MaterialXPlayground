@@ -590,6 +590,10 @@
         // The Scene keeps its own view transform (the Material Viewer stays on
         // sRGB for MaterialXView parity); exposure is shared with the other tools.
         const [displayTransform, setDisplayTransformState] = React.useState('neutral');
+        // Karma reads untagged colour constants and displayColor as ACEScg;
+        // this viewer treats the same numbers as linear Rec.709. Scene-only,
+        // recompiles every material when toggled (see setSceneMaterialWorkspace).
+        const [materialWorkspace, setMaterialWorkspaceState] = React.useState('rec709');
         const [displayExposure, setDisplayExposureState] = React.useState(
             () => (window.getDisplayExposure ? window.getDisplayExposure() : 0)
         );
@@ -784,6 +788,10 @@
             setDisplayTransformState(mode);
             callHandle('setSceneDisplayTransform', mode);
         };
+        const pickMaterialWorkspace = (space) => {
+            setMaterialWorkspaceState(space);
+            callHandle('setSceneMaterialWorkspace', space);
+        };
         const applyDisplayExposure = (raw) => {
             const value = Math.max(-8, Math.min(8, Number(raw)));
             if (!Number.isFinite(value)) return;
@@ -903,6 +911,7 @@
                     if (nextHandle.getShadows) setShadowsOn(nextHandle.getShadows().enabled);
                     if (nextHandle.getPresentation) setPresentation(nextHandle.getPresentation());
                     if (nextHandle.getSceneDisplayTransform) setDisplayTransformState(nextHandle.getSceneDisplayTransform());
+                    if (nextHandle.getSceneMaterialWorkspace) setMaterialWorkspaceState(nextHandle.getSceneMaterialWorkspace());
                     if (nextHandle.getSkyVisibility) {
                         const sky = nextHandle.getSkyVisibility();
                         setSkyVisOn(sky.enabled);
@@ -1354,6 +1363,21 @@
                         />
                     }
                     description="How the linear render is encoded for display. Neutral rolls highlights off while keeping hue; sRGB clips at 1.0 and matches the official MaterialX viewer."
+                />
+                <SelectRow
+                    label="Material working space" experimental
+                    title="This is the Scene's own setting; the Material Viewer, Compare, Builder and Graph previews always assume Rec.709."
+                    control={
+                        <MtlxSelect
+                            value={materialWorkspace}
+                            options={['rec709', 'acescg']}
+                            labels={{ rec709: 'Rec.709', acescg: 'ACEScg' }}
+                            onChange={pickMaterialWorkspace}
+                            defValue="rec709"
+                            size="sm"
+                        />
+                    }
+                    description="How untagged colour numbers in the material (constants, interface values, USD overrides, displayColor) are read. Rec.709 takes them literally; ACEScg treats them as Houdini/Karma's scene-linear space and converts them, which matches Karma's albedo more closely. Tagged textures and colorspace-tagged inputs are unaffected."
                 />
                 <SliderRow description="Scales the whole image before the display transform, the way a camera would. The Environment card's exposure only gains the image based lighting.">
                     <SliderField label="Camera exposure" unit="EV" value={displayExposure} min={-8} max={8} step={0.25}

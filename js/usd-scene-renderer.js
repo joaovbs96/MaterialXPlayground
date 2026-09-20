@@ -49,6 +49,24 @@ const storedSceneDisplayTransform = () => {
     } catch (e) { return SCENE_DISPLAY_TRANSFORM_DEFAULT; }
 };
 
+// "Material working space": Karma reads untagged colour constants and the
+// displayColor primvar as ACEScg (Houdini's own scene-linear space), while
+// this viewer treats the same numbers as linear Rec.709. Default stays
+// Rec.709 (matches every other tool's assumption); switching to ACEScg
+// converts every untagged colour with the same cmlib leg used for tagged
+// ACEScg textures. Scene-only, off in iframes, never touches the Viewer,
+// Compare, Builder, Graph previews or embeds.
+const SCENE_MATERIAL_WORKSPACE_KEY = 'mtlx_scene_material_workspace';
+const SCENE_MATERIAL_WORKSPACE_VALUES = ['rec709', 'acescg'];
+const SCENE_MATERIAL_WORKSPACE_DEFAULT = 'rec709';
+const storedSceneMaterialWorkspace = () => {
+    if (window.top !== window) return SCENE_MATERIAL_WORKSPACE_DEFAULT;
+    try {
+        const raw = localStorage.getItem(SCENE_MATERIAL_WORKSPACE_KEY);
+        return SCENE_MATERIAL_WORKSPACE_VALUES.includes(raw) ? raw : SCENE_MATERIAL_WORKSPACE_DEFAULT;
+    } catch (e) { return SCENE_MATERIAL_WORKSPACE_DEFAULT; }
+};
+
 // Baked sky visibility: the room-scale half of the same missing visibility
 // term. Screen space AO handles contacts, this handles walls. Default on,
 // because an interior lit by a dome is wrong without it and the bake is a
@@ -1469,7 +1487,7 @@ const SCENE_COMPILE_CACHE_MAX_ENTRIES = 256;
 let sceneCompileCacheHits = 0;
 let sceneCompileCacheMisses = 0;
 
-const sceneCompileCacheKey = ({ version, sourceAsset, name, resolvedXml, overrides, sceneRgbt, lightTransport, samplerBudget, uniformVectorBudget }) => [
+const sceneCompileCacheKey = ({ version, sourceAsset, name, resolvedXml, overrides, sceneRgbt, lightTransport, samplerBudget, uniformVectorBudget, materialWorkspace }) => [
     String(version || ''),
     String(sourceAsset || ''),
     String(name || ''),
@@ -1483,6 +1501,7 @@ const sceneCompileCacheKey = ({ version, sourceAsset, name, resolvedXml, overrid
     'sb=' + samplerBudget,
     'uv=' + uniformVectorBudget,
     'h2n=' + (window.getHeightToNormalTexel ? window.getHeightToNormalTexel() : ''),
+    'mws=' + (materialWorkspace || 'rec709'),
 ].join('|');
 
 // Approximate resident size of one cache entry: both compiled variants'
@@ -1764,6 +1783,7 @@ const createMtlxSceneView = async ({
     let bounceEnabled = storedSceneBounce();
     let bounceStrength = storedSceneBounceStrength();
     let sceneDisplayTransform = storedSceneDisplayTransform();
+    let materialWorkspace = storedSceneMaterialWorkspace();
     let shadowsEnabled = storedSceneShadows();
     // Ambient occlusion resources. Unlike the shadow map these are rebuilt
     // every frame the camera moves, because the whole term is screen space.
@@ -2723,7 +2743,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             warnings.push('MaterialX material has no compiled renderable: ' + label);
             return { compiled: null };
         }
-        const cacheKey = String(record.path || record.sourceAsset || label) + '|' + String(record.subIdentifier || '') + '|' + String(version || '');
+        const cacheKey = String(record.path || record.sourceAsset || label) + '|' + String(record.subIdentifier || '') + '|' + String(version || '') + '|' + materialWorkspace;
         if (forceCompile) { compiledByPath.delete(cacheKey); transferCompiledByPath.delete(cacheKey); }
         let compiled = compiledByPath.get(cacheKey);
         if (compiled) return { compiled, cacheKey, transferCompiled: transferCompiledByPath.get(cacheKey) || null };
@@ -2752,6 +2772,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                     name: record.subIdentifier || record.materialName || '',
                     resolvedXml: sourceInfo.resolved, overrides: record.overrides,
                     sceneRgbt: true, lightTransport: false, samplerBudget, uniformVectorBudget,
+                    materialWorkspace,
                 });
                 if (forceCompile) SCENE_COMPILE_CACHE.delete(moduleKey);
                 const cachedEntry = SCENE_COMPILE_CACHE.get(moduleKey);
@@ -2779,7 +2800,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             }
             compiled = await window.compileMtlxSceneMaterial({
                 mx: mxEnv.mx, gen: mxEnv.gen, genContext: mxEnv.genContext,
-                renderable, label, materialName, isMounted, document: sourceDocument, sceneRgbt: true, samplerBudget, uniformVectorBudget,
+                renderable, label, materialName, isMounted, document: sourceDocument, sceneRgbt: true, samplerBudget, uniformVectorBudget, materialWorkspace,
             });
             if (!compiled) return null;
             // Uniform paths alone cannot distinguish a direct
@@ -2824,7 +2845,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                         const transferSrcs = await window.compileMtlxSceneMaterial({
                             mx: mxEnv.mx, gen: mxEnv.gen, genContext: mxEnv.genContext,
                             renderable, label: label + ' (transmittance)', materialName, isMounted, document: sourceDocument,
-                            lightTransport: 4, samplerBudget,
+                            lightTransport: 4, samplerBudget, materialWorkspace,
                         });
                         if (transferSrcs && transferSrcs.lightTransportSupported) {
                             transferCompiled = transferSrcs;
@@ -6821,6 +6842,21 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             renderFrame();
             return sceneDisplayTransform;
         };
+        // Recompiles every material (same displayRevision rebuild path as
+        // setTextureMaxSize) because the setting changes what shader-gen
+        // sees, unlike the display transform's plain uniform swap.
+        const getSceneMaterialWorkspace = () => materialWorkspace;
+        const setSceneMaterialWorkspace = (space) => {
+            if (!SCENE_MATERIAL_WORKSPACE_VALUES.includes(space) || space === materialWorkspace) return materialWorkspace;
+            materialWorkspace = space;
+            try {
+                if (window.top === window) localStorage.setItem(SCENE_MATERIAL_WORKSPACE_KEY, materialWorkspace);
+            } catch (e) { /* privacy mode */ }
+            displayDirty = true;
+            displayRevision += 1;
+            if (queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
+            return materialWorkspace;
+        };
         const setSkyVisibility = (on) => {
             const next = !!on;
             if (next === skyVisEnabled) return skyVisEnabled;
@@ -7082,6 +7118,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             setSceneBounceEnabled, setSceneBounceStrength, getSceneBounce,
             setScreenSpaceReflections, setScreenSpaceReflectionStrength, setScreenSpaceReflectionMaxRoughness, getScreenSpaceReflections,
             getSceneDisplayTransform, setSceneDisplayTransform,
+            getSceneMaterialWorkspace, setSceneMaterialWorkspace,
             setSkyVisibility, setSkyVisibilityStrength, getSkyVisibility,
             setEnvironment, setEnvRotation, setEnvExposure,
             // getTextureMaxSize/setTextureMaxSize expose the ordinary-texture

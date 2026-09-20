@@ -399,8 +399,11 @@ let DISPLACEMENT_NORMALS_MODE = (() => {
         }
         const raw = localStorage.getItem('mtlxDisplacementNormals');
         if (raw === 'analytic' || raw === 'mesh') return raw;
-        return 'analytic';
-    } catch (e) { return 'analytic'; }
+        // Default to 'mesh' until the analytic path is verified free of the
+        // terracing seen on egg_normals (readback precision fix pending
+        // verification); 'analytic' stays selectable via query/localStorage.
+        return 'mesh';
+    } catch (e) { return 'mesh'; }
 })();
 const getDisplacementNormalsMode = () => DISPLACEMENT_NORMALS_MODE;
 const setDisplacementNormalsMode = (v, { persist = true } = {}) => {
@@ -2992,6 +2995,102 @@ const applyColorspaceTransforms = (doc, maxDepth) => {
     visit(doc, 0);
     const restore = () => { for (let i = restores.length - 1; i >= 0; i--) restores[i](); };
     return { restore, converted, unsupported };
+};
+
+// Scene "Material working space" setting: when the authored network works in
+// ACEScg (Houdini/Karma's default scene-linear space) rather than our own
+// linear Rec.709, every untagged colour NUMBER in the network reads too
+// saturated once compared byte-for-byte with Karma. This inserts the same
+// cmlib conversion applyColorspaceTransforms inserts for tagged textures,
+// but for two things that mechanism never touches: literal color3/color4
+// input VALUES (constants, interface defaults, USD overrides already baked
+// into a value attribute) and colour geomprops (displayColor and friends),
+// whose primvar stream carries no colorspace metadata at all.
+//
+// Only ever called for the Scene, and only when the setting is "acescg";
+// the Viewer/Compare/Builder/Graph previews and every embed never pass the
+// option that enables this. Runs on the LIVE document, so the caller MUST
+// call restore() in a finally.
+const applyMaterialWorkspaceTransforms = (doc, maxDepth) => {
+    mxWarnIfLocked('applyMaterialWorkspaceTransforms'); // exported doc-mutating helper, see mxWarnIfLocked's header comment
+    const cap = (typeof maxDepth === 'number') ? maxDepth : 10;
+    const restores = [];
+    let converted = 0;
+    // Same working-space guard as applyColorspaceTransforms: cmlib's
+    // acescg_to_lin_rec709 node converts INTO lin_rec709 only.
+    const docSpace = mxElAttr(doc, 'colorspace');
+    if (docSpace && docSpace !== 'lin_rec709') {
+        return { restore: () => {}, converted: 0, unsupported: new Set(['(document works in "' + docSpace + '", not lin_rec709)']) };
+    }
+    let serial = 0;
+    // Wraps `nodeName`'s output (already a color3/color4 node in `parent`)
+    // in an acescg_to_lin_rec709 node and redirects every other reference
+    // to it, the same redirect-by-attribute technique applyColorspaceTransforms
+    // uses for a converted image. Returns true on success.
+    const wrapNodeOutput = (parent, children, node, nodeName, type) => {
+        const cmName = '__mtlx_ws_' + (serial++) + '_' + nodeName;
+        const cm = mxSafe(() => parent.addNode('acescg_to_lin_rec709', cmName, type), null);
+        if (!cm) return false;
+        const cmIn = mxSafe(() => cm.addInput('in', type), null);
+        if (!cmIn || !mxSetAttr(cmIn, 'nodename', nodeName)) {
+            mxSafe(() => parent.removeChild(cmName), null);
+            return false;
+        }
+        const redirect = (el) => {
+            if (mxElAttr(el, 'nodename') !== nodeName) return;
+            if (mxSetAttr(el, 'nodename', cmName)) restores.push(() => mxSetAttr(el, 'nodename', nodeName));
+        };
+        for (const sibling of children) {
+            if (sibling === node || sibling === cm) continue;
+            redirect(sibling);
+            for (const input of vecToArray(mxSafe(() => sibling.getInputs(), []))) redirect(input);
+        }
+        restores.push(() => mxSafe(() => parent.removeChild(cmName), null));
+        return true;
+    };
+    const visit = (parent, depth) => {
+        if (!parent || depth > cap) return;
+        const children = vecToArray(mxSafe(() => parent.getChildren(), []));
+        const nodes = children.filter((c) => mxSafe(() => typeof c.getInputs === 'function' && typeof c.getCategory === 'function', false));
+        for (const node of nodes) {
+            const category = mxSafe(() => node.getCategory(), '');
+            const nodeType = mxSafe(() => String(node.getType()), '');
+            // geompropvalue's OUTPUT carries the primvar's colour (displayColor
+            // and friends): no attribute on it is ever a "value", so it's
+            // converted the same way a tagged image's output is, not as a
+            // literal input below.
+            if (category === 'geompropvalue' && (nodeType === 'color3' || nodeType === 'color4') && !mxElHasAttr(node, 'colorspace')) {
+                const nodeName = mxSafe(() => node.getName(), null);
+                if (nodeName && wrapNodeOutput(parent, children, node, nodeName, nodeType)) converted += 1;
+            }
+            const inputs = vecToArray(mxSafe(() => node.getInputs(), []));
+            for (const inp of inputs) {
+                const type = mxSafe(() => String(inp.getType()), '');
+                if (type !== 'color3' && type !== 'color4') continue; // vector3 and float values carry data, never colour
+                if (mxElHasAttr(inp, 'colorspace')) continue; // explicit tag: caller already knows its space
+                if (mxElHasAttr(inp, 'nodename') || mxElHasAttr(inp, 'nodegraph') || mxElHasAttr(inp, 'interfacename') || mxElHasAttr(inp, 'output')) continue; // a connection, not a literal value
+                const value = mxSafe(() => inp.getValueString(), null);
+                if (value == null || value === '') continue;
+                const inputName = mxSafe(() => inp.getName(), null);
+                const nodeName = mxSafe(() => node.getName(), null);
+                if (!inputName || !nodeName) continue;
+                const cmName = '__mtlx_ws_' + (serial++) + '_' + nodeName + '_' + inputName;
+                const cm = mxSafe(() => parent.addNode('acescg_to_lin_rec709', cmName, type), null);
+                if (!cm) continue;
+                const cmIn = mxSafe(() => cm.addInput('in', type), null);
+                if (!cmIn || !mxSetAttr(cmIn, 'value', value)) { mxSafe(() => parent.removeChild(cmName), null); continue; }
+                if (!mxSetAttr(inp, 'nodename', cmName)) { mxSafe(() => parent.removeChild(cmName), null); continue; }
+                mxRemoveAttr(inp, 'value');
+                restores.push(() => { mxRemoveAttr(inp, 'nodename'); mxSetAttr(inp, 'value', value); });
+                restores.push(() => mxSafe(() => parent.removeChild(cmName), null));
+                converted += 1;
+            }
+            visit(node, depth + 1); // nested nodegraphs/compound instances
+        }
+    };
+    visit(doc, 0);
+    const restore = () => { for (let i = restores.length - 1; i >= 0; i--) restores[i](); };
+    return { restore, converted };
 };
 
 // Doc-level renderable scan: returns [{ name, node }], one entry per
@@ -6934,11 +7033,24 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     const colorspaceDoc = mxSafe(() => renderable.getDocument(), null) || documentArg;
     let colorspaceAliasResult = null;
     let colorspaceTransformResult = null;
+    let materialWorkspaceResult = null;
     if (colorspaceDoc) {
         colorspaceAliasResult = applyColorspaceAliases(colorspaceDoc);
         // Must follow the aliases: an authored "srgb_tx" only becomes a
         // name cmlib knows once applyColorspaceAliases has normalized it.
         colorspaceTransformResult = applyColorspaceTransforms(colorspaceDoc);
+        // Scene-only "Material working space" setting: never set outside the
+        // Scene's own compile path (see compileMtlxSceneMaterial), so the
+        // Viewer/Compare/Builder/Graph previews and every embed are unaffected.
+        if (sceneFeatureOptions && sceneFeatureOptions.materialWorkspace === 'acescg') {
+            try {
+                materialWorkspaceResult = applyMaterialWorkspaceTransforms(colorspaceDoc);
+            } catch (e) {
+                // Safe-fail: leave the material in Rec.709 rather than throw.
+                mtlxWarn('Material working space (ACEScg) conversion failed, staying in Rec.709: ' + ((e && e.message) || e));
+                materialWorkspaceResult = null;
+            }
+        }
     }
     // Catches a MaterialX type mismatch (no implicit coercion) BEFORE
     // generation, which otherwise fails deep inside an opaque nodegraph
@@ -6966,6 +7078,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
         }
     } finally {
         // Reverse order: the transforms were layered on top of the aliases.
+        if (materialWorkspaceResult) materialWorkspaceResult.restore();
         if (colorspaceTransformResult) colorspaceTransformResult.restore();
         if (colorspaceAliasResult) colorspaceAliasResult.restore();
     }
@@ -7343,7 +7456,7 @@ const generatePreviewSourcesWithinBudget = async (args) => {
 // instances for each object that uses that source.
 const DEFAULT_UNIFORM_VECTOR_BUDGET = 1024;
 
-const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label = 'material', materialName = null, isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, samplerBudget = null, uniformVectorBudget = null }) => {
+const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label = 'material', materialName = null, isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, samplerBudget = null, uniformVectorBudget = null, materialWorkspace = 'rec709' }) => {
     if (!renderable) throw new Error('MaterialX scene material is missing its renderable surface.');
     // Test-only override wins over the caller's live GL limit, so a headless
     // spec can force a tight budget without a real ANGLE context.
@@ -7356,7 +7469,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
     let srcs = null;
     let samplerInfo = null;
     for (let attempt = 0; ; attempt++) {
-        const sceneFeatureOptions = {};
+        const sceneFeatureOptions = { materialWorkspace };
         for (const d of dropped) sceneFeatureOptions[d.key] = true;
         srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, materialName, isMounted, document: documentArg, sceneRgbt, lightTransport, sceneFeatureOptions });
         if (!srcs) return null;
@@ -7374,7 +7487,8 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
         // Program identity excludes uniforms and object transforms. Source
         // text is already fully adapted by generatePreviewSources.
         programKey: srcs.vs + '\\n/* scene-fs */\\n' + srcs.fs
-            + '\\n/* displacement */\\n' + (srcs.displacement ? srcs.displacement.key : ''),
+            + '\\n/* displacement */\\n' + (srcs.displacement ? srcs.displacement.key : '')
+            + '\\n/* material-workspace */\\n' + materialWorkspace,
         sceneRgbt,
         lightTransport: (lightTransport === true || lightTransport === 4 || lightTransport === 'transfer') ? 4 : 0,
         lightTransportSupported: !!srcs.lightTransportSupported,
@@ -7876,8 +7990,28 @@ const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMat
         const scene = new THREE.Scene();
         scene.add(points);
         const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+        // The analytic-normal frame differences two displacement evaluations
+        // eps apart (eps ~0.15mm at level 1, giving deltas ~3e-5 at a 0.2
+        // slope on egg_normals). The bit-pack readback below reconstructs a
+        // full float32 from an RGBA8 target's bytes, but those bytes still
+        // pass through the GPU's UNORM8 write path (clamp+round, and on some
+        // drivers dithering) before they can be read back; any of that
+        // rounding noise reads as terracing once amplified by the eps
+        // division. An RGBA32F target skips the UNORM8 round trip entirely,
+        // so the analytic path requires it and fails soft to the mesh
+        // recompute when the extension isn't available.
+        let wantAnalytic = getDisplacementNormalsMode() !== 'mesh' && mode !== 'vector3';
+        const floatReadbackAvailable = !!(gl.getExtension
+            && (gl.getExtension('EXT_color_buffer_float') || gl.getExtension('WEBGL_color_buffer_float')));
+        if (wantAnalytic && !floatReadbackAvailable) {
+            wantAnalytic = false;
+            notices.push('Analytic displacement normals unavailable: no float render-target readback on this GPU, using the mesh recompute');
+        }
+        const readbackFormat = wantAnalytic ? 'rgba32f' : 'rgba8';
         target = new THREE.WebGLRenderTarget(W, H, {
-            type: THREE.UnsignedByteType, format: THREE.RGBAFormat,
+            type: readbackFormat === 'rgba32f' ? THREE.FloatType : THREE.UnsignedByteType,
+            format: THREE.RGBAFormat,
             depthBuffer: false, magFilter: THREE.NearestFilter, minFilter: THREE.NearestFilter,
         });
 
@@ -7906,7 +8040,10 @@ const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMat
                 return { offsets: null, mode, notices };
             }
 
-            const pixels = new Uint8Array(W * H * 4);
+            // rgba32f: readRenderTargetPixels wants a Float32Array and hands
+            // back the exact bytes the shader wrote (0..1, no UNORM8 clamp);
+            // rgba8: the older Uint8Array path, byte-for-byte as GL wrote it.
+            const pixels = readbackFormat === 'rgba32f' ? new Float32Array(W * H * 4) : new Uint8Array(W * H * 4);
             const byteView = new DataView(new ArrayBuffer(4));
             renderer.autoClear = false;
             renderer.setViewport(0, 0, W, H);
@@ -7925,8 +8062,15 @@ const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMat
                     renderer.readRenderTargetPixels(target, 0, 0, W, H, pixels);
                     for (let i = 0; i < N; i++) {
                         const p = i * 4;
-                        byteView.setUint8(0, pixels[p]); byteView.setUint8(1, pixels[p + 1]);
-                        byteView.setUint8(2, pixels[p + 2]); byteView.setUint8(3, pixels[p + 3]);
+                        if (readbackFormat === 'rgba32f') {
+                            byteView.setUint8(0, Math.round(pixels[p] * 255) & 0xFF);
+                            byteView.setUint8(1, Math.round(pixels[p + 1] * 255) & 0xFF);
+                            byteView.setUint8(2, Math.round(pixels[p + 2] * 255) & 0xFF);
+                            byteView.setUint8(3, Math.round(pixels[p + 3] * 255) & 0xFF);
+                        } else {
+                            byteView.setUint8(0, pixels[p]); byteView.setUint8(1, pixels[p + 1]);
+                            byteView.setUint8(2, pixels[p + 2]); byteView.setUint8(3, pixels[p + 3]);
+                        }
                         passOffsets[i * 3 + c] = byteView.getFloat32(0, true);
                     }
                 }
@@ -7936,7 +8080,6 @@ const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMat
             const offsets = runPass();
 
             let offsetsTangent = null, offsetsBitangent = null, analyticFrame = null;
-            const wantAnalytic = getDisplacementNormalsMode() !== 'mesh' && mode !== 'vector3';
             if (wantAnalytic) {
                 try {
                     const posAttr2 = evalGeometry.getAttribute('i_position') || evalGeometry.getAttribute('position');
@@ -7975,7 +8118,7 @@ const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMat
                 }
             }
 
-            return { offsets, offsetsTangent, offsetsBitangent, analyticFrame, mode, notices };
+            return { offsets, offsetsTangent, offsetsBitangent, analyticFrame, mode, notices, readbackFormat };
         } finally {
             restore();
         }
