@@ -632,6 +632,14 @@ const sceneResolveDomeTexture = (fileMap, stage, rawRef) => {
     return { path: null, ref, reason: hits.length ? 'ambiguous' : 'missing' };
 };
 
+// Maps an authored UsdLuxDomeLight yaw (its xformOp Y rotation, in degrees)
+// to the engine's mx_latlong yaw. UsdLuxDomeLight puts the lat-long centre
+// at local +Z; mx_latlong (with u_envMatrix = makeRotationY(PI/2 + rad))
+// puts it at local -Z, and USD's row-vector transform convention makes the
+// two not simply additive. Derived and verified in
+// scratchpad/displacement-verified/color-parity/dome-yaw/dome-yaw.md.
+const sceneDomeYawDegFromRotation = (rotationDeg) => (((90 - Number(rotationDeg || 0)) % 360) + 360) % 360;
+
 // Builds the environment a stage's own dome light describes, so a stage
 // renders under the lighting it was authored with. Returns null when the
 // stage has no dome; never throws, since a light must not block a load.
@@ -3590,7 +3598,9 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
         };
         // A stage dome seeds rotation and exposure so the render matches the
         // authored lighting; the sidebar mirrors these through getDomeLight().
-        let envRotationRad = domeLight ? domeLight.rotationDeg * Math.PI / 180 : 0;
+        // The authored rotationDeg is a USD dome-light yaw, converted to the
+        // engine's mx_latlong yaw (see sceneDomeYawDegFromRotation above).
+        let envRotationRad = domeLight ? sceneDomeYawDegFromRotation(domeLight.rotationDeg) * Math.PI / 180 : 0;
         let envExposure = domeLight ? domeLight.exposure : 1;
         // Renders moments maps from the dominant stage/environment emitters.
         // Rebuilds happen when the camera, environment, or light controls
@@ -6005,7 +6015,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             if (!domeEnv || !domeLight || stopped) return false;
             env = domeEnv;
             if (environmentBridge && environmentBridge.setEnvironment) environmentBridge.setEnvironment(domeEnv);
-            setEnvRotation(domeLight.rotationDeg * Math.PI / 180);
+            setEnvRotation(sceneDomeYawDegFromRotation(domeLight.rotationDeg) * Math.PI / 180);
             setEnvExposure(domeLight.exposure);
             return true;
         };
