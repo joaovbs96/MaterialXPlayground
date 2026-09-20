@@ -3453,7 +3453,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             const paths = groups.length ? groups.map((g) => g && (g.materialPath || record.materialPath)) : [record.materialPath];
             return new Set(paths.filter((p) => materialIsDisplaced(p)).map((p) => String(p || '')));
         };
-        const DISPLACEMENT_MESH_TRIANGLE_LIMIT = 600000;
+        const DISPLACEMENT_MESH_TRIANGLE_LIMIT = 700000;
         const DISPLACEMENT_STAGE_TRIANGLE_LIMIT = 6000000;
         let displacementStageTriangleTotal = 0;
         // Resolves the requested numeric override against the per-mesh and

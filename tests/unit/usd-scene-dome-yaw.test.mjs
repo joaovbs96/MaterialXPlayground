@@ -45,3 +45,24 @@ test('negative and above-360 inputs wrap into [0, 360)', () => {
   assert.ok(sceneDomeYawDegFromRotation(720 + 230) >= 0 && sceneDomeYawDegFromRotation(720 + 230) < 360);
   assert.equal(sceneDomeYawDegFromRotation(720 + 230), 220);
 });
+
+// Extracts a top-level `const NAME = <number>;` declaration's numeric value
+// straight out of the authored source text, so this test checks the shipped
+// constant rather than a re-typed copy of it.
+function extractConstNumber(source, name) {
+  const match = source.match(new RegExp('const ' + name + '\\s*=\\s*(\\d+)\\s*;'));
+  assert.ok(match, `${name} declaration is present`);
+  return Number(match[1]);
+}
+
+test('the renderer and worker displacement triangle caps match and cover the authored Ore Swirl mesh', () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const rendererSource = fs.readFileSync(path.join(root, 'js', 'usd-scene-renderer.js'), 'utf8');
+  const workerSource = fs.readFileSync(path.join(root, 'js', 'usd', 'usd-stage-worker.js'), 'utf8');
+
+  const rendererLimit = extractConstNumber(rendererSource, 'DISPLACEMENT_MESH_TRIANGLE_LIMIT');
+  const workerLimit = extractConstNumber(workerSource, 'MESH_TRIANGLE_LIMIT');
+
+  assert.equal(rendererLimit, workerLimit, 'renderer and worker per-mesh displacement caps must match');
+  assert.ok(rendererLimit >= 700000, 'the per-mesh displacement cap must cover the 614,400-triangle Ore Swirl mesh with headroom');
+});

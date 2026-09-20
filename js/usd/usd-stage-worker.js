@@ -2293,7 +2293,7 @@ async function load(request) {
   {
     const levels = Math.max(0, Math.min(2, Number.isFinite(request.subdivisionLevel) ? request.subdivisionLevel : 0));
     if (levels > 0) {
-      const MESH_TRIANGLE_LIMIT = 600000;
+      const MESH_TRIANGLE_LIMIT = 700000;
       const STAGE_TRIANGLE_LIMIT = 6000000;
       const factor = 4 ** levels;
       let stageTriangleTotal = 0;
