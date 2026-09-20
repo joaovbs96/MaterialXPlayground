@@ -143,6 +143,23 @@ test('the emitted blend collapses to domeLi for strength 0 and for coverage 0', 
   assert.match(patched, /if \(cov <= 0\.0\) return domeLi;/);
 });
 
+test('the emitted blend applies no occlusion compensation (regression for the up-to-20x overshoot)', () => {
+  // `occlusion` only reaches ClosureData.occlusion, which the generated
+  // closures read in their direct-light branches, never in
+  // CLOSURE_TYPE_INDIRECT, so it never darkened this term. A prior revision
+  // divided the local term by mx_env_occlusion_value() to "undo" that
+  // non-existent darkening, amplifying it by up to 20x instead. See
+  // scratchpad/displacement-verified/reflections/overshoot.md. The
+  // declaration can still be emitted (patchAmbientOcclusion's writer needs
+  // it), but mx_local_env_mix itself must not call it or reference `comp`.
+  const patched = patchLocalEnvironmentRadiance(makeBody());
+  const mixStart = patched.indexOf('vec3 mx_local_env_mix');
+  const mixFn = patched.slice(mixStart, mixStart + patched.slice(mixStart).indexOf('\n}\n') + 3);
+  assert.doesNotMatch(mixFn, /mx_env_occlusion_value/);
+  assert.doesNotMatch(mixFn, /\bcomp\b/);
+  assert.match(mixFn, /return mix\(domeLi, local, cov \* clamp\(u_localEnvStrength, 0\.0, 1\.0\)\);/);
+});
+
 test('patchLocalEnvironmentRadiance then patchScreenSpaceReflection: the local mix lands inside mx_environment_radiance_ibl, the wrapper does not contain it', () => {
   const body = makeBody();
   const localFirst = patchScreenSpaceReflection(patchLocalEnvironmentRadiance(body, { skipLocalEnv: false }), { skipSsr: false });

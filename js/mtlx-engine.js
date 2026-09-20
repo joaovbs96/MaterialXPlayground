@@ -1691,12 +1691,14 @@ const patchAreaLightSourceCosine = (fs) => {
 //
 // Fail-soft: no anchor means no AO, and the default 1x1 white map with
 // strength 0 makes the injected code an exact no-op until a pass binds one.
-// Shared by patchAmbientOcclusion (writer) and patchLocalEnvironmentRadiance
-// (reader, via mx_env_occlusion_value): a file-scope float mirroring the
-// `occlusion` scalar, defaulting to 1.0 so a shader that never runs the AO
-// patch (or runs it before this exists) still compiles and reads as an
-// exact no-op. Idempotent: checks the CURRENT accumulated source, not just
-// its own prior output, so whichever of the two patches runs first wins and
+// A file-scope float mirroring the `occlusion` scalar, defaulting to 1.0 so
+// a shader that never runs this patch still compiles and reads as an exact
+// no-op. patchLocalEnvironmentRadiance no longer reads this (see its own
+// comment: `occlusion` only reaches ClosureData.occlusion, which the
+// generated closures read in their direct-light branches, never in
+// CLOSURE_TYPE_INDIRECT, so it was never applied to the local reflection
+// term in the first place). Idempotent: checks the CURRENT accumulated
+// source, not just its own prior output, so whichever of the two patches runs first wins and
 // the other is a no-op, regardless of JS call order.
 const ensureEnvOcclusionGlobal = (src) => {
     if (src.indexOf('mx_envOcclusionValue') !== -1) return src;
@@ -1724,12 +1726,17 @@ const patchAmbientOcclusion = (fs, { skipSkyVis = false, skipAoVolume = false } 
     // separate sampler-budget drop from sky visibility; skipAoVolume falls
     // back to the sky-times-ssao combination without it.
     const useVolume = hasWorldPos && !skipAoVolume;
-    // Mirrors the computed occlusion into a file-scope float that the local
-    // reflection blend (patchLocalEnvironmentRadiance's mx_env_occlusion_value)
-    // reads to undo this SAME multiply on its own term (see design.md
-    // section 5.6): without it, a blocked sky direction would be darkened
-    // twice, once by `occlusion` and once by the capture already seeing a
-    // dark studio wall in that direction.
+    // Mirrors the computed occlusion into a file-scope float (currently
+    // unread; kept for diagnostics and any future direct-light consumer).
+    // patchLocalEnvironmentRadiance does NOT read this: `occlusion` only
+    // reaches ClosureData.occlusion, which the generated conductor/
+    // dielectric/generalized_schlick/diffuse closures apply in their
+    // CLOSURE_TYPE_REFLECTION (direct light) branches only, never in
+    // CLOSURE_TYPE_INDIRECT, so it never darkened the environment radiance
+    // Li in the first place. An earlier revision divided the local
+    // reflection term by this value to "undo" that non-existent darkening,
+    // which amplified it by up to 20x instead (see
+    // scratchpad/displacement-verified/reflections/overshoot.md).
     const assignment = !hasWorldPos
         ? 'occlusion = mx_ssao_occlusion(); mx_envOcclusionValue = occlusion;'
         : (useVolume
@@ -2311,9 +2318,15 @@ const patchLocalEnvironmentRadiance = (fs, { skipLocalEnv = false, notices = nul
         '    return normalize((P + R * t) - u_localEnvProbe);\n' +
         '}\n' +
         // RGB is premultiplied by A (coverage) in the capture; un-multiply
-        // here. comp undoes patchAmbientOcclusion's `occlusion` multiply on
-        // this term only (design.md section 5.6): without it a blocked sky
-        // direction would be darkened twice.
+        // here. No occlusion compensation: patchAmbientOcclusion's
+        // `occlusion` scalar is wired into ClosureData.occlusion, which the
+        // generated closures (mx_conductor_bsdf.glsl etc.) only read in
+        // their CLOSURE_TYPE_REFLECTION (direct light) branches, never in
+        // CLOSURE_TYPE_INDIRECT, so it never darkens mx_environment_radiance
+        // or this substituted Li in the first place. An earlier revision
+        // divided by it here to "undo" a darkening that does not happen,
+        // amplifying the local term by up to 20x (see
+        // scratchpad/displacement-verified/reflections/overshoot.md).
         'vec3 mx_local_env_mix(vec3 domeLi, vec3 P, vec3 R, float lod)\n' +
         '{\n' +
         '    if (u_localEnvStrength <= 0.0) return domeLi;\n' +
@@ -2323,8 +2336,7 @@ const patchLocalEnvironmentRadiance = (fs, { skipLocalEnv = false, notices = nul
         '    float cov = clamp(s.a, 0.0, 1.0);\n' +
         '    if (cov <= 0.0) return domeLi;\n' +
         '    vec3 local = s.rgb / max(s.a, 1e-4);\n' +
-        '    float comp = min(1.0 / max(mx_env_occlusion_value(), 0.05), 20.0);\n' +
-        '    return mix(domeLi, local * comp, cov * clamp(u_localEnvStrength, 0.0, 1.0));\n' +
+        '    return mix(domeLi, local, cov * clamp(u_localEnvStrength, 0.0, 1.0));\n' +
         '}\n';
 
     // Land just above whichever function signature's BODY actually contains
@@ -2345,10 +2357,14 @@ const patchLocalEnvironmentRadiance = (fs, { skipLocalEnv = false, notices = nul
     if (insertAt === -1) insertAt = out.indexOf('void main(');
     if (insertAt === -1) return fs; // nothing recognisable: leave the shader untouched
     out = out.slice(0, insertAt) + decls + helpers + out.slice(insertAt);
-    // mx_local_env_mix (just inserted, above) reads mx_env_occlusion_value():
-    // ensure that global exists somewhere before it, idempotent against
-    // patchAmbientOcclusion having already declared it (or declaring it
-    // later, in which case ITS check finds this one first).
+    // mx_local_env_mix no longer reads mx_env_occlusion_value() (see its own
+    // comment), but patchAmbientOcclusion's own writer still needs the
+    // mx_envOcclusionValue declaration to exist before its assignment runs;
+    // ensureEnvOcclusionGlobal's guard checks for the identifier's TEXT
+    // anywhere in the source, which patchAmbientOcclusion's inserted
+    // assignment (`mx_envOcclusionValue = occlusion;`) would otherwise
+    // satisfy without ever declaring it. Keep calling it here so whichever
+    // patch runs first still gets the declaration in, regardless of order.
     out = ensureEnvOcclusionGlobal(out);
     return out;
 };

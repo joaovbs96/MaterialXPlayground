@@ -76,22 +76,26 @@
         return vNormalize(vSub(hit, probe));
     }
 
-    // Mirrors mx_local_env_mix's premultiplied un-multiply, the occlusion
-    // compensation clamp and the 0.05 occlusion floor. domeLi/local are
-    // [r,g,b] arrays, occlusion is mx_env_occlusion_value()'s scalar.
-    function blendLocalEnv(domeLi, sample, strength, occlusion) {
+    // Mirrors mx_local_env_mix's premultiplied un-multiply. domeLi/local are
+    // [r,g,b] arrays. No occlusion compensation: `occlusion` (patchAmbient
+    // Occlusion's sky-visibility/AO scalar) only reaches ClosureData.
+    // occlusion, which the generated closures read in their direct-light
+    // branches, never in CLOSURE_TYPE_INDIRECT, so it never darkens this
+    // term in the first place. An earlier revision divided by it here,
+    // amplifying the local term by up to 20x for no reason (see
+    // scratchpad/displacement-verified/reflections/overshoot.md).
+    function blendLocalEnv(domeLi, sample, strength) {
         const s = Math.max(0, Math.min(1, Number(strength) || 0));
         if (s <= 0) return domeLi.slice();
         const cov = Math.max(0, Math.min(1, sample[3]));
         if (cov <= 0) return domeLi.slice();
         const invA = 1 / Math.max(sample[3], 1e-4);
         const local = [sample[0] * invA, sample[1] * invA, sample[2] * invA];
-        const comp = Math.min(1 / Math.max(occlusion, 0.05), 20);
         const mixT = cov * s;
         return [
-            domeLi[0] + (local[0] * comp - domeLi[0]) * mixT,
-            domeLi[1] + (local[1] * comp - domeLi[1]) * mixT,
-            domeLi[2] + (local[2] * comp - domeLi[2]) * mixT,
+            domeLi[0] + (local[0] - domeLi[0]) * mixT,
+            domeLi[1] + (local[1] - domeLi[1]) * mixT,
+            domeLi[2] + (local[2] - domeLi[2]) * mixT,
         ];
     }
 
