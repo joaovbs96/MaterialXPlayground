@@ -81,11 +81,15 @@
         geometry: 1, env: 1, exposure: 1, background: 1, backdrop: 1, transparent: 1,
         accent: 1, surface: 1, text: 1, radius: 1, material: 1, camera: 1,
         envmap: 1, forcetransparency: 1, geometryurl: 1,
+        displacement: 1, previewsubdivision: 1,
     };
     // Theme attributes forwarded verbatim as `setTheme` messages — see
     // embed-boot.js's THEME_VARS/applyTheme, which does the actual
     // CSS.supports() validation on the other side of the iframe boundary.
     var THEME_ATTRS = { accent: 1, surface: 1, text: 1, radius: 1 };
+
+    // `displacement` off-like spellings, see the `displacement` getter.
+    var DISPLACEMENT_OFF_WORDS = ['off', '0', 'false', 'no'];
 
     // (Custom elements require native `class`/`extends HTMLElement` —
     // there's no ES5-compatible way to subclass a built-in. This is still
@@ -93,7 +97,8 @@
     class MtlxViewerElement extends HTMLElement {
         static get observedAttributes() {
             return ['src', 'geometry', 'env', 'exposure', 'autorotate', 'controls', 'background', 'backdrop', 'transparent', 'base', 'poster',
-                'accent', 'surface', 'text', 'radius', 'material', 'camera', 'wheel', 'version', 'envmap', 'forcetransparency', 'geometryurl'];
+                'accent', 'surface', 'text', 'radius', 'material', 'camera', 'wheel', 'version', 'envmap', 'forcetransparency', 'geometryurl',
+                'displacement', 'previewsubdivision'];
         }
 
         constructor() {
@@ -190,6 +195,21 @@
         // including shaderball-scene. See docs/EMBEDDING.md.
         get forceTransparency() { return this.hasAttribute('forcetransparency'); }
         set forceTransparency(v) { this._reflectBool('forcetransparency', v); }
+
+        // Displacement is on by default, unlike the other booleans here, so
+        // absence means true: only an explicit off-like value (`off`, 0,
+        // false, no) reads false. Written as the literal word, not presence.
+        get displacement() {
+            var raw = this.getAttribute('displacement');
+            if (raw == null) return true;
+            return DISPLACEMENT_OFF_WORDS.indexOf(String(raw).trim().toLowerCase()) === -1;
+        }
+        set displacement(v) { this._reflect('displacement', v == null ? null : (v ? 'on' : 'off')); }
+
+        // Preview subdivision level (0..3), applied when the material has
+        // displacement; see docs/EMBEDDING.md's Displacement section.
+        get previewSubdivision() { return this._num('previewsubdivision'); }
+        set previewSubdivision(v) { this._reflect('previewsubdivision', v == null ? null : String(v)); }
 
         get controls() { return this.getAttribute('controls') || ''; }
         set controls(v) { this._reflect('controls', Array.isArray(v) ? v.join(',') : v); }
@@ -431,6 +451,10 @@
             if (this.version) qp.set('version', this.version);
             if (this.envmap) qp.set('envmap', this.envmap);
             if (this.geometryUrl) qp.set('geometryUrl', this.geometryUrl);
+            if (this.hasAttribute('displacement')) qp.set('displacement', this.displacement ? '1' : '0');
+            if (this.hasAttribute('previewsubdivision') && this.previewSubdivision !== undefined) {
+                qp.set('previewsubdivision', String(this.previewSubdivision));
+            }
             Object.keys(THEME_ATTRS).forEach((name) => {
                 if (this[name]) qp.set(name, this[name]);
             });
@@ -464,6 +488,11 @@
                 this._send('setTransparent', { on: this.transparent });
             } else if (name === 'forcetransparency') {
                 this._send('setForceTransparency', { on: this.forceTransparency });
+            } else if (name === 'displacement') {
+                this._send('setDisplacement', { on: this.displacement });
+            } else if (name === 'previewsubdivision') {
+                var lvl = this.previewSubdivision;
+                this._send('setPreviewSubdivision', { level: lvl !== undefined ? lvl : 2 });
             } else if (name === 'material') {
                 this._send('setMaterial', { material: this.material });
             } else if (name === 'envmap') {
@@ -624,6 +653,13 @@
                     this._pending.delete(msg.id);
                 }
                 this.dispatchEvent(new CustomEvent('mtlx-error', { detail: { message: msg.message } }));
+            } else if (name === 'displacement') {
+                // Never fatal (see embed-boot.js's displacement forwarding):
+                // reports live state changes and, when `settled` is true,
+                // that the last load/settings change finished evaluating.
+                this.dispatchEvent(new CustomEvent('mtlx-displacement', {
+                    detail: { state: msg.state, notices: msg.notices || [], settled: !!msg.settled },
+                }));
             } else if (name === 'snapshot') {
                 if (msg.id != null && this._pending.has(msg.id)) {
                     this._pending.get(msg.id).resolve(msg.blob);

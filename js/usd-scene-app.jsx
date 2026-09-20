@@ -572,6 +572,21 @@
         );
         const subdivisionLevelRef = React.useRef(subdivisionLevel);
         subdivisionLevelRef.current = subdivisionLevel;
+        const [displacementEnabled, setDisplacementEnabledState] = React.useState(
+            () => !!(window.getDisplacementEnabled && window.getDisplacementEnabled())
+        );
+        const [displacementSubdivisionOverride, setDisplacementSubdivisionOverrideState] = React.useState(
+            () => (typeof storedSceneDisplacementSubdivision === 'function' ? storedSceneDisplacementSubdivision() : 'follow')
+        );
+        const displacementSubdivisionRef = React.useRef(displacementSubdivisionOverride);
+        displacementSubdivisionRef.current = displacementSubdivisionOverride;
+        React.useEffect(() => {
+            const onSettingsChanged = (e) => {
+                if (e.detail && e.detail.key === 'displacement') setDisplacementEnabledState(!!e.detail.value);
+            };
+            window.addEventListener('mtlx-settings-changed', onSettingsChanged);
+            return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);
+        }, []);
         // The Scene keeps its own view transform (the Material Viewer stays on
         // sRGB for MaterialXView parity); exposure is shared with the other tools.
         const [displayTransform, setDisplayTransformState] = React.useState('neutral');
@@ -853,7 +868,7 @@
                     // A retained scene handle survives route visibility pauses
                     // after adoption. During initial construction, the local
                     // effect guard still cancels work when the route leaves.
-                    const nextHandle = await renderer({ container: containerRef.current, stage, files, version, onProgress: (value) => updateProgress(value, rendererGeneration), isMounted: () => mountedRef.current && generationRef.current === rendererGeneration && !rendererController?.signal?.aborted && (adopted || (live && active)) });
+                    const nextHandle = await renderer({ container: containerRef.current, stage, files, version, displacementSubdivision: displacementSubdivisionRef.current, onProgress: (value) => updateProgress(value, rendererGeneration), isMounted: () => mountedRef.current && generationRef.current === rendererGeneration && !rendererController?.signal?.aborted && (adopted || (live && active)) });
                     created = nextHandle;
                     if (!live || !mountedRef.current || !active || generationRef.current !== rendererGeneration || rendererController?.signal?.aborted) { if (nextHandle && nextHandle.dispose) nextHandle.dispose(); return; }
                     nextHandle.__sceneStage = stage;
@@ -1222,6 +1237,13 @@
             if (typeof setStoredSceneSubdivisionLevel === 'function') setStoredSceneSubdivisionLevel(next);
             if (files.length && rootPath) load();
         };
+        const pickDisplacementSubdivisionOverride = (value) => {
+            const next = value === 'follow' ? 'follow' : Number(value);
+            setDisplacementSubdivisionOverrideState(next);
+            displacementSubdivisionRef.current = next;
+            if (typeof setStoredSceneDisplacementSubdivision === 'function') setStoredSceneDisplacementSubdivision(next);
+            callHandle('setDisplacementSubdivisionOverride', next);
+        };
         const textureMaxSize = (handle && typeof handle.getTextureMaxSize === 'function')
             ? handle.getTextureMaxSize()
             : (typeof storedSceneTextureMaxSize === 'function' ? storedSceneTextureMaxSize() : 2048);
@@ -1444,6 +1466,17 @@
                             onChange={pickSubdivisionLevel} defValue={0} size="sm" disabled={busy} />
                     }
                     description="Loop-subdivides catmullClark meshes for preview; the runtime cannot expose the cage, so this approximates the limit surface." />
+                <ToggleRow label="Displacement" checked={displacementEnabled}
+                    title={displacementEnabled ? 'Disable displacement' : 'Enable displacement'}
+                    onChange={(next) => { setDisplacementEnabledState(next); window.setDisplacementEnabled && window.setDisplacementEnabled(next); }}
+                    description="Moves geometry bound to a displaced MaterialX material." />
+                <SelectRow label="Displacement subdivision"
+                    control={
+                        <MtlxSelect value={displacementSubdivisionOverride} options={['follow', 0, 1, 2, 3]}
+                            labels={{ follow: 'Follow stage', 0: 'Off', 1: '1', 2: '2', 3: '3' }}
+                            onChange={pickDisplacementSubdivisionOverride} defValue="follow" size="sm" disabled={busy} />
+                    }
+                    description="Subdivision applied to meshes bound to displaced MaterialX materials." />
             </React.Fragment>
         );
         const sidebarBody = (

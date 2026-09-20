@@ -166,6 +166,11 @@ const BUILDER_DEFAULTS = {
     version: BUILDER_DEFAULT_VERSION,
     poster: '',
     eager: false,
+    // 'default' | 'on' | 'off', and 'default' | 'off' | '1' | '2' | '3':
+    // Default means the param/attribute is omitted, deferring to the
+    // engine's own default (on, and level 2) or the visitor's own setting.
+    displacement: 'default',
+    subdivision: 'default',
 };
 
 // Round-trips embed-boot.js's `all` keyword: every box ticked emits it.
@@ -280,6 +285,11 @@ const parseBuilderHashSettings = () => {
     if (params.has('version')) patch.version = params.get('version');
     if (params.has('poster')) patch.poster = params.get('poster');
     if (params.has('eager')) patch.eager = builderParseBool(params.get('eager'));
+    if (params.has('displacement')) patch.displacement = builderParseBool(params.get('displacement')) ? 'on' : 'off';
+    if (params.has('previewsubdivision')) {
+        const raw = params.get('previewsubdivision');
+        if (['0', '1', '2', '3'].includes(raw)) patch.subdivision = raw === '0' ? 'off' : raw;
+    }
     if (params.has('w')) patch.width = Math.max(1, Number(params.get('w')) || BUILDER_DEFAULTS.width);
     if (params.has('h')) patch.height = Math.max(1, Number(params.get('h')) || BUILDER_DEFAULTS.height);
     if (params.has('sizing')) patch.sizing = params.get('sizing') === 'responsive' ? 'responsive' : 'fixed';
@@ -316,6 +326,8 @@ const buildShareParams = (s) => {
     if (s.version && s.version !== BUILDER_DEFAULT_VERSION) params.set('version', s.version);
     if (s.poster.trim()) params.set('poster', s.poster.trim());
     if (s.eager) params.set('eager', '1');
+    if (s.displacement !== 'default') params.set('displacement', s.displacement === 'on' ? '1' : '0');
+    if (s.subdivision !== 'default') params.set('previewsubdivision', s.subdivision === 'off' ? '0' : s.subdivision);
     if (s.width !== BUILDER_DEFAULTS.width) params.set('w', String(s.width));
     if (s.height !== BUILDER_DEFAULTS.height) params.set('h', String(s.height));
     if (s.sizing !== BUILDER_DEFAULTS.sizing) params.set('sizing', s.sizing);
@@ -1016,7 +1028,7 @@ function BuilderApp({ active } = {}) {
     const {
         src, geometry, controls, backdrop, transparent, autorotate, env, exposure, envmap,
         geometryUrl, accent, surface, text, radius, width, height, sizing, material, camera,
-        wheelZoom, version, poster, eager,
+        wheelZoom, version, poster, eager, displacement, subdivision,
     } = settings;
 
     // { origin, docPath } of the last preset picked via MtlxPresetPicker, or
@@ -1105,6 +1117,8 @@ function BuilderApp({ active } = {}) {
         if (poster.trim()) el.poster = poster.trim();
         if (envmap.trim()) el.envmap = envmap.trim();
         if (geometryUrl.trim()) el.geometryUrl = geometryUrl.trim();
+        if (displacement !== 'default') el.displacement = displacement === 'on';
+        if (subdivision !== 'default') el.previewSubdivision = subdivision === 'off' ? 0 : Number(subdivision);
         const handleError = (e) => {
             const message = (e && e.detail && e.detail.message) || 'Unknown error';
             // The Scene/Look cards keep transparent + shaderball-scene
@@ -1145,6 +1159,14 @@ function BuilderApp({ active } = {}) {
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.material = material; }, [material]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.camera = camera.trim(); }, [camera]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.poster = poster.trim(); }, [poster]);
+    React.useEffect(() => {
+        if (previewElRef.current) previewElRef.current.displacement = displacement === 'default' ? null : displacement === 'on';
+    }, [displacement]);
+    React.useEffect(() => {
+        if (previewElRef.current) {
+            previewElRef.current.previewSubdivision = subdivision === 'default' ? null : (subdivision === 'off' ? 0 : Number(subdivision));
+        }
+    }, [subdivision]);
 
     // Drops the current material selection once a newly parsed document's
     // renderables no longer include it (e.g. a different src was loaded).
@@ -1324,6 +1346,8 @@ function BuilderApp({ active } = {}) {
         if (camera.trim()) entries.push(['camera', camera.trim()]);
         if (wheelZoom) entries.push(['wheel', 'zoom']);
         if (version && version !== BUILDER_DEFAULT_VERSION) entries.push(['version', version]);
+        if (displacement !== 'default') entries.push(['displacement', displacement === 'on' ? '1' : '0']);
+        if (subdivision !== 'default') entries.push(['previewsubdivision', subdivision === 'off' ? '0' : subdivision]);
         return entries;
     };
 
@@ -1370,6 +1394,8 @@ function BuilderApp({ active } = {}) {
         if (version && version !== BUILDER_DEFAULT_VERSION) attrs.push(`version="${builderEscAttr(version)}"`);
         if (poster.trim()) attrs.push(`poster="${builderEscAttr(poster.trim())}"`);
         if (eager) attrs.push('eager');
+        if (displacement !== 'default') attrs.push(`displacement="${displacement}"`);
+        if (subdivision !== 'default') attrs.push(`previewsubdivision="${subdivision === 'off' ? '0' : subdivision}"`);
         attrs.push(sizing === 'responsive'
             ? `style="width:100%;aspect-ratio:${width}/${height}"`
             : `style="width: ${width}px; height: ${height}px;"`);
@@ -1735,6 +1761,32 @@ function BuilderApp({ active } = {}) {
                 <span className="flex items-center gap-1.5 text-xs font-medium text-gray-400">Direct wheel zoom, no Ctrl needed <ReloadsPill /></span>
                 <Toggle checked={wheelZoom} onChange={(v) => patch({ wheelZoom: v })} />
             </label>
+            <div className="border-t border-gray-700/60 pt-3.5 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-gray-400">Displacement</span>
+                    <MtlxSelect
+                        value={displacement}
+                        options={['default', 'on', 'off']}
+                        labels={{ default: 'Default', on: 'On', off: 'Off' }}
+                        onChange={(v) => patch({ displacement: v })}
+                        defValue="default"
+                        title="Moves the mesh by the material's displacement; Default follows the visitor's own setting"
+                        size="sm"
+                    />
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-gray-400">Subdivision</span>
+                    <MtlxSelect
+                        value={subdivision}
+                        options={['default', 'off', '1', '2', '3']}
+                        labels={{ default: 'Default', off: 'Off', 1: '1', 2: '2', 3: '3' }}
+                        onChange={(v) => patch({ subdivision: v })}
+                        defValue="default"
+                        title="Preview geometry subdivision applied ahead of displacement; each level is 4x triangles, capped at 1.5M"
+                        size="sm"
+                    />
+                </div>
+            </div>
             <div className="border-t border-gray-700/60 pt-3.5 space-y-3">
                 <div>
                     <div className="text-xs font-medium text-gray-300">Loading</div>

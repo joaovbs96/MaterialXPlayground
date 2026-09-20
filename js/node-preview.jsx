@@ -307,8 +307,8 @@
             // PNG snapshot named after the node + geometry — best-effort,
             // same as before (the hook's takeScreenshot has no internal
             // try/catch).
-            const takeScreenshot = () => {
-                try { takeScreenshotRaw(); } catch (e) { /* best-effort */ }
+            const takeScreenshot = async () => {
+                try { await takeScreenshotRaw(); } catch (e) { /* best-effort */ }
             };
             // Metadata for the .mtlx export (node element type, kind).
             const exportMetaRef = React.useRef(null);
@@ -1124,6 +1124,9 @@
                         const buildView = () => createMtlxRenderView({
                             canvas, mx, gen, genContext, renderable, lightData,
                             label: nodeName,
+                            // Many small previews mount at once; a tighter
+                            // budget keeps displaced subdivision cheap here.
+                            triangleBudget: 250000,
                             needsLighting,
                             geomName: geom,
                             // Fixed authored camera for the full scene
@@ -1226,6 +1229,7 @@
                                     const sourceView = await createMtlxRenderView({
                                         canvas: srcCanvas, mx, gen, genContext, renderable: sourceRenderable, lightData,
                                         label: nodeName + ' (source)',
+                                        triangleBudget: 250000,
                                         needsLighting,
                                         geomName: geom,
                                         sceneOrbit: false,

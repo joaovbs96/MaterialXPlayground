@@ -6,12 +6,32 @@
  * result out of Emscripten memory into ordinary transferable buffers.
  */
 
+import "../shared/mesh-subdivision.js";
+
+const { subdivideMesh, weldMesh } = globalThis.MtlxMeshSubdivision;
+
 const RUNTIME_DIR = new URL("../../vendor/usd-webview-bindings/", import.meta.url);
 let runtimePromise;
 let activeStage;
 const nativeWarnings = [];
 const originalConsoleError = console.error.bind(console);
 const originalConsoleWarn = console.warn.bind(console);
+// Reused scalar storage keeps weld hashing allocation-free while retaining
+// the fractional bits that distinguish neighboring geometry samples.
+const weldHashBuffer = new ArrayBuffer(8);
+const weldHashFloat64 = new Float64Array(weldHashBuffer);
+const weldHashWords = new Uint32Array(weldHashBuffer);
+function hashWeldNumber(value) {
+  const numeric = Number(value);
+  if (Number.isNaN(numeric)) return 0x7fc00000;
+  if (numeric === 0) {
+    weldHashWords[0] = 0;
+    weldHashWords[1] = 0;
+    return 0;
+  }
+  weldHashFloat64[0] = numeric;
+  return (Math.imul(weldHashWords[0], 0x9e3779b1) ^ Math.imul(weldHashWords[1], 0x85ebca6b)) >>> 0;
+}
 // Bounded copy of the native runtime's console output (Emscripten binds
 // console.error/warn), so load() can read diagnostics openStage does not
 // return, such as an asset path it failed to resolve.
@@ -405,6 +425,15 @@ function copySubset(subset) {
   };
 }
 
+function copyGeomprop(prop) {
+  return {
+    name: text(prop.name) ?? "",
+    itemSize: Number(prop.itemSize ?? 0),
+    interpolation: text(prop.interpolation) ?? "",
+    data: arrayCopy(prop.data, Float32Array),
+  };
+}
+
 function copyMesh(mesh, assets, materials) {
   const positions = arrayCopy(mesh.positions ?? mesh.points, Float32Array);
   if (!positions || !positions.length) return undefined;
@@ -414,6 +443,8 @@ function copyMesh(mesh, assets, materials) {
   // The draw exposes displayColor as a single constant colour, never the
   // authored per-vertex array; kept for geompropvalue fallbacks.
   const displayColor = arrayCopy(mesh.displayColor, Float32Array);
+  const vertexCount = positions.length / 3;
+  const geomprops = arrayItems(mesh.geomprops).map(copyGeomprop).filter(prop => prop.data && Number.isInteger(prop.itemSize) && prop.itemSize > 0 && prop.data.length === vertexCount * prop.itemSize);
   const material = copyMaterial(mesh.material, assets);
   const materialPath = text(mesh.materialPath) ?? text(mesh.material?.path);
   if (materialPath && material) materials.set(materialPath, material);
@@ -421,16 +452,29 @@ function copyMesh(mesh, assets, materials) {
   const matrix = arrayCopy(mesh.matrix, Float64Array);
   const hasInstanceMatrices = mesh.instanceMatrices != null;
   const instance = copyInstanceMatrices(mesh.instanceMatrices);
+  const cage = mesh.cage ? {
+    positions: arrayCopy(mesh.cage.positions, Float32Array),
+    ...(mesh.cage.normals ? { normals: arrayCopy(mesh.cage.normals, Float32Array) } : {}),
+    ...(mesh.cage.uvs ? { uvs: arrayCopy(mesh.cage.uvs, Float32Array) } : {}),
+    ...(mesh.cage.indices ? { indices: arrayCopy(mesh.cage.indices, Uint32Array) } : {}),
+    ...(mesh.cage.subsets?.length ? { subsets: mesh.cage.subsets.map(copySubset) } : {}),
+    ...(mesh.cage.geomprops?.length ? { geomprops: mesh.cage.geomprops.map(copyGeomprop).filter(prop => prop.data && prop.data.length) } : {}),
+  } : undefined;
   return {
     primPath: text(mesh.path) ?? text(mesh.primPath) ?? "",
     name: text(mesh.name) ?? "",
     positions,
     ...(normals ? { normals } : {}),
     ...(uvs ? { uvs } : {}),
+    ...(geomprops.length ? { geomprops } : {}),
     ...(displayColor && displayColor.length ? { displayColor: Array.from(displayColor) } : {}),
     ...(indices ? { indices } : {}),
     matrix: matrix ? Array.from(matrix) : [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
     orientation: mesh.orientation === "leftHanded" ? "leftHanded" : "rightHanded",
+    castsShadow: mesh.castsShadow !== false,
+    ...(mesh.subdivisionScheme ? { subdivisionScheme: mesh.subdivisionScheme } : {}),
+    ...(Number.isFinite(mesh.subdivisionLevelsApplied) ? { subdivisionLevelsApplied: mesh.subdivisionLevelsApplied } : {}),
+    ...(cage ? { cage } : {}),
     ...(materialPath ? { materialPath } : {}),
     ...(groups.length ? { groups } : {}),
     ...(hasInstanceMatrices ? {
@@ -453,6 +497,13 @@ function snapshotDraw(draw) {
     const uvs = arrayCopy(mesh.uvs, Float32Array);
     const indices = arrayCopy(mesh.indices, Uint32Array);
     const displayColor = arrayCopy(mesh.displayColor, Float32Array);
+    // Copy geomprops here, not on demand later: their `data` is a view into
+    // WASM memory and the next source.get(i) below can detach it (see the
+    // comment on the caller loop).
+    const geomprops = arrayItems(mesh.geomprops)
+      .map(copyGeomprop)
+      .filter(prop => prop.data && prop.data.length && Number.isInteger(prop.itemSize) && prop.itemSize > 0 &&
+        prop.data.length === (positions.length / 3) * prop.itemSize);
     const matrix = arrayCopy(mesh.matrix, Float64Array);
     const hasInstanceMatrices = mesh.instanceMatrices != null;
     const instance = copyInstanceMatrices(mesh.instanceMatrices);
@@ -462,11 +513,13 @@ function snapshotDraw(draw) {
       positions,
       ...(normals ? { normals } : {}),
       ...(uvs ? { uvs } : {}),
+      ...(geomprops.length ? { geomprops } : {}),
       ...(displayColor && displayColor.length ? { displayColor: Array.from(displayColor) } : {}),
       ...(indices ? { indices } : {}),
       matrix,
       materialPath: text(mesh.materialPath) ?? text(mesh.material?.path),
       material: copyMaterial(mesh.material, new Map()),
+      castsShadow: mesh.castsShadow !== false,
       subsets: arrayItems(mesh.subsets ?? mesh.materialSubsets).map(copySubset),
       ...(hasInstanceMatrices ? {
         instanceMatrices: instance.matrices,
@@ -535,26 +588,41 @@ function sameCornerIndices(generated, ordinary, vertexCount) {
   return true;
 }
 
-// The native draw ignores UsdGeomMesh orientation = "leftHanded": it emits
-// clockwise winding and inward normals for such prims. getPrimAttributes
-// exposes the authored token so the worker can correct the stream itself.
-// Array-valued attributes from this API are truncated past 512 elements and
-// must never be read as data; the orientation token is always safe.
+// The native draw ignores UsdGeomMesh orientation = "leftHanded" for topology.
+// Authored normals already carry the authored orientation, while generated
+// smooth normals follow the native right-handed fallback and need a sign fix.
+// getPrimAttributes exposes the authored token and normal provenance so the
+// worker can correct only the generated stream.
 function readOrientation(api, root, primPath) {
   return readMeshTokens(api, root, primPath).orientation;
 }
 
-// Reads orientation and subdivisionScheme together with a single
-// getPrimAttributes call, since array-valued attributes from this API
-// truncate past 512 elements but these two tokens are always safe.
+function hasAuthoredNormalData(record) {
+  const typeName = text(record?.typeName)?.replace(/\s+/g, "").toLowerCase();
+  const supportedTypes = new Set(["float3[]", "vector3f[]", "point3f[]", "normal3f[]", "color3f[]", "texcoord3f[]"]);
+  if (!record?.isAuthored || !supportedTypes.has(typeName)) return false;
+  const rawCount = record?.valueElementCount;
+  if (rawCount != null && String(rawCount).trim() !== "") {
+    const count = Number(rawCount);
+    if (Number.isFinite(count)) return count > 0;
+  }
+  return parseNumbers(record?.value).length >= 3;
+}
+
+// Reads orientation, subdivisionScheme, and authored normal provenance with
+// a single getPrimAttributes call. Normal array values may be truncated, so
+// only their type, authored flag, and bounded nonempty metadata are inspected.
 function readMeshTokens(api, root, primPath) {
-  const tokens = { orientation: "rightHanded", subdivisionScheme: undefined };
+  const tokens = { orientation: "rightHanded", subdivisionScheme: undefined, authoredNormals: false };
   if (typeof api.getPrimAttributes !== "function" || !primPath) return tokens;
   try {
     for (const record of arrayItems(api.getPrimAttributes(root, primPath))) {
       const name = text(record?.name);
       if (name === "orientation") tokens.orientation = text(record.value) === "leftHanded" ? "leftHanded" : "rightHanded";
       else if (name === "subdivisionScheme") tokens.subdivisionScheme = text(record.value);
+      else if (name === "primvars:normals" || name === "normals") {
+        tokens.authoredNormals ||= hasAuthoredNormalData(record);
+      }
     }
   } catch {
     // Tolerate any native failure and fall back to the USD default.
@@ -709,6 +777,55 @@ function readPrimAttrMap(api, root, primPath) {
   return map;
 }
 
+function parentPrimPath(primPath) {
+  const normalized = text(primPath)?.replace(/\/+$/, "");
+  if (!normalized || normalized === "/") return "";
+  const slash = normalized.lastIndexOf("/");
+  return slash <= 0 ? "/" : normalized.slice(0, slash);
+}
+
+// Karma's rendervisibility token is inherited by descendants. The viewer only
+// consumes the evidenced -shadow token; every other value keeps the default
+// shadow-casting behavior.
+function readMeshCastsShadowOverride(api, root, primPath) {
+  let current = text(primPath);
+  while (current) {
+    const attributes = readPrimAttrMap(api, root, current);
+    const record = attributes.get("primvars:karma:object:rendervisibility");
+    if (record && record.isAuthored !== false) {
+      const value = text(record.value) ?? "";
+      const tokens = value.split(/[^A-Za-z0-9_-]+/).filter(Boolean);
+      return !tokens.includes("-shadow");
+    }
+    current = parentPrimPath(current);
+  }
+  return undefined;
+}
+
+function readMeshCastsShadow(api, root, primPath) {
+  return readMeshCastsShadowOverride(api, root, primPath) ?? true;
+}
+
+function readInstanceCastsShadow(api, root, mesh) {
+  const owner = text(mesh?.instanceOwnerPath);
+  const ownerOverride = readMeshCastsShadowOverride(api, root, owner);
+  if (ownerOverride !== undefined) return ownerOverride;
+  const marker = "/__instances__/";
+  const instancePath = text(mesh?.path);
+  const markerIndex = instancePath ? instancePath.indexOf(marker) : -1;
+  if (markerIndex < 0 || typeof api.inspectPrimRelationships !== "function") return true;
+  const tail = instancePath.slice(markerIndex + marker.length);
+  const prototypeName = tail.split("/")[0];
+  if (!prototypeName) return true;
+  let targets = [];
+  try { targets = collectPrototypeTargets(api.inspectPrimRelationships(root, owner)); } catch { targets = []; }
+  const matching = [...new Set(targets)].filter(target => target.split("/").pop() === prototypeName);
+  if (matching.length !== 1) return true;
+  const relativeMeshPath = tail.slice(prototypeName.length).replace(/^\//, "");
+  const prototypePath = relativeMeshPath ? `${matching[0]}/${relativeMeshPath}` : matching[0];
+  return readMeshCastsShadowOverride(api, root, prototypePath) ?? true;
+}
+
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -752,6 +869,113 @@ function collectNamedChildren(blockBody) {
   let m;
   while ((m = re.exec(blockBody))) names.add(m[1]);
   return names;
+}
+
+// Balanced `{...}` body starting at the first brace of `text`, or null.
+function leadingBraceBody(text) {
+  const start = text.indexOf("{");
+  if (start < 0 || text.slice(0, start).trim()) return null;
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return text.slice(start + 1, i);
+  }
+  return null;
+}
+
+// Value text immediately after an `=`: a parenthesised/bracketed tuple, a
+// quoted string, or the rest of the line.
+function leadingValueText(text) {
+  const open = text[0];
+  const close = open === "(" ? ")" : open === "[" ? "]" : null;
+  if (close) {
+    let depth = 0;
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === open) depth++;
+      else if (text[i] === close && --depth === 0) return text.slice(0, i + 1).trim();
+    }
+  }
+  return text.split("\n")[0].trim();
+}
+
+// `time: value` pairs of a `.timeSamples` map, in authored order.
+function parseTimeSamples(body) {
+  const samples = [];
+  const re = /(-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)\s*:\s*/g;
+  let m;
+  while ((m = re.exec(body))) {
+    const value = leadingValueText(body.slice(m.index + m[0].length));
+    if (value) samples.push([Number(m[1]), value.replace(/,$/, "")]);
+  }
+  return samples;
+}
+
+// `inputs:*` attributes authored directly in one plain-text USD block scope.
+function collectScopeInputs(scopeText) {
+  const inputs = new Map();
+  const re = /\binputs:([A-Za-z0-9_:]+?)(\.timeSamples)?\s*=\s*/g;
+  let m;
+  while ((m = re.exec(scopeText))) {
+    const rest = scopeText.slice(m.index + m[0].length);
+    const entry = inputs.get(m[1]) ?? { value: null, timeSamples: null };
+    if (m[2]) {
+      const body = leadingBraceBody(rest);
+      if (body !== null) entry.timeSamples = parseTimeSamples(body);
+    } else {
+      entry.value = leadingValueText(rest) || entry.value;
+    }
+    inputs.set(m[1], entry);
+  }
+  return inputs;
+}
+
+// `inputs:*` attributes a plain-text layer authors inside a Material block,
+// keyed by shader-node name (null for the Material prim itself). Nested
+// blocks contribute under their own name at any depth, matching
+// collectNamedChildren.
+function collectAuthoredBlockInputs(blockBody, out = new Map()) {
+  const re = /\b(?:def|over)\s+(?:\w+\s+)?"([^"]+)"[^{]*\{/g;
+  let own = "", cursor = 0, m;
+  while ((m = re.exec(blockBody))) {
+    if (m.index < cursor) continue;
+    const braceStart = m.index + m[0].length - 1;
+    let depth = 0, end = -1;
+    for (let i = braceStart; i < blockBody.length; i++) {
+      const c = blockBody[i];
+      if (c === "{") depth++;
+      else if (c === "}" && --depth === 0) { end = i; break; }
+    }
+    if (end < 0) break;
+    own += blockBody.slice(cursor, m.index);
+    const inner = collectAuthoredBlockInputs(blockBody.slice(braceStart + 1, end), new Map());
+    const merged = out.get(m[1]) ?? new Map();
+    for (const [name, entry] of inner.get(null) ?? new Map()) merged.set(name, entry);
+    out.set(m[1], merged);
+    for (const [node, inputs] of inner) if (node !== null) out.set(node, inputs);
+    cursor = end + 1;
+    re.lastIndex = end + 1;
+  }
+  own += blockBody.slice(cursor);
+  const ownInputs = out.get(null) ?? new Map();
+  for (const [name, entry] of collectScopeInputs(own)) ownInputs.set(name, entry);
+  out.set(null, ownInputs);
+  return out;
+}
+
+// Value of a `.timeSamples` map at `time`: the last sample at or before it,
+// falling back to the first. Integer frames land on a sample, so the held
+// read matches USD's own resolution there.
+function sampleValueAtTime(samples, time) {
+  if (!Array.isArray(samples) || !samples.length) return null;
+  const sorted = samples.slice().sort((a, b) => a[0] - b[0]);
+  if (!Number.isFinite(time)) return sorted[0][1];
+  let picked = sorted[0][1];
+  for (const [at, value] of sorted) {
+    if (at > time) break;
+    picked = value;
+  }
+  return picked;
 }
 
 // Element names declared in a MaterialX document's XML text: any tag with a
@@ -803,7 +1027,7 @@ function decodeMtlxTextsForMaterial(material, mtlxFileTextsByPath) {
 // override-only prim has none, even though getPrimAttributes resolves it
 // directly once its path is known). The Scene applies the composed
 // attribute values onto the resolved MaterialX document.
-function collectMaterialOverrides(api, root, usdaLayers, mtlxTexts, materialPath) {
+function collectMaterialOverrides(api, root, usdaLayers, mtlxTexts, materialPath, stageTime = Number.NaN) {
   const overrides = [];
   if (!materialPath) return overrides;
   const leafName = materialPath.split("/").filter(Boolean).pop();
@@ -812,18 +1036,48 @@ function collectMaterialOverrides(api, root, usdaLayers, mtlxTexts, materialPath
   for (const mtlxText of mtlxTexts) {
     for (const name of collectMtlxElementNames(mtlxText)) childNames.add(name);
   }
+  // Attributes the uploaded text layers author inside this Material's block.
+  // getPrimAttributes reads at the default time only, so a value composed
+  // from a time-sampled `over` comes back as the fallback; the text layers
+  // are the one source that still carries the samples.
+  const authored = new Map();
   for (const layer of usdaLayers) {
     const body = findNamedBlockBodyWithInputs(layer.text, leafName);
     if (!body) continue;
     for (const name of collectNamedChildren(body)) childNames.add(name);
+    for (const [node, inputs] of collectAuthoredBlockInputs(body)) {
+      const merged = authored.get(node) ?? new Map();
+      for (const [name, entry] of inputs) merged.set(name, entry);
+      authored.set(node, merged);
+    }
   }
+  // Default-time value text of each time-sampled Material interface input,
+  // mapped to its value at the stage start time. A value shared by two
+  // animated interfaces is ambiguous and is left out.
+  const animatedFallbacks = new Map();
   const readInto = (primPath, node) => {
     const attrMap = readPrimAttrMap(api, root, primPath);
+    const scope = authored.get(node);
     for (const [name, record] of attrMap) {
       if (!name.startsWith("inputs:")) continue;
-      const valueText = text(record?.value);
+      const input = name.slice("inputs:".length);
+      const samples = scope?.get(input)?.timeSamples;
+      const composed = text(record?.value);
+      const sampled = samples ? sampleValueAtTime(samples, stageTime) : null;
+      if (node === null && sampled && composed) {
+        animatedFallbacks.set(composed, animatedFallbacks.has(composed) ? null : sampled);
+      }
+      // A shader-node input whose composed value is the fallback of an
+      // animated Material interface input is driven by that interface: USD
+      // gives the connection precedence, but getPrimAttributes reads at the
+      // default time and cannot follow it, so the raw read is stale. The
+      // native payload already resolved it at the stage start time, and
+      // re-applying the default-time read would overwrite that with the
+      // fallback. Carry the start-time sample instead.
+      const retargeted = node !== null && composed ? animatedFallbacks.get(composed) : undefined;
+      const valueText = sampled ?? retargeted ?? composed;
       if (!valueText) continue; // metadata-only attribute, no authored value
-      overrides.push({ node, input: name.slice("inputs:".length), value: valueText });
+      overrides.push({ node, input, value: valueText });
     }
   };
   readInto(materialPath, null);
@@ -1341,6 +1595,33 @@ function composeWorldMatrix(api, root, primPath, warn, label) {
   };
 }
 
+// Snapshot evaluated transforms once at the stage driver start time. Native
+// records include Mesh, Camera, and UsdLuxLightAPI paths; plain Xforms are
+// intentionally omitted. Invalid records never replace composed fallbacks.
+function stageStartTime(api, root, summary) {
+  let time = Number.NaN;
+  try { time = Number(api?.stageDriverGetTiming?.(root)?.start); } catch {}
+  if (!Number.isFinite(time)) time = Number(summary?.startTimeCode);
+  if (!Number.isFinite(time)) time = 0;
+  return time;
+}
+
+function snapshotEvaluatedTransforms(api, root, summary) {
+  if (typeof api?.extractTransformsAtTime !== "function") return new Map();
+  const time = stageStartTime(api, root, summary);
+  let records;
+  try { records = arrayItems(api.extractTransformsAtTime(root, time)); } catch { return new Map(); }
+  const transforms = new Map();
+  for (const record of records) {
+    const primPath = text(record?.path);
+    if (!primPath) continue;
+    let matrix;
+    try { matrix = Array.from(record.matrix ?? []); } catch { continue; }
+    if (matrix.length !== 16 || !matrix.every(value => typeof value === "number" && Number.isFinite(value))) continue;
+    transforms.set(primPath, matrix.slice());
+  }
+  return transforms;
+}
 // Graph entries carry a resolved typeName, so prims are picked by type here.
 // A prim authored purely as an `over` has no resolved type and never appears.
 function graphEntriesOfType(graph, matches) {
@@ -1353,7 +1634,7 @@ function graphEntriesOfType(graph, matches) {
   });
 }
 
-function collectCameras(api, root, graph, warn) {
+function collectCameras(api, root, graph, warn, evaluatedTransforms = null) {
   const cameraEntries = graphEntriesOfType(graph, name => name === "camera");
   const cameras = [];
   for (const entry of cameraEntries) {
@@ -1373,7 +1654,7 @@ function collectCameras(api, root, graph, warn) {
     cameras.push({
       primPath,
       name: segments[segments.length - 1] || primPath,
-      matrix: worldSoFar,
+      matrix: evaluatedTransforms?.get(primPath) ?? worldSoFar,
       focalLength: numberOf("focalLength", 50),
       horizontalAperture: numberOf("horizontalAperture", 36),
       verticalAperture: numberOf("verticalAperture", 24),
@@ -1431,7 +1712,7 @@ const IMPORTED_LIGHT_TYPES = new Set([
   "domelight", "distantlight", "spherelight", "rectlight", "disklight", "cylinderlight",
 ]);
 
-function collectLights(api, root, graph, warn) {
+function collectLights(api, root, graph, warn, evaluatedTransforms = null) {
   const entries = graphEntriesOfType(graph, name => name.endsWith("light"));
   const lights = [];
   for (const entry of entries) {
@@ -1454,7 +1735,7 @@ function collectLights(api, root, graph, warn) {
       primPath,
       name: segments[segments.length - 1] || primPath,
       type: typeName,
-      matrix,
+      matrix: evaluatedTransforms?.get(primPath) ?? matrix,
       textureFile: valueOf("inputs:texture:file") ?? null,
       textureFormat: valueOf("inputs:texture:format") ?? "automatic",
       intensity: numberOf("inputs:intensity", LIGHT_DEFAULTS.intensity),
@@ -1506,13 +1787,13 @@ function swapCorners(array, triangleIndex, stride) {
   }
 }
 
-// Corrects a leftHanded mesh so the renderer receives outward normals and
-// counter-clockwise winding, matching what rightHanded prims already get.
-// Never recomputes normals: the native smooth cage normals are correct up
-// to sign, only the winding and the sign need fixing.
+// Corrects a leftHanded mesh so the renderer receives counter-clockwise
+// winding. Authored normals retain their sign after corner reordering;
+// generated right-handed fallback normals also need a sign flip.
 function applyOrientation(mesh) {
   if (!mesh || mesh.orientation !== "leftHanded") return mesh;
   const { positions, normals, uvs, indices } = mesh;
+  const geomprops = mesh.geomprops ?? [];
   if (indices && indices.length) {
     for (let k = 0; k + 2 < indices.length; k += 3) {
       const tmp = indices[k + 1];
@@ -1525,9 +1806,15 @@ function applyOrientation(mesh) {
       swapCorners(positions, t, 3);
       if (normals && normals.length === positions.length) swapCorners(normals, t, 3);
       if (uvs && uvs.length === (positions.length / 3) * 2) swapCorners(uvs, t, 2);
+      for (const stream of geomprops) {
+        if (stream?.itemSize > 0 && Number.isInteger(stream.itemSize) &&
+            stream.data?.length === (positions.length / 3) * stream.itemSize) {
+          swapCorners(stream.data, t, stream.itemSize);
+        }
+      }
     }
   }
-  if (normals) {
+  if (normals && mesh.authoredNormals !== true) {
     for (let i = 0; i < normals.length; i++) normals[i] = -normals[i];
   }
   return mesh;
@@ -1542,241 +1829,6 @@ function applyOrientation(mesh) {
 // topology, and re-expands to deindexed corners with a sequential index so
 // the renderer path is unchanged. Returns null if the mesh cannot be welded
 // into a usable triangle list (degenerate/point mesh).
-function subdivideMesh(mesh, levels) {
-  const positions = mesh.positions;
-  if (!positions || positions.length < 9 || levels <= 0) return null;
-  const indices = mesh.indices;
-  const cornerCount = indices ? indices.length : positions.length / 3;
-  if (cornerCount < 3 || cornerCount % 3 !== 0) return null;
-  const hasUV = mesh.uvs && mesh.uvs.length === (positions.length / 3) * 2;
-
-  // Normalize -0 so sign noise near zero cannot split a weld (toFixed keeps
-  // the sign of a tiny negative value, e.g. (-1e-7).toFixed(5) === "-0.00000").
-  const noSignZero = (v) => (v === 0 ? 0 : v);
-  const posKey = (x, y, z) => `${noSignZero(x).toFixed(5)},${noSignZero(y).toFixed(5)},${noSignZero(z).toFixed(5)}`;
-  const posMap = new Map();
-  let weldedPositions = [];
-  const cornerVertex = (cornerIndex) => {
-    const srcIndex = indices ? indices[cornerIndex] : cornerIndex;
-    const x = positions[srcIndex * 3], y = positions[srcIndex * 3 + 1], z = positions[srcIndex * 3 + 2];
-    const key = posKey(x, y, z);
-    let vi = posMap.get(key);
-    if (vi === undefined) {
-      vi = weldedPositions.length;
-      weldedPositions.push([x, y, z]);
-      posMap.set(key, vi);
-    }
-    return vi;
-  };
-
-  let triangles = [];
-  for (let c = 0; c + 2 < cornerCount; c += 3) {
-    const a = cornerVertex(c), b = cornerVertex(c + 1), cc = cornerVertex(c + 2);
-    const uv = hasUV ? [
-      [mesh.uvs[c * 2], mesh.uvs[c * 2 + 1]],
-      [mesh.uvs[(c + 1) * 2], mesh.uvs[(c + 1) * 2 + 1]],
-      [mesh.uvs[(c + 2) * 2], mesh.uvs[(c + 2) * 2 + 1]],
-    ] : null;
-    triangles.push({ v: [a, b, cc], uv });
-  }
-  if (weldedPositions.length < 4 || !triangles.length) return null;
-
-  const edgeKey = (x, y) => (x < y ? `${x}_${y}` : `${y}_${x}`);
-
-  for (let level = 0; level < levels; level++) {
-    const n = weldedPositions.length;
-    const edgeTriangles = new Map();
-    const vertexNeighbors = Array.from({ length: n }, () => new Set());
-    for (let ti = 0; ti < triangles.length; ti++) {
-      const [a, b, c] = triangles[ti].v;
-      for (const [x, y] of [[a, b], [b, c], [c, a]]) {
-        const ek = edgeKey(x, y);
-        let list = edgeTriangles.get(ek);
-        if (!list) { list = []; edgeTriangles.set(ek, list); }
-        list.push(ti);
-        vertexNeighbors[x].add(y);
-        vertexNeighbors[y].add(x);
-      }
-    }
-
-    const evenPositions = new Array(n);
-    for (let vi = 0; vi < n; vi++) {
-      const neighbors = Array.from(vertexNeighbors[vi]);
-      const boundaryNeighbors = neighbors.filter(nb => edgeTriangles.get(edgeKey(vi, nb)).length === 1);
-      const p = weldedPositions[vi];
-      if (boundaryNeighbors.length) {
-        if (boundaryNeighbors.length === 2) {
-          const p0 = weldedPositions[boundaryNeighbors[0]], p1 = weldedPositions[boundaryNeighbors[1]];
-          evenPositions[vi] = [
-            0.75 * p[0] + 0.125 * (p0[0] + p1[0]),
-            0.75 * p[1] + 0.125 * (p0[1] + p1[1]),
-            0.75 * p[2] + 0.125 * (p0[2] + p1[2]),
-          ];
-        } else {
-          evenPositions[vi] = p.slice();
-        }
-      } else {
-        const k = neighbors.length || 1;
-        const beta = k === 3 ? 3 / 16 : 3 / (8 * k);
-        let sx = 0, sy = 0, sz = 0;
-        for (const nb of neighbors) { const pn = weldedPositions[nb]; sx += pn[0]; sy += pn[1]; sz += pn[2]; }
-        evenPositions[vi] = [
-          (1 - k * beta) * p[0] + beta * sx,
-          (1 - k * beta) * p[1] + beta * sy,
-          (1 - k * beta) * p[2] + beta * sz,
-        ];
-      }
-    }
-
-    const newPositions = evenPositions.slice();
-    const oddIndex = new Map();
-    const getOdd = (a, b) => {
-      const ek = edgeKey(a, b);
-      let idx = oddIndex.get(ek);
-      if (idx !== undefined) return idx;
-      const adj = edgeTriangles.get(ek);
-      const pa = weldedPositions[a], pb = weldedPositions[b];
-      // Real-world meshes can have degenerate triangles (a collapsed
-      // diagonal) or non-manifold edges (shared by more than two
-      // triangles). Both break the textbook interior mask; fall back to
-      // the boundary midpoint rule rather than crashing on bad topology.
-      const oppOf = (ti) => triangles[ti]?.v.find(v => v !== a && v !== b);
-      let pc, pd;
-      if (adj.length === 2) {
-        pc = weldedPositions[oppOf(adj[0])];
-        pd = weldedPositions[oppOf(adj[1])];
-      }
-      let pos;
-      if (pc && pd) {
-        pos = [
-          0.375 * (pa[0] + pb[0]) + 0.125 * (pc[0] + pd[0]),
-          0.375 * (pa[1] + pb[1]) + 0.125 * (pc[1] + pd[1]),
-          0.375 * (pa[2] + pb[2]) + 0.125 * (pc[2] + pd[2]),
-        ];
-      } else {
-        pos = [(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2, (pa[2] + pb[2]) / 2];
-      }
-      idx = newPositions.length;
-      newPositions.push(pos);
-      oddIndex.set(ek, idx);
-      return idx;
-    };
-
-    const lerpUV = (u0, u1, t) => [u0[0] + (u1[0] - u0[0]) * t, u0[1] + (u1[1] - u0[1]) * t];
-    const newTriangles = [];
-    for (const tri of triangles) {
-      const [a, b, c] = tri.v;
-      const ab = getOdd(a, b), bc = getOdd(b, c), ca = getOdd(c, a);
-      if (tri.uv) {
-        const [uvA, uvB, uvC] = tri.uv;
-        const uvAB = lerpUV(uvA, uvB, 0.5), uvBC = lerpUV(uvB, uvC, 0.5), uvCA = lerpUV(uvC, uvA, 0.5);
-        newTriangles.push({ v: [a, ab, ca], uv: [uvA, uvAB, uvCA] });
-        newTriangles.push({ v: [b, bc, ab], uv: [uvB, uvBC, uvAB] });
-        newTriangles.push({ v: [c, ca, bc], uv: [uvC, uvCA, uvBC] });
-        newTriangles.push({ v: [ab, bc, ca], uv: [uvAB, uvBC, uvCA] });
-      } else {
-        newTriangles.push({ v: [a, ab, ca], uv: null });
-        newTriangles.push({ v: [b, bc, ab], uv: null });
-        newTriangles.push({ v: [c, ca, bc], uv: null });
-        newTriangles.push({ v: [ab, bc, ca], uv: null });
-      }
-    }
-    weldedPositions = newPositions;
-    triangles = newTriangles;
-  }
-
-  // Area-weighted smooth normals from the final welded topology.
-  const smoothNormals = weldedPositions.map(() => [0, 0, 0]);
-  for (const tri of triangles) {
-    const [a, b, c] = tri.v;
-    const pa = weldedPositions[a], pb = weldedPositions[b], pc = weldedPositions[c];
-    const e1 = [pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2]];
-    const e2 = [pc[0] - pa[0], pc[1] - pa[1], pc[2] - pa[2]];
-    const nx = e1[1] * e2[2] - e1[2] * e2[1];
-    const ny = e1[2] * e2[0] - e1[0] * e2[2];
-    const nz = e1[0] * e2[1] - e1[1] * e2[0];
-    for (const vi of [a, b, c]) {
-      smoothNormals[vi][0] += nx; smoothNormals[vi][1] += ny; smoothNormals[vi][2] += nz;
-    }
-  }
-  for (const n of smoothNormals) {
-    const len = Math.hypot(n[0], n[1], n[2]) || 1;
-    n[0] /= len; n[1] /= len; n[2] /= len;
-  }
-
-  // Re-expand to deindexed corners (sequential index, matching the current
-  // renderer path exactly).
-  const cornerN = triangles.length * 3;
-  const outPositions = new Float32Array(cornerN * 3);
-  const outNormals = new Float32Array(cornerN * 3);
-  const outUVs = hasUV ? new Float32Array(cornerN * 2) : undefined;
-  let cursor = 0;
-  for (const tri of triangles) {
-    for (let k = 0; k < 3; k++) {
-      const vi = tri.v[k];
-      const p = weldedPositions[vi], n = smoothNormals[vi];
-      outPositions[cursor * 3] = p[0]; outPositions[cursor * 3 + 1] = p[1]; outPositions[cursor * 3 + 2] = p[2];
-      outNormals[cursor * 3] = n[0]; outNormals[cursor * 3 + 1] = n[1]; outNormals[cursor * 3 + 2] = n[2];
-      if (outUVs && tri.uv) {
-        outUVs[cursor * 2] = tri.uv[k][0]; outUVs[cursor * 2 + 1] = tri.uv[k][1];
-      }
-      cursor++;
-    }
-  }
-
-  return {
-    positions: outPositions,
-    normals: outNormals,
-    ...(outUVs ? { uvs: outUVs } : {}),
-    triangleCount: triangles.length,
-  };
-}
-
-// Welds per-corner streams (positions/normals/uvs bitwise equal) into an
-// indexed vertex buffer so computeTangents can average tangents across every
-// face sharing a vertex instead of computing one tangent per lone corner.
-// UV seams and hard normal edges stay split naturally since their corners
-// differ. Corner order is preserved in the output indices, so material
-// subset start/count ranges (which are ranges over corners) stay valid.
-function weldMesh(mesh) {
-  const positions = mesh.positions;
-  const normals = mesh.normals;
-  if (!positions || !normals) return mesh;
-  const cornerCount = Math.floor(positions.length / 3);
-  if (cornerCount < 3 || normals.length !== positions.length) return mesh;
-  const uvs = mesh.uvs;
-  const hasUV = uvs && uvs.length === cornerCount * 2;
-  const vertexMap = new Map();
-  const outPositions = [];
-  const outNormals = [];
-  const outUVs = hasUV ? [] : undefined;
-  const indices = new Uint32Array(cornerCount);
-  for (let c = 0; c < cornerCount; c++) {
-    const px = positions[c * 3], py = positions[c * 3 + 1], pz = positions[c * 3 + 2];
-    const nx = normals[c * 3], ny = normals[c * 3 + 1], nz = normals[c * 3 + 2];
-    const key = hasUV
-      ? `${px},${py},${pz}|${nx},${ny},${nz}|${uvs[c * 2]},${uvs[c * 2 + 1]}`
-      : `${px},${py},${pz}|${nx},${ny},${nz}`;
-    let vi = vertexMap.get(key);
-    if (vi === undefined) {
-      vi = outPositions.length / 3;
-      outPositions.push(px, py, pz);
-      outNormals.push(nx, ny, nz);
-      if (hasUV) outUVs.push(uvs[c * 2], uvs[c * 2 + 1]);
-      vertexMap.set(key, vi);
-    }
-    indices[c] = vi;
-  }
-  mesh.positions = Float32Array.from(outPositions);
-  mesh.normals = Float32Array.from(outNormals);
-  if (hasUV) mesh.uvs = Float32Array.from(outUVs);
-  mesh.indices = indices;
-  mesh.welded = true;
-  mesh.weldedCornerCount = cornerCount;
-  mesh.weldedVertexCount = outPositions.length / 3;
-  return mesh;
-}
-
 function collectPrototypeTargets(value, result = []) {
   if (value == null) return result;
   if (typeof value === "string") {
@@ -1807,11 +1859,13 @@ function collectPrototypeTargets(value, result = []) {
 // The temporary layer remains in the native VFS until the next whole-stage
 // close; this avoids wrapper.closeStage() unlinking the caller's input files.
 async function recoverInstanceNormals(api, root, pointInstancerPaths, drawSnapshot, purposePolicy) {
-  const generated = drawSnapshot.meshes.filter(mesh => mesh.instanceOwnerPath && !mesh.normals);
-  if (!generated.length || !api.inspectPrimRelationships || !api.createDataFile || !api.openStage) return [];
+  const generated = drawSnapshot.meshes.filter(mesh => mesh.instanceOwnerPath);
+  for (const mesh of generated) mesh.castsShadow = readInstanceCastsShadow(api, root, mesh);
+  const normalRecoveryMeshes = generated.filter(mesh => !mesh.normals);
+  if (!normalRecoveryMeshes.length || !api.inspectPrimRelationships || !api.createDataFile || !api.openStage) return [];
   const probes = new Map();
   const warnings = [];
-  for (const mesh of generated) {
+  for (const mesh of normalRecoveryMeshes) {
     const marker = "/__instances__/";
     const markerIndex = mesh.path.indexOf(marker);
     if (markerIndex < 0) continue;
@@ -1872,6 +1926,7 @@ async function recoverInstanceNormals(api, root, pointInstancerPaths, drawSnapsh
       const actualMeshPath = probe.relativeMeshPath ? `${probe.target}/${probe.relativeMeshPath}` : probe.target;
       const tokens = readMeshTokens(api, root, actualMeshPath);
       const orientation = tokens.orientation;
+      const castsShadow = readMeshCastsShadow(api, root, actualMeshPath);
       for (const generatedMesh of probe.meshes) {
         const marker = "/__instances__/";
         const tail = generatedMesh.path.slice(generatedMesh.path.indexOf(marker) + marker.length);
@@ -1901,6 +1956,8 @@ async function recoverInstanceNormals(api, root, pointInstancerPaths, drawSnapsh
         generatedMesh.normals = candidate.normals;
         generatedMesh.orientation = orientation;
         generatedMesh.subdivisionScheme = tokens.subdivisionScheme;
+        generatedMesh.authoredNormals = tokens.authoredNormals;
+        generatedMesh.castsShadow = readInstanceCastsShadow(api, root, generatedMesh);
       }
     }
   } catch (error) {
@@ -2007,6 +2064,11 @@ function copyStageResult(summary, draw, payloads, cameras, lights, metrics = nul
   };
   for (const mesh of meshes) {
     for (const key of ["positions", "normals", "uvs", "indices"]) if (mesh[key]) addTransfer(mesh[key].buffer);
+    for (const prop of mesh.geomprops ?? []) if (prop.data?.buffer) addTransfer(prop.data.buffer);
+    if (mesh.cage) for (const prop of mesh.cage.geomprops ?? []) if (prop.data?.buffer) addTransfer(prop.data.buffer);
+    if (mesh.cage) {
+      for (const key of ["positions", "normals", "uvs", "indices"]) if (mesh.cage[key]) addTransfer(mesh.cage[key].buffer);
+    }
   }
   for (const material of materialList) {
     for (const value of Object.values(material)) {
@@ -2140,6 +2202,8 @@ async function load(request) {
   const stageMetrics = resolveStageMetrics(summary, rootMetrics);
   postMessage({ id: request.id, type: "progress", value: { phase: "parse", done: 1, total: 1, fraction: 0.4, message: "Composed stage" } });
   if (!api.createStageDriver(root)) throw new Error("OpenUSD stage driver could not be created");
+  const evaluatedTransforms = snapshotEvaluatedTransforms(api, root, summary);
+  const stageTime = stageStartTime(api, root, summary);
   // A full draw can itself grow the native heap while it is constructing
   // multiple MeshUpdate objects. Earlier objects then retain detached views
   // by the time the native call returns. Enumerate mesh prims and draw each
@@ -2170,6 +2234,8 @@ async function load(request) {
           const tokens = readMeshTokens(api, root, mesh.path || path);
           mesh.orientation = tokens.orientation;
           mesh.subdivisionScheme = tokens.subdivisionScheme;
+          mesh.authoredNormals = tokens.authoredNormals;
+          mesh.castsShadow = readMeshCastsShadow(api, root, mesh.path || path);
         }
         drawSnapshot.meshes.push(mesh);
         if (mesh.path) copiedMeshPaths.add(mesh.path);
@@ -2201,6 +2267,13 @@ async function load(request) {
     // Snapshot before making the next native call; diagnostics and payload
     // extraction may also refresh the Emscripten heap.
     drawSnapshot = snapshotDraw(draw);
+    for (const mesh of drawSnapshot.meshes) {
+      const tokens = readMeshTokens(api, root, mesh.path);
+      mesh.orientation = tokens.orientation;
+      mesh.subdivisionScheme = tokens.subdivisionScheme;
+      mesh.authoredNormals = tokens.authoredNormals;
+      mesh.castsShadow = readMeshCastsShadow(api, root, mesh.path);
+    }
   }
   postMessage({ id: request.id, type: "progress", value: { phase: "extract-materials", done: 0, total: 0, fraction: 0.8, message: "Extracting material payloads" } });
   const payloads = api.extractMaterialPayloads(root);
@@ -2254,10 +2327,21 @@ async function load(request) {
         }
         const subdivided = subdivideMesh(mesh, levels);
         if (!subdivided) continue;
+        mesh.cage = {
+          positions: mesh.positions,
+          normals: mesh.normals,
+          uvs: mesh.uvs,
+          indices: mesh.indices,
+          subsets: Array.isArray(mesh.subsets) ? mesh.subsets.slice() : undefined,
+          geomprops: Array.isArray(mesh.geomprops) ? mesh.geomprops : undefined,
+        };
+        mesh.subdivisionLevelsApplied = levels;
         stageTriangleTotal += subdivided.triangleCount - originalTriangles;
         mesh.positions = subdivided.positions;
         mesh.normals = subdivided.normals;
         if (subdivided.uvs) mesh.uvs = subdivided.uvs;
+        if (subdivided.geomprops) mesh.geomprops = subdivided.geomprops;
+        else delete mesh.geomprops;
         delete mesh.indices;
         if (Array.isArray(mesh.subsets) && mesh.subsets.length) {
           mesh.subsets = mesh.subsets.map(subset => ({
@@ -2279,17 +2363,23 @@ async function load(request) {
   postMessage({ id: request.id, type: "progress", value: {
     phase: "extract-materials", done: 1, total: 1, fraction: 0.9, message: "Extracted material payloads",
   } });
+  const volumePaths = Array.from(new Set(graphEntriesOfType(
+    graph, name => name === "volume"
+  ).map(entry => text(entry.path)).filter(Boolean)));
+  const volumeWarnings = volumePaths.map(path =>
+    "Unsupported USD volume rendering: " + path + " (VDB volume data was not imported)"
+  );
   const cameraWarnings = [];
-  const cameras = collectCameras(api, root, graph, message => cameraWarnings.push(message));
+  const cameras = collectCameras(api, root, graph, message => cameraWarnings.push(message), evaluatedTransforms);
   markDefaultCamera(api, root, graph, cameras);
   const lightWarnings = [];
-  const lights = collectLights(api, root, graph, message => lightWarnings.push(message));
+  const lights = collectLights(api, root, graph, message => lightWarnings.push(message), evaluatedTransforms);
   const result = copyStageResult(summary, drawSnapshot, payloadSnapshot, cameras, lights, stageMetrics);
-  result.warnings.push(...stageMetrics.warnings);
+  result.warnings.push(...stageMetrics.warnings, ...volumeWarnings);
   const connectionWarnedLayers = new Set();
   for (const material of result.materials) {
     const mtlxTexts = decodeMtlxTextsForMaterial(material, mtlxFileTextsByPath);
-    const overrides = collectMaterialOverrides(api, root, usdaTexts, mtlxTexts, material.path);
+    const overrides = collectMaterialOverrides(api, root, usdaTexts, mtlxTexts, material.path, stageTime);
     if (overrides.length) material.overrides = overrides;
 
     const built = buildUsdShadeMaterialX(api, root, material.path, usdaTexts);

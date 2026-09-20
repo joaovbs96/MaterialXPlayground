@@ -268,6 +268,7 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
                     renderable: target.node,
                     lightData: loaded.lightData,
                     label: 'compare-' + label,
+                    materialName: target.name,
                     needsLighting: true,
                     geomName: geom,
                     sceneOrbit: geom === 'shaderball-scene',
@@ -1017,7 +1018,7 @@ function MaterialCompareApp({ active = true } = {}) {
     // gives both views time to repaint before it recomputes.
     React.useEffect(() => {
         const onSettingsChanged = (e) => {
-            if (!e.detail || e.detail.key !== 'forceTransparency') return;
+            if (!e.detail || (e.detail.key !== 'forceTransparency' && e.detail.key !== 'displacement' && e.detail.key !== 'previewSubdivision')) return;
             statsDirtyRef.current = true;
             diffDirtyRef.current = true;
         };
@@ -1809,6 +1810,7 @@ function MaterialCompareApp({ active = true } = {}) {
                             <div className="mt-1 text-[11px] text-gray-400">
                                 Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.
                             </div>
+                            <DisplacementSettingsRows />
                         </SectionCard>
                     </div>
 
