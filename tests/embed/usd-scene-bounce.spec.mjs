@@ -1,16 +1,18 @@
 // tests/embed/usd-scene-bounce.spec.mjs: "no effect outside the Scene" for
-// the diffuse bounce term (js/mtlx-engine.js's mx_diffuse_bounce_add,
-// injected by patchDiffuseBounceAdd; see bounce/implementation.md and its
-// v2 addendum). Two independent checks:
+// the diffuse bounce v3 term (js/mtlx-engine.js's mx_diffuse_bounce_add,
+// injected by patchDiffuseBounceAdd; see
+// scratchpad/displacement-verified/color-parity/bounce/v3-design.md and
+// bounce/implementation.md for the v2 predecessor this replaces). Two
+// independent checks:
 //   1. a plain (non-Scene) #!viewer compile DOES get the
 //      mx_diffuse_bounce_add() call textually (needsLighting:true gives it
 //      the same positionWorld/normalWorld varyings the existing
 //      sky-visibility/AO-volume hooks already rely on there, and
 //      standard_surface's own generated code always has
 //      base_color_nonnegative_out in scope), but its u_skyBounceStrength
-//      AND u_bounceERef uniforms both default to 0, which is what actually
+//      AND u_bounceScale uniforms both default to 0, which is what actually
 //      makes it an exact no-op (the injected function's first line is "if
-//      (u_skyBounceStrength <= 0.0 || u_bounceERef <= 0.0) return
+//      (u_skyBounceStrength <= 0.0 || u_bounceScale <= 0.0) return
 //      vec3(0.0);"). This mirrors u_skyVisStrength/u_aoVolumeStrength,
 //      both already 0 by default outside the Scene;
 //   2. storedSceneBounce() (js/usd-scene-renderer.js), the setting's
@@ -52,11 +54,11 @@ test('a non-Scene compiled material has the bounce hook wired but its strength d
     });
     const material = view.__debug().material;
     const strengthUniform = material.uniforms && material.uniforms.u_skyBounceStrength;
-    const eRefUniform = material.uniforms && material.uniforms.u_bounceERef;
+    const scaleUniform = material.uniforms && material.uniforms.u_bounceScale;
     return {
       fragmentShader: material.fragmentShader,
       strength: strengthUniform ? strengthUniform.value : null,
-      eRef: eRefUniform ? eRefUniform.value : null,
+      scale: scaleUniform ? scaleUniform.value : null,
     };
   }, SIMPLE_MTLX);
 
@@ -66,7 +68,7 @@ test('a non-Scene compiled material has the bounce hook wired but its strength d
   // varyings the Scene uses, and standard_surface always computes
   // base_color_nonnegative_out), inert because both uniforms are 0.
   expect(result.fragmentShader).toContain('vec3 mx_diffuse_bounce_add(vec3 albedo)');
-  expect(result.fragmentShader).toContain('if (u_skyBounceStrength <= 0.0 || u_bounceERef <= 0.0) return vec3(0.0);');
+  expect(result.fragmentShader).toContain('if (u_skyBounceStrength <= 0.0 || u_bounceScale <= 0.0) return vec3(0.0);');
   // Regression guard: the additive call must be part of the SAME statement
   // as the original "shader_constructor_out.color += occlusion * ...
   // response;" line, not appended after its semicolon (that split one
@@ -77,7 +79,7 @@ test('a non-Scene compiled material has the bounce hook wired but its strength d
   // suite rather than only in the Node unit test).
   expect(result.fragmentShader).toMatch(/shader_constructor_out\.color \+= occlusion \* \w+\.response \+ mx_diffuse_bounce_add\(base_color_nonnegative_out\);/);
   expect(result.strength).toBe(0);
-  expect(result.eRef).toBe(0);
+  expect(result.scale).toBe(0);
 });
 
 test('storedSceneBounce() reads false inside an embed (window.top !== window)', async ({ page, embedURL }) => {

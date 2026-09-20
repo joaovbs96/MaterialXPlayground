@@ -97,52 +97,42 @@ const storedSceneAoStrength = () => {
     } catch (e) { return 0.7; }
 };
 
-// Baked single-bounce diffuse light: blocker albedo times the blocker's own
-// sky visibility, on the sky bake's grid, ADDED to the shaded colour as an
-// extra Lambertian contribution (patchDiffuseBounceAdd in
-// js/mtlx-engine.js), not folded into the "occlusion" scalar: canonical.md
-// (2026-09-20) found the analytic key light supplies most of a point's
-// diffuse irradiance and sits entirely outside occlusion's reach, so
-// scaling only the small residual it does multiply cannot recover a
-// Karma-sized indirect share. Sized against a reference irradiance
-// (computeBounceERef) that represents the whole scene's light, not just
-// that residual. Bounded by the [0,1] baked volume, the [0,1] strength
-// clamp and a non-negative E_ref, so it can only add light, never remove
-// it or invert sign; default-on is safe.
+// Baked ONE-BOUNCE diffuse irradiance (v3, 2026-09-20): per-cell scalar SH1
+// of the blockers' OWN outgoing radiance (albedo_b * the engine's own
+// convolved irradiance at the blocker's normal, key-light gated by the
+// blocker's own sky visibility), on the sky bake's grid, ADDED to the
+// shaded colour as an extra Lambertian contribution
+// (patchDiffuseBounceAdd in js/mtlx-engine.js), not folded into the
+// "occlusion" scalar: canonical.md (2026-09-20) found the analytic key
+// light supplies most of a point's diffuse irradiance and sits entirely
+// outside occlusion's reach, so scaling only the small residual it does
+// multiply cannot recover a Karma-sized indirect share. Replaces the
+// v2 whole-scene-mean reference irradiance (computeBounceERef, eecd3a3/
+// 75ee6b4/fa73f24): see scratchpad/displacement-verified/color-parity/
+// bounce/v3-design.md for the four factors (units, whole-sphere mean,
+// self-hit co-location, no outgoing direction) that made v2 measure only
+// +1.4 percent of beauty against Karma's 18.8 percent indirect share.
+// Bounded by the [0,1] baked mean/moment reconstruction, the [0,1]
+// strength clamp, a non-negative scale and the near-field AO gate, so it
+// can only add light, never remove it or invert sign; default-on is safe.
 const SCENE_BOUNCE_KEY = 'mtlx_scene_bounce';
 const SCENE_BOUNCE_STRENGTH_KEY = 'mtlx_scene_bounce_strength';
-// Default ON (2026-09-20): the earlier "renderer hang" was not a hang at
-// all. A CDP-instrumented headed capture (scratchpad/displacement-verified/
-// color-parity/bounce/hang/hang-diagnostic.mjs, hang-stack.json) showed the
-// page staying fully responsive (rAF and the interval heartbeat both kept
-// ticking); the real fault was a plain ReferenceError ("envExposure is not
-// defined") thrown from makeMtlxMaterial's `computeBounceERef(env,
-// envExposure)` call (js/usd-scene-renderer.js:2844) during the initial
-// per-material precompile pass, which runs before this file's `let
-// envExposure` is reached; bounce OFF never evaluates that ternary branch,
-// so it was invisible until enabled. React's own catch stored the message
-// on UI state instead of logging it, which is why no console error or
-// exception was ever seen. Fixed at the three computeBounceERef call sites
-// (this function, applySkyBounce, and the displacement-subdivision-override
-// rebuild) with a typeof guard that falls back to the same dome-exposure
-// expression envExposure is itself initialized from. Re-verified headed on
-// egg_brown with bounce forced on: captured in ~33s (same order as bounce
-// off), 0 console errors, u_bounceERef read back live as ~1.13, chart
-// neutral / gray sphere / backdrop / floor ratios all lift by a small,
-// bounded amount versus bounce off, none newly crossing 1.1 (see
-// scratchpad/displacement-verified/color-parity/bounce/v2-fixed/).
 const storedSceneBounce = () => {
     if (window.top !== window) return false;
     try { return localStorage.getItem(SCENE_BOUNCE_KEY) !== '0'; } catch (e) { return true; }
 };
+// Default 1.0 (v3, 2026-09-20): v3-design.md section 9's chart prediction
+// lands inside Karma's target band at strength 1.0 (about 0.13 at the old
+// v2 default of 0.8), unlike v2 where 0.8 was chosen only because the whole
+// term was small everywhere.
 const storedSceneBounceStrength = () => {
-    if (window.top !== window) return 0.8;
+    if (window.top !== window) return 1;
     try {
         const raw = localStorage.getItem(SCENE_BOUNCE_STRENGTH_KEY);
-        if (raw == null || raw === '') return 0.8;
+        if (raw == null || raw === '') return 1;
         const value = Number(raw);
-        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0.8;
-    } catch (e) { return 0.8; }
+        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1;
+    } catch (e) { return 1; }
 };
 
 // Screen-space reflections: a history-reprojected trace for opaque
@@ -1345,16 +1335,18 @@ const sceneGeompropConstants = (record) => {
     return { displayColor: [Number(color[0]) || 0, Number(color[1]) || 0, Number(color[2]) || 0] };
 };
 
-// Per-mesh albedo estimate for the diffuse bounce bake (buildSkyBounceVolume).
-// MaterialX public uniforms are named after node paths, so there is no
-// reliable "u_base_color" to read; this is a heuristic, resolved in order and
-// clamped to a sane blocker albedo range so no single guess can blow up the
-// bounce term.
+// Per-mesh RGB albedo estimate for the diffuse bounce bake
+// (buildSkyBounceVolume). MaterialX public uniforms are named after node
+// paths, so there is no reliable "u_base_color" to read; this is a
+// heuristic, resolved in order and clamped to a sane blocker albedo range so
+// no single guess can blow up the bounce term. Returns [r, g, b] (v3: the
+// bake now carries the blockers' own chroma via u_bounceTint, so this can no
+// longer collapse to a single luminance scalar).
 const sceneBounceAlbedo = (object) => {
-    const luminance = (r, g, b) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    const clampAlbedo = (v) => Math.max(0.04, Math.min(0.9, v));
-    if (object && object.userData && Number.isFinite(object.userData.mtlxBounceAlbedo)) {
-        return clampAlbedo(object.userData.mtlxBounceAlbedo);
+    const clampC = (v) => Math.max(0.02, Math.min(0.95, Number(v) || 0));
+    const clampRGB = (arr) => [clampC(arr[0]), clampC(arr[1]), clampC(arr[2])];
+    if (object && object.userData && Array.isArray(object.userData.mtlxBounceAlbedo) && object.userData.mtlxBounceAlbedo.length >= 3) {
+        return clampRGB(object.userData.mtlxBounceAlbedo);
     }
     const mats = object && object.material ? (Array.isArray(object.material) ? object.material : [object.material]) : [];
     for (const material of mats) {
@@ -1363,51 +1355,91 @@ const sceneBounceAlbedo = (object) => {
         for (const key of Object.keys(uniforms)) {
             if (!/(^|_)(base_color|diffuse_color|diffusecolor)$/i.test(key)) continue;
             const v = uniforms[key] && uniforms[key].value;
-            if (v && v.isColor) return clampAlbedo(luminance(v.r, v.g, v.b));
-            if (v && v.isVector3) return clampAlbedo(luminance(v.x, v.y, v.z));
+            if (v && v.isColor) return clampRGB([v.r, v.g, v.b]);
+            if (v && v.isVector3) return clampRGB([v.x, v.y, v.z]);
         }
     }
     const displayColor = object && object.userData && object.userData.displayColor;
-    if (Array.isArray(displayColor) && displayColor.length >= 3) {
-        return clampAlbedo(luminance(Number(displayColor[0]) || 0, Number(displayColor[1]) || 0, Number(displayColor[2]) || 0));
-    }
-    return 0.5;
+    if (Array.isArray(displayColor) && displayColor.length >= 3) return clampRGB(displayColor);
+    return [0.5, 0.5, 0.5];
 };
 
-// Reference irradiance for the additive diffuse bounce term
-// (patchDiffuseBounceAdd in js/mtlx-engine.js): the solid-angle-weighted
-// mean, over EVERY possible surface normal, of the FULL scene irradiance
-// (dome convolution mean plus the extracted key light's own contribution),
-// unclamped and with the key light included. canonical.md (2026-09-20)
-// found the key light supplies most of a typical point's diffuse
-// irradiance and sits entirely outside the "occlusion" scalar's reach, so
-// scaling the small IBL-only residual that scalar multiplies cannot reach
-// a Karma-sized indirect share; this reference has to represent the whole
-// picture instead.
+// mx_latlong_projection, transliterated from
+// libraries/pbrlib/genglsl/lib/mx_microfacet_specular.glsl:531-535.
+const M_PI_INV_JS = 1 / Math.PI;
+const mxLatlongProjectionJS = (nx, ny, nz) => {
+    const latitude = -Math.asin(Math.max(-1, Math.min(1, ny))) * M_PI_INV_JS + 0.5;
+    const longitude = Math.atan2(nx, -nz) * M_PI_INV_JS * 0.5 + 0.5;
+    return [longitude, latitude];
+};
+
+// Irradiance sampler for the diffuse bounce v3 bake (shadeBounce in
+// js/usd-scene-skyvis.js). Replaces computeBounceERef's whole-sphere mean:
+// v3-design.md section 1 found the two surfaces that actually light a
+// typical blocker sit 2 to 2.2 times ABOVE that mean, so a global mean
+// halved the bounce term before anything else happened. Evaluates the SAME
+// convolved irradiance map the shader samples (env.irradianceConvolvedData,
+// retained by ensureConvolvedIrradiance in js/mtlx-engine.js) at an
+// arbitrary blocker normal, by transliterating mx_latlong_projection and
+// bilinearly fetching the retained float readback -- the lookup chain
+// canonical.md (2026-09-20) proved reproduces the GPU to 0.7 percent.
 //
-// mean_n(E_key(n)) = intensity / 4 for a directional light of irradiance
-// `intensity` at normal incidence: the integral over the FULL sphere of
-// max(dot(n, L), 0) dOmega_n is the standard cosine-hemisphere integral
-// (equals pi, independent of L's direction by symmetry, since for every n
-// with dot(n,L)>0 there is an equal-measure set of directions by
-// rotational symmetry around L), so the solid-angle AVERAGE over the full
-// sphere (divide by the sphere's own solid angle, 4*pi) is pi / (4*pi) =
-// 1/4. mean_n(E_conv(n)) (env.irradianceConvolvedMean, computed once in
-// ensureConvolvedIrradiance from the same 64x32/128x64 convolution texel
-// data) is, by the matching identity (swap the order of integration over
-// the convolution's own hemisphere sum), exactly the solid-angle-weighted
-// mean radiance of the source environment map -- proved in that function's
-// own comment, not re-derived here.
-const computeBounceERef = (env, envExposure) => {
-    const luminance = (r, g, b) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    const envMean = (env && Number.isFinite(env.irradianceConvolvedMean)) ? env.irradianceConvolvedMean : 0;
-    let keyMean = 0;
-    if (env && env.keyLight && Array.isArray(env.keyLight.color) && env.keyLight.color.length >= 3 && Number.isFinite(env.keyLight.intensity)) {
-        keyMean = luminance(env.keyLight.color[0], env.keyLight.color[1], env.keyLight.color[2]) * env.keyLight.intensity / 4;
-    }
+// keyDirWorld, when supplied, must be the SAME already-rotated key light
+// direction the ordinary light loop uses (env.keyLight.direction.clone()
+// .applyMatrix4(new THREE.Matrix4().makeRotationY(-envRotationRad)), see
+// the call sites below): passed in rather than re-derived from envMatrix's
+// own rotation (a different construction, makeRotationY(Math.PI/2 +
+// envRotationRad)) to avoid a second, error-prone decomposition of the
+// same angle.
+//
+// Returns a closure eStored(nx, ny, nz, Vb) -> [r, g, b] in stored units
+// (pi already folded in, matching mx_environment_irradiance): the convolved
+// dome term at that normal plus the key light's own contribution, gated by
+// Vb (the blocker's own mean sky visibility from the sky bake --
+// v3-design.md section 6's proxy for "is the blocker itself lit by the
+// key"). Returns null when the readback is unavailable (WebGL1, missing
+// float colour buffer, or the SH irradiance path is selected), which makes
+// the whole bounce bake a safe-fail no-op.
+const makeEStoredSampler = (env, envExposure, envMatrix, keyDirWorld) => {
+    if (!env || !env.irradianceConvolvedData || !env.irradianceConvolvedSize) return null;
+    const data = env.irradianceConvolvedData;
+    const w = env.irradianceConvolvedSize[0], h = env.irradianceConvolvedSize[1];
+    if (!(w > 0) || !(h > 0)) return null;
     const exposure = Number.isFinite(envExposure) ? Math.max(0, envExposure) : 1;
-    const value = (envMean + keyMean) * exposure;
-    return Number.isFinite(value) && value > 0 ? value : 0;
+    const rotated = new THREE.Vector3();
+    const wrapU = (x) => ((x % w) + w) % w;
+    const clampV = (y) => Math.max(0, Math.min(h - 1, y));
+    const sample = (u, v) => {
+        const fx = u * w - 0.5, fy = v * h - 0.5;
+        const x0 = Math.floor(fx), y0 = Math.floor(fy);
+        const tx = fx - x0, ty = fy - y0;
+        const texel = (x, y, c) => data[(clampV(y) * w + wrapU(x)) * 4 + c];
+        const out = [0, 0, 0];
+        for (let c = 0; c < 3; c++) {
+            const a = texel(x0, y0, c) * (1 - tx) + texel(x0 + 1, y0, c) * tx;
+            const b = texel(x0, y0 + 1, c) * (1 - tx) + texel(x0 + 1, y0 + 1, c) * tx;
+            out[c] = a * (1 - ty) + b * ty;
+        }
+        return out;
+    };
+    const keyLight = env.keyLight;
+    const keyColor = (keyLight && Array.isArray(keyLight.color) && keyLight.color.length >= 3) ? keyLight.color : null;
+    const keyIntensity = (keyLight && Number.isFinite(keyLight.intensity)) ? Math.max(0, keyLight.intensity) : 0;
+    return (nx, ny, nz, Vb) => {
+        let rx = nx, ry = ny, rz = nz;
+        if (envMatrix) { rotated.set(nx, ny, nz).transformDirection(envMatrix); rx = rotated.x; ry = rotated.y; rz = rotated.z; }
+        const uv = mxLatlongProjectionJS(rx, ry, rz);
+        const conv = sample(uv[0], uv[1]);
+        let r = conv[0] * exposure, g = conv[1] * exposure, b = conv[2] * exposure;
+        if (keyColor && keyIntensity > 0 && keyDirWorld && Vb > 0) {
+            const ndotl = Math.max(0, nx * keyDirWorld.x + ny * keyDirWorld.y + nz * keyDirWorld.z);
+            if (ndotl > 0) {
+                const k = keyIntensity * exposure * ndotl * Vb * M_PI_INV_JS;
+                r += keyColor[0] * k; g += keyColor[1] * k; b += keyColor[2] * k;
+            }
+        }
+        return [r, g, b];
+    };
 };
 
 const sceneNeutralMaterial = (label) => new THREE.MeshNormalMaterial({
@@ -1713,13 +1745,21 @@ const createMtlxSceneView = async ({
     let aoVolumeSize = null;
     let aoVolumeCell = 0;
     let aoVolumeInfo = null;
-    // Baked diffuse bounce volume (js/usd-scene-skyvis.js's marchBounce/
-    // buildSkyBounce). Shares the sky bake's own grid; rebuilt alongside it,
-    // never per frame.
+    // Baked one-bounce diffuse irradiance volume (js/usd-scene-skyvis.js's
+    // bakeBounceGeometry/shadeBounce). Shares the sky bake's own grid. The
+    // GEOMETRY half (skyBounceGeometry/skyBounceVoxels) depends only on
+    // geometry and is rebuilt alongside the sky volume, never per frame; the
+    // SHADING half (the texture/scale/tint below) additionally depends on
+    // the environment and is re-run alone (reshadeSkyBounce) on a dome yaw,
+    // exposure or environment change, without re-marching.
     let skyBounceTexture = null;
     let skyBounceMin = null;
     let skyBounceSize = null;
     let skyBounceCell = 0;
+    let skyBounceScale = 0;
+    let skyBounceTint = new THREE.Vector3(1, 1, 1);
+    let skyBounceGeometry = null;
+    let skyBounceVoxels = null;
     let skyBounceInfo = null;
     let bounceEnabled = storedSceneBounce();
     let bounceStrength = storedSceneBounceStrength();
@@ -2851,12 +2891,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
             aoVolumeMap: aoEnabled ? aoVolumeTexture : null, aoVolumeMin, aoVolumeSize, aoVolumeStrength: aoStrength, aoVolumeCell,
             skyBounceMap: bounceEnabled ? skyBounceTexture : null, skyBounceMin, skyBounceSize, skyBounceStrength: bounceStrength, skyBounceCell,
-            // The initial per-material precompile pass (this function's caller,
-            // around the materialList loop) runs before `let envExposure` below
-            // is reached in this file's sequential setup, so that binding is not
-            // yet available here; fall back to the same dome-exposure expression
-            // envExposure is itself initialized from.
-            bounceERef: bounceEnabled ? computeBounceERef(env, typeof envExposure !== 'undefined' ? envExposure : (domeLight ? domeLight.exposure : 1)) : 0,
+            bounceScale: bounceEnabled ? skyBounceScale : 0, bounceTint: bounceEnabled ? skyBounceTint : null,
             envTilt,
             thicknessScale, refractionTwoSided: true, sceneRadius,
             environmentIndirectScale: shadowDiagnostic ? shadowDiagnostic.environmentIndirectScale : 1,
@@ -5451,46 +5486,40 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             if (warnings.indexOf(note) < 0) warnings.push(note);
             return result;
         };
-        // Bakes the diffuse bounce volume: blocker albedo times the blocker's
-        // own sky visibility, on the SAME grid the sky bake used (skyResult
-        // is required; this never voxelizes the stage on its own). Modelled
-        // on buildAoVolume above, but voxelizes its own copy of the stage
-        // WITH per-mesh albedo, since the sky bake's own voxel grid does not
-        // carry it.
-        const buildSkyBounceVolume = (stageBox, skyResult) => {
+        // Builds the current shading-time lighting closure for the bounce
+        // bake: the SAME env matrix / key light rotation the ordinary light
+        // loop uses, so the bake and the real shading agree on which way is
+        // "up" in the rotated dome frame. Returns null (safe-fail) whenever
+        // the convolved irradiance readback is unavailable.
+        const currentBounceLighting = () => {
+            // The convolved irradiance readback (env.irradianceConvolvedData)
+            // is otherwise only populated lazily, the first time a material
+            // compiles (makeMtlxMaterial) or the environment is re-applied
+            // (applyMaterialEnvironment). buildSkyBounceVolume can run
+            // earlier than either, during the initial geometry rebuild
+            // (rebuildGeometryDerivedState), which made the bake silently
+            // and permanently a no-op (ready:false, no [info] baked line,
+            // no error) on every fresh Scene load -- caught only by a
+            // headed on/off capture pair coming back byte-identical, not by
+            // any source-text check. Ensure it here too.
+            if (window.ensureConvolvedIrradiance) window.ensureConvolvedIrradiance(renderer, env);
+            const exposure = typeof envExposure !== 'undefined' ? envExposure : (domeLight ? domeLight.exposure : 1);
+            const rotRad = typeof envRotationRad !== 'undefined' ? envRotationRad : 0;
+            const envMatrix = new THREE.Matrix4().makeRotationY(Math.PI / 2 + rotRad);
+            const keyDirWorld = (env && env.keyLight && env.keyLight.direction)
+                ? env.keyLight.direction.clone().applyMatrix4(new THREE.Matrix4().makeRotationY(-rotRad))
+                : null;
+            const eStored = makeEStoredSampler(env, exposure, envMatrix, keyDirWorld);
+            if (!eStored) return null;
+            return { eStored };
+        };
+        // Turns a shadeBounce() result into the live DataTexture3D/scale/tint
+        // state and disposes the previous texture. Shared by
+        // buildSkyBounceVolume (first bake) and reshadeSkyBounce (re-shade
+        // only, on an environment change).
+        const adoptSkyBounceShaded = (shaded, dim, min, size, cell, ms) => {
             if (skyBounceTexture) { try { skyBounceTexture.dispose(); } catch (e) {} }
-            skyBounceTexture = null;
-            skyBounceMin = null;
-            skyBounceSize = null;
-            skyBounceCell = 0;
-            skyBounceInfo = null;
-            if (!bounceEnabled || !window.UsdSceneSkyVisibility || !window.buildSkyBounce || !THREE.DataTexture3D) return null;
-            if (!skyResult || !skyResult.data || !skyResult.voxels) return null;
-            if (!sceneRoot || !stageBox || stageBox.isEmpty()) return null;
-            const meshes = [];
-            sceneRoot.traverse((object) => {
-                if (!object.isMesh || !object.geometry) return;
-                if (object.userData && object.userData.excludeFromFrame) return;
-                const opacity = sceneObjectPrepassCoverage(object);
-                if (opacity === 0) return;
-                meshes.push({ geometry: object.geometry, matrixWorld: object.matrixWorld, opacity, albedo: sceneBounceAlbedo(object) });
-            });
-            if (!meshes.length) return null;
-            const started = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
-            let albedoVoxels = null;
-            let result = null;
-            try {
-                albedoVoxels = window.UsdSceneSkyVisibility.voxelizeStage(meshes, stageBox, { resolution: skyResult.voxels.resolution, albedo: true });
-                if (albedoVoxels) {
-                    result = window.buildSkyBounce(meshes, stageBox, { voxels: albedoVoxels, visibility: skyResult.data, rays: 32 });
-                }
-            } catch (error) {
-                const note = 'Diffuse bounce bake failed: ' + (error && error.message || error);
-                if (warnings.indexOf(note) < 0) warnings.push(note);
-                return null;
-            }
-            if (!result) return null;
-            const texture = new THREE.DataTexture3D(result.data, result.dim[0], result.dim[1], result.dim[2]);
+            const texture = new THREE.DataTexture3D(shaded.data, dim[0], dim[1], dim[2]);
             texture.format = THREE.RGBAFormat;
             texture.type = THREE.UnsignedByteType;
             texture.minFilter = THREE.LinearFilter;
@@ -5501,11 +5530,94 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             texture.unpackAlignment = 1;
             texture.needsUpdate = true;
             skyBounceTexture = texture;
-            skyBounceCell = result.cell;
-            skyBounceMin = new THREE.Vector3(result.min[0], result.min[1], result.min[2]);
-            skyBounceSize = new THREE.Vector3(result.size[0], result.size[1], result.size[2]);
+            skyBounceCell = cell;
+            skyBounceMin = new THREE.Vector3(min[0], min[1], min[2]);
+            skyBounceSize = new THREE.Vector3(size[0], size[1], size[2]);
+            skyBounceScale = shaded.scale;
+            skyBounceTint = new THREE.Vector3(shaded.tint[0], shaded.tint[1], shaded.tint[2]);
+            skyBounceInfo = { dim: dim.slice(), cell, ms };
+        };
+        // Re-runs ONLY the shading pass (js/usd-scene-skyvis.js's
+        // shadeBounce) against the cached geometry pass, on a dome yaw,
+        // exposure or environment change: v3-design.md section 7's split,
+        // avoiding a full re-march (28600 cells x 32 rays) for something
+        // that only changes what each hit's irradiance evaluates to.
+        const reshadeSkyBounce = () => {
+            if (!bounceEnabled || !skyBounceGeometry || !skyBounceVoxels || !window.UsdSceneSkyVisibility) return;
+            const lighting = currentBounceLighting();
+            if (!lighting) return;
+            const started = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+            let shaded = null;
+            try {
+                shaded = window.UsdSceneSkyVisibility.shadeBounce(skyBounceGeometry, skyBounceVoxels, lighting);
+            } catch (error) {
+                const note = 'Diffuse bounce re-shade failed: ' + (error && error.message || error);
+                if (warnings.indexOf(note) < 0) warnings.push(note);
+                return;
+            }
+            if (!shaded) return;
+            const dim = skyBounceVoxels.dim, min = skyBounceVoxels.min;
+            const size = [dim[0] * skyBounceVoxels.cell, dim[1] * skyBounceVoxels.cell, dim[2] * skyBounceVoxels.cell];
             const ms = ((typeof performance !== 'undefined' && performance.now) ? performance.now() - started : 0);
-            skyBounceInfo = { dim: result.dim.slice(), cell: result.cell, ms };
+            adoptSkyBounceShaded(shaded, dim, min, size, skyBounceVoxels.cell, ms);
+        };
+        // Bakes the one-bounce diffuse irradiance volume: GEOMETRY (per-cell
+        // hits, blocked fraction, blocker sky visibility) on the SAME grid
+        // the sky bake used (skyResult is required; this never voxelizes the
+        // stage on its own for the sky term), plus a first SHADING pass
+        // against the current environment. Voxelizes its own copy of the
+        // stage WITH per-mesh RGB albedo and per-cell average normals, since
+        // the sky bake's own voxel grid does not carry either.
+        const buildSkyBounceVolume = (stageBox, skyResult) => {
+            skyBounceGeometry = null;
+            skyBounceVoxels = null;
+            if (!bounceEnabled || !window.UsdSceneSkyVisibility || !window.buildSkyBounce || !THREE.DataTexture3D) {
+                if (skyBounceTexture) { try { skyBounceTexture.dispose(); } catch (e) {} }
+                skyBounceTexture = null; skyBounceMin = null; skyBounceSize = null; skyBounceCell = 0;
+                skyBounceScale = 0; skyBounceTint = new THREE.Vector3(1, 1, 1); skyBounceInfo = null;
+                return null;
+            }
+            if (!skyResult || !skyResult.data || !skyResult.voxels) {
+                const note = '[info] Diffuse bounce bake skipped: no sky visibility bake to share a grid with';
+                if (warnings.indexOf(note) < 0) warnings.push(note);
+                return null;
+            }
+            if (!sceneRoot || !stageBox || stageBox.isEmpty()) return null;
+            const meshes = [];
+            sceneRoot.traverse((object) => {
+                if (!object.isMesh || !object.geometry) return;
+                if (object.userData && object.userData.excludeFromFrame) return;
+                const opacity = sceneObjectPrepassCoverage(object);
+                if (opacity === 0) return;
+                meshes.push({ geometry: object.geometry, matrixWorld: object.matrixWorld, opacity, albedo: sceneBounceAlbedo(object) });
+            });
+            if (!meshes.length) {
+                const note = '[info] Diffuse bounce bake skipped: no eligible meshes';
+                if (warnings.indexOf(note) < 0) warnings.push(note);
+                return null;
+            }
+            const started = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+            const lighting = currentBounceLighting();
+            if (!lighting) {
+                const note = '[info] Diffuse bounce bake skipped: convolved irradiance unavailable (WebGL1, missing float colour buffer, or SH irradiance selected)';
+                if (warnings.indexOf(note) < 0) warnings.push(note);
+                return null;
+            }
+            let result = null;
+            try {
+                const voxels = window.UsdSceneSkyVisibility.voxelizeStage(meshes, stageBox, { resolution: skyResult.voxels.resolution, albedo: true, normals: true });
+                if (voxels && lighting) {
+                    result = window.buildSkyBounce(meshes, stageBox, { voxels, visibility: skyResult.data, rays: 32, lighting });
+                    if (result) { skyBounceVoxels = voxels; skyBounceGeometry = result.geometry; }
+                }
+            } catch (error) {
+                const note = 'Diffuse bounce bake failed: ' + (error && error.message || error);
+                if (warnings.indexOf(note) < 0) warnings.push(note);
+                return null;
+            }
+            if (!result) return null;
+            const ms = ((typeof performance !== 'undefined' && performance.now) ? performance.now() - started : 0);
+            adoptSkyBounceShaded(result, result.dim, result.min, result.size, result.cell, ms);
             const note = '[info] Diffuse bounce baked at ' + result.dim.join('x') + ' in ' + Math.round(ms) + ' ms';
             if (warnings.indexOf(note) < 0) warnings.push(note);
             return result;
@@ -5537,11 +5649,10 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             }
         };
         // Pushes the baked bounce volume onto every live material. Strength
-        // and the reference irradiance are both 0 whenever the setting is
-        // off or nothing is baked yet, which makes the injected
-        // mx_diffuse_bounce_add() early-return an exact no-op.
+        // and the scale are both 0 whenever the setting is off or nothing is
+        // baked yet, which makes the injected mx_diffuse_bounce_add()
+        // early-return an exact no-op.
         const applySkyBounce = () => {
-            const eRef = bounceEnabled ? computeBounceERef(env, typeof envExposure !== 'undefined' ? envExposure : (domeLight ? domeLight.exposure : 1)) : 0;
             for (const material of materials) {
                 const u = material.uniforms;
                 if (!u) continue;
@@ -5550,7 +5661,8 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 if (u.u_skyBounceSize && skyBounceSize) u.u_skyBounceSize.value.copy(skyBounceSize);
                 if (u.u_skyBounceCell) u.u_skyBounceCell.value = skyBounceCell;
                 if (u.u_skyBounceStrength) u.u_skyBounceStrength.value = (bounceEnabled && skyBounceTexture) ? bounceStrength : 0;
-                if (u.u_bounceERef) u.u_bounceERef.value = (bounceEnabled && skyBounceTexture) ? eRef : 0;
+                if (u.u_bounceScale) u.u_bounceScale.value = (bounceEnabled && skyBounceTexture) ? skyBounceScale : 0;
+                if (u.u_bounceTint && skyBounceTint) u.u_bounceTint.value.copy(skyBounceTint);
             }
         };
         const applyShadowMatrix = () => {
@@ -5646,7 +5758,6 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
             aoVolumeMap: aoEnabled ? aoVolumeTexture : null, aoVolumeMin, aoVolumeSize, aoVolumeStrength: aoStrength, aoVolumeCell,
             skyBounceMap: bounceEnabled ? skyBounceTexture : null, skyBounceMin, skyBounceSize, skyBounceStrength: bounceStrength, skyBounceCell,
-            bounceERef: bounceEnabled ? computeBounceERef(env, typeof envExposure !== 'undefined' ? envExposure : (domeLight ? domeLight.exposure : 1)) : 0,
                     envTilt,
                     thicknessScale, refractionTwoSided: true, sceneRadius,
                     envRotationRad, envExposure,
@@ -6638,6 +6749,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             env = next;
             if (environmentBridge && environmentBridge.setEnvironment) environmentBridge.setEnvironment(next);
             applyMaterialEnvironment();
+            reshadeSkyBounce(); applySkyBounce();
             if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
             return true;
         };
@@ -6645,6 +6757,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             envRotationRad = Number(radians) || 0;
             if (environmentBridge && environmentBridge.setEnvRotation) environmentBridge.setEnvRotation(envRotationRad);
             applyMaterialEnvironment();
+            reshadeSkyBounce(); applySkyBounce();
             if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
             return envRotationRad;
         };
@@ -6787,7 +6900,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
         };
         const setSceneBounceStrength = (value) => {
             const next = Number(value);
-            bounceStrength = Number.isFinite(next) ? Math.max(0, Math.min(1, next)) : 0.8;
+            bounceStrength = Number.isFinite(next) ? Math.max(0, Math.min(1, next)) : 1;
             try { if (window.top === window) localStorage.setItem(SCENE_BOUNCE_STRENGTH_KEY, String(bounceStrength)); } catch (e) { /* privacy mode */ }
             applySkyBounce();
             renderFrame();
@@ -6856,6 +6969,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             envExposure = Math.max(0, Number(value) || 0);
             if (environmentBridge && environmentBridge.setEnvExposure) environmentBridge.setEnvExposure(envExposure);
             applyMaterialEnvironment();
+            reshadeSkyBounce(); applySkyBounce();
             if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
             return envExposure;
         };

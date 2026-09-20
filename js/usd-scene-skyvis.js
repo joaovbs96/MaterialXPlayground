@@ -27,6 +27,11 @@
 // which resolves "under the desk", "behind the chair" and "facing the wall"
 // without pretending to resolve contact shading. Contact shading is the screen
 // space pass's job, and the two multiply.
+//
+// The SAME voxel grid also carries a one-bounce diffuse irradiance bake (see
+// bakeBounceGeometry/shadeBounce below): the blockers' own outgoing radiance,
+// not a whole-scene mean, reflected onto every other cell. See
+// scratchpad/displacement-verified/color-parity/bounce/v3-design.md.
 (function () {
     'use strict';
 
@@ -59,11 +64,20 @@
     // running an exact box overlap test: this feeds a visibility estimate, and
     // the sample count is derived from the triangle's own size in cells, so a
     // floor spanning the grid is still filled solidly.
+    //
     // alb is null unless the caller asked for an albedo bake (opts.albedo in
-    // voxelizeStage); albedo is the constant scalar for this triangle's mesh.
-    // Hoisting the null check out of the sample loop keeps the no-albedo path
-    // doing the exact same work as before (see the byte-identity guard test).
-    function rasterizeTriangle(occ, alb, dim, min, inv, ax, ay, az, bx, by, bz, cx, cy, cz, opacity, albedo) {
+    // voxelizeStage): a Float32Array(3*total) of per-cell RGB, one triplet per
+    // cell, written by the sample that wins the occ max-merge (same winner
+    // that owns occ[cell]). nrm is null unless opts.normals asked for it: a
+    // Float32Array(3*total) SUMMED (not max-merged) with this triangle's own
+    // unnormalized normal (cross(edge1,edge2), magnitude 2*area) divided by
+    // the sample count, so a triangle's total contribution over every sample
+    // it touches in a cell approximates its own area-weighted normal
+    // regardless of tessellation density; voxelizeStage normalizes at the end.
+    // Hoisting both null checks out of the sample loop keeps the no-option
+    // path doing the exact same work as before (see the byte-identity guard
+    // test).
+    function rasterizeTriangle(occ, alb, nrm, dim, min, inv, ax, ay, az, bx, by, bz, cx, cy, cz, opacity, albedoRGB) {
         const coverage = Math.max(0, Math.min(1, Number(opacity) || 0));
         const e1 = Math.max(Math.abs(bx - ax), Math.abs(by - ay), Math.abs(bz - az));
         const e2 = Math.max(Math.abs(cx - ax), Math.abs(cy - ay), Math.abs(cz - az));
@@ -71,6 +85,17 @@
         const n = Math.max(1, Math.min(96, Math.ceil(cells * 1.5)));
         const dimX = dim[0], dimY = dim[1], dimZ = dim[2];
         const hasAlbedo = !!alb;
+        const hasNormal = !!nrm;
+        let ntx = 0, nty = 0, ntz = 0, sampleCount = 0;
+        if (hasNormal) {
+            const e1x = bx - ax, e1y = by - ay, e1z = bz - az;
+            const e2x = cx - ax, e2y = cy - ay, e2z = cz - az;
+            ntx = e1y * e2z - e1z * e2y;
+            nty = e1z * e2x - e1x * e2z;
+            ntz = e1x * e2y - e1y * e2x;
+            for (let i = 0; i <= n; i++) sampleCount += (n - i + 1);
+            if (sampleCount < 1) sampleCount = 1;
+        }
         for (let i = 0; i <= n; i++) {
             const u = i / n;
             for (let j = 0; j <= n - i; j++) {
@@ -89,7 +114,16 @@
                 // winning (raising) coverage also owns the albedo, when asked.
                 if (coverage > occ[cell]) {
                     occ[cell] = coverage;
-                    if (hasAlbedo) alb[cell] = albedo;
+                    if (hasAlbedo) {
+                        alb[cell * 3] = albedoRGB[0];
+                        alb[cell * 3 + 1] = albedoRGB[1];
+                        alb[cell * 3 + 2] = albedoRGB[2];
+                    }
+                }
+                if (hasNormal) {
+                    nrm[cell * 3] += ntx / sampleCount;
+                    nrm[cell * 3 + 1] += nty / sampleCount;
+                    nrm[cell * 3 + 2] += ntz / sampleCount;
                 }
             }
         }
@@ -132,12 +166,19 @@
         }
     }
 
-    // Same march as escapeVisibility, plus the index of the first occupied
-    // cell the ray entered (-1 when it escapes). Used by marchBounce to look
-    // up the blocker's own albedo and sky visibility at that cell. Kept as a
-    // separate function so escapeVisibility (and everything that calls it)
-    // stays untouched.
-    function escapeVisibilityHit(occ, dim, sx, sy, sz, dx, dy, dz, maxT) {
+    // Same march as escapeVisibility, plus the index of the first NON-SELF
+    // occupied cell the ray entered (-1 when it escapes or only ever touches
+    // its own origin run). Used by bakeBounceGeometry to look up the
+    // blocker's own albedo/normal/sky-visibility at that cell.
+    //
+    // skipSelfCells (cell units, default 0) discards the entire contiguous
+    // occupied run the ray is IN or FIRST enters within that many cells of
+    // the origin: a ray cast from a cell that is itself part of a blocker
+    // (a floor tile, a thin card) would otherwise immediately re-hit its own
+    // structure and contribute nothing (a "self-hit"), which starves the
+    // bake of the very neighbours it is supposed to see. Once a run starts
+    // at or beyond skipSelfCells it is treated as a normal blocker.
+    function escapeVisibilityHit(occ, dim, sx, sy, sz, dx, dy, dz, maxT, skipSelfCells) {
         const dimX = dim[0], dimY = dim[1], dimZ = dim[2];
         let x = sx, y = sy, z = sz;
         const stepX = dx > 0 ? 1 : -1;
@@ -151,8 +192,10 @@
         let tZ = dz !== 0 ? invZ * 0.5 : Infinity;
         let visibility = 1;
         let occupiedRun = false;
+        let inSkippedRun = false;
         let hitIndex = -1;
         const limit = maxT != null ? maxT : Infinity;
+        const skip = skipSelfCells > 0 ? skipSelfCells : 0;
         // A degenerate direction or maxT cannot make this loop leave the grid
         // (analytically it always does, within dimX+dimY+dimZ steps); this cap
         // is a cheap safety net against any future regression, not a fix for
@@ -163,24 +206,36 @@
                 console.error('[usd-scene-skyvis] escapeVisibilityHit exceeded ' + stepCap + ' steps, aborting the march early');
                 return { visibility, hitIndex };
             }
-            if (Math.min(tX, tY, tZ) > limit) return { visibility, hitIndex };
+            const t = Math.min(tX, tY, tZ);
+            if (t > limit) return { visibility, hitIndex };
             if (tX < tY && tX < tZ) { x += stepX; tX += invX; } else if (tY < tZ) { y += stepY; tY += invY; } else { z += stepZ; tZ += invZ; }
             if (x < 0 || y < 0 || z < 0 || x >= dimX || y >= dimY || z >= dimZ) return { visibility, hitIndex };
             const idx = (z * dimY + y) * dimX + x;
             const coverage = occ[idx];
             if (coverage > 0) {
-                if (!occupiedRun) { visibility *= 1 - coverage; if (hitIndex === -1) hitIndex = idx; }
+                if (!occupiedRun) {
+                    inSkippedRun = t < skip;
+                    if (!inSkippedRun) {
+                        visibility *= 1 - coverage;
+                        if (hitIndex === -1) hitIndex = idx;
+                    }
+                }
                 occupiedRun = true;
-                if (visibility <= 0) return { visibility: 0, hitIndex };
-            } else occupiedRun = false;
+                if (!inSkippedRun && visibility <= 0) return { visibility: 0, hitIndex };
+            } else { occupiedRun = false; inSkippedRun = false; }
         }
     }
 
     // meshes: [{ geometry, matrixWorld, albedo? }]. box: THREE.Box3 of the stage.
     // Returns { occ, dim, min, cell, occupiedFraction, triangles, stride,
     // sampledTriangles, structuralTriangles, subcellTriangles, resolution },
-    // or null when the stage is degenerate. occ is a Float32Array of per-cell
+    // plus .alb / .normals when opts.albedo / opts.normals are requested, or
+    // null when the stage is degenerate. occ is a Float32Array of per-cell
     // opacity, the shared input to marchVisibility.
+    //
+    // mesh.albedo, when opts.albedo is set, is expected as an [r, g, b]
+    // triplet (sceneBounceAlbedo in js/usd-scene-renderer.js); missing or
+    // malformed entries fall back to a neutral [0.5, 0.5, 0.5].
     function voxelizeStage(meshes, box, options) {
         const opts = options || {};
         const resolution = Math.max(8, Math.min(96, opts.resolution || 32));
@@ -204,10 +259,11 @@
         ];
         const total = dim[0] * dim[1] * dim[2];
         const occ = new Float32Array(total);
-        // Only allocated when a bounce bake asks for it: the byte-identity
-        // regression guard requires the no-albedo path to do no extra
+        // Only allocated when a bounce bake asks for them: the byte-identity
+        // regression guard requires the no-option path to do no extra
         // allocation and take no extra branch inside the inner raster loop.
-        const alb = opts.albedo ? new Float32Array(total) : null;
+        const alb = opts.albedo ? new Float32Array(total * 3) : null;
+        const nrm = opts.normals ? new Float32Array(total * 3) : null;
         const inv = 1 / cell;
 
         // Triangle budget. A global stride is unsafe: if a dense decorative
@@ -271,17 +327,57 @@
                 const structural = edgeSpan(world, a, b, c) * inv >= 1;
                 if (!structural && (subcellOrdinal++ % stride) !== 0) continue;
                 sampledTriangles++;
-                rasterizeTriangle(occ, alb, dim, min, inv,
+                const meshAlbedo = alb
+                    ? (Array.isArray(item.mesh && item.mesh.albedo) && item.mesh.albedo.length >= 3
+                        ? item.mesh.albedo : [0.5, 0.5, 0.5])
+                    : undefined;
+                rasterizeTriangle(occ, alb, nrm, dim, min, inv,
                     world[a * 3], world[a * 3 + 1], world[a * 3 + 2],
                     world[b * 3], world[b * 3 + 1], world[b * 3 + 2],
                     world[c * 3], world[c * 3 + 1], world[c * 3 + 2],
                     item.mesh && item.mesh.opacity != null ? item.mesh.opacity : 1,
-                    alb ? (item.mesh && item.mesh.albedo != null ? item.mesh.albedo : 0.5) : undefined);
+                    meshAlbedo);
             }
         }
 
         let occupied = 0;
         for (let i = 0; i < total; i++) if (occ[i]) occupied++;
+
+        // Normalize the accumulated per-cell normal sum. A cell with no
+        // accumulated normal (no triangle sample landed exactly on it, or the
+        // sums cancelled) falls back to the negated central-difference
+        // gradient of occ: occ increases INTO solid material, so -grad(occ)
+        // points away from it, which is the right sense for a surface normal.
+        if (nrm) {
+            const dimX = dim[0], dimY = dim[1], dimZ = dim[2];
+            const occAt = (x, y, z) => {
+                if (x < 0 || y < 0 || z < 0 || x >= dimX || y >= dimY || z >= dimZ) return 0;
+                return occ[(z * dimY + y) * dimX + x];
+            };
+            for (let z = 0; z < dimZ; z++) {
+                for (let y = 0; y < dimY; y++) {
+                    for (let x = 0; x < dimX; x++) {
+                        const idx = (z * dimY + y) * dimX + x;
+                        const o = idx * 3;
+                        const len = Math.hypot(nrm[o], nrm[o + 1], nrm[o + 2]);
+                        if (len > 1e-8) {
+                            nrm[o] /= len; nrm[o + 1] /= len; nrm[o + 2] /= len;
+                        } else {
+                            const gx = occAt(x + 1, y, z) - occAt(x - 1, y, z);
+                            const gy = occAt(x, y + 1, z) - occAt(x, y - 1, z);
+                            const gz = occAt(x, y, z + 1) - occAt(x, y, z - 1);
+                            const glen = Math.hypot(gx, gy, gz);
+                            if (glen > 1e-8) {
+                                nrm[o] = -gx / glen; nrm[o + 1] = -gy / glen; nrm[o + 2] = -gz / glen;
+                            }
+                            // else: an isolated cell with no gradient information
+                            // at all is left at (0,0,0), a documented resolution
+                            // limit rather than a fabricated direction.
+                        }
+                    }
+                }
+            }
+        }
 
         const result = {
             occ,
@@ -297,6 +393,7 @@
             resolution,
         };
         if (alb) result.alb = alb;
+        if (nrm) result.normals = nrm;
         return result;
     }
 
@@ -381,73 +478,163 @@
         };
     }
 
-    // voxels: a voxelizeStage() result baked WITH opts.albedo (needs its .alb
-    // array; returns null otherwise). visibilityData: the RGBA8 Uint8Array
-    // from the sky bake at the SAME voxel grid (marchVisibility's .data, or
-    // buildSkyVisibility's .data), used to look up each blocker's own sky
-    // visibility. For every cell and every one of the same ray directions
-    // marchVisibility casts, this reuses escapeVisibilityHit instead of
-    // escapeVisibility: a ray that escapes contributes nothing (the sky term
-    // already covers it, unoccluded), and a ray that hits a surface
-    // contributes that surface's own (albedo * sky visibility), weighted by
-    // how much of the ray's path was blocked. That keeps the sky term and
-    // the bounce term disjoint by construction: nothing is double counted.
-    function marchBounce(voxels, visibilityData, options) {
+    // GEOMETRY pass of the one-bounce diffuse irradiance bake (v3-design.md
+    // section 5/7). Depends only on the voxel grid and the sky bake's own
+    // per-cell visibility, never on the environment/exposure, so it is cached
+    // by the caller (js/usd-scene-renderer.js's buildSkyBounceVolume) and
+    // re-run only when geometry rebuilds, not when the dome yaw or exposure
+    // changes.
+    //
+    // voxels: a voxelizeStage() result baked WITH opts.normals (needs its
+    // .normals array; returns null otherwise -- .alb is only needed later, by
+    // shadeBounce). visibilityData: the sky bake's RGBA8 Uint8Array at the
+    // SAME voxel grid (marchVisibility's .data / buildSkyVisibility's .data).
+    //
+    // For every cell and every one of the same ray directions marchVisibility
+    // casts, casts via escapeVisibilityHit (with opts.skipSelfCells, default
+    // 1 cell, discarding the blocker's own contiguous run so a surface cell
+    // does not "see" only itself). Returns
+    // { hitIndex: Int32Array(cells*rays), blocked: Float32Array(cells*rays),
+    //   blockerVis: Float32Array(cells*rays), rays, dirs }. blockerVis is the
+    // hit cell's OWN mean sky visibility (visibilityData[hit*4]/255), read
+    // once here because it too is a purely geometric quantity (the sky bake
+    // does not depend on the environment either) and is what shadeBounce's
+    // key-light gating multiplies by.
+    function bakeBounceGeometry(voxels, visibilityData, options) {
         const opts = options || {};
-        const { occ, alb, dim, cell } = voxels;
-        if (!alb || !visibilityData) return null;
+        if (!voxels || !voxels.normals || !visibilityData) return null;
+        const { occ, dim, cell } = voxels;
         const requestedRays = Math.floor(Math.max(8, Math.min(128, Number(opts.rays) || 32)));
         const rayCount = requestedRays % 2 === 0 ? requestedRays : (requestedRays < 128 ? requestedRays + 1 : requestedRays - 1);
         const maxDistance = Number(opts.maxDistance);
         const maxT = (Number.isFinite(maxDistance) && maxDistance > 0 && cell > 0) ? maxDistance / cell : Infinity;
+        const skipSelfCells = Number.isFinite(opts.skipSelfCells) ? opts.skipSelfCells : 1.0;
         const dirs = sphereDirections(rayCount);
         const total = dim[0] * dim[1] * dim[2];
-        const data = new Uint8Array(total * 4);
+        const hitIndex = new Int32Array(total * rayCount);
+        const blocked = new Float32Array(total * rayCount);
+        const blockerVis = new Float32Array(total * rayCount);
         for (let z = 0; z < dim[2]; z++) {
             for (let y = 0; y < dim[1]; y++) {
                 for (let x = 0; x < dim[0]; x++) {
-                    const idx = (z * dim[1] + y) * dim[0] + x;
-                    let sum = 0, dirX = 0, dirY = 0, dirZ = 0;
+                    const cellIdx = (z * dim[1] + y) * dim[0] + x;
+                    const base = cellIdx * rayCount;
                     for (let r = 0; r < rayCount; r++) {
                         const dx = dirs[r * 3], dy = dirs[r * 3 + 1], dz = dirs[r * 3 + 2];
-                        const hit = escapeVisibilityHit(occ, dim, x, y, z, dx, dy, dz, maxT);
-                        let contribution = 0;
+                        const hit = escapeVisibilityHit(occ, dim, x, y, z, dx, dy, dz, maxT, skipSelfCells);
+                        const o = base + r;
                         if (hit.hitIndex !== -1) {
-                            const blockerVisibility = visibilityData[hit.hitIndex * 4] / 255;
-                            contribution = (1 - hit.visibility) * alb[hit.hitIndex] * blockerVisibility;
+                            hitIndex[o] = hit.hitIndex;
+                            blocked[o] = Math.max(0, Math.min(1, 1 - hit.visibility));
+                            blockerVis[o] = visibilityData[hit.hitIndex * 4] / 255;
+                        } else {
+                            hitIndex[o] = -1;
                         }
-                        sum += contribution;
-                        dirX += dx * contribution;
-                        dirY += dy * contribution;
-                        dirZ += dz * contribution;
                     }
-                    const a = sum / rayCount;
-                    const encodeMoment = (s) => Math.round(128 + 127 * Math.max(-1, Math.min(1, 2 * s / rayCount)));
-                    const o = idx * 4;
-                    data[o] = Math.round(255 * Math.max(0, Math.min(1, a)));
-                    data[o + 1] = encodeMoment(dirX);
-                    data[o + 2] = encodeMoment(dirY);
-                    data[o + 3] = encodeMoment(dirZ);
                 }
             }
         }
-        return { data, rayCount };
+        return { hitIndex, blocked, blockerVis, rays: rayCount, dirs };
     }
 
-    // opts.voxels: the sky bake's own voxel grid, REBAKED with opts.albedo so
-    // it carries .alb (see buildSkyBounceVolume in usd-scene-renderer.js,
-    // which voxelizes once for both). opts.visibility: the sky bake's RGBA8
-    // data at that same grid. Returns null (never re-voxelizes on its own)
-    // when either is missing, matching buildSkyVisibility's shape otherwise.
+    // SHADING pass of the one-bounce bake. Depends on the environment
+    // (lighting.eStored) and is cheap to re-run alone (one irradiance sample
+    // per cached hit, no re-marching) whenever the dome yaw, exposure or
+    // environment changes -- the reason bakeBounceGeometry and shadeBounce
+    // are two functions instead of one.
+    //
+    // geometry: a bakeBounceGeometry() result. voxels: the SAME voxelizeStage
+    // result (needs its .alb, the per-cell RGB albedo). lighting.eStored is a
+    // function(nx, ny, nz, Vb) -> [r, g, b] returning the stored-unit (already
+    // divided by pi, see makeEStoredSampler in js/usd-scene-renderer.js)
+    // irradiance a surface with that normal and own sky visibility Vb would
+    // receive: the convolved dome term plus the key light's own contribution,
+    // gated by Vb per v3-design.md section 6.
+    //
+    // Per cell, per ray: L = blocked * albedoRGB[hit] * eStored(normal[hit],
+    // blockerVis[hit]). Accumulates a scalar SH1 (L0 = mean luminance, L1 =
+    // 2 * mean(luminance * rayDirection), one RGBA8 sampler3D per
+    // v3-design.md section 4) plus ONE global albedo-weighted mean chroma
+    // (u_bounceTint), normalized to luminance 1, and a single global scale
+    // (the bake's own reconstructed maximum) so the UNORM8 encoding spans the
+    // real range instead of clamping at 1.
+    function shadeBounce(geometry, voxels, lighting) {
+        if (!geometry || !voxels || !voxels.alb || !voxels.normals || !lighting
+            || typeof lighting.eStored !== 'function') return null;
+        const { hitIndex, blocked, blockerVis, rays, dirs } = geometry;
+        const { alb, normals, dim } = voxels;
+        const total = dim[0] * dim[1] * dim[2];
+        const lum = (r, g, b) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        const l0 = new Float32Array(total);
+        const l1x = new Float32Array(total), l1y = new Float32Array(total), l1z = new Float32Array(total);
+        let tintR = 0, tintG = 0, tintB = 0;
+        let maxRecon = 0;
+        for (let idx = 0; idx < total; idx++) {
+            const base = idx * rays;
+            let sumLum = 0, mx = 0, my = 0, mz = 0;
+            for (let r = 0; r < rays; r++) {
+                const o = base + r;
+                const hit = hitIndex[o];
+                if (hit === -1) continue;
+                const b = blocked[o];
+                if (b <= 0) continue;
+                const hb = hit * 3;
+                const e = lighting.eStored(normals[hb], normals[hb + 1], normals[hb + 2], blockerVis[o]);
+                const Lr = b * alb[hb] * e[0];
+                const Lg = b * alb[hb + 1] * e[1];
+                const Lb = b * alb[hb + 2] * e[2];
+                const l = lum(Lr, Lg, Lb);
+                if (l <= 0) continue;
+                sumLum += l;
+                const dx = dirs[r * 3], dy = dirs[r * 3 + 1], dz = dirs[r * 3 + 2];
+                mx += l * dx; my += l * dy; mz += l * dz;
+                tintR += l * Lr; tintG += l * Lg; tintB += l * Lb;
+            }
+            const meanLum = sumLum / rays;
+            const mlx = 2 * mx / rays, mly = 2 * my / rays, mlz = 2 * mz / rays;
+            l0[idx] = meanLum;
+            l1x[idx] = mlx; l1y[idx] = mly; l1z[idx] = mlz;
+            const recon = meanLum + Math.hypot(mlx, mly, mlz);
+            if (recon > maxRecon) maxRecon = recon;
+        }
+        const scale = maxRecon > 1e-8 ? maxRecon : 1;
+        const data = new Uint8Array(total * 4);
+        const encode = (v) => Math.round(128 + 127 * Math.max(-1, Math.min(1, v / scale)));
+        for (let idx = 0; idx < total; idx++) {
+            const o = idx * 4;
+            data[o] = Math.round(255 * Math.max(0, Math.min(1, l0[idx] / scale)));
+            data[o + 1] = encode(l1x[idx]);
+            data[o + 2] = encode(l1y[idx]);
+            data[o + 3] = encode(l1z[idx]);
+        }
+        const tintLum = lum(tintR, tintG, tintB);
+        const tint = tintLum > 1e-8 ? [tintR / tintLum, tintG / tintLum, tintB / tintLum] : [1, 1, 1];
+        return { data, scale, tint, rayCount: rays };
+    }
+
+    // opts.voxels: the sky bake's own voxel grid, REBAKED with opts.albedo
+    // AND opts.normals so it carries .alb/.normals (see buildSkyBounceVolume
+    // in js/usd-scene-renderer.js, which voxelizes once for both). opts.
+    // visibility: the sky bake's RGBA8 data at that same grid. opts.lighting:
+    // see shadeBounce. Returns null (never re-voxelizes on its own) when any
+    // of the three is missing, matching buildSkyVisibility's shape otherwise
+    // plus { scale, tint, geometry } (geometry is exposed so the caller can
+    // cache it and call shadeBounce again on its own after an environment
+    // change, without a second bakeBounceGeometry pass).
     function buildSkyBounce(meshes, box, options) {
         const opts = options || {};
         const voxels = opts.voxels;
         const visibility = opts.visibility;
-        if (!voxels || !voxels.alb || !visibility) return null;
-        const marched = marchBounce(voxels, visibility, { rays: opts.rays, maxDistance: opts.maxDistance });
-        if (!marched) return null;
+        const lighting = opts.lighting;
+        if (!voxels || !voxels.alb || !voxels.normals || !visibility || !lighting) return null;
+        const geometry = bakeBounceGeometry(voxels, visibility, { rays: opts.rays, maxDistance: opts.maxDistance, skipSelfCells: opts.skipSelfCells });
+        if (!geometry) return null;
+        const shaded = shadeBounce(geometry, voxels, lighting);
+        if (!shaded) return null;
         return {
-            data: marched.data,
+            data: shaded.data,
+            scale: shaded.scale,
+            tint: shaded.tint,
             channels: 4,
             format: 'rgba8',
             dim: voxels.dim,
@@ -455,10 +642,14 @@
             cell: voxels.cell,
             size: [voxels.dim[0] * voxels.cell, voxels.dim[1] * voxels.cell, voxels.dim[2] * voxels.cell],
             voxels,
+            geometry,
         };
     }
 
     window.buildSkyVisibility = buildSkyVisibility;
     window.buildSkyBounce = buildSkyBounce;
-    window.UsdSceneSkyVisibility = { build: buildSkyVisibility, voxelizeStage, marchVisibility, marchBounce, buildSkyBounce };
+    window.UsdSceneSkyVisibility = {
+        build: buildSkyVisibility, voxelizeStage, marchVisibility,
+        bakeBounceGeometry, shadeBounce, buildSkyBounce,
+    };
 })();
