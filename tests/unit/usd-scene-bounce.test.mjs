@@ -281,11 +281,17 @@ function loadPatchDiffuseBounceAdd() {
 // is under test.
 function loadBothPatches() {
   const source = fs.readFileSync(path.join(ROOT, 'js', 'mtlx-engine.js'), 'utf8');
+  // patchAmbientOcclusion now calls ensureEnvOcclusionGlobal (the local
+  // reflections' occlusion-compensation global, see
+  // scratchpad/displacement-verified/reflections/design.md section 5.6),
+  // declared just above it; include it so this standalone extraction still
+  // resolves that reference.
+  const helperStart = source.indexOf('const ensureEnvOcclusionGlobal =');
   const start = source.indexOf('const patchAmbientOcclusion =');
   const end = source.indexOf('const patchSceneThinWalledTransmission =', start);
-  assert.ok(start >= 0 && end > start);
+  assert.ok(helperStart >= 0 && helperStart < start && end > start);
   const context = {};
-  vm.runInNewContext(source.slice(start, end)
+  vm.runInNewContext(source.slice(helperStart, start) + source.slice(start, end)
     + '\nthis.patchAmbientOcclusion = patchAmbientOcclusion; this.patchDiffuseBounceAdd = patchDiffuseBounceAdd;',
     context, { filename: 'mtlx-engine.js' });
   return context;

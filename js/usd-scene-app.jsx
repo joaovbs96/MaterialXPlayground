@@ -621,6 +621,10 @@
         const [ssrMaxRoughness, setSsrMaxRoughness] = React.useState(0.5);
         const [skyVisOn, setSkyVisOn] = React.useState(true);
         const [skyVisStrength, setSkyVisStrength] = React.useState(1);
+        // Local reflections: off by default (storedSceneLocalReflections in
+        // js/usd-scene-renderer.js), never on in an embed.
+        const [localEnvOn, setLocalEnvOn] = React.useState(false);
+        const [localEnvStrength, setLocalEnvStrength] = React.useState(1);
         // Render settings popover: replaces the old sidebar Rendering card.
         // Tab is persisted so a reopen lands where the user left it.
         const RENDER_TAB_KEY = 'mtlx_scene_render_settings_tab';
@@ -933,6 +937,11 @@
                         setSsrStrength(ssr.strength);
                         setSsrMaxRoughness(ssr.maxRoughness);
                     }
+                    if (nextHandle.getLocalReflections) {
+                        const localEnv = nextHandle.getLocalReflections();
+                        setLocalEnvOn(localEnv.enabled);
+                        setLocalEnvStrength(localEnv.strength);
+                    }
                     const transparencyEnabled = typeof window.getUsdSceneTransparency === 'function'
                         ? !!window.getUsdSceneTransparency() : sceneTransparency;
                     if (nextHandle.getTransparentPrims && transparencyEnabled) {
@@ -1157,6 +1166,12 @@
             if (!Number.isFinite(value)) return;
             setSkyVisStrength(value);
             callHandle('setSkyVisibilityStrength', value);
+        };
+        const applyLocalEnvStrength = (raw) => {
+            const value = Math.max(0, Math.min(1, Number(raw)));
+            if (!Number.isFinite(value)) return;
+            setLocalEnvStrength(value);
+            callHandle('setLocalReflectionStrength', value);
         };
         const applyStageLightsEv = (raw) => {
             const value = Math.max(-8, Math.min(8, Number(raw)));
@@ -1484,6 +1499,16 @@
                     <SliderRow description="How strongly the baked bounce term fills back in.">
                         <SliderField label="Diffuse bounce strength" value={bounceStrength} min={0} max={1} step={0.05}
                             onSlider={applyBounceStrength} onNumber={applyBounceStrength} />
+                    </SliderRow>
+                ) : null}
+                <ToggleRow label="Local reflections" experimental checked={localEnvOn}
+                    title={localEnvOn ? 'Turn the local reflection capture off' : 'Reflect the captured studio set instead of only the environment'}
+                    onChange={(next) => { setLocalEnvOn(next); callHandle('setLocalReflections', next); writeStoredSceneBool('mtlx_scene_local_reflections', next); }}
+                    description="Reflections only show the environment, so the floor and the wall of a studio set never appear in a metal or a glossy surface. This captures the scene once from the subject and reflects that instead wherever it covers the sky." />
+                {localEnvOn ? (
+                    <SliderRow description="How strongly the captured local reflection blends in.">
+                        <SliderField label="Local reflection strength" value={localEnvStrength} min={0} max={1} step={0.05}
+                            onSlider={applyLocalEnvStrength} onNumber={applyLocalEnvStrength} />
                     </SliderRow>
                 ) : null}
                 {SSR_ROWS_HIDDEN ? null : (<React.Fragment>

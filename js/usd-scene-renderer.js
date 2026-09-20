@@ -183,6 +183,30 @@ const storedSceneSsrMaxRoughness = () => {
     } catch (e) { return 0.5; }
 };
 
+// Local environment reflections: a static per-stage cubemap capture (see
+// js/usd-scene-localenv.js and scratchpad/displacement-verified/reflections/
+// design.md) substituted into the generated environment radiance lookup, so
+// a reflective surface sees the studio set it is actually sitting in
+// (floor, walls) rather than only the dome. Off by default until the
+// verification captures land; flip the '===' to '!==' to default it on.
+// Never on in an embed, same guard shape as SSR/bounce/sky-vis above.
+const SCENE_LOCAL_ENV_PARKED = false;
+const SCENE_LOCAL_ENV_KEY = 'mtlx_scene_local_reflections';
+const SCENE_LOCAL_ENV_STRENGTH_KEY = 'mtlx_scene_local_reflections_strength';
+const storedSceneLocalReflections = () => {
+    if (SCENE_LOCAL_ENV_PARKED || window.top !== window) return false;
+    try { return localStorage.getItem(SCENE_LOCAL_ENV_KEY) === '1'; } catch (e) { return false; }
+};
+const storedSceneLocalReflectionStrength = () => {
+    if (window.top !== window) return 1;
+    try {
+        const raw = localStorage.getItem(SCENE_LOCAL_ENV_STRENGTH_KEY);
+        if (raw == null || raw === '') return 1;
+        const value = Number(raw);
+        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1;
+    } catch (e) { return 1; }
+};
+
 // Default on. Shadows are what makes objects sit in a scene rather than float
 // in it, and the cost is bounded: the atlas is redrawn only when the camera
 // actually moves, and the caster count drops on very large stages.
@@ -1782,6 +1806,22 @@ const createMtlxSceneView = async ({
     let skyBounceInfo = null;
     let bounceEnabled = storedSceneBounce();
     let bounceStrength = storedSceneBounceStrength();
+    // Static local environment capture (js/usd-scene-localenv.js): a 512x256
+    // RGBA16F lat-long DataTexture, RGB premultiplied by A (captured
+    // coverage). Rebuilt on stage/geometry/material/environment change via
+    // localEnvDirty, consumed once at the top of renderFrame rather than
+    // inline, so an environment-rotation drag does not re-run six face
+    // renders and a prefilter chain every frame.
+    let localEnvTexture = null;
+    let localEnvMips = 1;
+    let localEnvProbe = null;
+    let localEnvBoxMin = null;
+    let localEnvBoxMax = null;
+    let localEnvParallax = 0;
+    let localEnvEnabled = storedSceneLocalReflections();
+    let localEnvStrength = storedSceneLocalReflectionStrength();
+    let localEnvInfo = null;
+    let localEnvDirty = false;
     let sceneDisplayTransform = storedSceneDisplayTransform();
     let materialWorkspace = storedSceneMaterialWorkspace();
     let shadowsEnabled = storedSceneShadows();
@@ -2913,6 +2953,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             aoVolumeMap: aoEnabled ? aoVolumeTexture : null, aoVolumeMin, aoVolumeSize, aoVolumeStrength: aoStrength, aoVolumeCell,
             skyBounceMap: bounceEnabled ? skyBounceTexture : null, skyBounceMin, skyBounceSize, skyBounceStrength: bounceStrength, skyBounceCell,
             bounceScale: bounceEnabled ? skyBounceScale : 0, bounceTint: bounceEnabled ? skyBounceTint : null,
+            localEnvMap: localEnvEnabled ? localEnvTexture : null, localEnvMips, localEnvStrength, localEnvProbe, localEnvBoxMin, localEnvBoxMax, localEnvParallax,
             envTilt,
             thicknessScale, refractionTwoSided: true, sceneRadius,
             environmentIndirectScale: shadowDiagnostic ? shadowDiagnostic.environmentIndirectScale : 1,
@@ -5643,6 +5684,69 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             if (warnings.indexOf(note) < 0) warnings.push(note);
             return result;
         };
+        // Static local environment capture: six 256x256 renders of the live
+        // (already-lit) stage from a probe at its centre, with every
+        // material's own local-env term forced to 0 so the capture cannot
+        // recurse, reprojected to a 512x256 lat-long map and GGX-prefiltered
+        // by the same mip-to-alpha convention as the dome's own chain. See
+        // js/usd-scene-localenv.js and
+        // scratchpad/displacement-verified/reflections/design.md section 5.
+        // Safe-fail: any missing dependency or thrown error leaves the
+        // texture null, which is an exact no-op at the shader (strength
+        // forced to 0 in applyLocalEnv below).
+        const buildLocalEnvCapture = (box) => {
+            if (localEnvTexture) { try { localEnvTexture.dispose(); } catch (e) {} }
+            localEnvTexture = null; localEnvMips = 1; localEnvProbe = null;
+            localEnvBoxMin = null; localEnvBoxMax = null; localEnvParallax = 0; localEnvInfo = null;
+            if (!localEnvEnabled || !window.UsdSceneLocalEnv || !window.UsdSceneLocalEnv.capture) return null;
+            if (!sceneRoot || !renderer || !box || box.isEmpty()) return null;
+            let result = null;
+            try {
+                result = window.UsdSceneLocalEnv.capture(renderer, scene, {
+                    stageBox: box,
+                    sceneRadius,
+                    materials,
+                    beginSceneLinear,
+                });
+            } catch (error) {
+                const note = 'Local reflection capture failed: ' + (error && error.message || error);
+                if (warnings.indexOf(note) < 0) warnings.push(note);
+                return null;
+            }
+            if (!result || !result.texture) return null;
+            localEnvTexture = result.texture;
+            localEnvMips = result.mips || 1;
+            localEnvProbe = result.probe || null;
+            localEnvBoxMin = result.boxMin || null;
+            localEnvBoxMax = result.boxMax || null;
+            localEnvParallax = result.parallax ? 1 : 0;
+            localEnvInfo = { ms: result.ms || 0, coverage: result.coverage || 0 };
+            const note = '[info] Local reflection capture baked in ' + Math.round(result.ms || 0) + ' ms';
+            if (warnings.indexOf(note) < 0) warnings.push(note);
+            return result;
+        };
+        // Pushes the baked local environment capture onto every live
+        // material without a rebuild. Strength is forced to 0 whenever the
+        // setting is off or nothing has been baked yet, which makes the
+        // injected mx_local_env_mix's early return an exact no-op.
+        const applyLocalEnv = () => {
+            for (const material of materials) {
+                const u = material.uniforms;
+                if (!u) continue;
+                if (u.u_localEnvRadiance) u.u_localEnvRadiance.value = (localEnvEnabled && localEnvTexture) ? localEnvTexture : (window.getDummyTexWhite ? window.getDummyTexWhite() : u.u_localEnvRadiance.value);
+                if (u.u_localEnvMips) u.u_localEnvMips.value = localEnvMips;
+                if (u.u_localEnvStrength) u.u_localEnvStrength.value = (localEnvEnabled && localEnvTexture) ? localEnvStrength : 0;
+                if (u.u_localEnvProbe && localEnvProbe) u.u_localEnvProbe.value.copy(localEnvProbe);
+                if (u.u_localEnvBoxMin && localEnvBoxMin) u.u_localEnvBoxMin.value.copy(localEnvBoxMin);
+                if (u.u_localEnvBoxMax && localEnvBoxMax) u.u_localEnvBoxMax.value.copy(localEnvBoxMax);
+                if (u.u_localEnvParallax) u.u_localEnvParallax.value = localEnvParallax;
+            }
+        };
+        // Marks the capture stale without rebuilding inline; renderFrame
+        // consumes this once per dirty event, so an environment-rotation
+        // slider or a material replacement never re-triggers six face
+        // renders per frame while it is being dragged.
+        const markLocalEnvDirty = () => { localEnvDirty = true; };
         // Pushes the baked volume onto every live material without a rebuild.
         const applySkyVisibility = () => {
             for (const material of materials) {
@@ -5779,6 +5883,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             skyVisMap: skyVisEnabled ? skyVisTexture : null, skyVisMin, skyVisSize, skyVisStrength, skyVisCell,
             aoVolumeMap: aoEnabled ? aoVolumeTexture : null, aoVolumeMin, aoVolumeSize, aoVolumeStrength: aoStrength, aoVolumeCell,
             skyBounceMap: bounceEnabled ? skyBounceTexture : null, skyBounceMin, skyBounceSize, skyBounceStrength: bounceStrength, skyBounceCell,
+            localEnvMap: localEnvEnabled ? localEnvTexture : null, localEnvMips, localEnvStrength, localEnvProbe, localEnvBoxMin, localEnvBoxMax, localEnvParallax,
                     envTilt,
                     thicknessScale, refractionTwoSided: true, sceneRadius,
                     envRotationRad, envExposure,
@@ -5787,7 +5892,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                     lightScales: diagnosticLightScales(),
                 });
                 for (const [name, slot] of Object.entries(next)) {
-                    if (!(/^(?:u_env|u_lightData$|u_numActiveLightSources$)/).test(name) || !material.uniforms[name]) continue;
+                    if (!(/^(?:u_env|u_localEnv|u_lightData$|u_numActiveLightSources$)/).test(name) || !material.uniforms[name]) continue;
                     const current = material.uniforms[name].value;
                     if ((current && current.isTexture) || (slot.value && slot.value.isTexture)) material.uniforms[name].value = slot.value;
                     else if (current && typeof current.copy === 'function' && slot.value && typeof slot.value.copy === 'function') current.copy(slot.value);
@@ -6150,6 +6255,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             if (emitProgress) reportRendererStep('bounce-volume');
             buildSkyBounceVolume(stageBox, skyBakeResult);
             applySkyBounce();
+            markLocalEnvDirty();
             if (shadowsEnabled) { if (emitProgress) reportRendererStep('shadow-atlas'); updateShadowMap(); }
             applyMaterialEnvironment();
         };
@@ -6436,6 +6542,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                     environmentBridge.refreshDisplayTransform();
                 }
                 applyMaterialEnvironment();
+                markLocalEnvDirty();
                 displayDirty = targetRevision !== displayRevision;
                 if (!displayDirty) {
                     rebuildingProvisional = null;
@@ -6609,6 +6716,14 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             // sync to hidden keep-alive views) cannot re-allocate transient
             // targets. setActive(true) renders the catch-up frame itself.
             if (!active) return;
+            // Consumed once per dirty event rather than every frame: the
+            // capture is six extra draws plus a prefilter chain, so this
+            // must not re-run while an environment slider is being dragged.
+            if (localEnvDirty) {
+                localEnvDirty = false;
+                buildLocalEnvCapture(stageBox);
+                applyLocalEnv();
+            }
             ensureShadowCurrent();
             const callerTarget = renderer.getRenderTarget();
             const outputSize = callerTarget
@@ -6771,6 +6886,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             if (environmentBridge && environmentBridge.setEnvironment) environmentBridge.setEnvironment(next);
             applyMaterialEnvironment();
             reshadeSkyBounce(); applySkyBounce();
+            markLocalEnvDirty();
             if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
             return true;
         };
@@ -6779,6 +6895,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             if (environmentBridge && environmentBridge.setEnvRotation) environmentBridge.setEnvRotation(envRotationRad);
             applyMaterialEnvironment();
             reshadeSkyBounce(); applySkyBounce();
+            markLocalEnvDirty();
             if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
             return envRotationRad;
         };
@@ -6979,6 +7096,35 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 reason: (!historyValid && encodedFallback) ? 'encoded-fallback: scene-linear presentation is unavailable' : null,
             };
         };
+        // Local environment reflections: enabling re-bakes only if nothing
+        // is captured yet (the texture is kept, not dropped, while off, so
+        // re-enabling within the same stage is instant).
+        const setLocalReflections = (on) => {
+            const next = !SCENE_LOCAL_ENV_PARKED && !!on;
+            if (next === localEnvEnabled) return localEnvEnabled;
+            localEnvEnabled = next;
+            try { if (window.top === window) localStorage.setItem(SCENE_LOCAL_ENV_KEY, localEnvEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            if (localEnvEnabled && !localEnvTexture) markLocalEnvDirty();
+            applyLocalEnv();
+            renderFrame();
+            return localEnvEnabled;
+        };
+        const setLocalReflectionStrength = (value) => {
+            const next = Number(value);
+            localEnvStrength = Number.isFinite(next) ? Math.max(0, Math.min(1, next)) : 1;
+            try { if (window.top === window) localStorage.setItem(SCENE_LOCAL_ENV_STRENGTH_KEY, String(localEnvStrength)); } catch (e) { /* privacy mode */ }
+            applyLocalEnv();
+            renderFrame();
+            return localEnvStrength;
+        };
+        const getLocalReflections = () => ({
+            enabled: localEnvEnabled,
+            ready: !!localEnvTexture,
+            strength: localEnvStrength,
+            coverage: localEnvInfo ? localEnvInfo.coverage : null,
+            ms: localEnvInfo ? localEnvInfo.ms : null,
+            reason: !localEnvEnabled ? 'off' : (localEnvTexture ? null : 'not baked'),
+        });
         const setStageLightsEnabled = (on) => {
             stageLightsEnabled = !!on;
             try { if (window.top === window) localStorage.setItem(SCENE_STAGE_LIGHTS_KEY, stageLightsEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
@@ -7006,6 +7152,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             if (environmentBridge && environmentBridge.setEnvExposure) environmentBridge.setEnvExposure(envExposure);
             applyMaterialEnvironment();
             reshadeSkyBounce(); applySkyBounce();
+            markLocalEnvDirty();
             if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
             return envExposure;
         };
@@ -7117,6 +7264,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             setAmbientOcclusionEnabled, setAmbientOcclusionStrength, getAmbientOcclusion,
             setSceneBounceEnabled, setSceneBounceStrength, getSceneBounce,
             setScreenSpaceReflections, setScreenSpaceReflectionStrength, setScreenSpaceReflectionMaxRoughness, getScreenSpaceReflections,
+            setLocalReflections, setLocalReflectionStrength, getLocalReflections,
             getSceneDisplayTransform, setSceneDisplayTransform,
             getSceneMaterialWorkspace, setSceneMaterialWorkspace,
             setSkyVisibility, setSkyVisibilityStrength, getSkyVisibility,

@@ -1691,6 +1691,26 @@ const patchAreaLightSourceCosine = (fs) => {
 //
 // Fail-soft: no anchor means no AO, and the default 1x1 white map with
 // strength 0 makes the injected code an exact no-op until a pass binds one.
+// Shared by patchAmbientOcclusion (writer) and patchLocalEnvironmentRadiance
+// (reader, via mx_env_occlusion_value): a file-scope float mirroring the
+// `occlusion` scalar, defaulting to 1.0 so a shader that never runs the AO
+// patch (or runs it before this exists) still compiles and reads as an
+// exact no-op. Idempotent: checks the CURRENT accumulated source, not just
+// its own prior output, so whichever of the two patches runs first wins and
+// the other is a no-op, regardless of JS call order.
+const ensureEnvOcclusionGlobal = (src) => {
+    if (src.indexOf('mx_envOcclusionValue') !== -1) return src;
+    const decl = 'float mx_envOcclusionValue = 1.0;\nfloat mx_env_occlusion_value() { return mx_envOcclusionValue; }\n';
+    // Same anchor as patchAmbientOcclusion's own uniform decls below: must
+    // land before the FIRST function definition (not just before main()),
+    // since the generator can emit the AO/environment-radiance slots inside
+    // a surface evaluation function that precedes main.
+    const firstFn = src.search(/^(?:void|vec[234]|float|int|bool|mat[234])\s+\w+\s*\(/m);
+    const at = firstFn !== -1 ? firstFn : src.indexOf('void main(');
+    if (at === -1) return src;
+    return src.slice(0, at) + decl + src.slice(at);
+};
+
 const patchAmbientOcclusion = (fs, { skipSkyVis = false, skipAoVolume = false } = {}) => {
     const anchor = /(\/\/ Ambient occlusion\s*\n\s*)occlusion = 1\.0;/;
     if (!anchor.test(fs)) return fs;
@@ -1704,12 +1724,19 @@ const patchAmbientOcclusion = (fs, { skipSkyVis = false, skipAoVolume = false } 
     // separate sampler-budget drop from sky visibility; skipAoVolume falls
     // back to the sky-times-ssao combination without it.
     const useVolume = hasWorldPos && !skipAoVolume;
+    // Mirrors the computed occlusion into a file-scope float that the local
+    // reflection blend (patchLocalEnvironmentRadiance's mx_env_occlusion_value)
+    // reads to undo this SAME multiply on its own term (see design.md
+    // section 5.6): without it, a blocked sky direction would be darkened
+    // twice, once by `occlusion` and once by the capture already seeing a
+    // dark studio wall in that direction.
     const assignment = !hasWorldPos
-        ? 'occlusion = mx_ssao_occlusion();'
+        ? 'occlusion = mx_ssao_occlusion(); mx_envOcclusionValue = occlusion;'
         : (useVolume
-            ? 'occlusion = mx_sky_visibility() * min(mx_volume_occlusion(), mx_ssao_occlusion());'
-            : 'occlusion = mx_ssao_occlusion() * mx_sky_visibility();');
-    const out = fs.replace(anchor, '$1' + assignment);
+            ? 'occlusion = mx_sky_visibility() * min(mx_volume_occlusion(), mx_ssao_occlusion()); mx_envOcclusionValue = occlusion;'
+            : 'occlusion = mx_ssao_occlusion() * mx_sky_visibility(); mx_envOcclusionValue = occlusion;');
+    let out = fs.replace(anchor, '$1' + assignment);
+    out = ensureEnvOcclusionGlobal(out);
     const skyDecls = !hasWorldPos ? [] : [
         // Baked coarse visibility of the environment (js/usd-scene-skyvis.js).
         // MaterialX's IBL has no visibility term at all, so an interior lit by
@@ -2223,6 +2250,106 @@ const patchTransmissionAlpha = (fs, { skipRefraction = false } = {}) => {
     out = out.slice(0, returnIdx) + gatedReturn + out.slice(returnIdx + returnAnchor.length);
     out = out.slice(0, transFnIdx) + refractionDecls + 'uniform int u_peelMode;\n' + out.slice(transFnIdx);
 
+    return out;
+};
+
+// Local environment reflections: substitutes a static per-stage cubemap
+// capture (js/usd-scene-localenv.js) into the generated prefilter's `Li`
+// lookup, so a reflective surface sees the studio set it sits in (floor,
+// cyc wall) rather than only the dome. See
+// scratchpad/displacement-verified/reflections/design.md section 5.5.
+//
+// Sits at `Li` INSIDE the function patchScreenSpaceReflection renames to
+// mx_environment_radiance_ibl, so FG, fd.refraction and u_envLightIntensity
+// are all inherited unchanged: the local term is weighted by exactly the
+// same directional albedo the dome term is. This function therefore MUST
+// run before patchScreenSpaceReflection in the call chain (see the call
+// site in generatePreviewSourcesUnlocked); the two patches then compose
+// without either knowing about the other.
+const patchLocalEnvironmentRadiance = (fs, { skipLocalEnv = false, notices = null } = {}) => {
+    if (fs.indexOf('mx_local_env_mix') !== -1) return fs;
+    // The generator's own prefilter body (mx_environment_prefilter.glsl),
+    // matched verbatim; FIS (no single `Li` assignment) and any shader
+    // shape the generator changes underneath us both safe-fail here.
+    const anchor = 'vec3 Li = mx_latlong_map_lookup(L, u_envMatrix, mx_latlong_alpha_to_lod(avgAlpha), u_envRadiance);';
+    const anchorIdx = fs.indexOf(anchor);
+    const usable = anchorIdx !== -1
+        && /\bin\s+vec3\s+positionWorld\s*;/.test(fs)
+        && /\bvec2\s+mx_latlong_projection\s*\(/.test(fs);
+    if (skipLocalEnv || !usable) {
+        if (anchorIdx !== -1 && !skipLocalEnv && notices) {
+            notices.push('local reflections: shader anchor unusable (missing positionWorld or mx_latlong_projection); reflections stay image based');
+        }
+        return fs;
+    }
+    let out = fs.slice(0, anchorIdx) + anchor
+        + '\n    Li = mx_local_env_mix(Li, positionWorld, L, mx_latlong_alpha_to_lod(avgAlpha));'
+        + fs.slice(anchorIdx + anchor.length);
+
+    const declIfAbsent = (line) => (out.indexOf(line) === -1 ? line + '\n' : '');
+    const decls =
+        declIfAbsent('uniform sampler2D u_localEnvRadiance;') +
+        declIfAbsent('uniform float u_localEnvMips;') +
+        declIfAbsent('uniform float u_localEnvStrength;') +
+        declIfAbsent('uniform vec3 u_localEnvProbe;') +
+        declIfAbsent('uniform vec3 u_localEnvBoxMin;') +
+        declIfAbsent('uniform vec3 u_localEnvBoxMax;') +
+        declIfAbsent('uniform int u_localEnvParallax;');
+
+    const helpers =
+        // P is positionWorld, R is the same L the generated body already
+        // computed, so no second reflect.
+        'vec3 mx_local_env_direction(vec3 P, vec3 R)\n' +
+        '{\n' +
+        '    if (u_localEnvParallax == 0) return R;\n' +
+        '    vec3 invR = 1.0 / max(abs(R), vec3(1e-6)) * sign(R + vec3(1e-9));\n' +
+        '    vec3 tMax = (u_localEnvBoxMax - P) * invR;\n' +
+        '    vec3 tMin = (u_localEnvBoxMin - P) * invR;\n' +
+        '    vec3 tFar = max(tMax, tMin);\n' +
+        '    float t = min(min(tFar.x, tFar.y), tFar.z);\n' +
+        '    if (!(t > 0.0)) return R;\n' +
+        '    return normalize((P + R * t) - u_localEnvProbe);\n' +
+        '}\n' +
+        // RGB is premultiplied by A (coverage) in the capture; un-multiply
+        // here. comp undoes patchAmbientOcclusion's `occlusion` multiply on
+        // this term only (design.md section 5.6): without it a blocked sky
+        // direction would be darkened twice.
+        'vec3 mx_local_env_mix(vec3 domeLi, vec3 P, vec3 R, float lod)\n' +
+        '{\n' +
+        '    if (u_localEnvStrength <= 0.0) return domeLi;\n' +
+        '    vec3 D = mx_local_env_direction(P, R);\n' +
+        '    vec2 uv = mx_latlong_projection(D);\n' +
+        '    vec4 s = textureLod(u_localEnvRadiance, uv, clamp(lod, 0.0, u_localEnvMips - 1.0));\n' +
+        '    float cov = clamp(s.a, 0.0, 1.0);\n' +
+        '    if (cov <= 0.0) return domeLi;\n' +
+        '    vec3 local = s.rgb / max(s.a, 1e-4);\n' +
+        '    float comp = min(1.0 / max(mx_env_occlusion_value(), 0.05), 20.0);\n' +
+        '    return mix(domeLi, local * comp, cov * clamp(u_localEnvStrength, 0.0, 1.0));\n' +
+        '}\n';
+
+    // Land just above whichever function signature's BODY actually contains
+    // the Li anchor: ordinarily that is mx_environment_radiance itself, but
+    // if patchScreenSpaceReflection already ran first (not reachable today,
+    // skipSsr is hardcoded true, but kept correct for when it is unparked),
+    // that function was renamed to mx_environment_radiance_ibl and a NEW
+    // mx_environment_radiance wrapper now exists further down, near main;
+    // matching by name alone would find that wrapper instead. Take the last
+    // signature match that still precedes the anchor.
+    const fnAnchorRe = /vec3 mx_environment_radiance(?:_ibl)?\(vec3 N, vec3 V, vec3 X, vec2 alpha, int distribution, FresnelData fd\)[ \t]*\r?\n[ \t]*\{/g;
+    let insertAt = -1;
+    let fnMatch;
+    while ((fnMatch = fnAnchorRe.exec(out))) {
+        if (fnMatch.index >= anchorIdx) break;
+        insertAt = fnMatch.index;
+    }
+    if (insertAt === -1) insertAt = out.indexOf('void main(');
+    if (insertAt === -1) return fs; // nothing recognisable: leave the shader untouched
+    out = out.slice(0, insertAt) + decls + helpers + out.slice(insertAt);
+    // mx_local_env_mix (just inserted, above) reads mx_env_occlusion_value():
+    // ensure that global exists somewhere before it, idempotent against
+    // patchAmbientOcclusion having already declared it (or declaring it
+    // later, in which case ITS check finds this one first).
+    out = ensureEnvOcclusionGlobal(out);
     return out;
 };
 
@@ -6988,6 +7115,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     const skipRefraction = !!(sceneFeatureOptions && sceneFeatureOptions.skipRefraction);
     // Screen-space reflections are parked (see SCENE_SSR_PARKED in the renderer): skip the patch.
     const skipSsr = true || !!(sceneFeatureOptions && sceneFeatureOptions.skipSsr);
+    const skipLocalEnv = !!(sceneFeatureOptions && sceneFeatureOptions.skipLocalEnv);
     // OFFICIAL PARITY: per-material generation options on SHARED
     // module-scope genContext. hwTransparency is reset FIRST,
     // unconditionally, else a failed detection leaks A's stale value onto B.
@@ -7146,6 +7274,10 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     } else {
         fs = encodeDisplay(fs);
     }
+    // Local reflections substitute the dome lookup's `Li` BEFORE screen-space
+    // reflections wrap the whole function, so SSR (when unparked) blends on
+    // top of a local-env-aware fallback rather than the bare dome.
+    fs = patchLocalEnvironmentRadiance(fs, { skipLocalEnv, notices });
     // Screen-space reflections wrap the generated IBL call before the
     // refraction/peel patches touch the shader.
     fs = patchScreenSpaceReflection(fs, { skipSsr, notices });
@@ -7415,6 +7547,7 @@ const joinWithAnd = (items) => (items.length <= 1 ? items.join('')
 const SAMPLER_BUDGET_DROP_ORDER = [
     // Parked with screen-space reflections (always skipped for now).
     // { key: 'skipSsr', label: 'screen-space reflection (u_opaqueColor)' },
+    { key: 'skipLocalEnv', label: 'local reflection capture (u_localEnvRadiance)', userLabel: 'local reflections' },
     { key: 'skipBounce', label: 'bounce volume (u_skyBounceMap)', userLabel: 'diffuse bounce' },
     { key: 'skipAoVolume', label: 'occlusion volume (u_aoVolumeMap)', userLabel: 'ambient occlusion' },
     { key: 'skipSkyVis', label: 'sky visibility (u_skyVisMap)', userLabel: 'sky visibility' },
@@ -7508,7 +7641,8 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
 // independent world/normal matrices and MaterialX values.
 const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, sceneRadius = 1, envTilt = null, envRotationRad = 0, envExposure = 1, environmentIndirectScale = 1, environmentKeyScale = 1, lightScales = null, shadowDiagnosticVisibilityScale = 1, displayTransform = null, shadowAtlas = null, shadowMatrices = null, shadowTiles = null, shadowDepthPlanes = null, shadowDepthRanges = null, shadowSourceRadii = null, shadowTexelSizes = null, shadowFaceOrigins = null, shadowFaceValid = null, shadowFaceBasisX = null, shadowFaceBasisY = null, shadowFaceBasisZ = null, shadowSlotFace = null, shadowSlotFaceCount = null, shadowTransmittance = null, shadowRecordCells = null, skyVisMap = null, skyVisMin = null, skyVisSize = null, skyVisStrength = 1, skyVisCell = 0,
     aoVolumeMap = null, aoVolumeMin = null, aoVolumeSize = null, aoVolumeStrength = 1, aoVolumeCell = 0,
-    skyBounceMap = null, skyBounceMin = null, skyBounceSize = null, skyBounceStrength = 0, skyBounceCell = 0, bounceScale = 0, bounceTint = null }) => {
+    skyBounceMap = null, skyBounceMin = null, skyBounceSize = null, skyBounceStrength = 0, skyBounceCell = 0, bounceScale = 0, bounceTint = null,
+    localEnvMap = null, localEnvMips = 1, localEnvStrength = 0, localEnvProbe = null, localEnvBoxMin = null, localEnvBoxMax = null, localEnvParallax = 0 }) => {
     if (!compiled) throw new Error('Cannot create scene uniforms without compiled MaterialX source.');
     const uniforms = {
         u_worldMatrix: { value: new THREE.Matrix4() },
@@ -7646,6 +7780,17 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
         uniforms.u_shadowRecordCells = { value: shadowRecordCells && shadowRecordCells.length === SHADOW_FACE_SLOTS
             ? shadowRecordCells : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector4(0, 0, 0, 0)) };
     }
+    // Local environment reflections: a plain sampler2D, visible to has()
+    // unlike the sampler3D volumes above, so this stays gated exactly like
+    // u_ssaoMap. White at strength 0 (or coverage 0, see mx_local_env_mix's
+    // own early return) is an exact no-op.
+    if (has('u_localEnvRadiance')) uniforms.u_localEnvRadiance = { value: localEnvMap || getDummyTexWhite() };
+    if (has('u_localEnvMips')) uniforms.u_localEnvMips = { value: Number.isFinite(localEnvMips) ? localEnvMips : 1 };
+    if (has('u_localEnvStrength')) uniforms.u_localEnvStrength = { value: localEnvMap ? localEnvStrength : 0 };
+    if (has('u_localEnvProbe')) uniforms.u_localEnvProbe = { value: localEnvProbe ? localEnvProbe.clone() : new THREE.Vector3() };
+    if (has('u_localEnvBoxMin')) uniforms.u_localEnvBoxMin = { value: localEnvBoxMin ? localEnvBoxMin.clone() : new THREE.Vector3() };
+    if (has('u_localEnvBoxMax')) uniforms.u_localEnvBoxMax = { value: localEnvBoxMax ? localEnvBoxMax.clone() : new THREE.Vector3() };
+    if (has('u_localEnvParallax')) uniforms.u_localEnvParallax = { value: localEnvParallax ? 1 : 0 };
     if (has('u_ssaoMap')) uniforms.u_ssaoMap = { value: ssaoMap || getDummyTexWhite() };
     if (has('u_ssaoTexel')) uniforms.u_ssaoTexel = { value: ssaoTexel ? ssaoTexel.clone() : new THREE.Vector2() };
     if (has('u_ssaoStrength')) uniforms.u_ssaoStrength = { value: ssaoMap ? ssaoStrength : 0 };
