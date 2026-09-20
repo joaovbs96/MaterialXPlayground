@@ -21,6 +21,12 @@
     // stats panel (js/shared/mtlx-ui.jsx CARD_SURFACE).
     const PANEL_SURFACE = 'color-mix(in srgb, var(--site-gray-800, #1f2937) 35%, var(--site-gray-900, #111827))';
 
+    // Mirrors js/usd-scene-renderer.js sceneDomeYawDegFromRotation (not
+    // exported, math not to be changed here): converts an authored dome
+    // rotationDeg into the engine's mx_latlong yaw degrees, so a manual
+    // nudge of the slider matches the yaw the renderer already applied.
+    const domeYawDegFromRotation = (rotationDeg) => (((90 - Number(rotationDeg || 0)) % 360) + 360) % 360;
+
     const asPath = (file) => String(file.webkitRelativePath || file.relativePath || file.name || '').replace(/\\/g, '/');
     const ext = (path) => { const i = path.lastIndexOf('.'); return i < 0 ? '' : path.slice(i).toLowerCase(); };
     const rootCandidates = (files) => {
@@ -722,6 +728,9 @@
         const envSettingsRef = React.useRef({ rotation: 0, exposureLinear: 1, backdrop: 'studio', autoRotate: false });
         const [recordOpen, setRecordOpen] = React.useState(false);
         const envOverrideRef = React.useRef(null);
+        // True while envRotation holds an authored dome rotationDeg rather
+        // than a plain engine-degree value; gates the yaw conversion below.
+        const domeRotationActiveRef = React.useRef(false);
         const currentEnvironmentRef = React.useRef(null);
         const containerRef = React.useRef(null);
         const viewportRef = containerRef;
@@ -959,7 +968,9 @@
                         setEnvFileName(dome.fileName || 'Stage dome light');
                         setEnvRotation(Math.round(dome.rotationDeg));
                         setEnvExposureLinear(dome.exposure);
+                        domeRotationActiveRef.current = true;
                     } else {
+                        domeRotationActiveRef.current = false;
                         callHandle('setEnvRotation', settings.rotation * Math.PI / 180);
                         callHandle('setEnvExposure', settings.exposureLinear);
                     }
@@ -1219,6 +1230,7 @@
                 if (apiFunction('setEnvOverride')) apiFunction('setEnvOverride')(env);
                 envOverrideRef.current = env;
                 currentEnvironmentRef.current = env;
+                domeRotationActiveRef.current = false;
                 setEnvFileName(file.name || file.path || 'Imported environment');
             } catch (e) { if (mountedRef.current && generation === environmentGenerationRef.current) setEnvImportError(String(e && e.message || e)); }
         };
@@ -1253,11 +1265,23 @@
                 setEnvFileName(dome.fileName || 'Stage dome light');
                 setEnvRotation(Math.round(dome.rotationDeg));
                 setEnvExposureLinear(dome.exposure);
+                domeRotationActiveRef.current = true;
                 setBackdrop('studio'); callHandle('setBackdrop', 'studio');
                 return;
             }
+            domeRotationActiveRef.current = false;
             if (env) { currentEnvironmentRef.current = env; callHandle('setEnvironment', env); }
             setEnvFileName(''); setEnvRotation(0); setEnvExposureLinear(1); callHandle('setEnvRotation', 0); callHandle('setEnvExposure', 1); setBackdrop('studio'); callHandle('setBackdrop', 'studio');
+        };
+        // The slider always displays and edits the authored degrees (matching
+        // the dome light's own rotationDeg label when one is active); only
+        // the value sent to the engine goes through the yaw conversion, so
+        // the running rotation stays consistent with what seeded it.
+        const applyEnvRotation = (v) => {
+            const n = Number(v);
+            setEnvRotation(n);
+            const engineDeg = domeRotationActiveRef.current ? domeYawDegFromRotation(n) : n;
+            callHandle('setEnvRotation', engineDeg * Math.PI / 180);
         };
         const setEnvExposureVal = (linear) => { setEnvExposureLinear(linear); callHandle('setEnvExposure', linear); };
         const cancel = () => { generationRef.current += 1; if (abortRef.current) abortRef.current.abort(); setStatus('cancelled'); setProgress((p) => ({ ...p, message: 'Cancelled' })); };
@@ -1707,8 +1731,8 @@
                         disabled={!canTuneEnvironment}
                         label="Environment rotation" unit="deg"
                         value={envRotation} min={0} max={360} step={1}
-                        onSlider={(v) => { const n = Number(v); setEnvRotation(n); callHandle('setEnvRotation', n * Math.PI / 180); }}
-                        onNumber={(v) => { const n = Number(v); setEnvRotation(n); callHandle('setEnvRotation', n * Math.PI / 180); }}
+                        onSlider={applyEnvRotation}
+                        onNumber={applyEnvRotation}
                     />
                     <SliderField
                         disabled={!canTuneEnvironment}
