@@ -19,6 +19,14 @@
 // Browsers cap live WebGL contexts around 8-16, so a page with a grid of
 // materials MUST NOT eagerly instantiate all of them — hence the
 // IntersectionObserver + LRU cap below.
+// Diffuse environment irradiance stays pinned to the SH path until the
+// convolved map (js/mtlx-engine.js DIFFUSE_ENV_METHOD) is verified in the
+// embed build. This flag documents the pin; the actual pin is enforced in
+// _buildSrcUrl() below by forwarding diffuseEnv=sh on the iframe's own URL,
+// since mtlx-engine.js reads window.location.search inside the iframe's
+// OWN window, not this page's.
+window.MTLX_DIFFUSE_ENV = 'sh';
+
 (function () {
     'use strict';
 
@@ -461,6 +469,10 @@
             // The host's OWN origin — lets embed-boot.js target replies at this
             // exact origin instead of '*'. See its header comment.
             qp.set('origin', window.location.origin);
+            // Pins the iframe's own diffuse irradiance switch to 'sh' until
+            // the convolved map is verified for embeds (see the
+            // window.MTLX_DIFFUSE_ENV comment at the top of this file).
+            qp.set('diffuseEnv', 'sh');
             return url.href;
         }
 

@@ -2710,6 +2710,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
         // uniform builder below picks it over the FIS chain when the
         // shaders were generated for the prefilter path.
         if (window.ensurePrefilteredEnv) window.ensurePrefilteredEnv(renderer, env);
+        if (window.ensureConvolvedIrradiance) window.ensureConvolvedIrradiance(renderer, env);
         const diagnosticSlots = diagnosticShadowSlots();
         const uniforms = window.createMtlxSceneUniforms({
             compiled, env, lightData: mxEnv.lightData || [], stageLights: diagnosticStageLights(), displayTransform: sceneDisplayTransform,
@@ -5355,6 +5356,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
         };
         const applyMaterialEnvironment = () => {
             if (window.ensurePrefilteredEnv) window.ensurePrefilteredEnv(renderer, env);
+            if (window.ensureConvolvedIrradiance) window.ensureConvolvedIrradiance(renderer, env);
             const radiance = env && env.radiance;
             if (radiance && radiance.isTexture && (radiance.minFilter !== THREE.LinearMipmapLinearFilter || !radiance.generateMipmaps)) {
                 console.warn('usd-scene-renderer: env.radiance lost its mip chain (minFilter or generateMipmaps reset), restoring it.');

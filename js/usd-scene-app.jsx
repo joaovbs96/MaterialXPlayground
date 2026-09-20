@@ -691,6 +691,21 @@
             window.addEventListener('mtlx-usd-scene-transparency', onSceneTransparencyChanged);
             return () => window.removeEventListener('mtlx-usd-scene-transparency', onSceneTransparencyChanged);
         }, []);
+        // GPU-convolved diffuse irradiance vs. the SH l<=2 fit (js/mtlx-engine.js
+        // DIFFUSE_ENV_METHOD). Not generation-affecting: flipping it only
+        // rebinds a sampler through applyMaterialEnvironment, no recompile.
+        const [diffuseEnvConvolve, setDiffuseEnvConvolveState] = React.useState(
+            () => (typeof window.getDiffuseEnvMethod === 'function' ? window.getDiffuseEnvMethod() !== 'sh' : true)
+        );
+        React.useEffect(() => {
+            const onSettingsChanged = (e) => {
+                const detail = e && e.detail;
+                if (!detail || detail.key !== 'diffuseEnvMethod') return;
+                setDiffuseEnvConvolveState(detail.value !== 'sh');
+            };
+            window.addEventListener('mtlx-settings-changed', onSettingsChanged);
+            return () => window.removeEventListener('mtlx-settings-changed', onSettingsChanged);
+        }, []);
         const envSettingsRef = React.useRef({ rotation: 0, exposureLinear: 1, backdrop: 'studio', autoRotate: false });
         const [recordOpen, setRecordOpen] = React.useState(false);
         const envOverrideRef = React.useRef(null);
@@ -1443,6 +1458,14 @@
                     title={sceneTransparency ? 'Disable scene material transparency' : 'Enable scene material transparency'}
                     onChange={(next) => { setSceneTransparencyState(next); window.setUsdSceneTransparency && window.setUsdSceneTransparency(next); }}
                     description="Render opacity/transmission authored by scene materials. When off, transparent materials render opaque." />
+                <ToggleRow label="Convolved diffuse environment" checked={diffuseEnvConvolve}
+                    title={diffuseEnvConvolve ? 'Use the second-order spherical harmonic fit instead' : 'Cosine-convolve the environment on the GPU instead'}
+                    onChange={(next) => {
+                        setDiffuseEnvConvolveState(next);
+                        window.setDiffuseEnvMethod && window.setDiffuseEnvMethod(next ? 'convolve' : 'sh');
+                        if (currentEnvironmentRef.current) callHandle('setEnvironment', currentEnvironmentRef.current);
+                    }}
+                    description="Cosine-convolves the environment instead of a 9 term spherical harmonic fit. More accurate diffuse under small bright lights." />
             </React.Fragment>
         );
         const renderGeometryTab = () => (

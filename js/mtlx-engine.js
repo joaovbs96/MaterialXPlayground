@@ -496,6 +496,32 @@ let SPECULAR_ENV_METHOD = (() => {
 })();
 const getSpecularEnvMethod = () => SPECULAR_ENV_METHOD;
 
+// Diffuse environment irradiance method. 'convolve' cosine-convolves the
+// radiance map directly on the GPU into a lat-long irradiance map, accurate
+// under small bright lights where the SH l<=2 reconstruction below loses
+// about 9% of a studio softbox's energy (see
+// scratchpad/displacement-verified/color-parity/direct-scale/direct-scale.md).
+// 'sh' is the original 9-coefficient spherical-harmonic path, kept as the
+// safe-fail target and the one embeds stay pinned to until verified there.
+let DIFFUSE_ENV_METHOD = (() => {
+    try {
+        if (window.MTLX_DIFFUSE_ENV === 'sh' || window.MTLX_DIFFUSE_ENV === 'convolve') return window.MTLX_DIFFUSE_ENV;
+        const qs = new URLSearchParams(window.location.search);
+        if (qs.has('diffuseEnv')) return qs.get('diffuseEnv') === 'sh' ? 'sh' : 'convolve';
+        return localStorage.getItem('mtlx_diffuse_env') === 'sh' ? 'sh' : 'convolve';
+    } catch (e) { return 'convolve'; }
+})();
+const getDiffuseEnvMethod = () => DIFFUSE_ENV_METHOD;
+const setDiffuseEnvMethod = (v, { persist = true } = {}) => {
+    DIFFUSE_ENV_METHOD = (v === 'sh') ? 'sh' : 'convolve';
+    if (persist) {
+        try { localStorage.setItem('mtlx_diffuse_env', DIFFUSE_ENV_METHOD); } catch (e) { /* best-effort */ }
+    }
+    // Not generation-affecting: same lookup, same uniform, just a rebind,
+    // so listeners re-run their environment effect, not a recompile.
+    try { window.dispatchEvent(new CustomEvent('mtlx-settings-changed', { detail: { key: 'diffuseEnvMethod', value: DIFFUSE_ENV_METHOD } })); } catch (e) { /* best-effort */ }
+};
+
 const getHeightToNormalTexel = () => HEIGHT_TO_NORMAL_TEXEL;
 const setHeightToNormalTexel = (v, { persist = true } = {}) => {
     HEIGHT_TO_NORMAL_TEXEL = !!v;
@@ -6077,6 +6103,144 @@ const envRadianceForShading = (env) => {
     return env.radiance;
 };
 
+// GPU cosine-convolved diffuse irradiance map: replaces the SH l<=2
+// reconstruction above with a direct hemispherical integral baked into a
+// 64x32 RGBA half-float lat-long map, same shape/lookup contract as
+// shIrradianceFromEquirect's output (mx_environment_irradiance never
+// changes). Reuses the GGX prefilter's render-target/readback pipeline and
+// its +0.5 longitude convention (mx_latlong_map_projection_inverse is NOT
+// the inverse of mx_latlong_projection; see PREFILTER_GLSL's comment above).
+const IRRADIANCE_CONV_W = 128;
+const IRRADIANCE_CONV_H = 64;
+const IRRADIANCE_OUT_W = 64;
+const IRRADIANCE_OUT_H = 32;
+const IRRADIANCE_GLSL = [
+    'precision highp float;',
+    'const float M_PI = 3.1415926535897932;',
+    'const float M_PI_INV = 0.31830988618379067;',
+    'uniform sampler2D uSource;',
+    'uniform float uSrcLod;',
+    'uniform vec2 uTargetSize;',
+    'out vec4 fragColor;',
+    'vec3 mx_latlong_map_projection_inverse(vec2 uv) {',
+    '    float latitude = (uv.y - 0.5) * M_PI;',
+    '    float longitude = (uv.x - 0.5) * M_PI * 2.0;',
+    '    float x = -cos(latitude) * sin(longitude);',
+    '    float y = -sin(latitude);',
+    '    float z = cos(latitude) * cos(longitude);',
+    '    return vec3(x, y, z);',
+    '}',
+    'void main() {',
+    '    vec2 uv = gl_FragCoord.xy / uTargetSize;',
+    // Same +0.5 longitude rule as PREFILTER_GLSL: texel uv holds the
+    // value for this direction, which is what mx_latlong_projection
+    // reads back.
+    '    vec3 N = normalize(mx_latlong_map_projection_inverse(vec2(uv.x + 0.5, uv.y)));',
+    '    const int CW = ' + IRRADIANCE_CONV_W + ';',
+    '    const int CH = ' + IRRADIANCE_CONV_H + ';',
+    '    float dPhi = 2.0 * M_PI / float(CW);',
+    '    float dTheta = M_PI / float(CH);',
+    '    vec3 E = vec3(0.0);',
+    '    for (int j = 0; j < CH; j++) {',
+    '        float sv = (float(j) + 0.5) / float(CH);',
+    '        for (int i = 0; i < CW; i++) {',
+    '            float su = (float(i) + 0.5) / float(CW);',
+    '            vec3 L = normalize(mx_latlong_map_projection_inverse(vec2(su + 0.5, sv)));',
+    '            float NdotL = dot(N, L);',
+    '            if (NdotL <= 0.0) continue;',
+    // Lat-long solid angle: sin(polar) = cos(latitude) = sqrt(1 - L.y*L.y).
+    '            float sinT = sqrt(max(0.0, 1.0 - L.y * L.y));',
+    '            vec3 Li = textureLod(uSource, vec2(su, sv), uSrcLod).rgb;',
+    '            E += Li * NdotL * sinT * dPhi * dTheta;',
+    '        }',
+    '    }',
+    // The 1/PI matches mx_environment_irradiance's units, the same scale
+    // shIrradianceFromEquirect's Pass 2 applies above.
+    '    fragColor = vec4(max(E * M_PI_INV, vec3(0.0)), 1.0);',
+    '}',
+].join('\n');
+
+// Builds env.irradianceConvolved once per environment, on the first view
+// that has a WebGL2 renderer with a float color-buffer extension. Fail-soft
+// at every step: env.irradiance (the SH map) is never touched here, so any
+// guard failure or thrown error leaves diffuse shading exactly as it was.
+const ensureConvolvedIrradiance = (renderer, env) => {
+    if (!env || !env.radiance || env.irradianceTried) return env;
+    if (getDiffuseEnvMethod() !== 'convolve') return env;
+    if (!renderer || !renderer.capabilities || !renderer.capabilities.isWebGL2) return env;
+    env.irradianceTried = true;
+    if (!renderer.extensions.get('EXT_color_buffer_float')) {
+        mtlxWarn('mtlx-engine: EXT_color_buffer_float missing, keeping the SH irradiance.');
+        return env;
+    }
+    const src = env.radiance;
+    const srcW = (src.image && src.image.width) || IRRADIANCE_CONV_W;
+    const srcH = (src.image && src.image.height) || IRRADIANCE_CONV_H;
+    const t0 = performance.now();
+    const previousTarget = renderer.getRenderTarget();
+    let material = null, scene = null, target = null;
+    try {
+        material = new THREE.RawShaderMaterial({
+            glslVersion: THREE.GLSL3,
+            vertexShader: 'in vec3 position;\nvoid main() { gl_Position = vec4(position, 1.0); }',
+            fragmentShader: IRRADIANCE_GLSL,
+            uniforms: {
+                uSource: { value: src },
+                uSrcLod: { value: Math.max(0, Math.log2(srcW / IRRADIANCE_CONV_W)) },
+                uTargetSize: { value: new THREE.Vector2(IRRADIANCE_OUT_W, IRRADIANCE_OUT_H) },
+            },
+            depthTest: false, depthWrite: false,
+        });
+        scene = new THREE.Scene();
+        scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material));
+        const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        target = new THREE.WebGLRenderTarget(IRRADIANCE_OUT_W, IRRADIANCE_OUT_H, {
+            minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+            format: THREE.RGBAFormat, type: THREE.FloatType,
+            depthBuffer: false, stencilBuffer: false, generateMipmaps: false,
+        });
+        renderer.setRenderTarget(target);
+        renderer.render(scene, camera);
+        const pixels = new Float32Array(IRRADIANCE_OUT_W * IRRADIANCE_OUT_H * 4);
+        renderer.readRenderTargetPixels(target, 0, 0, IRRADIANCE_OUT_W, IRRADIANCE_OUT_H, pixels);
+        const half = new Uint16Array(pixels.length);
+        for (let i = 0; i < half.length; i++) half[i] = floatToHalf(pixels[i]);
+        const tex = new THREE.DataTexture(half, IRRADIANCE_OUT_W, IRRADIANCE_OUT_H, THREE.RGBAFormat, THREE.HalfFloatType);
+        tex.mapping = THREE.EquirectangularReflectionMapping;
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.ClampToEdgeWrapping;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        tex.generateMipmaps = false;
+        // Framebuffer space, same reasoning as ensurePrefilteredEnv's tex.
+        tex.flipY = false;
+        tex.encoding = THREE.LinearEncoding;
+        tex.needsUpdate = true;
+        env.irradianceConvolved = tex;
+        if (window.MTLX_PERF_LOG) {
+            console.log('[mtlx-perf] env irradiance convolve: ' + (performance.now() - t0).toFixed(1)
+                + 'ms (' + srcW + 'x' + srcH + ' -> ' + IRRADIANCE_OUT_W + 'x' + IRRADIANCE_OUT_H + ')');
+        }
+    } catch (error) {
+        mtlxWarn('mtlx-engine: irradiance convolution failed, keeping the SH map: ' + (error && error.message || error));
+    }
+    renderer.setRenderTarget(previousTarget);
+    if (target) target.dispose();
+    if (material) material.dispose();
+    if (scene && scene.children[0]) scene.children[0].geometry.dispose();
+    return env;
+};
+
+// The irradiance sampler the SHADING path binds. env.irradiance (the SH
+// map) always exists and is the fallback; env.irradianceConvolved only
+// exists once ensureConvolvedIrradiance has succeeded on a WebGL2 renderer
+// with the 'convolve' switch active.
+const envIrradianceForShading = (env) => {
+    if (!env) return null;
+    if (getDiffuseEnvMethod() === 'convolve' && env.irradianceConvolved) return env.irradianceConvolved;
+    return env.irradiance;
+};
+
 const buildEnvFromParsedTexture = (raw) => {
     // Extraction mutates raw's pixels (clamps the sun) BEFORE mips/SH/
     // background are built below, so it disappears from all three,
@@ -6094,7 +6258,7 @@ const buildEnvFromParsedTexture = (raw) => {
     // Correctly-oriented copy for the visible skybox mesh, see
     // makeBackgroundTexture and the env-prep header above.
     const background = makeBackgroundTexture(radiance);
-    return { radiance, irradiance, mips, background, prefilteredIrr: false, keyLight, softKeyDir };
+    return { radiance, irradiance, irradianceConvolved: null, mips, background, prefilteredIrr: false, keyLight, softKeyDir };
 };
 const getEnvironment = () => {
     if (!envPromise) {
@@ -7149,7 +7313,7 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
     const declared = new Set((compiled.declared || []).map((u) => u.name));
     const has = (name) => declared.has(name);
     const radiance = envRadianceForShading(env) || getDummyTex();
-    const irradiance = (env && env.irradiance) || radiance;
+    const irradiance = envIrradianceForShading(env) || radiance;
     const mips = env && env.mips != null ? env.mips : 1;
     if (has('u_time')) uniforms.u_time = { value: MTLX_CLOCK.time };
     if (has('u_frame')) uniforms.u_frame = { value: MTLX_CLOCK.frame };
@@ -9192,6 +9356,7 @@ const createMtlxRenderView = async ({
         if (!env) return;
         try { if (env.radiance) env.radiance.dispose(); } catch (e) { /* already disposed/invalid */ }
         try { if (env.irradiance && env.irradiance !== env.radiance) env.irradiance.dispose(); } catch (e) { /* ditto */ }
+        try { if (env.irradianceConvolved && env.irradianceConvolved !== env.irradiance && env.irradianceConvolved !== env.radiance) env.irradianceConvolved.dispose(); } catch (e) { /* ditto */ }
         try { if (env.radiancePrefiltered) env.radiancePrefiltered.dispose(); } catch (e) { /* ditto */ }
         try { if (env.background) env.background.dispose(); } catch (e) { /* ditto */ }
     };
@@ -9672,7 +9837,7 @@ const createMtlxRenderView = async ({
                     const radianceSrc = env ? env.radiance : makeEnvTexture(256, 128, false);
                     if (needsLighting) {
                         if (env) {
-                            envRadiance = envRadianceForShading(env); envIrradiance = env.irradiance; envMips = env.mips;
+                            envRadiance = envRadianceForShading(env); envIrradiance = envIrradianceForShading(env); envMips = env.mips;
                             envBgTexture = env.background;
                             envHasFile = true;
                             envPrefilteredIrr = !!env.prefilteredIrr;
@@ -10830,14 +10995,15 @@ const createMtlxRenderView = async ({
             setEnvironment: (env) => {
                 if (!env) return;
                 ensurePrefilteredEnv(renderer, env);
+                ensureConvolvedIrradiance(renderer, env);
                 if (envRadSamplerName && uniforms[envRadSamplerName]) uniforms[envRadSamplerName].value = envRadianceForShading(env);
-                if (envIrrSamplerName && uniforms[envIrrSamplerName]) uniforms[envIrrSamplerName].value = env.irradiance;
+                if (envIrrSamplerName && uniforms[envIrrSamplerName]) uniforms[envIrrSamplerName].value = envIrradianceForShading(env);
                 if (uniforms.u_envRadianceMips) uniforms.u_envRadianceMips.value = env.mips;
                 // Persist onto the SHELL env state too, not just the
                 // current material's uniforms, otherwise a future swap
                 // silently reverts to the stale env.
                 envRadiance = envRadianceForShading(env);
-                envIrradiance = env.irradiance;
+                envIrradiance = envIrradianceForShading(env);
                 envMips = env.mips;
                 envBgTexture = env.background;
                 // New env => possibly a new (or no) key light; refresh the
@@ -11396,6 +11562,7 @@ Object.assign(window, {
     generatePreviewSources, generatePreviewSourcesWithinBudget,
     evaluateDisplacement, generateDisplacementSourcesUnlocked, detectDisplacementMode,
     ensurePrefilteredEnv, getSpecularEnvMethod,
+    ensureConvolvedIrradiance, envIrradianceForShading, getDiffuseEnvMethod, setDiffuseEnvMethod,
     getDummyTexWhite, getDummyTex3DWhite,
     SHADOW_FACE_SLOTS, SHADOW_LIGHT_SLOTS_MAX,
     SHADOW_NORMAL_OFFSET_TEXELS, SHADOW_DEPTH_BIAS_TEXELS,
