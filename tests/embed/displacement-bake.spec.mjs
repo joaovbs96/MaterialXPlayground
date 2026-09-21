@@ -368,13 +368,16 @@ test('geompropvalue displacement binds authored values and defaults missing stre
   for (const value of fallback.eval.offsets) expect(value).toBeCloseTo(0.25, 3);
 });
 
-test('negative fractional power displacement returns finite zero offsets', async ({ page, embedURL }) => {
+test('negative fractional power displacement returns the sign-preserving real power', async ({ page, embedURL }) => {
   await gotoEngine(page, embedURL);
   const result = await bakeCase(page, { xml: POWER_FRACTIONAL_MTLX, segments: 4 });
   expect(result.error).toBeNull();
   expect(result.eval).toBeTruthy();
   expect(result.eval.offsets.every((value) => Number.isFinite(value))).toBe(true);
-  expect(result.eval.offsets.every((value) => Math.abs(value) < 1e-4)).toBe(true);
+  // mx_preview_power_real returns -pow(-base, exponent) for a negative base
+  // with a non-integer exponent: base -0.5, exponent 0.7.
+  const expected = -Math.pow(0.5, 0.7);
+  for (const value of result.eval.offsets) expect(value).toBeCloseTo(expected, 4);
 });
 
 test('clamp and periodic image samplers produce different out-of-range UV readback', async ({ page, embedURL }) => {

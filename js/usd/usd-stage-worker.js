@@ -1170,25 +1170,6 @@ function decodeMtlxTextsForMaterial(material, mtlxFileTextsByPath) {
   return texts;
 }
 
-// Safe over-approximation of "this mesh's bound material can ever produce a
-// MaterialX displacement": true whenever any available text source mentions
-// "displacement" (the MaterialX node category/shader type and the UsdShade
-// output token both contain that substring). Must never return false for a
-// material that actually displaces, since the renderer only re-subdivides
-// from mesh.cage when it later confirms displacement after compiling the
-// shader; a missed cage there would silently re-subdivide the wrong mesh.
-function meshMaterialMayDisplace(mesh, mtlxFileTextsByPath, usdaTexts) {
-  if (!mesh.materialPath && !mesh.material) return false; // no bound material at all
-  const texts = decodeMtlxTextsForMaterial(mesh.material, mtlxFileTextsByPath);
-  if (texts.some((t) => /displacement/i.test(t))) return true;
-  const leaf = text(mesh.materialPath)?.split("/").filter(Boolean).pop();
-  if (!leaf) return true; // material bound but path unknown here, stay conservative
-  for (const layer of usdaTexts) {
-    if (layer.text.includes(leaf) && /displacement/i.test(layer.text)) return true;
-  }
-  return false;
-}
-
 // USD `over` blocks under a Material prim (asset file swaps, place2d scale,
 // glass parameters, etc.) are authored on the material's descendant shader
 // prims. Candidate child names come from two sources: primarily the
@@ -2554,10 +2535,7 @@ async function load(request) {
           : subdivideMesh(mesh, levels);
         delete mesh.faceVertexCounts;
         if (!subdivided) continue;
-        // Only meshes whose bound material can possibly displace ever need
-        // the pre-subdivision cage (see meshMaterialMayDisplace); every
-        // other mesh skips this copy and its transfer to the main thread.
-        if (meshMaterialMayDisplace(mesh, mtlxFileTextsByPath, usdaTexts)) mesh.cage = {
+        mesh.cage = {
           positions: mesh.positions,
           normals: mesh.normals,
           uvs: mesh.uvs,
