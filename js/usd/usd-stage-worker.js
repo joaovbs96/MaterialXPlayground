@@ -2604,11 +2604,6 @@ async function load(request) {
     ...(result.diagnostics ?? {}),
     inputCache: { hits: inputCacheHits, misses: inputCacheMisses, bytes: inputCacheBytes },
   };
-  // Lets the loader decide whether this load grew the wasm heap enough that
-  // the persistent worker should be discarded instead of pinning it for the
-  // rest of the session; undefined (never negative) when unavailable.
-  const heapBuffer = wasmHeapBuffer();
-  if (heapBuffer) result.wasmHeapBytes = heapBuffer.byteLength;
   const transfer = result.transfer;
   delete result.transfer;
   try {
