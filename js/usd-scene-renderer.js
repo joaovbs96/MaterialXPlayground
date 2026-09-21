@@ -1669,9 +1669,26 @@ const createMtlxSceneView = async ({
     // step's compile is a driver cache hit. Kill switch
     // mtlx_displacement_prewarm=0.
     const displacementPrewarm = readDefaultOnSwitch('mtlx_displacement_prewarm');
+    // Read once per scene load: let bind/textures/geometry/bakes run while the
+    // surface programs are still compiling, joining only before the first use
+    // of a surface program on the visible renderer. Default ON, kill switch
+    // mtlx_scene_overlap_geometry=0 joins right after the material phase.
+    const overlapGeometry = readDefaultOnSwitch('mtlx_scene_overlap_geometry');
     // Pending { promise, perfEntry, submitAt } prewarm joins in parallel mode,
-    // awaited together right before renderer.compile (see the gpu-program step).
+    // awaited together before the first surface-program use (see joinPrewarms).
     const pendingPrewarms = [];
+    const joinPrewarms = async (lateJoin) => {
+        if (!effectiveParallelCompile || !pendingPrewarms.length) return;
+        if (lateJoin) report({ phase: 'renderer', status: 'step', step: 'shader-join' });
+        else report({ phase: 'material', status: 'driver-wait', total: pendingPrewarms.length });
+        const startedAt = scenePerf ? performance.now() : 0;
+        await Promise.all(pendingPrewarms.map(async (p) => {
+            await p.promise;
+            if (p.perfEntry) p.perfEntry.prewarmMs = performance.now() - p.submitAt;
+        }));
+        if (scenePerf) scenePerf.prewarmParallelWaitMs += performance.now() - startedAt;
+        pendingPrewarms.length = 0;
+    };
     const warnings = Array.isArray(stage.warnings) ? stage.warnings.slice() : [];
     const prepassWarnings = new Set();
     let displayTransformListener = null;
@@ -3542,6 +3559,9 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 await new Promise((resolve) => setTimeout(resolve, 0));
             }
             if (scenePerf) scenePerf.materialPhaseMs = performance.now() - __perfMaterialPhaseStart;
+            // Switch off: join the driver compiles here, before textures and
+            // geometry, which is the order this view used before the overlap.
+            if (!overlapGeometry) await joinPrewarms();
             await planTextureSize(precompiled);
             const __perfBindPhaseStart = scenePerf ? performance.now() : 0;
             for (let i = 0; i < materialList.length; i += 1) {
@@ -7073,6 +7093,10 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             });
             return displayRebuildPromise;
         };
+        // First point that can touch a surface program on the visible renderer:
+        // the display rebuild below calls renderer.compile(). Every earlier step
+        // draws with depth-override or dedicated materials only.
+        await joinPrewarms(true);
         resize();
         frameAll();
         const globalTransformDriftedAtCreation = creationDisplayTransform !== (window.getDisplayTransform ? window.getDisplayTransform() : 'srgb');
@@ -7092,19 +7116,9 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
         // program handles into per-material diagnostics.
         try {
             reportRendererStep('gpu-program');
-            // Parallel mode: nothing between the material loop and here needed
-            // the driver-side compiles, so join them now, right before the
-            // real renderer.compile() that actually links every program.
-            if (effectiveParallelCompile && pendingPrewarms.length) {
-                report({ phase: 'material', status: 'driver-wait', total: pendingPrewarms.length });
-                const __perfJoinStart = scenePerf ? performance.now() : 0;
-                await Promise.all(pendingPrewarms.map(async (p) => {
-                    await p.promise;
-                    if (p.perfEntry) p.perfEntry.prewarmMs = performance.now() - p.submitAt;
-                }));
-                if (scenePerf) scenePerf.prewarmParallelWaitMs = performance.now() - __perfJoinStart;
-                pendingPrewarms.length = 0;
-            }
+            // Normally already drained above; still here for the case where a
+            // late material compile queued a submit after that join.
+            await joinPrewarms();
             const __perfGpuProgramStart = scenePerf ? performance.now() : 0;
             renderer.compile(scene, camera);
             if (scenePerf) scenePerf.gpuProgramMs = performance.now() - __perfGpuProgramStart;

@@ -128,6 +128,7 @@ localStorage.setItem('mtlx_light_limit', '0');            // per-tool stage-ligh
 localStorage.setItem('mtlx_const_inputs', '0');            // fold compile-heavy scalar inputs into GLSL consts
 localStorage.setItem('mtlx_scene_parallel_compile', '0');  // no-await parallel driver compiles in the Scene
 localStorage.setItem('mtlx_scene_fast_display', '0');      // skip full regen on a display-transform-only change
+localStorage.setItem('mtlx_scene_overlap_geometry', '0');  // join Scene driver compiles before textures and geometry
 localStorage.setItem('mtlx_feature_gated_shaders', '0');   // generate shadow, occlusion and sky-visibility code always
 localStorage.setItem('mtlx_scene_texture_fast', '0');      // header-read dimensions and one resized PNG/JPEG decode
 localStorage.setItem('mtlx_texture_decode_limit', '0');    // cap on concurrent EXR, HDR and TIF decodes

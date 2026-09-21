@@ -156,7 +156,11 @@ function summarizeLongtasks(tasks, geometryFirstAt) {
     const after = tasks.filter((t) => t.start >= geometryFirstAt).map((t) => t.duration);
     longestTaskAfterGeometryFirstMs = after.length ? Math.max(...after) : null;
   }
-  return { longestTaskMs, longestTaskAfterGeometryFirstMs };
+  // Top three by duration with their start times, so a stall can be
+  // attributed to a load phase instead of just a maximum.
+  const topTasks = tasks.slice().sort((a, b) => b.duration - a.duration).slice(0, 3)
+    .map((t) => ({ startMs: Math.round(t.start), durationMs: Math.round(t.duration) }));
+  return { longestTaskMs, longestTaskAfterGeometryFirstMs, topTasks };
 }
 
 // --warm-cache: one persistent profile dir for the whole run, outside the
