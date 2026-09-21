@@ -6,10 +6,9 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 // Loads the worker source in a VM sandbox (same pattern as
-// usd-stage-geomprop.test.mjs) and exposes the two memory-reduction helpers
-// added for the load-path memory pass: the VFS extension skip list and the
-// cage-need heuristic used to avoid shipping displacement cages for meshes
-// whose material can never displace.
+// usd-stage-geomprop.test.mjs) and exposes the memory-reduction helpers
+// added for the load-path memory pass: the VFS extension skip list plus
+// the other load-path helpers below.
 function loadWorkerHelpers() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
   const workerPath = path.join(root, 'js', 'usd', 'usd-stage-worker.js');
@@ -18,7 +17,7 @@ function loadWorkerHelpers() {
   const source = sharedSource + '\n' + fs.readFileSync(workerPath, 'utf8')
     .replace('import "../shared/mesh-subdivision.js";', '')
     .replace('const RUNTIME_DIR = new URL("../../vendor/usd-webview-bindings/", import.meta.url);', 'const RUNTIME_DIR = null;')
-    + '\nthis.__helpers = { shouldSkipVfsUpload, meshMaterialMayDisplace, normalizePath, ownedTyped, arrayCopy, writeStageFile, closeDirectVfsFiles, directVfsPaths };';
+    + '\nthis.__helpers = { shouldSkipVfsUpload, normalizePath, ownedTyped, arrayCopy, writeStageFile, closeDirectVfsFiles, directVfsPaths };';
   const context = {
     ArrayBuffer, Blob, Float32Array, Float64Array, Int32Array, Map, Math, Number, Set,
     TextDecoder, TextEncoder, Uint8Array, Uint32Array, URL, console,
@@ -39,51 +38,6 @@ test('shouldSkipVfsUpload skips vdb/rat/tx and keeps every other extension', () 
   assert.equal(shouldSkipVfsUpload('materials/red.mtlx'), false);
   assert.equal(shouldSkipVfsUpload('textures/diffuse.png'), false);
   assert.equal(shouldSkipVfsUpload('textures/diffuse.exr'), false);
-});
-
-test('meshMaterialMayDisplace keeps the cage whenever displacement text is present', () => {
-  const { meshMaterialMayDisplace } = loadWorkerHelpers();
-  const mtlxFileTextsByPath = new Map();
-  const usdaTexts = [];
-
-  const inlineDisplacement = {
-    materialPath: '/Materials/Egg',
-    material: {
-      materialX: {
-        data: new TextEncoder().encode('<materialx><displacement name="disp1" type="displacementshader"/></materialx>'),
-      },
-    },
-  };
-  assert.equal(meshMaterialMayDisplace(inlineDisplacement, mtlxFileTextsByPath, usdaTexts), true);
-
-  const referencedFile = {
-    materialPath: '/Materials/Countertop',
-    material: { sourceAsset: 'materials/countertop.mtlx' },
-  };
-  mtlxFileTextsByPath.set('materials/countertop.mtlx', '<materialx><displacement name="d"/></materialx>');
-  assert.equal(meshMaterialMayDisplace(referencedFile, mtlxFileTextsByPath, usdaTexts), true);
-
-  const usdaOverride = {
-    materialPath: '/Materials/Plate',
-    material: {},
-  };
-  usdaTexts.push({ path: 'root.usda', text: 'over "Plate" { token outputs:displacement.connect = </Materials/Plate/disp.outputs:out> }' });
-  assert.equal(meshMaterialMayDisplace(usdaOverride, new Map(), usdaTexts), true);
-});
-
-test('meshMaterialMayDisplace drops the cage for plain surface materials and unbound meshes', () => {
-  const { meshMaterialMayDisplace } = loadWorkerHelpers();
-  const mtlxFileTextsByPath = new Map();
-  const usdaTexts = [{ path: 'root.usda', text: 'def Material "Plastic" { token outputs:surface.connect = </Materials/Plastic/surf.outputs:out> }' }];
-
-  const plainSurface = {
-    materialPath: '/Materials/Plastic',
-    material: { materialX: { data: new TextEncoder().encode('<materialx><standard_surface name="s1"/></materialx>') } },
-  };
-  assert.equal(meshMaterialMayDisplace(plainSurface, mtlxFileTextsByPath, usdaTexts), false);
-
-  const unbound = { materialPath: '', material: null };
-  assert.equal(meshMaterialMayDisplace(unbound, mtlxFileTextsByPath, usdaTexts), false);
 });
 
 test('ownedTyped reuses a JS-owned typed array of the right type instead of copying', () => {
