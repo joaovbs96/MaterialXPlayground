@@ -749,6 +749,16 @@ const parseVertexInputs = (vs) => {
     return out;
 };
 
+// Integer geomprop varyings need GLSL ES 3.00's "flat" qualifier, and every
+// stream this viewer binds is a Float32 attribute, so the vertex ATTRIBUTE
+// side is redeclared as the matching float type and rounded back to int
+// for the varying and any other in-stage use.
+const INT_GEOMPROP_TYPES = {
+    int: 'float', ivec2: 'vec2', ivec3: 'vec3', ivec4: 'vec4',
+    uint: 'float', uvec2: 'vec2', uvec3: 'vec3', uvec4: 'vec4'
+};
+const isIntGeompropType = (type) => Object.prototype.hasOwnProperty.call(INT_GEOMPROP_TYPES, type);
+
 // ESSL's geompropvalue node names both the vertex input and the vertex-data
 // connector "i_geomprop_<name>" (the GLSL generator hides this behind a
 // vd. struct; ESSL emits flat varyings), producing a redefinition of the
@@ -762,10 +772,47 @@ const patchGeompropVaryings = (vs, fs) => {
     if (!hasOut && inRe.test(vs)) {
         mtlxWarn('mtlx-engine: found a vertex "in i_geomprop_*" without a matching "out", patchGeompropVaryings skipped.');
     }
-    const patchedVs = vs
-        .replace(/^\s*out\s+(\w+)\s+i_geomprop_(\w+)\s*;/gm, 'out $1 vd_geomprop_$2;')
-        .replace(/^(\s*)i_geomprop_(\w+)\s*=\s*i_geomprop_\2\s*;/gm, '$1vd_geomprop_$2 = i_geomprop_$2;');
-    const patchedFs = fs.replace(/\bi_geomprop_(\w+)\b/g, 'vd_geomprop_$1');
+    // Connector type per geomprop name, gathered before any rewrite.
+    const connectorTypes = new Map();
+    outRe.lastIndex = 0;
+    let om;
+    while ((om = outRe.exec(vs)) !== null) connectorTypes.set(om[2], om[1]);
+
+    const vsLines = vs.split('\n').map((line) => {
+        const declMatch = line.match(/^(\s*)in\s+(\w+)\s+i_geomprop_(\w+)\s*;/);
+        if (declMatch) {
+            const [, indent, type, name] = declMatch;
+            const floatType = INT_GEOMPROP_TYPES[type];
+            return floatType ? `${indent}in ${floatType} i_geomprop_${name};` : line;
+        }
+        const outMatch = line.match(/^(\s*)out\s+(\w+)\s+i_geomprop_(\w+)\s*;/);
+        if (outMatch) {
+            const [, indent, type, name] = outMatch;
+            return `${indent}${isIntGeompropType(type) ? 'flat ' : ''}out ${type} vd_geomprop_${name};`;
+        }
+        const connMatch = line.match(/^(\s*)i_geomprop_(\w+)\s*=\s*i_geomprop_\2\s*;/);
+        if (connMatch) {
+            const [, indent, name] = connMatch;
+            const type = connectorTypes.get(name);
+            return isIntGeompropType(type)
+                ? `${indent}vd_geomprop_${name} = ${type}(round(i_geomprop_${name}));`
+                : `${indent}vd_geomprop_${name} = i_geomprop_${name};`;
+        }
+        // Any other in-stage use of an integer geomprop (e.g. displacement
+        // reading it directly) rounds the float attribute back to its int type.
+        let out = line;
+        for (const [name, type] of connectorTypes) {
+            if (!isIntGeompropType(type)) continue;
+            out = out.replace(new RegExp('\\bi_geomprop_' + name + '\\b', 'g'), `${type}(round(i_geomprop_${name}))`);
+        }
+        return out;
+    });
+    const patchedVs = vsLines.join('\n');
+
+    const patchedFs = fs
+        .replace(/\bi_geomprop_(\w+)\b/g, 'vd_geomprop_$1')
+        .replace(/^(\s*)in\s+(\w+)\s+vd_geomprop_(\w+)\s*;/gm, (full, indent, type, name) =>
+            `${indent}${isIntGeompropType(type) ? 'flat ' : ''}in ${type} vd_geomprop_${name};`);
     return { vs: patchedVs, fs: patchedFs };
 };
 
@@ -4823,13 +4870,15 @@ const prepGeometry = (geometry) => {
     return geometry;
 };
 
-// Sizes for the geomprop types this viewer can zero-fill (int types read
-// zero already at the GL default and are skipped, only noted).
+// Sizes for the geomprop types this viewer can zero-fill. patchGeompropVaryings
+// redeclares integer geomprop attributes as float/vecN (rounded back to int
+// in the vertex shader), so they land here too and fill like any other stream.
 const GEOMPROP_ITEM_SIZE = { float: 1, vec2: 2, vec3: 3, vec4: 4 };
 // Binds each declared geompropvalue vertex input that the geometry does not
-// already carry: vec2 aliases "uv", other float types get a zero-filled
-// attribute, integer types are skipped. `notify(text)` receives one notice
-// per unbound geomprop; callers dedupe and surface it to the user.
+// already carry: vec2 aliases "uv", every other type (including integer
+// geomprops, now reported as float/vecN) gets a zero- or default-filled
+// attribute. `notify(text)` receives one notice per unbound geomprop;
+// callers dedupe and surface it to the user.
 const bindGeompropAttributes = (geometry, geomprops, notify, constants = null) => {
     if (!geometry || !geomprops || !geomprops.length) return geometry;
     const uv = geometry.getAttribute('uv');
@@ -8281,10 +8330,21 @@ const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMat
         // never leave the live view bound to this disposed target.
         try {
             compileFilteringDriverNoise(renderer, scene, camera);
-            const badProg = (renderer.info.programs || []).find((p) => p.diagnostics && p.diagnostics.runnable === false);
+            // Attribute to THIS material's own program, not the first broken
+            // program anywhere in the shared renderer (an unrelated material
+            // would otherwise blame every displacement evaluation). Mirrors
+            // reportBadPrograms in js/usd-scene-renderer.js. Falls back to the
+            // old scan if r128 hasn't recorded a currentProgram yet.
+            const props = renderer.properties.get(material);
+            const ownProgram = props && props.currentProgram;
+            const badProg = ownProgram
+                ? (ownProgram.diagnostics && ownProgram.diagnostics.runnable === false ? ownProgram : null)
+                : (renderer.info.programs || []).find((p) => p.diagnostics && p.diagnostics.runnable === false);
             if (badProg) {
                 const d = badProg.diagnostics;
-                const log = (d.programLog || '') + (d.fragmentShader && d.fragmentShader.log ? ' FRAG: ' + d.fragmentShader.log : '');
+                const log = (d.programLog || '')
+                    + (d.vertexShader && d.vertexShader.log ? ' VERT: ' + d.vertexShader.log : '')
+                    + (d.fragmentShader && d.fragmentShader.log ? ' FRAG: ' + d.fragmentShader.log : '');
                 notices.push('Displacement evaluation failed: ' + (log.split('\n')[0] || 'program not runnable').slice(0, 200));
                 return { offsets: null, mode, notices };
             }

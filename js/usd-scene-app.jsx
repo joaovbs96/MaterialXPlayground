@@ -578,6 +578,11 @@
         );
         const subdivisionLevelRef = React.useRef(subdivisionLevel);
         subdivisionLevelRef.current = subdivisionLevel;
+        const [triangleLimits, setTriangleLimitsState] = React.useState(
+            () => (typeof storedSceneTriangleLimits === 'function' ? storedSceneTriangleLimits() : true)
+        );
+        const triangleLimitsRef = React.useRef(triangleLimits);
+        triangleLimitsRef.current = triangleLimits;
         const [displacementEnabled, setDisplacementEnabledState] = React.useState(
             () => !!(window.getDisplacementEnabled && window.getDisplacementEnabled())
         );
@@ -861,7 +866,7 @@
             handleRef.current = null; setHandle(null); setStage(null); setError(''); setStatus('loading');
             window.__mtlxUsdSceneHandle = null;
             try {
-                const result = await loader({ files: loadFiles, rootPath: loadRoot, signal: controller.signal, subdivisionLevel: subdivisionLevelRef.current, onProgress: (value) => updateProgress(value, generation) });
+                const result = await loader({ files: loadFiles, rootPath: loadRoot, signal: controller.signal, subdivisionLevel: subdivisionLevelRef.current, triangleLimits: triangleLimitsRef.current, onProgress: (value) => updateProgress(value, generation) });
                 if (!mountedRef.current || controller.signal.aborted || generation !== generationRef.current) return;
                 setStage(result); setStatus('loaded');
             } catch (e) {
@@ -914,7 +919,7 @@
                     // A retained scene handle survives route visibility pauses
                     // after adoption. During initial construction, the local
                     // effect guard still cancels work when the route leaves.
-                    const nextHandle = await renderer({ container: containerRef.current, stage, files, version, displacementSubdivision: displacementSubdivisionRef.current, onProgress: (value) => updateProgress(value, rendererGeneration), isMounted: () => mountedRef.current && generationRef.current === rendererGeneration && !rendererController?.signal?.aborted && (adopted || (live && active)) });
+                    const nextHandle = await renderer({ container: containerRef.current, stage, files, version, displacementSubdivision: displacementSubdivisionRef.current, triangleLimits: triangleLimitsRef.current, onProgress: (value) => updateProgress(value, rendererGeneration), isMounted: () => mountedRef.current && generationRef.current === rendererGeneration && !rendererController?.signal?.aborted && (adopted || (live && active)) });
                     created = nextHandle;
                     if (!live || !mountedRef.current || !active || generationRef.current !== rendererGeneration || rendererController?.signal?.aborted) { if (nextHandle && nextHandle.dispose) nextHandle.dispose(); return; }
                     nextHandle.__sceneStage = stage;
@@ -1329,6 +1334,14 @@
             if (typeof setStoredSceneDisplacementSubdivision === 'function') setStoredSceneDisplacementSubdivision(next);
             callHandle('setDisplacementSubdivisionOverride', next);
         };
+        const pickTriangleLimits = (enabled) => {
+            const next = enabled !== false;
+            setTriangleLimitsState(next);
+            triangleLimitsRef.current = next;
+            if (typeof setStoredSceneTriangleLimits === 'function') setStoredSceneTriangleLimits(next);
+            callHandle('setTriangleLimits', next);
+            if (files.length && rootPath) load();
+        };
         const textureMaxSize = (handle && typeof handle.getTextureMaxSize === 'function')
             ? handle.getTextureMaxSize()
             : (typeof storedSceneTextureMaxSize === 'function' ? storedSceneTextureMaxSize() : 2048);
@@ -1609,6 +1622,9 @@
                             onChange={pickDisplacementSubdivisionOverride} defValue="follow" size="sm" disabled={busy} />
                     }
                     description="Subdivision applied to meshes bound to displaced MaterialX materials." />
+                <ToggleRow label="Triangle limits" checked={triangleLimits}
+                    onChange={pickTriangleLimits} disabled={busy}
+                    description="Skips or lowers subdivision and displacement detail that would exceed 700,000 triangles per mesh or 6,000,000 per scene. Turning this off can run out of memory or freeze the tab on heavy scenes." />
             </React.Fragment>
         );
         const sidebarBody = (

@@ -8,7 +8,7 @@
 
 import "../shared/mesh-subdivision.js";
 
-const { subdivideMesh, weldMesh } = globalThis.MtlxMeshSubdivision;
+const { subdivideMesh, subdivideCatmullClark, weldMesh } = globalThis.MtlxMeshSubdivision;
 
 const RUNTIME_DIR = new URL("../../vendor/usd-webview-bindings/", import.meta.url);
 let runtimePromise;
@@ -137,6 +137,13 @@ function arrayCopy(value, Type = Float32Array) {
 function text(value) {
   return value == null ? undefined : String(value);
 }
+
+// Meshes with no bound material but a constant displayColor (for example
+// Pixar's Kitchen_set) fall back to this synthetic MaterialX material, which
+// the renderer tints per mesh.
+const DISPLAY_COLOR_MATERIAL_PATH = "/__displayColor__";
+const DISPLAY_COLOR_SOURCE_ASSET = "__displaycolor.mtlx";
+const DISPLAY_COLOR_MATERIAL_NAME = "M_displayColor";
 
 function normalizePath(path) {
   let value = String(path ?? "").replaceAll("\\", "/");
@@ -609,17 +616,30 @@ function hasAuthoredNormalData(record) {
   return parseNumbers(record?.value).length >= 3;
 }
 
-// Reads orientation, subdivisionScheme, and authored normal provenance with
-// a single getPrimAttributes call. Normal array values may be truncated, so
-// only their type, authored flag, and bounded nonempty metadata are inspected.
+// getPrimAttributes stringifies faceVertexCounts and truncates long arrays
+// with a "... N more" tail; valueElementCount holds the true total but only
+// the printed prefix is ever needed here, so anything after "..." is dropped.
+function parseFaceVertexCounts(record) {
+  const raw = String(record?.value ?? "");
+  const cut = raw.indexOf("...");
+  const prefix = cut >= 0 ? raw.slice(0, cut) : raw;
+  const matches = prefix.match(/-?\d+/g);
+  return matches && matches.length ? matches.map(Number) : undefined;
+}
+
+// Reads orientation, subdivisionScheme, authored normal provenance, and a
+// (possibly truncated) faceVertexCounts prefix with a single
+// getPrimAttributes call. Normal array values may be truncated too, so only
+// their type, authored flag, and bounded nonempty metadata are inspected.
 function readMeshTokens(api, root, primPath) {
-  const tokens = { orientation: "rightHanded", subdivisionScheme: undefined, authoredNormals: false };
+  const tokens = { orientation: "rightHanded", subdivisionScheme: undefined, authoredNormals: false, faceVertexCounts: undefined };
   if (typeof api.getPrimAttributes !== "function" || !primPath) return tokens;
   try {
     for (const record of arrayItems(api.getPrimAttributes(root, primPath))) {
       const name = text(record?.name);
       if (name === "orientation") tokens.orientation = text(record.value) === "leftHanded" ? "leftHanded" : "rightHanded";
       else if (name === "subdivisionScheme") tokens.subdivisionScheme = text(record.value);
+      else if (name === "faceVertexCounts") tokens.faceVertexCounts = parseFaceVertexCounts(record);
       else if (name === "primvars:normals" || name === "normals") {
         tokens.authoredNormals ||= hasAuthoredNormalData(record);
       }
@@ -1956,6 +1976,7 @@ async function recoverInstanceNormals(api, root, pointInstancerPaths, drawSnapsh
         generatedMesh.normals = candidate.normals;
         generatedMesh.orientation = orientation;
         generatedMesh.subdivisionScheme = tokens.subdivisionScheme;
+        generatedMesh.faceVertexCounts = tokens.faceVertexCounts;
         generatedMesh.authoredNormals = tokens.authoredNormals;
         generatedMesh.castsShadow = readInstanceCastsShadow(api, root, generatedMesh);
       }
@@ -2097,6 +2118,26 @@ function copyStageResult(summary, draw, payloads, cameras, lights, metrics = nul
   };
 }
 
+// Exact Catmull-Clark triangle count needs each face's vertex count: a face
+// with n vertices yields n quads, so n * 2 triangles per level-1 subdivision,
+// times 4 per further level. faceVertexCounts may only be a truncated prefix
+// (the native attribute reader caps at 512 entries), so it is only trusted
+// when it fully accounts for originalTriangles; otherwise fall back to the
+// quad-typical factor used for a plain quad mesh.
+function catmullClarkProjectedTriangles(mesh, levels, originalTriangles) {
+  const counts = mesh.faceVertexCounts;
+  if (Array.isArray(counts) && counts.length) {
+    let sum = 0;
+    for (const n of counts) sum += Math.max(0, n - 2);
+    if (sum === originalTriangles) {
+      let triangles = 0;
+      for (const n of counts) triangles += n * 2 * 4 ** (levels - 1);
+      return triangles;
+    }
+  }
+  return originalTriangles * (4 ** levels);
+}
+
 async function load(request) {
   // A persistent worker must not let a second load inherit the first
   // stage's warnings.
@@ -2234,6 +2275,7 @@ async function load(request) {
           const tokens = readMeshTokens(api, root, mesh.path || path);
           mesh.orientation = tokens.orientation;
           mesh.subdivisionScheme = tokens.subdivisionScheme;
+          mesh.faceVertexCounts = tokens.faceVertexCounts;
           mesh.authoredNormals = tokens.authoredNormals;
           mesh.castsShadow = readMeshCastsShadow(api, root, mesh.path || path);
         }
@@ -2271,6 +2313,7 @@ async function load(request) {
       const tokens = readMeshTokens(api, root, mesh.path);
       mesh.orientation = tokens.orientation;
       mesh.subdivisionScheme = tokens.subdivisionScheme;
+      mesh.faceVertexCounts = tokens.faceVertexCounts;
       mesh.authoredNormals = tokens.authoredNormals;
       mesh.castsShadow = readMeshCastsShadow(api, root, mesh.path);
     }
@@ -2293,6 +2336,7 @@ async function load(request) {
   {
     const levels = Math.max(0, Math.min(2, Number.isFinite(request.subdivisionLevel) ? request.subdivisionLevel : 0));
     if (levels > 0) {
+      const triangleLimits = request.triangleLimits !== false;
       const MESH_TRIANGLE_LIMIT = 700000;
       const STAGE_TRIANGLE_LIMIT = 6000000;
       const factor = 4 ** levels;
@@ -2309,15 +2353,17 @@ async function load(request) {
         const cornerCount = mesh.indices ? mesh.indices.length : (mesh.positions ? mesh.positions.length / 3 : 0);
         const originalTriangles = Math.floor(cornerCount / 3);
         if (!originalTriangles) continue;
-        const projectedTriangles = originalTriangles * factor;
-        if (projectedTriangles > MESH_TRIANGLE_LIMIT) {
+        const projectedTriangles = scheme === "catmullClark"
+          ? catmullClarkProjectedTriangles(mesh, levels, originalTriangles)
+          : originalTriangles * factor;
+        if (triangleLimits && projectedTriangles > MESH_TRIANGLE_LIMIT) {
           drawSnapshot.warnings ??= [];
           drawSnapshot.warnings.push(
             `Subdivision skipped (would exceed ${MESH_TRIANGLE_LIMIT} triangles): ${mesh.path || mesh.name || "mesh"}`
           );
           continue;
         }
-        if (stageTriangleTotal - originalTriangles + projectedTriangles > STAGE_TRIANGLE_LIMIT) {
+        if (triangleLimits && stageTriangleTotal - originalTriangles + projectedTriangles > STAGE_TRIANGLE_LIMIT) {
           if (!budgetWarned) {
             drawSnapshot.warnings ??= [];
             drawSnapshot.warnings.push(`Subdivision stopped: stage triangle budget (${STAGE_TRIANGLE_LIMIT}) reached`);
@@ -2325,7 +2371,10 @@ async function load(request) {
           }
           continue;
         }
-        const subdivided = subdivideMesh(mesh, levels);
+        const subdivided = scheme === "catmullClark"
+          ? subdivideCatmullClark(mesh, levels, mesh.subsets, { faceVertexCounts: mesh.faceVertexCounts })
+          : subdivideMesh(mesh, levels);
+        delete mesh.faceVertexCounts;
         if (!subdivided) continue;
         mesh.cage = {
           positions: mesh.positions,
@@ -2343,7 +2392,9 @@ async function load(request) {
         if (subdivided.geomprops) mesh.geomprops = subdivided.geomprops;
         else delete mesh.geomprops;
         delete mesh.indices;
-        if (Array.isArray(mesh.subsets) && mesh.subsets.length) {
+        if (scheme === "catmullClark") {
+          if (subdivided.subsets) mesh.subsets = subdivided.subsets;
+        } else if (Array.isArray(mesh.subsets) && mesh.subsets.length) {
           mesh.subsets = mesh.subsets.map(subset => ({
             ...subset,
             start: subset.start * factor,
@@ -2414,6 +2465,45 @@ async function load(request) {
         );
       }
     }
+  }
+  // Unbound meshes with a displayColor share one synthetic material, tinted
+  // per mesh by the renderer. Runs after the loop above so the record never
+  // reaches collectMaterialOverrides / buildUsdShadeMaterialX.
+  const displayColorMeshes = result.meshes.filter(mesh =>
+    mesh.displayColor && !mesh.materialPath &&
+    !(Array.isArray(mesh.groups) && mesh.groups.some(group => group.materialPath)));
+  if (displayColorMeshes.length) {
+    for (const mesh of displayColorMeshes) mesh.materialPath = DISPLAY_COLOR_MATERIAL_PATH;
+    const xml = [
+      '<?xml version="1.0"?>',
+      '<materialx version="1.39">',
+      '  <standard_surface name="SR_displayColor" type="surfaceshader">',
+      '    <input name="base" type="float" value="1" />',
+      '    <input name="base_color" type="color3" value="0.18, 0.18, 0.18" />',
+      '    <input name="specular_roughness" type="float" value="0.5" />',
+      '  </standard_surface>',
+      '  <surfacematerial name="M_displayColor" type="material">',
+      '    <input name="surfaceshader" type="surfaceshader" nodename="SR_displayColor" />',
+      '  </surfacematerial>',
+      '</materialx>',
+      '',
+    ].join("\n");
+    const bytes = new TextEncoder().encode(xml);
+    result.materials.push({
+      path: DISPLAY_COLOR_MATERIAL_PATH,
+      materialX: {
+        path: DISPLAY_COLOR_SOURCE_ASSET,
+        mimeType: "application/xml",
+        materialName: DISPLAY_COLOR_MATERIAL_NAME,
+        data: bytes,
+      },
+      sourceAsset: DISPLAY_COLOR_SOURCE_ASSET,
+      materialName: DISPLAY_COLOR_MATERIAL_NAME,
+      displayColorFallback: true,
+    });
+    result.assets.push({ path: DISPLAY_COLOR_SOURCE_ASSET, data: bytes.buffer });
+    result.transfer.push(bytes.buffer);
+    result.warnings.push(`[info] ${displayColorMeshes.length} meshes have no material and use their USD display color`);
   }
   resolveBackslashMaterialReferences(api, root, result, openStageStderrLines, uploadedPaths, graph);
   result.warnings.push(...cameraWarnings);

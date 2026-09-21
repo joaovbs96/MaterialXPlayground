@@ -89,7 +89,7 @@ function ensureWorker() {
   return worker;
 }
 
-function runLoad(requestFiles, rootPath, onProgress, signal, purposePolicy, subdivisionLevel) {
+function runLoad(requestFiles, rootPath, onProgress, signal, purposePolicy, subdivisionLevel, triangleLimits) {
   if (signal?.aborted) return Promise.reject(new DOMException("USD stage load aborted", "AbortError"));
 
   for (const file of requestFiles) {
@@ -139,7 +139,7 @@ function runLoad(requestFiles, rootPath, onProgress, signal, purposePolicy, subd
     try {
       // No transfer list: the caller keeps ownership of its buffers, since
       // the same files are subsequently consumed by MaterialX.
-      activeWorker.postMessage({ id, type: "load", files: requestFiles, rootPath, purposePolicy, subdivisionLevel });
+      activeWorker.postMessage({ id, type: "load", files: requestFiles, rootPath, purposePolicy, subdivisionLevel, triangleLimits });
     } catch (error) {
       if (finish(reject, new Error(`OpenUSD request could not cross Worker boundary: ${error?.message ?? error}`))) {
         discardWorker("postMessage failed");
@@ -153,7 +153,7 @@ function runLoad(requestFiles, rootPath, onProgress, signal, purposePolicy, subd
  * Input ArrayBuffers are deliberately structured-cloned; the caller keeps
  * ownership because the same files are subsequently consumed by MaterialX.
  */
-export function loadUsdStage({ files, rootPath, onProgress, signal, purposePolicy = "defaultRender", subdivisionLevel = 0 }) {
+export function loadUsdStage({ files, rootPath, onProgress, signal, purposePolicy = "defaultRender", subdivisionLevel = 0, triangleLimits = true }) {
   if (!Array.isArray(files) || !files.length) return Promise.reject(new Error("USD files are required"));
   if (!rootPath) return Promise.reject(new Error("USD rootPath is required"));
 
@@ -169,7 +169,7 @@ export function loadUsdStage({ files, rootPath, onProgress, signal, purposePolic
 
   // Strict FIFO: the worker holds exactly one native stage, so this request
   // waits for every previously queued one to settle before it starts.
-  const runThisLoad = () => runLoad(requestFiles, rootPath, onProgress, signal, purposePolicy, subdivisionLevel);
+  const runThisLoad = () => runLoad(requestFiles, rootPath, onProgress, signal, purposePolicy, subdivisionLevel, triangleLimits);
   const result = queueTail.then(runThisLoad, runThisLoad);
   queueTail = result.then(() => {}, () => {});
   return result;
