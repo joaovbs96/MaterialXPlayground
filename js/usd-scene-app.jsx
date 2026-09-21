@@ -673,11 +673,17 @@
         const progressFractionGenRef = React.useRef(null);
         const progressFractionRef = React.useRef(0);
         const [rotating, toggleRotating] = useViewToggle(handleRef, 'setAutoRotate', false);
+        // Geometry-first mode: once the renderer signals the neutral-material
+        // frame is up, the full-screen loading overlay steps aside so the
+        // stage stays visible while materials keep compiling behind it.
+        const [geometryFirstReady, setGeometryFirstReady] = React.useState(false);
+        const geometryFirstMode = (() => { try { return localStorage.getItem('mtlx_scene_geometry_first') === '1'; } catch (e) { return false; } })();
         filesRef.current = files;
         envSettingsRef.current = { rotation: envRotation, exposureLinear: envExposureLinear, backdrop, autoRotate: rotating };
         const updateProgress = (value, generation) => {
             if (!mountedRef.current || (generation != null && generation !== generationRef.current)) return;
             if (progressFractionGenRef.current !== generation) { progressFractionGenRef.current = generation; progressFractionRef.current = 0; }
+            if (value && typeof value === 'object' && value.phase === 'geometry-first' && value.status === 'ready') setGeometryFirstReady(true);
             const wholeFraction = usdSceneProgressFraction(value, progressFractionRef.current);
             progressFractionRef.current = wholeFraction;
             setProgress(progressValue(value, wholeFraction));
@@ -766,6 +772,7 @@
             abortRef.current = controller;
             if (handleRef.current && typeof handleRef.current.dispose === 'function') handleRef.current.dispose();
             handleRef.current = null; setHandle(null); setStage(null); setError(''); setStatus('loading');
+            setGeometryFirstReady(false);
             window.__mtlxUsdSceneHandle = null;
             try {
                 const result = await loader({ files: loadFiles, rootPath: loadRoot, signal: controller.signal, subdivisionLevel: subdivisionLevelRef.current, onProgress: (value) => updateProgress(value, generation) });
@@ -1206,6 +1213,9 @@
         const RENDERER_STEP_LABELS = { 'shadow-atlas': 'Building shadow atlas', 'sky-visibility': 'Baking sky visibility', 'occlusion-volume': 'Baking occlusion volume', 'gpu-program': 'Checking GPU programs', 'first-frame': 'Rendering first frame' };
         const progressDetail = progress.phase === 'renderer' ? (RENDERER_STEP_LABELS[progress.step] || '') : (progress.label || '');
         const busy = status === 'loading' || status === 'loading-example' || status === 'loaded';
+        // Once geometry-first has shown the stage, drop to a small corner
+        // indicator instead of covering the viewport for the rest of the load.
+        const geometryFirstCorner = geometryFirstMode && geometryFirstReady && busy;
         const canTuneEnvironment = !!handle && typeof handle.setEnvRotation === 'function';
         const envSummary = (envRotation === 0 && envExposureLinear === 1)
             ? 'Default environment'
@@ -1714,9 +1724,13 @@
                         label={progressLabel + (progressText ? ' ' + progressText : '')}
                         fraction={fraction}
                         testId="usd-scene-progress"
-                        className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70"
-                        labelClassName="text-sm text-gray-300 animate-pulse"
-                        barWidthClass="w-56"
+                        className={geometryFirstCorner
+                            ? 'absolute bottom-3 right-3 z-20 flex flex-col items-end gap-1.5 pointer-events-none'
+                            : 'absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70'}
+                        labelClassName={geometryFirstCorner
+                            ? 'text-xs text-gray-300 animate-pulse bg-gray-900/80 rounded px-2 py-1'
+                            : 'text-sm text-gray-300 animate-pulse'}
+                        barWidthClass={geometryFirstCorner ? 'w-40' : 'w-56'}
                     >
                         {progressDetail && (
                             <span

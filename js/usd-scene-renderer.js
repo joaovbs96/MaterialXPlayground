@@ -32,6 +32,8 @@ const storedSceneTextureMaxSize = () => {
 // match a reference by eye instead of us hardcoding a factor.
 const SCENE_STAGE_LIGHTS_KEY = 'mtlx_scene_stage_lights';
 const SCENE_STAGE_LIGHTS_EV_KEY = 'mtlx_scene_stage_lights_ev';
+// Analytic stage-light slots, must match STAGE_LIGHT_SLOTS in js/mtlx-engine.js.
+const SCENE_STAGE_LIGHT_LIMIT = 16;
 const SCENE_SHADOWS_KEY = 'mtlx_scene_shadows';
 
 // The Scene keeps its own view transform. A whole stage is a photographic
@@ -1206,7 +1208,66 @@ const createMtlxSceneView = async ({
     if (!container) throw new Error('USD scene view requires a container.');
     if (!stage || !Array.isArray(stage.meshes)) throw new Error('USD scene snapshot is missing meshes.');
     if (!window.THREE || !THREE.WebGLRenderer) throw new Error('Three.js WebGL renderer is unavailable.');
-    const report = (event) => { if (onProgress) { try { onProgress(event); } catch (e) {} } };
+    const report = (event) => {
+        // Perf-only hook: lets the compile-speed harness poll for a
+        // display-transform-ready signal without scraping status text.
+        if (window.MTLX_PERF_LOG && event && event.phase === 'display-transform') {
+            window.__mtlxSceneDisplayTransformEvents = window.__mtlxSceneDisplayTransformEvents || [];
+            window.__mtlxSceneDisplayTransformEvents.push({ status: event.status, value: event.value, at: performance.now() });
+        }
+        if (onProgress) { try { onProgress(event); } catch (e) {} }
+    };
+    // Perf measurement only, gated by window.MTLX_PERF_LOG; zero cost when
+    // off. Published as window.__mtlxScenePerf once compile finishes.
+    const scenePerf = window.MTLX_PERF_LOG ? { materials: [], materialPhaseMs: 0, bindPhaseMs: 0, gpuProgramMs: 0,
+        distinctPrograms: 0, distinctProgramsNamesStripped: 0, prewarmParallelWaitMs: 0, firstGeometryFrameMs: null } : null;
+    const sceneLoadStart = performance.now();
+    const scenePerfHash = (s) => {
+        let h = 2166136261;
+        const str = String(s || '');
+        for (let i = 0; i < str.length; i += 1) { h ^= str.charCodeAt(i); h = (h * 16777619) >>> 0; }
+        return h.toString(16);
+    };
+    // Measurement only: approximates how many distinct programs would remain
+    // if structurally identical materials shared one, by replacing each
+    // public (non u_) uniform name and its node-name prefix with a token.
+    const scenePerfStripNames = (fs, introspected) => {
+        const names = new Set();
+        (introspected || []).forEach((u) => {
+            const n = u && u.name && String(u.name);
+            if (!n) return;
+            if (!n.startsWith('u_')) names.add(n);
+            const cut = n.indexOf('_');
+            if (cut > 0) names.add(n.slice(0, cut));
+        });
+        const ordered = Array.from(names).filter((n) => n.length > 1).sort((a, b) => b.length - a.length);
+        let out = String(fs || '');
+        let index = 0;
+        for (const name of ordered) {
+            if (!out.includes(name)) continue;
+            out = out.split(name).join('U' + index);
+            index += 1;
+        }
+        return out;
+    };
+    // Kill switch reader: '0' disables, anything else (or absence) enables.
+    const readDefaultOnSwitch = (key) => { try { return localStorage.getItem(key) !== '0'; } catch (e) { return true; } };
+    // Read once per scene load: no-await parallel driver compiles (item 3).
+    // Default ON, kill switch mtlx_scene_parallel_compile=0.
+    const parallelCompile = readDefaultOnSwitch('mtlx_scene_parallel_compile');
+    // Read once per scene load: build geometry with the neutral material and
+    // start rendering before MaterialX materials compile, swapping each in
+    // once its driver program is ready. Forces the parallel prewarm path
+    // below, since that is what keeps the swap from blocking a frame.
+    // Experimental, default OFF: only '1' enables it.
+    const geometryFirst = (() => { try { return localStorage.getItem('mtlx_scene_geometry_first') === '1'; } catch (e) { return false; } })();
+    const effectiveParallelCompile = parallelCompile || geometryFirst;
+    // Read once per scene load: skip full regen on a display-transform-only
+    // change (item 4). Default ON, kill switch mtlx_scene_fast_display=0.
+    const fastDisplaySwitch = readDefaultOnSwitch('mtlx_scene_fast_display');
+    // Pending { promise, perfEntry, submitAt } prewarm joins in parallel mode,
+    // awaited together right before renderer.compile (see the gpu-program step).
+    const pendingPrewarms = [];
     const warnings = Array.isArray(stage.warnings) ? stage.warnings.slice() : [];
     const prepassWarnings = new Set();
     let displayTransformListener = null;
@@ -1216,10 +1277,31 @@ const createMtlxSceneView = async ({
     let displayRebuildPromise = null;
     let displayDirty = false;
     let displayRevision = 0;
-    displayTransformListener = () => {
+    // Generation-affecting: full material regen, used for heightToNormalTexel
+    // and texture size/budget changes, and (switch off) the global display
+    // transform event too.
+    const markDisplayRegenDirty = () => {
         displayDirty = true;
         displayRevision += 1;
         if (queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
+    };
+    // Set right before the fast path is used, once pushDisplaySettings and
+    // environmentBridge exist (see updateRendererDisplayTransform below).
+    let applyDisplayTransformFast = null;
+    displayTransformListener = () => {
+        // The global display transform is a uniform in every generated
+        // shader, so with the switch on a value-only push is enough; the
+        // Scene's own transform (setSceneDisplayTransform) already does the
+        // same thing today. Everything else routed through this listener
+        // (heightToNormalTexel, texture size/budget) calls
+        // markDisplayRegenDirty directly instead, and always keeps the full
+        // regen path regardless of this switch.
+        if (fastDisplaySwitch && applyDisplayTransformFast) {
+            applyDisplayTransformFast();
+            report({ phase: 'display-transform', status: 'ready', value: window.getDisplayTransform ? window.getDisplayTransform() : 'srgb' });
+            return;
+        }
+        markDisplayRegenDirty();
     };
     window.addEventListener('mtlx-display-transform', displayTransformListener);
     sceneTransparencyListener = () => { if (sceneTransparencyRefresh) sceneTransparencyRefresh(); };
@@ -1227,7 +1309,7 @@ const createMtlxSceneView = async ({
     // heightToNormalTexel is generation-affecting like the display
     // transform: reuse the same rebuild path so a flag flip recompiles.
     const settingsChangedListener = (e) => {
-        if (e.detail && e.detail.key === 'heightToNormalTexel') displayTransformListener();
+        if (e.detail && e.detail.key === 'heightToNormalTexel') markDisplayRegenDirty();
     };
     window.addEventListener('mtlx-settings-changed', settingsChangedListener);
     const fileMap = sceneFileMap(files, stage);
@@ -1581,6 +1663,12 @@ const createMtlxSceneView = async ({
     let domeEnv = null;
     let envTilt = null;
     let stageLights = [];
+    // Stage-light slots a generated shader must reserve. convertLights caps
+    // its output at SCENE_STAGE_LIGHT_LIMIT and only the sample split (not
+    // the set of lights) depends on the bounds, so "none after the first
+    // pass" means none ever, and anything else keeps the full reservation.
+    let stageLightsConverted = false;
+    const stageLightSlotHint = () => (stageLightsConverted && !stageLights.length ? 0 : SCENE_STAGE_LIGHT_LIMIT);
     let stageLightsEnabled = storedSceneStageLights();
     let stageLightsEv = storedSceneStageLightsEv();
     // Scratch-only direct-light diagnostic state. It is never read from or
@@ -2100,10 +2188,13 @@ const createMtlxSceneView = async ({
                 samplerBudget = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
                 uniformVectorBudget = gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS);
             } catch (e) { /* keep the engine's fallback defaults */ }
+            const __perfGenStart = scenePerf ? performance.now() : 0;
             compiled = await window.compileMtlxSceneMaterial({
                 mx: mxEnv.mx, gen: mxEnv.gen, genContext: mxEnv.genContext,
                 renderable, label, isMounted, document: sourceDocument, sceneRgbt: true, samplerBudget, uniformVectorBudget,
+                stageLightCount: stageLightSlotHint(),
             });
+            const __perfGenMs = scenePerf ? (performance.now() - __perfGenStart) : 0;
             if (!compiled) return null;
             // Uniform paths alone cannot distinguish a direct
             // standard_surface/OpenPBR input from a nested layer closure.
@@ -2127,6 +2218,7 @@ const createMtlxSceneView = async ({
             // that could qualify as a shadow transmittance caster. Per-object
             // thin/solid gating happens later, in shadowCollectTransmitters.
             let transferCompiled = transferCompiledByPath.get(cacheKey);
+            let transferGenMs = 0;
             if (transferCompiled === undefined) {
                 transferCompiled = null;
                 const preClassification = sceneMaterialClassification(compiled, compiled.mtlxSceneSurfaceMetadata);
@@ -2135,12 +2227,14 @@ const createMtlxSceneView = async ({
                     && (Number(preClassification.coverage.opacity) < 0.999 || Number(preClassification.coverage.transmission) > 0.001)
                     && (preThinReason === 'constant-thin' || preThinReason === 'constant-solid' || preThinReason === 'default-solid');
                 if (wantsTransfer && window.createLightTransportUniforms) {
+                    const __perfTransferStart = scenePerf ? performance.now() : 0;
                     try {
                         const transferSrcs = await window.compileMtlxSceneMaterial({
                             mx: mxEnv.mx, gen: mxEnv.gen, genContext: mxEnv.genContext,
                             renderable, label: label + ' (transmittance)', isMounted, document: sourceDocument,
-                            lightTransport: 4, samplerBudget,
+                            lightTransport: 4, samplerBudget, stageLightCount: stageLightSlotHint(),
                         });
+                        if (scenePerf) transferGenMs = performance.now() - __perfTransferStart;
                         if (transferSrcs && transferSrcs.lightTransportSupported) {
                             transferCompiled = transferSrcs;
                         } else if (transferSrcs && transferSrcs.notices && transferSrcs.notices.length) {
@@ -2153,12 +2247,43 @@ const createMtlxSceneView = async ({
                 transferCompiledByPath.set(cacheKey, transferCompiled);
             }
             // Reuse the engine's hidden KHR warm context before this
-            // scene's display WebGL context submits the same source.
+            // scene's display WebGL context submits the same source. In
+            // parallel mode the submit is fired without awaiting completion,
+            // so the driver compiles this program while later materials are
+            // still generating; every pending submit is joined together
+            // right before the real renderer.compile() (see reportRendererStep
+            // 'gpu-program'). The per-submit timeout is stretched by queue
+            // depth so a busy driver with many in-flight programs does not
+            // false-positive a slow-but-fine compile as timed out.
+            let __perfPrewarmMs = 0;
+            let __perfSubmitAt = 0;
+            let prewarmPromise = null;
             if (window.prewarmShaderCompile) {
-                await window.prewarmShaderCompile({ vs: compiled.vs, fs: compiled.fs, isMounted, label });
+                if (effectiveParallelCompile) {
+                    __perfSubmitAt = scenePerf ? performance.now() : 0;
+                    const timeoutMs = Math.min(60000, 15000 + pendingPrewarms.length * 1000);
+                    prewarmPromise = window.prewarmShaderCompile({ vs: compiled.vs, fs: compiled.fs, isMounted, label, timeoutMs });
+                } else {
+                    const __perfPrewarmStart = scenePerf ? performance.now() : 0;
+                    await window.prewarmShaderCompile({ vs: compiled.vs, fs: compiled.fs, isMounted, label });
+                    if (scenePerf) __perfPrewarmMs = performance.now() - __perfPrewarmStart;
+                }
             }
             compiledByPath.set(cacheKey, compiled);
             if (!programByKey.has(compiled.programKey)) programByKey.set(compiled.programKey, compiled);
+            if (scenePerf) {
+                const perfEntry = {
+                    label, genMs: __perfGenMs, transferGenMs, prewarmMs: __perfPrewarmMs,
+                    fsBytes: compiled.fs ? compiled.fs.length : 0,
+                    programKeyHash: scenePerfHash(compiled.programKey),
+                    srcHash: scenePerfHash((compiled.vs || '') + ' ' + (compiled.fs || '')),
+                    stripHash: scenePerfHash(scenePerfStripNames(compiled.fs, compiled.introspected)),
+                };
+                scenePerf.materials.push(perfEntry);
+                if (prewarmPromise) pendingPrewarms.push({ promise: prewarmPromise, perfEntry, submitAt: __perfSubmitAt });
+            } else if (prewarmPromise) {
+                pendingPrewarms.push({ promise: prewarmPromise, perfEntry: null, submitAt: 0 });
+            }
             report({ phase: 'material', path: record.path, label, status: 'ready' });
             return { compiled, cacheKey, transferCompiled };
         } catch (e) {
@@ -2323,7 +2448,7 @@ const createMtlxSceneView = async ({
             try {
                 stageLights = window.convertUsdStageLights(stage.lights, {
                     rootMatrix: sceneRootMatrix(stage),
-                    limit: 16, // must match STAGE_LIGHT_SLOTS in js/mtlx-engine.js
+                    limit: SCENE_STAGE_LIGHT_LIMIT,
                     sceneCenter,
                     metersPerUnit: Number(stage.metersPerUnit),
                     warn: (message) => { if (warnings.indexOf(message) < 0) warnings.push(message); },
@@ -2332,6 +2457,7 @@ const createMtlxSceneView = async ({
                 warnings.push('Stage light import failed: ' + String(e && e.message || e));
                 stageLights = [];
             }
+            stageLightsConverted = true;
         };
         convertLights(null);
         // sceneRoot has already converted geometry to metres. Convert the
@@ -2414,37 +2540,49 @@ const createMtlxSceneView = async ({
         // Compile every material first (cheap on the second pass below, since
         // it just hits compiledByPath) so the ordinary-texture size tier can
         // be planned from the full reference count before any texture binds.
-        const precompiled = [];
+        // Wrapped in a function so geometry-first mode (below) can defer this
+        // whole phase until after the first neutral-material frame is up.
         const materialList = sceneArray(stage.materials);
-        for (let i = 0; i < materialList.length; i += 1) {
-            const record = materialList[i];
-            const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
-            if (skipMaterialCompile(record)) continue;
-            report({ phase: 'material', status: 'start', index: i + 1, total: materialList.length, label });
-            const ensured = await ensureCompiledMaterial(record);
-            report({ phase: 'material', status: (ensured && ensured.compiled) ? 'ready' : 'error', index: i + 1, total: materialList.length, label });
-            if (ensured && ensured.compiled) precompiled.push(ensured.compiled);
-            // Yield one macrotask so the overlay can paint between compiles;
-            // this is the only behaviour change in this instrumentation pass.
-            await new Promise((resolve) => setTimeout(resolve, 0));
-        }
-        await planTextureSize(precompiled);
-        for (let i = 0; i < materialList.length; i += 1) {
-            const record = materialList[i];
-            const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
-            if (!materialHasSource(record)) continue; // handled in the first pass
-            const result = await makeMtlxMaterial(record);
-            if (result) {
-                byPath.set(String(record.path || ''), result);
-                materialRecords.set(String(record.path || ''), record);
-                pendingTextures.push(...(result.pendingTextures || []));
+        const compileAndBindMaterials = async () => {
+            const precompiled = [];
+            const __perfMaterialPhaseStart = scenePerf ? performance.now() : 0;
+            for (let i = 0; i < materialList.length; i += 1) {
+                const record = materialList[i];
+                const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
+                if (skipMaterialCompile(record)) continue;
+                report({ phase: 'material', status: 'start', index: i + 1, total: materialList.length, label });
+                const ensured = await ensureCompiledMaterial(record);
+                report({ phase: 'material', status: (ensured && ensured.compiled) ? 'ready' : 'error', index: i + 1, total: materialList.length, label });
+                if (ensured && ensured.compiled) precompiled.push(ensured.compiled);
+                // Yield one macrotask so the overlay can paint between compiles;
+                // this is the only behaviour change in this instrumentation pass.
+                await new Promise((resolve) => setTimeout(resolve, 0));
             }
-            report({ phase: 'material-bind', index: i + 1, total: materialList.length, label });
-        }
-        await awaitTextureJobs(pendingTextures);
-        // These jobs have settled; only variant jobs created during mesh
-        // partitioning belong to the later wait below.
-        pendingTextures.length = 0;
+            if (scenePerf) scenePerf.materialPhaseMs = performance.now() - __perfMaterialPhaseStart;
+            await planTextureSize(precompiled);
+            const __perfBindPhaseStart = scenePerf ? performance.now() : 0;
+            for (let i = 0; i < materialList.length; i += 1) {
+                const record = materialList[i];
+                const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
+                if (!materialHasSource(record)) continue; // handled in the first pass
+                const result = await makeMtlxMaterial(record);
+                if (result) {
+                    byPath.set(String(record.path || ''), result);
+                    materialRecords.set(String(record.path || ''), record);
+                    pendingTextures.push(...(result.pendingTextures || []));
+                }
+                report({ phase: 'material-bind', index: i + 1, total: materialList.length, label });
+            }
+            if (scenePerf) scenePerf.bindPhaseMs = performance.now() - __perfBindPhaseStart;
+            await awaitTextureJobs(pendingTextures);
+            // These jobs have settled; only variant jobs created during mesh
+            // partitioning belong to the later wait below.
+            pendingTextures.length = 0;
+        };
+        // Off: unchanged behaviour, materials compile before any geometry
+        // exists. On: geometry (below) builds and renders first; this runs
+        // later, right before the material-dependent renderer steps.
+        if (!geometryFirst) await compileAndBindMaterials();
         const udimVariantByMaterial = new Map();
         const udimMaterial = (info, code, label) => {
             if (!info || !info.udimRefs || !info.udimRefs.length) return info && info.material;
@@ -4603,6 +4741,20 @@ const createMtlxSceneView = async ({
                 if (obj.material && obj.material.toneMapped) obj.material.needsUpdate = true;
             });
         };
+        // Fast path for a global display-transform-only change (item 4): push
+        // uniforms and the renderer tone-mapping chunk (pushDisplaySettings),
+        // then refresh whatever the environment bridge bakes for it (the
+        // studio backdrop gradient, the only piece keyed to the global
+        // transform rather than the uniform). No material regen, no texture
+        // cache drop. The peel pipeline's finalMat reads its display
+        // transform from a uniform at render time (see createPeelPipeline in
+        // mtlx-engine.js), so it needs no disposal here.
+        applyDisplayTransformFast = () => {
+            pushDisplaySettings();
+            if (environmentBridge && typeof environmentBridge.refreshDisplayTransform === 'function') {
+                environmentBridge.refreshDisplayTransform();
+            }
+        };
         renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
         // r128's blend-state cache otherwise corrupts VSM and PMREM passes;
         // see js/mtlx-engine.js:4290-4292 for the same reset after construction.
@@ -4732,24 +4884,50 @@ const createMtlxSceneView = async ({
                 environmentBridge.setEnvExposure(envExposure);
             }
         }
-        for (let i = 0; i < stage.meshes.length; i++) {
-            if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
-            const record = stage.meshes[i];
-            if (!record || !record.positions || record.positions.length < 3) {
-                warnings.push('Skipped mesh without valid positions: ' + String(record && (record.primPath || record.name) || i));
-                continue;
-            }
+        const resize = () => {
+            if (!renderer || !container || resizeSuspended) return;
+            const w = Math.max(1, container.clientWidth || 640);
+            const h = Math.max(1, container.clientHeight || 480);
+            renderer.setSize(w, h, false);
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+        };
+        const frameAll = () => {
+            // Backdrops/skyboxes are deliberately excluded from framing.
+            // A USD camera may have left a non-default fov/aperture-derived
+            // fov behind; the auto-framing entry always uses the plain 45.
+            camera.fov = 45;
+            const box = new THREE.Box3().setFromObject(sceneRoot);
+            if (box.isEmpty()) return;
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
+            const radius = size.length() * 0.5 || 1;
+            const halfY = THREE.MathUtils.degToRad(camera.fov * 0.5);
+            const halfX = Math.atan(Math.tan(halfY) * Math.max(camera.aspect, 0.01));
+            const distance = Math.max(radius / Math.tan(halfY), radius / Math.tan(halfX)) * 1.25;
+            lastFrameDistance = distance;
+            camera.position.copy(center).add(new THREE.Vector3(0, 0.25, 1).normalize().multiplyScalar(distance));
+            camera.near = Math.max(radius / 1000, 0.001);
+            // Studio wall sits at STUDIO_WALL_R + STUDIO_MAX_ORBIT_DISTANCE (world
+            // units, at studioScale 1), so the far plane must also cover that
+            // wall once the studio is scaled to the scene, not just the scene.
+            const studioScale = environmentBridge && environmentBridge.getStudioScale ? environmentBridge.getStudioScale() : 0;
+            camera.far = Math.max(distance + radius * 4, 100, studioScale * 36);
+            camera.updateProjectionMatrix();
+            if (controls) { controls.target.copy(center); controls.update(); }
+        };
+        // Neutral placeholder used to build geometry before any material has
+        // compiled; byPath is empty at that point anyway, so meshParts always
+        // takes its plain (non-UDIM) branch against this.
+        const earlyMaterialForPath = (path, label) => sceneNeutralMaterial(label || path || 'pending');
+        const geometryFirstRecords = geometryFirst ? [] : null;
+        // Shared by the initial pass (final materials normally, neutral ones
+        // under geometry-first) and the geometry-first finalize pass below
+        // (only for the rare UDIM record that must be re-triangulated once
+        // its real material's tiles are known).
+        const instantiateParts = (record, index, parts) => {
+            const objects = [];
             const instanceMatrices = sceneInstanceMatrices(record.instanceMatrices);
-            if (record.instanceMatricesInvalid) {
-                warnings.push('Skipped PointInstancer mesh with invalid instance matrices: ' + String(record.primPath || record.name || i));
-                continue;
-            }
-            if (record.instanceMatrices != null && !instanceMatrices.length) continue;
-            const parts = meshParts(record, materialForPath);
-            if (!parts.length) { warnings.push('Skipped mesh without triangle faces: ' + String(record.primPath || record.name || i)); continue; }
-            // An explicit empty matrix array means the PointInstancer has no
-            // visible instances.  Only ordinary meshes with the field absent
-            // get the single parent-matrix draw.
             const drawMatrices = record.instanceMatrices != null ? instanceMatrices : [null];
             const parentMatrix = sceneMatrix(record.matrix);
             parts.forEach((part, partIndex) => {
@@ -4776,7 +4954,7 @@ const createMtlxSceneView = async ({
                     const object = new THREE.Mesh(part.geometry, part.material);
                     const partSuffix = parts.length > 1 ? '-part-' + partIndex : '';
                     const instanceSuffix = instanceMatrix ? '-instance-' + instanceIndex : '';
-                    object.name = String(record.name || record.primPath || ('mesh-' + i)) + partSuffix + instanceSuffix;
+                    object.name = String(record.name || record.primPath || ('mesh-' + index)) + partSuffix + instanceSuffix;
                     // The generated MeshUpdate path identifies the prototype
                     // geometry.  Use the owner path for selection and retain
                     // the generated path/index for diagnostics and picking.
@@ -4798,13 +4976,120 @@ const createMtlxSceneView = async ({
                     };
                     sceneRoot.add(object);
                     prims.push(object);
+                    objects.push(object);
                 });
             });
+            return objects;
+        };
+        for (let i = 0; i < stage.meshes.length; i++) {
+            if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
+            const record = stage.meshes[i];
+            if (!record || !record.positions || record.positions.length < 3) {
+                warnings.push('Skipped mesh without valid positions: ' + String(record && (record.primPath || record.name) || i));
+                continue;
+            }
+            const instanceMatrices = sceneInstanceMatrices(record.instanceMatrices);
+            if (record.instanceMatricesInvalid) {
+                warnings.push('Skipped PointInstancer mesh with invalid instance matrices: ' + String(record.primPath || record.name || i));
+                continue;
+            }
+            if (record.instanceMatrices != null && !instanceMatrices.length) continue;
+            const parts = meshParts(record, geometryFirst ? earlyMaterialForPath : materialForPath);
+            if (!parts.length) { warnings.push('Skipped mesh without triangle faces: ' + String(record.primPath || record.name || i)); continue; }
+            const objects = instantiateParts(record, i, parts);
+            if (geometryFirstRecords) geometryFirstRecords.push({ record, index: i, objects });
             const geometryLabel = String(record.primPath || '').split('/').filter(Boolean).pop() || String(record.name || '');
             report({ phase: 'geometry', index: i + 1, total: stage.meshes.length, primPath: String(record.primPath || ''), label: geometryLabel });
         }
-        await awaitTextureJobs(pendingTextures);
+        if (!geometryFirst) await awaitTextureJobs(pendingTextures);
         if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
+        // Geometry-first: show the stage now, with the neutral material,
+        // before spending any time on MaterialX compiles. Bounds only depend
+        // on positions, so this box and the framing below are already final.
+        let earlyRaf = 0;
+        if (geometryFirst) {
+            resize();
+            frameAll();
+            report({ phase: 'geometry-first', status: 'start' });
+            renderer.render(scene, camera);
+            if (scenePerf) scenePerf.firstGeometryFrameMs = performance.now() - sceneLoadStart;
+            report({ phase: 'geometry-first', status: 'ready' });
+            const earlyRender = () => {
+                if (stopped || !active || !isMounted()) { earlyRaf = 0; return; }
+                if (controls) controls.update();
+                renderer.render(scene, camera);
+                earlyRaf = requestAnimationFrame(earlyRender);
+            };
+            earlyRaf = requestAnimationFrame(earlyRender);
+            // Off's very first material build calls this with the renderer
+            // still null (materials compile before the renderer exists in
+            // that path), which sets env.prefilterTried before the renderer
+            // check and permanently keeps the 16-sample FIS fallback instead
+            // of the prefiltered GGX chain for the rest of the session (an
+            // existing bug in the null-renderer path, not fixed here). Priming
+            // the same flag the same way keeps this switch's final image
+            // identical to off's instead of accidentally fixing that bug.
+            if (window.ensurePrefilteredEnv) window.ensurePrefilteredEnv(null, env);
+            await compileAndBindMaterials();
+            if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
+            // Swap the real material onto every mesh built above. A record
+            // whose material turned out to need UDIM tile partitioning has a
+            // different final triangulation, so it is rebuilt from scratch
+            // instead of a simple material swap.
+            for (const entry of geometryFirstRecords) {
+                const { record, index, objects } = entry;
+                const originalGroups = sceneArray(record.groups);
+                const originalMaterialPaths = originalGroups.length
+                    ? originalGroups.map((group) => group && (group.materialPath || record.materialPath))
+                    : [record.materialPath];
+                const needsUdimPartition = originalMaterialPaths.some((path) => {
+                    const info = byPath.get(String(path || ''));
+                    return !!(info && info.udimRefs && info.udimRefs.length);
+                });
+                if (needsUdimPartition) {
+                    objects.forEach((object) => {
+                        sceneRoot.remove(object);
+                        const idx = prims.indexOf(object);
+                        if (idx >= 0) prims.splice(idx, 1);
+                    });
+                    const oldGeometry = objects[0] && objects[0].geometry;
+                    if (oldGeometry) { geometries.delete(oldGeometry); oldGeometry.dispose(); }
+                    const oldMaterials = new Set();
+                    objects.forEach((object) => {
+                        (Array.isArray(object.material) ? object.material : [object.material]).forEach((m) => oldMaterials.add(m));
+                    });
+                    oldMaterials.forEach((m) => { materials.delete(m); try { m.dispose && m.dispose(); } catch (e) {} });
+                    const parts = meshParts(record, materialForPath);
+                    if (parts.length) instantiateParts(record, index, parts);
+                    continue;
+                }
+                const finalMaterial = originalGroups.length
+                    ? originalMaterialPaths.map((path) => materialForPath(path, record.primPath || record.name))
+                    : materialForPath(record.materialPath, record.primPath || record.name);
+                const finalMaterials = Array.isArray(finalMaterial) ? finalMaterial : [finalMaterial];
+                finalMaterials.forEach((m) => materials.add(m));
+                if (window.bindGeompropAttributes && objects[0]) {
+                    const seen = new Map();
+                    finalMaterials.forEach((m) => {
+                        const compiled = m.userData && m.userData.mtlxSceneCompiled;
+                        for (const gp of (compiled && compiled.geomprops) || []) seen.set(gp.name, gp);
+                    });
+                    if (seen.size) {
+                        window.bindGeompropAttributes(objects[0].geometry, Array.from(seen.values()), (text) => {
+                            if (!warnings.includes(text)) warnings.push(text);
+                        });
+                    }
+                }
+                objects.forEach((object) => {
+                    const oldMaterials = Array.isArray(object.material) ? object.material : [object.material];
+                    oldMaterials.forEach((m) => { materials.delete(m); try { m.dispose && m.dispose(); } catch (e) {} });
+                    object.material = finalMaterial;
+                });
+            }
+            invalidateTransparentMeshCache();
+            await awaitTextureJobs(pendingTextures);
+            if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
+        }
         const stageBox = new THREE.Box3().setFromObject(sceneRoot);
         if (!stageBox.isEmpty()) {
             sceneRadius = stageBox.getBoundingSphere(new THREE.Sphere()).radius;
@@ -4840,38 +5125,6 @@ const createMtlxSceneView = async ({
         applyAoVolume();
         if (shadowsEnabled) { reportRendererStep('shadow-atlas'); updateShadowMap(); }
         applyMaterialEnvironment();
-        const resize = () => {
-            if (!renderer || !container || resizeSuspended) return;
-            const w = Math.max(1, container.clientWidth || 640);
-            const h = Math.max(1, container.clientHeight || 480);
-            renderer.setSize(w, h, false);
-            camera.aspect = w / h;
-            camera.updateProjectionMatrix();
-        };
-        const frameAll = () => {
-            // Backdrops/skyboxes are deliberately excluded from framing.
-            // A USD camera may have left a non-default fov/aperture-derived
-            // fov behind; the auto-framing entry always uses the plain 45.
-            camera.fov = 45;
-            const box = new THREE.Box3().setFromObject(sceneRoot);
-            if (box.isEmpty()) return;
-            const center = box.getCenter(new THREE.Vector3());
-            const size = box.getSize(new THREE.Vector3());
-            const radius = size.length() * 0.5 || 1;
-            const halfY = THREE.MathUtils.degToRad(camera.fov * 0.5);
-            const halfX = Math.atan(Math.tan(halfY) * Math.max(camera.aspect, 0.01));
-            const distance = Math.max(radius / Math.tan(halfY), radius / Math.tan(halfX)) * 1.25;
-            lastFrameDistance = distance;
-            camera.position.copy(center).add(new THREE.Vector3(0, 0.25, 1).normalize().multiplyScalar(distance));
-            camera.near = Math.max(radius / 1000, 0.001);
-            // Studio wall sits at STUDIO_WALL_R + STUDIO_MAX_ORBIT_DISTANCE (world
-            // units, at studioScale 1), so the far plane must also cover that
-            // wall once the studio is scaled to the scene, not just the scene.
-            const studioScale = environmentBridge && environmentBridge.getStudioScale ? environmentBridge.getStudioScale() : 0;
-            camera.far = Math.max(distance + radius * 4, 100, studioScale * 36);
-            camera.updateProjectionMatrix();
-            if (controls) { controls.target.copy(center); controls.update(); }
-        };
         const getCameras = () => sceneArray(stage.cameras).map((record) => ({
             primPath: String(record.primPath || ''),
             name: String(record.name || record.primPath || ''),
@@ -5124,16 +5377,39 @@ const createMtlxSceneView = async ({
         };
         resize();
         frameAll();
+        const globalTransformDriftedAtCreation = creationDisplayTransform !== (window.getDisplayTransform ? window.getDisplayTransform() : 'srgb');
+        // With the switch on, displayRevision only ever moves for a
+        // genuinely generation-affecting change (markDisplayRegenDirty), so
+        // a transform-only drift here is safe to take the cheap path too.
         displayDirty = creationDisplayRevision !== displayRevision
-            || creationDisplayTransform !== (window.getDisplayTransform ? window.getDisplayTransform() : 'srgb');
+            || (!fastDisplaySwitch && globalTransformDriftedAtCreation);
         if (displayDirty) await queueDisplayRebuild();
+        else if (fastDisplaySwitch && globalTransformDriftedAtCreation && applyDisplayTransformFast) {
+            applyDisplayTransformFast();
+            report({ phase: 'display-transform', status: 'ready', value: window.getDisplayTransform ? window.getDisplayTransform() : 'srgb' });
+        }
         // Force the actual display renderer to link every scene program before
         // advertising the view as ready. Three may report a GLSL failure via
         // console and leave no public exception, so turn missing material
         // program handles into per-material diagnostics.
         try {
             reportRendererStep('gpu-program');
+            // Parallel mode: nothing between the material loop and here needed
+            // the driver-side compiles, so join them now, right before the
+            // real renderer.compile() that actually links every program.
+            if (effectiveParallelCompile && pendingPrewarms.length) {
+                report({ phase: 'material', status: 'driver-wait', total: pendingPrewarms.length });
+                const __perfJoinStart = scenePerf ? performance.now() : 0;
+                await Promise.all(pendingPrewarms.map(async (p) => {
+                    await p.promise;
+                    if (p.perfEntry) p.perfEntry.prewarmMs = performance.now() - p.submitAt;
+                }));
+                if (scenePerf) scenePerf.prewarmParallelWaitMs = performance.now() - __perfJoinStart;
+                pendingPrewarms.length = 0;
+            }
+            const __perfGpuProgramStart = scenePerf ? performance.now() : 0;
             renderer.compile(scene, camera);
+            if (scenePerf) scenePerf.gpuProgramMs = performance.now() - __perfGpuProgramStart;
             reportBadPrograms(materials, '');
         } catch (error) {
             warnings.push('USD scene GPU program compilation failed: ' + String(error && error.message || error));
@@ -5161,6 +5437,12 @@ const createMtlxSceneView = async ({
         }
         if (window.ResizeObserver) { resizeObserver = new ResizeObserver(resize); resizeObserver.observe(container); }
         reportRendererStep('first-frame');
+        if (scenePerf) {
+            scenePerf.distinctPrograms = new Set(scenePerf.materials.map((m) => m.srcHash)).size;
+            scenePerf.distinctProgramsNamesStripped = new Set(scenePerf.materials.map((m) => m.stripHash)).size;
+            window.__mtlxScenePerf = scenePerf;
+            console.log('[mtlx-perf] scene materials: ' + JSON.stringify(scenePerf));
+        }
         report({ phase: 'renderer', status: 'ready', warnings: warnings.slice() });
         // Mirrors the material viewer's applyStudioPolarClamp (js/mtlx-
         // engine.js:4804-4819): the orbit target sits above the floor, so a
@@ -5397,6 +5679,11 @@ const createMtlxSceneView = async ({
             raf = requestAnimationFrame(render);
         };
         const startLoop = () => { if (!raf && !stopped && active) render(); };
+        // Geometry-first's own minimal loop (plain renderer.render(), no
+        // post/AO/shadow pipeline) hands off to the real one here, right
+        // before it takes over, so the view stays live and orbit-able for
+        // the whole wait instead of freezing once materials finish compiling.
+        if (earlyRaf) { cancelAnimationFrame(earlyRaf); earlyRaf = 0; }
         if (window.UsdScenePost) {
             presentationPipeline = window.UsdScenePost.create(renderer, {
                 getDisplayTransform: () => sceneDisplayTransform,

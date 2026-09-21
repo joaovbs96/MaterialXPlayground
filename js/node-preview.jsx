@@ -1135,6 +1135,9 @@
                             isMounted: () => mounted,
                             isActive: () => activeRef.current,
                             debugKind: kind,
+                            // Sliders here write uniforms with no regeneration
+                            // path, so a constified input would be uneditable.
+                            allowConstInputs: false,
                         });
                         let view;
                         try {
@@ -1234,6 +1237,7 @@
                                         isMounted: () => mounted,
                                         isActive: () => activeRef.current,
                                         debugKind: kind,
+                                        allowConstInputs: false,
                                     });
                                     if (!sourceView || !mounted) {
                                         if (sourceView) sourceView.dispose();

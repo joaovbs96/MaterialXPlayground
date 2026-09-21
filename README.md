@@ -121,6 +121,17 @@ localStorage.setItem('mtlxPerfLog', '1');      // log graph-editor timing (scope
 
 Remove the keys (`localStorage.removeItem(...)`) and reload to turn them off again.
 
+Compile-speed kill switches, all on by default, set to `'0'` to disable:
+
+```js
+localStorage.setItem('mtlx_light_limit', '0');            // per-tool stage-light slot tiers
+localStorage.setItem('mtlx_const_inputs', '0');            // fold compile-heavy scalar inputs into GLSL consts
+localStorage.setItem('mtlx_scene_parallel_compile', '0');  // no-await parallel driver compiles in the Scene
+localStorage.setItem('mtlx_scene_fast_display', '0');      // skip full regen on a display-transform-only change
+```
+
+`mtlx_scene_geometry_first` is an experimental, off-by-default Scene switch (set to `'1'` to enable) that renders geometry with a neutral material before MaterialX materials finish compiling.
+
 ## VS Code extension (experimental)
 
 The playground also ships as a VS Code extension: opening a `.mtlx` file brings up the Node Graph Editor and Material Viewer beside the text editor, with edits synced live in both directions, plus in-editor validation diagnostics, hover documentation for node types, and the node library documentation as its own panel.

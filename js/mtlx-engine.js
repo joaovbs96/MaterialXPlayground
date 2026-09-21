@@ -36,6 +36,9 @@ const LIGHT_SOURCE_KIND_AREA = 1;
 // finer area-light subdivision at the risk of failing to link on a GPU at
 // that floor, and this define lands in EVERY material in both apps.
 const STAGE_LIGHT_SLOTS = 16;
+// Rig lights parsed from environment_map.mtlx, recorded here so the
+// light-limit tiers can size one generation without the getMxEnv closure.
+let mxRigLightCount = 0;
 const mxEnvPromises = new Map();
 
 // Classic-<script> fallback for UMD builds (e.g. 1.39.4) that have no
@@ -166,6 +169,7 @@ const getMxEnv = (version) => {
                             // slot and STAGE_LIGHT_SLOTS for imported USD lights;
                             // a bound array's length can never change afterwards.
                             const opts = ctx.getOptions();
+                            mxRigLightCount = rigLights.length;
                             opts.hwMaxActiveLightSources = Math.max(opts.hwMaxActiveLightSources || 0, rigLights.length + 1 + STAGE_LIGHT_SLOTS);
                         }
                     } catch (e) { console.warn('direct-light registration unavailable:', e); }
@@ -317,6 +321,15 @@ const mxWarnIfLocked = (name) => {
 const DEBUG_SHADERS = (() => {
     try { return !!localStorage.getItem('mtlxDebugShaders'); } catch (e) { return false; }
 })();
+
+// Publish the perf-log flag here too, so engine [mtlx-perf] logs fire even
+// on views that never load js/graph/model.jsx (#!viewer, #!scene, embeds).
+// Never clobbers an already-true value set by another loader.
+try {
+    if (!window.MTLX_PERF_LOG && localStorage.getItem('mtlxPerfLog')) {
+        window.MTLX_PERF_LOG = true;
+    }
+} catch (e) { /* ignore */ }
 
 // Gated console.warn for expected/recoverable conditions (e.g. a missing
 // texture) that would otherwise spam every load; real warnings stay
@@ -2434,6 +2447,101 @@ const ensureTypedInput = (doc, node, inputName, wantedType) => {
         mtlxWarn('ensureTypedInput: "' + inputName + '" is "' + mxElType(inp) + '" (wanted "' + wantedType + '"), path=' + how);
     }
     return inp;
+};
+
+// Light-limit kill switch, default ON. '0' disables it, read per
+// generation (one localStorage hit) so toggling it needs no reload.
+const LIGHT_LIMIT_KEY = 'mtlx_light_limit';
+const readLightLimit = () => {
+    try { return localStorage.getItem(LIGHT_LIMIT_KEY) !== '0'; } catch (e) { return true; }
+};
+// Stage-light slot tiers. MAX_LIGHT_SOURCES is baked into the generated
+// source, so a tool that can never hold a stage light compiles a body per
+// light slot it will never use (17 slots is 8.4s vs 3.7s on a glass shader).
+const STAGE_LIGHT_TIERS = [0, 4, STAGE_LIGHT_SLOTS];
+// Viewer, Compare, docs previews, Graph previews and embeds bind the rig
+// plus the environment key light and nothing else (currentLights is called
+// there without stageLights), so their tier can never be exceeded.
+const PREVIEW_STAGE_LIGHT_COUNT = 0;
+// Smallest tier that still covers `count`; anything unknown or over the
+// ceiling falls back to the full reservation.
+const chooseStageLightTier = (count) => {
+    const n = Number(count);
+    if (!Number.isFinite(n) || n < 0) return STAGE_LIGHT_SLOTS;
+    const tier = STAGE_LIGHT_TIERS.find((t) => t >= n);
+    return tier === undefined ? STAGE_LIGHT_SLOTS : tier;
+};
+
+// Const-inputs kill switch, default ON. '0' disables it. Read per
+// generation.
+const CONST_INPUTS_KEY = 'mtlx_const_inputs';
+const readConstInputs = () => {
+    try { return localStorage.getItem(CONST_INPUTS_KEY) !== '0'; } catch (e) { return true; }
+};
+// MaterialX input names whose value multiplies compile time: a uniform
+// thin-film thickness keeps the mx_fresnel_airy branch alive and a uniform
+// selector keeps every arm of its if-chain alive, in every closure context.
+const CONST_INPUT_NAMES = ['thin_film_thickness', 'thin_film_ior', 'thin_film_IOR', 'thinfilm_thickness', 'thinfilm_ior',
+    'distribution', 'scatter_mode', 'retroreflective', 'energy_compensation', 'mode'];
+// Names the Scene's thin-wall / light-transport patches and uniform builders
+// match on by declaration or function signature; never rewrite these.
+const CONST_INPUT_DENY = new Set(['thin_walled', 'geometry_thin_walled', 'transmission_weight',
+    'transmission_color', 'transmission_depth', 'geometry_opacity']);
+const CONST_INPUT_GLSL_TYPES = { float: 'float', integer: 'int', boolean: 'bool' };
+
+// Deterministic GLSL literal for one introspected default; floats always
+// carry a decimal point (or an exponent). Returns null when unusable.
+const constInputLiteral = (type, data) => {
+    if (type === 'boolean') return data ? 'true' : 'false';
+    const n = Number(data);
+    if (!Number.isFinite(n)) return null;
+    if (type === 'integer') return String(n | 0);
+    const s = String(n);
+    return /[.eE]/.test(s) ? s : s + '.0';
+};
+
+// Which targeted input an introspected uniform is, or null. Prefers the
+// MaterialX path's last segment; the flattened uniform name is the fallback.
+const constInputKey = (u) => {
+    const name = String((u && u.name) || '');
+    if (!name || name.indexOf('u_') === 0) return null; // engine/private uniform
+    const seg = u.path ? String(u.path).split('/').pop() : '';
+    if (seg && CONST_INPUT_NAMES.indexOf(seg) >= 0) return seg;
+    for (const n of CONST_INPUT_NAMES) {
+        if (name === n || name.endsWith('_' + n)) return n;
+    }
+    return null;
+};
+
+// Rewrites `uniform T name;` into `const T name = <literal>;` for the
+// targeted inputs, so the driver can fold their branches away. Only a
+// scalar float/int/bool with exactly one declaration is touched; everything
+// else is left alone. Returns the rewritten sources plus the pruned
+// introspection list, so nothing tries to bind a uniform that is now gone.
+const constifyInputUniforms = (vs, fs, introspected) => {
+    const constInputs = [];
+    const kept = [];
+    let outVs = vs;
+    let outFs = fs;
+    for (const u of introspected) {
+        const glslType = CONST_INPUT_GLSL_TYPES[u.type];
+        const key = glslType ? constInputKey(u) : null;
+        // `mode` is a generic name: only take it when the generator typed it
+        // as an enum selector (integer), never a float or boolean input.
+        if (!key || CONST_INPUT_DENY.has(String(u.name)) || (key === 'mode' && u.type !== 'integer')) { kept.push(u); continue; }
+        const literal = u.data == null ? null : constInputLiteral(u.type, u.data);
+        if (literal == null) { kept.push(u); continue; }
+        const escaped = String(u.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const declRe = new RegExp('(^|\\n)([ \\t]*)uniform[ \\t]+(?:(?:low|medium|high)p[ \\t]+)?'
+            + glslType + '[ \\t]+' + escaped + '[ \\t]*;', 'g');
+        const hits = (outVs.match(declRe) || []).length + (outFs.match(declRe) || []).length;
+        if (hits !== 1) { kept.push(u); continue; }
+        const replacement = '$1$2const ' + glslType + ' ' + u.name + ' = ' + literal + ';';
+        outVs = outVs.replace(declRe, replacement);
+        outFs = outFs.replace(declRe, replacement);
+        constInputs.push({ name: u.name, path: u.path || null, value: u.data });
+    }
+    return { vs: outVs, fs: outFs, introspected: kept, constInputs };
 };
 
 // Sweep run before every writeToXmlString call, fixing two attributes
@@ -5481,9 +5589,13 @@ const makeLightEntry = (over) => Object.assign({
 // mean), so it has to carry the same gain as the map it came from; without it
 // the sun and the sky drift apart by exactly the dome's intensity whenever
 // that is not 1, which reads as one blown highlight over a correct scene.
-const currentLights = (rigLights, keyLight, rotRad, stageLights, envScale, lightScales = null) => {
+// maxLights is the material's own MAX_LIGHT_SOURCES (see the light-limit
+// tiers); absent, the full rig + key + stage reservation applies.
+const currentLights = (rigLights, keyLight, rotRad, stageLights, envScale, lightScales = null, maxLights = null) => {
     const rig = rigLights || [];
-    const stage = (stageLights || []).slice(0, STAGE_LIGHT_SLOTS);
+    const total = Number.isFinite(maxLights) && maxLights > rig.length
+        ? maxLights : rig.length + 1 + STAGE_LIGHT_SLOTS;
+    const stage = (stageLights || []).slice(0, Math.max(0, total - rig.length - 1));
     const out = rig.map((l) => makeLightEntry({
         type: l.type, direction: l.direction.clone(), color: l.color.clone(), intensity: l.intensity,
     }));
@@ -5500,7 +5612,7 @@ const currentLights = (rigLights, keyLight, rotRad, stageLights, envScale, light
     for (const l of stage) out.push(makeLightEntry(l));
     // The array length must equal MAX_LIGHT_SOURCES exactly; three walks
     // every declared index and an absent element throws.
-    while (out.length < rig.length + 1 + STAGE_LIGHT_SLOTS) out.push(makeLightEntry());
+    while (out.length < total) out.push(makeLightEntry());
     // Scene diagnostics may isolate one direct source without changing the
     // fixed slot layout. Absent scales preserve the ordinary lighting path.
     if (lightScales) {
@@ -5513,9 +5625,11 @@ const currentLights = (rigLights, keyLight, rotRad, stageLights, envScale, light
 };
 // Slots actually evaluated. Stage lights sit past the key slot, so reaching
 // them means counting it too; an unused key slot is inert (intensity 0).
-const activeLightCount = (rigLights, keyLight, stageLights) => {
+const activeLightCount = (rigLights, keyLight, stageLights, maxLights = null) => {
     const rigCount = (rigLights || []).length;
-    const stageCount = Math.min((stageLights || []).length, STAGE_LIGHT_SLOTS);
+    const slots = Number.isFinite(maxLights) && maxLights > rigCount
+        ? maxLights - rigCount - 1 : STAGE_LIGHT_SLOTS;
+    const stageCount = Math.min((stageLights || []).length, Math.max(0, slots));
     if (stageCount) return rigCount + 1 + stageCount;
     return rigCount + (keyLight ? 1 : 0);
 };
@@ -5949,7 +6063,10 @@ const warmKey = (vs, fs) => {
 // Pre-compiles vs/fs on the hidden warm context; never throws. The
 // submitted source must match byte-for-byte what three.js's WebGLProgram
 // submits for display, or the driver cache misses (harmless, no speed win).
-const prewarmShaderCompile = async ({ vs, fs, isMounted, label }) => {
+// timeoutMs overrides WAIT_TIMEOUT_MS for one call: the Scene's parallel
+// compile mode (mtlx_scene_parallel_compile) stretches this per submission
+// so a driver busy with many queued programs is not mistaken for a stall.
+const prewarmShaderCompile = async ({ vs, fs, isMounted, label, timeoutMs }) => {
     const ctx = getWarmContext();
     if (!ctx) return 'skipped';
     const key = warmKey(vs, fs);
@@ -5992,7 +6109,8 @@ const prewarmShaderCompile = async ({ vs, fs, isMounted, label }) => {
         try { if (warmFShader) gl.deleteShader(warmFShader); } catch (e) { /* ditto */ }
     };
 
-    const WAIT_POLL_MS = 50, WAIT_POLL_FAST_MS = 16, WAIT_POLL_FAST_TICKS = 6, WAIT_TIMEOUT_MS = 15000;
+    const WAIT_POLL_MS = 50, WAIT_POLL_FAST_MS = 16, WAIT_POLL_FAST_TICKS = 6;
+    const WAIT_TIMEOUT_MS = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : 15000;
     const __waitStart = performance.now();
     let timedOut = false;
 
@@ -6066,6 +6184,7 @@ const prewarmPreviewTarget = async ({ mx, gen, genContext, buildRenderable, labe
             try {
                 return generatePreviewSourcesUnlocked({
                     mx, gen, genContext, renderable: built.renderable, label, isMounted,
+                    stageLightCount: PREVIEW_STAGE_LIGHT_COUNT,
                 });
             } finally {
                 // Best-effort, ALWAYS: the transient __pv_* wrappers must
@@ -6240,7 +6359,7 @@ const unresolvedNodesText = (found) => found.map((u) => (u.known
 // letting tryRefreshRenderView diff sources without a full rebuild.
 // Frees mxShader before returning, so nothing holds a live wasm handle.
 // ------------------------------------------------------------------
-const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label, isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, sceneFeatureOptions = null }) => {
+const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label, isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, sceneFeatureOptions = null, stageLightCount = null, allowConstInputs = true }) => {
     // Sampler-budget drops, requested only by compileMtlxSceneMaterial's
     // recompile loop; every other caller keeps the full feature set.
     const skipSkyVis = !!(sceneFeatureOptions && sceneFeatureOptions.skipSkyVis);
@@ -6284,6 +6403,14 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
             ? methods.SPECULAR_ENVIRONMENT_FIS : methods.SPECULAR_ENVIRONMENT_PREFILTER;
         if (wanted) genContext.getOptions().hwSpecularEnvironmentMethod = wanted;
     } catch (e) { /* enum absent in older bindings, keep the generator default */ }
+    // Light limit: MAX_LIGHT_SOURCES is baked into the source, so a tool
+    // that can never hold a stage light gets a smaller tier. Written on
+    // EVERY generation while the switch is on, so no tier leaks to the next.
+    let maxLights = mxRigLightCount + 1 + STAGE_LIGHT_SLOTS;
+    if (readLightLimit()) {
+        maxLights = mxRigLightCount + 1 + chooseStageLightTier(stageLightCount);
+        try { genContext.getOptions().hwMaxActiveLightSources = maxLights; } catch (e) { /* option absent */ }
+    }
 
     // Bail before the ~expensive shader-generation call if this
     // build was superseded (mounted flipped while awaiting above),
@@ -6430,12 +6557,24 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // exists, instead of pattern-matching the (nonexistent) literal text.
     fs = applyHeightToNormalTexel(fs, notices, introspected);
 
+    // Const inputs: the last source pass, so every regex above still sees
+    // the declarations it matches on. Pruned entries leave `introspected`
+    // so nothing tries to bind a uniform that no longer exists.
+    let constInputs = [];
+    if (allowConstInputs !== false && readConstInputs()) {
+        const constified = constifyInputUniforms(vs, fs, introspected);
+        vs = constified.vs;
+        fs = constified.fs;
+        introspected = constified.introspected;
+        constInputs = constified.constInputs;
+    }
+
     // Last reference to mxShader, free it here, still inside the lock.
     // Guarded: a BindingError here must never fail an otherwise-successful
     // generation. Loop-local `st` handles are left for FinalizationRegistry.
     try { mxShader.delete(); } catch (e) { /* already deleted */ }
 
-    return { vs, fs, introspected, transparent, vertexInputs, geomprops, notices, payloadSupported, lightTransportSupported };
+    return { vs, fs, introspected, transparent, vertexInputs, geomprops, notices, payloadSupported, lightTransportSupported, maxLights, constInputs };
 };
 
 // Public entry point: serializes generatePreviewSourcesUnlocked against
@@ -6497,7 +6636,7 @@ const generatePreviewSourcesWithinBudget = async (args) => {
 // instances for each object that uses that source.
 const DEFAULT_UNIFORM_VECTOR_BUDGET = 1024;
 
-const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label = 'material', isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, samplerBudget = null, uniformVectorBudget = null }) => {
+const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label = 'material', isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, samplerBudget = null, uniformVectorBudget = null, stageLightCount = null }) => {
     if (!renderable) throw new Error('MaterialX scene material is missing its renderable surface.');
     // Test-only override wins over the caller's live GL limit, so a headless
     // spec can force a tight budget without a real ANGLE context.
@@ -6512,7 +6651,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
     for (let attempt = 0; ; attempt++) {
         const sceneFeatureOptions = {};
         for (const d of dropped) sceneFeatureOptions[d.key] = true;
-        srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted, document: documentArg, sceneRgbt, lightTransport, sceneFeatureOptions });
+        srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted, document: documentArg, sceneRgbt, lightTransport, sceneFeatureOptions, stageLightCount });
         if (!srcs) return null;
         samplerInfo = countFragmentSamplers(srcs.fs);
         if (samplerInfo.count <= budget) break;
@@ -6710,10 +6849,10 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
     if (has('u_shadowMatrix')) uniforms.u_shadowMatrix = { value: shadowMatrix ? shadowMatrix.clone() : shadowOffMatrix() };
     if (has('u_lightData')) {
         const entries = currentLights(lightData, env && env.keyLight, envRotationRad, stageLights,
-            envExposure * Math.max(0, Number(environmentKeyScale) || 0), lightScales);
+            envExposure * Math.max(0, Number(environmentKeyScale) || 0), lightScales, compiled.maxLights);
         uniforms.u_lightData = { value: entries };
     }
-    if (has('u_numActiveLightSources')) uniforms.u_numActiveLightSources = { value: activeLightCount(lightData, env && env.keyLight, stageLights) };
+    if (has('u_numActiveLightSources')) uniforms.u_numActiveLightSources = { value: activeLightCount(lightData, env && env.keyLight, stageLights, compiled.maxLights) };
     return uniforms;
 };
 
@@ -6942,7 +7081,10 @@ const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, lab
     const __t = window.MTLX_PERF_LOG ? performance.now() : 0;
     let srcs;
     try {
-        srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, isMounted });
+        // Same generation options the live view was built with, else the
+        // byte compare below can never match.
+        srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, isMounted,
+            stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, allowConstInputs: view ? view.allowConstInputs !== false : true });
     } catch (e) {
         return { refreshed: false, srcs: null };
     }
@@ -8365,6 +8507,9 @@ const createMtlxRenderView = async ({
     // TEMPORARY visibility (backgrounded view skips render, keeps looping).
     // isAlive: OPTIONAL, read only by animate() via `aliveFn` below.
     isMounted = () => true, isActive = () => true, isAlive = null, debugKind = '',
+    // Opt-out for views whose sliders write uniforms with no regeneration
+    // path (the docs node preview); see constifyInputUniforms.
+    allowConstInputs = true,
     // Initial camera pull-back. 3.6 is roomy framing; ~2.55 fills the
     // frame for small square previews. IGNORED in full-scene mode, the
     // camera there is copied verbatim from the GLB's own embedded camera.
@@ -8611,7 +8756,8 @@ const createMtlxRenderView = async ({
                 // Generates the shader from the renderable surface node.
                 // See generatePreviewSources for the full breakdown;
                 // extracted so tryRefreshRenderView can reuse it for a diff.
-                const __srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, isMounted });
+                const __srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, isMounted,
+                    stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, allowConstInputs });
                 // Bail if this build was superseded while awaiting above:
                 // nothing GL-side exists yet, so disposePartial() is a
                 // safe, idempotent no-op beyond flagging `stopped`.
@@ -8619,7 +8765,7 @@ const createMtlxRenderView = async ({
                 // introspected: already plain JS, converted inside the
                 // mxExclusive-locked generatePreviewSourcesUnlocked
                 // before the lock released. No wasm reads left here.
-                const { vs, fs, introspected, transparent, geomprops, notices } = __srcs;
+                const { vs, fs, introspected, transparent, geomprops, notices, maxLights } = __srcs;
 
                 // Pre-warms the driver compile BEFORE the display renderer
                 // is created; the old after-renderer placement measured
@@ -9441,10 +9587,10 @@ const createMtlxRenderView = async ({
                         // length (rigCount+1, see getMxEnv's
                         // hwMaxActiveLightSources) so later updates can
                         // mutate values in place without a rebuild.
-                        const nLights = activeLightCount(lightData, envKeyLight, null);
+                        const nLights = activeLightCount(lightData, envKeyLight, null, srcs.maxLights);
                         if (has('u_numActiveLightSources')) newUniforms.u_numActiveLightSources = { value: nLights };
                         if (has('u_lightData')) {
-                            const entries = currentLights(lightData, envKeyLight, envRotationRad);
+                            const entries = currentLights(lightData, envKeyLight, envRotationRad, null, undefined, null, srcs.maxLights);
                             newUniforms.u_lightData = { value: entries };
                         }
                         if (DEBUG_SHADERS) {
@@ -9593,7 +9739,7 @@ const createMtlxRenderView = async ({
                 // First build: routes through the exact same helper every
                 // later applyMaterial() call uses, throwing the same styled
                 // Error on failure, identical to today's first-build path.
-                applyMaterialInternal({ vs, fs, introspected, transparent, geomprops, notices }, label);
+                applyMaterialInternal({ vs, fs, introspected, transparent, geomprops, notices, maxLights }, label);
 
                 // Contact-shadow casters, only when a studioGroup exists
                 // to receive them. Full-scene mode has no catcher, so
@@ -9678,6 +9824,7 @@ const createMtlxRenderView = async ({
 
         const handle = {
             uniforms, introspected, vs, fs, controls, renderer,
+            allowConstInputs,
             notices: notices || [],
             isTransparent: !!transparent,
             // Live auto-orbit toggle (no regen needed). No-op in
@@ -9945,7 +10092,8 @@ const createMtlxRenderView = async ({
                 // on an already-disposed renderer/context.
                 if (stopped || !isMounted()) return null;
                 if (!srcs) {
-                    srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, isMounted });
+                    srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, isMounted,
+                        stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, allowConstInputs });
                 }
                 // A thrown generation error is NOT caught here, it
                 // propagates like a first-build failure, so the UI shows
