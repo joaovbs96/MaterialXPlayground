@@ -1826,11 +1826,11 @@ const patchSpecularAA = (fs, { specularAA = false } = {}) => {
 // comment: `occlusion` only reaches ClosureData.occlusion, which the
 // generated closures read in their direct-light branches, never in
 // CLOSURE_TYPE_INDIRECT, so it was never applied to the local reflection
-// term in the first place). Idempotent: checks the CURRENT accumulated
-// source, not just its own prior output, so whichever of the two patches runs first wins and
-// the other is a no-op, regardless of JS call order.
+// term in the first place). Idempotent: checks for the DECLARATION, not the
+// bare identifier, so an already-inserted assignment (which also contains
+// the identifier text) never fools this into skipping the declaration.
 const ensureEnvOcclusionGlobal = (src) => {
-    if (src.indexOf('mx_envOcclusionValue') !== -1) return src;
+    if (/\bfloat\s+mx_envOcclusionValue\b/.test(src)) return src;
     const decl = 'float mx_envOcclusionValue = 1.0;\nfloat mx_env_occlusion_value() { return mx_envOcclusionValue; }\n';
     // Same anchor as patchAmbientOcclusion's own uniform decls below: must
     // land before the FIRST function definition (not just before main()),
@@ -2488,12 +2488,9 @@ const patchLocalEnvironmentRadiance = (fs, { skipLocalEnv = false, notices = nul
     out = out.slice(0, insertAt) + decls + helpers + out.slice(insertAt);
     // mx_local_env_mix no longer reads mx_env_occlusion_value() (see its own
     // comment), but patchAmbientOcclusion's own writer still needs the
-    // mx_envOcclusionValue declaration to exist before its assignment runs;
-    // ensureEnvOcclusionGlobal's guard checks for the identifier's TEXT
-    // anywhere in the source, which patchAmbientOcclusion's inserted
-    // assignment (`mx_envOcclusionValue = occlusion;`) would otherwise
-    // satisfy without ever declaring it. Keep calling it here so whichever
-    // patch runs first still gets the declaration in, regardless of order.
+    // mx_envOcclusionValue declaration to exist before its assignment runs.
+    // Keep calling it here so whichever patch runs first still gets the
+    // declaration in, regardless of order.
     out = ensureEnvOcclusionGlobal(out);
     return out;
 };
