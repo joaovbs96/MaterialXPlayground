@@ -313,6 +313,8 @@ async function runSceneSample({ server, backend, subject, rootBasename, sampleIn
     await page.waitForTimeout(2000);
 
     const scenePerf = await page.evaluate(() => window.__mtlxScenePerf || null);
+    const prefilterLine = consoleLines.find((l) => l.startsWith('[mtlx-perf] env prefilter:'));
+    if (scenePerf) scenePerf.envPrefilterMs = prefilterLine ? Number((/: ([\d.]+)ms/.exec(prefilterLine) || [])[1]) : null;
     const longtaskData = await page.evaluate(() => ({
       tasks: (window.__mtlxLongtasks && window.__mtlxLongtasks.tasks) || [],
       geometryFirstAt: (window.__mtlxScenePerf && window.__mtlxScenePerf.firstGeometryFrameMs) || null,
@@ -468,7 +470,7 @@ async function main() {
         report.median[k] = median(values);
       }
     } else {
-      const keys = ['materialPhaseMs', 'bindPhaseMs', 'gpuProgramMs', 'distinctPrograms', 'firstGeometryFrameMs', 'frameAvgMs', 'stageLightSamples', 'stageLightSlots'];
+      const keys = ['materialPhaseMs', 'bindPhaseMs', 'gpuProgramMs', 'distinctPrograms', 'firstGeometryFrameMs', 'frameAvgMs', 'envPrefilterMs', 'stageLightSamples', 'stageLightSlots'];
       for (const k of keys) {
         const values = report.samples.map((s) => s.scenePerf && s.scenePerf[k]).filter((v) => typeof v === 'number');
         report.median[k] = values.length ? median(values) : null;

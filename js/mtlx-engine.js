@@ -3463,6 +3463,26 @@ const sceneTextureFastPathEnabled = () => {
     try { return localStorage.getItem('mtlx_scene_texture_fast') !== '0'; } catch (e) { return true; }
 };
 
+// .exr/.hdr/.tif decode on the main thread and allocate large float buffers,
+// unlike the bounded-bitmap path above which is already pooled per view. This
+// pool is shared by every caller of bindDroppedTextures (Viewer, Compare,
+// preview, Scene) so a drop with many HDR-ish textures never decodes them all
+// at once. mtlx_texture_decode_limit=0 disables it (old fully-parallel start).
+const HEAVY_TEXTURE_DECODE_CONCURRENCY = 2;
+const heavyTextureDecodeLimitEnabled = () => {
+    try { return localStorage.getItem('mtlx_texture_decode_limit') !== '0'; } catch (e) { return true; }
+};
+const heavyTextureDecodeSlots = Array.from({ length: HEAVY_TEXTURE_DECODE_CONCURRENCY }, () => Promise.resolve());
+let heavyTextureDecodeNext = 0;
+const runHeavyTextureDecode = (startDecode) => {
+    if (!heavyTextureDecodeLimitEnabled()) return startDecode();
+    const slot = heavyTextureDecodeNext % heavyTextureDecodeSlots.length;
+    heavyTextureDecodeNext += 1;
+    const chained = heavyTextureDecodeSlots[slot].catch(() => {}).then(startDecode);
+    heavyTextureDecodeSlots[slot] = chained.catch(() => {});
+    return chained;
+};
+
 // Scene snapshots can contain many UDIM tiles.  When a caller supplies a
 // preview limit, decode/upload a bounded ImageBitmap while retaining the
 // source image's color and alpha semantics.  The normal viewer path does not
@@ -3787,7 +3807,8 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
                 });
                 pending.push(pendingLoad);
             } else if (ext === 'exr' || ext === 'hdr' || ext === 'tif' || ext === 'tiff') {
-                const parsePromise = ext === 'exr' ? loadExrTexture(blob) : ext === 'hdr' ? loadHdrTexture(blob) : loadTifTexture(blob, hit.key);
+                const startDecode = () => ext === 'exr' ? loadExrTexture(blob) : ext === 'hdr' ? loadHdrTexture(blob) : loadTifTexture(blob, hit.key);
+                const parsePromise = runHeavyTextureDecode(startDecode);
                 const pendingLoad = parsePromise.then((tex) => {
                     if (!tex) return; // unsupported/corrupt, the node default color stands
                     configureLoadedTexture(tex);
@@ -5875,8 +5896,16 @@ const PREFILTER_GLSL = [
 // DataTexture whose `mipmaps` array three uploads level by level.
 // Fail-soft: any problem leaves the flag set and the FIS chain in place, so
 // shading still works, just noisier.
+// A caller with no renderer yet (materials that compile ahead of the
+// renderer, e.g. the Scene's first pass) must not latch prefilterTried: that
+// would permanently skip the prefiltered chain for the rest of the session.
+// mtlx_scene_prefilter_fix=0 restores that old (buggy) latch-on-null behaviour.
+const legacyPrefilterLatch = (() => {
+    try { return localStorage.getItem('mtlx_scene_prefilter_fix') === '0'; } catch (e) { return false; }
+})();
 const ensurePrefilteredEnv = (renderer, env) => {
     if (!env || !env.radiance || env.prefilterTried) return env;
+    if (!renderer && !legacyPrefilterLatch) return env;
     env.prefilterTried = true;
     if (getSpecularEnvMethod() !== 'prefilter') return env;
     if (!renderer || !renderer.capabilities || !renderer.capabilities.isWebGL2) return env;

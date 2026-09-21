@@ -1222,7 +1222,8 @@ const createMtlxSceneView = async ({
     const scenePerf = window.MTLX_PERF_LOG ? { materials: [], materialPhaseMs: 0, bindPhaseMs: 0, gpuProgramMs: 0,
         distinctPrograms: 0, distinctProgramsNamesStripped: 0, prewarmParallelWaitMs: 0, firstGeometryFrameMs: null,
         frameSamples: 0, frameTotalMs: 0, frameAvgMs: null, lastFrameAt: 0,
-        texturePhaseMs: 0, texture: { decodeMs: 0, resizeMs: 0, uploadMs: 0, count: 0 } } : null;
+        texturePhaseMs: 0, texture: { decodeMs: 0, resizeMs: 0, uploadMs: 0, count: 0 },
+        envPrefilterMs: null } : null;
     if (scenePerf && window.resetTexturePerf) window.resetTexturePerf();
     const sceneLoadStart = performance.now();
     const scenePerfHash = (s) => {
@@ -5105,15 +5106,6 @@ const createMtlxSceneView = async ({
                 earlyRaf = requestAnimationFrame(earlyRender);
             };
             earlyRaf = requestAnimationFrame(earlyRender);
-            // Off's very first material build calls this with the renderer
-            // still null (materials compile before the renderer exists in
-            // that path), which sets env.prefilterTried before the renderer
-            // check and permanently keeps the 16-sample FIS fallback instead
-            // of the prefiltered GGX chain for the rest of the session (an
-            // existing bug in the null-renderer path, not fixed here). Priming
-            // the same flag the same way keeps this switch's final image
-            // identical to off's instead of accidentally fixing that bug.
-            if (window.ensurePrefilteredEnv) window.ensurePrefilteredEnv(null, env);
             await compileAndBindMaterials();
             if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
             // Swap the real material onto every mesh built above. A record
