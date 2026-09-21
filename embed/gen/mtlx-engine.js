@@ -4,7 +4,10 @@
 // bind defaults/env/lights -> compile-check -> render loop). Shared by
 // the app shell (index.html) and the VS Code webview.
 // Public API exported onto window at the bottom.
-// ------------------------------------------------------------------
+// Load-timeline mark: first executed statement, i.e. right after
+// babel-standalone finishes fetching + transforming this file. Gated on
+// localStorage directly since window.MTLX_PERF_LOG is not set yet this early.
+try{if(localStorage.getItem('mtlxPerfLog'))performance.mark('mtlx-engine-exec-start');}catch(e){/* ignore */}// ------------------------------------------------------------------
 // MaterialX 3D Preview Component
 // ------------------------------------------------------------------
 // Load ONLY JsMaterialXGenShader.js (superset of JsMaterialXCore.js),
@@ -57,8 +60,10 @@ reject(new Error('MaterialX engine script loaded but window.MaterialX is not a f
 // Absolute URL on purpose: WebKit resolves import() in a classic
 // script against the script URL, not the document base, so the
 // embeds (served from embed/gen/ under a base tag) 404 in Safari.
-const factoryUrl=new URL('./js/materialx/'+ver+'/JsMaterialXGenShader.js',document.baseURI).href;const factoryPromise=import(factoryUrl).then(mod=>typeof mod.default==='function'?mod.default:loadMxFactoryViaScript(ver));mxEnvPromises.set(ver,factoryPromise.then(factory=>factory({// .wasm and .data live next to the .js.
-locateFile:path=>'./js/materialx/'+ver+'/'+path})).then(mx=>{// Expose the MaterialX library version (from the JS API)
+const factoryUrl=new URL('./js/materialx/'+ver+'/JsMaterialXGenShader.js',document.baseURI).href;// Load-timeline marks (perf-gated, zero cost when off): wasm module
+// fetch/instantiate, then standard libraries + GenContext below.
+const __wasmPerfStart=window.MTLX_PERF_LOG?performance.now():0;const factoryPromise=import(factoryUrl).then(mod=>typeof mod.default==='function'?mod.default:loadMxFactoryViaScript(ver));mxEnvPromises.set(ver,factoryPromise.then(factory=>factory({// .wasm and .data live next to the .js.
+locateFile:path=>'./js/materialx/'+ver+'/'+path})).then(mx=>{if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] wasm instantiate: '+(performance.now()-__wasmPerfStart).toFixed(1)+'ms (target: '+ver+')');}const __stdlibPerfStart=window.MTLX_PERF_LOG?performance.now():0;// Expose the MaterialX library version (from the JS API)
 // for the top-menu badge; broadcast so the UI can update
 // whenever the WASM finishes loading. Only the default
 // version drives the header badge, a non-default pane
@@ -66,7 +71,7 @@ locateFile:path=>'./js/materialx/'+ver+'/'+path})).then(mx=>{// Expose the Mater
 if(ver===MTLX_DEFAULT_VERSION){try{const verStr=mx.getVersionString&&mx.getVersionString()||null;if(verStr){window.__mtlxVersion=verStr;window.dispatchEvent(new CustomEvent('mtlx-version',{detail:verStr}));}}catch(e){/* version is optional */}}// WebGL 2 targets ESSL (GLSL ES 3.00), not the desktop GLSL
 // generator (#version 400 won't compile in-browser).
 // loadStandardLibraries also registers the source-code search path.
-const gen=mx.EsslShaderGenerator.create();const genContext=new mx.GenContext(gen);const stdlib=mx.loadStandardLibraries(genContext);// ldef/rigLights are filled in once the light rig below has
+const gen=mx.EsslShaderGenerator.create();const genContext=new mx.GenContext(gen);const stdlib=mx.loadStandardLibraries(genContext);if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] stdlib+GenContext: '+(performance.now()-__stdlibPerfStart).toFixed(1)+'ms (target: '+ver+')');}// ldef/rigLights are filled in once the light rig below has
 // been fetched and parsed; configureGenContext reads them
 // by closure, so it must be called AFTER that happens.
 let ldef=null;const rigLights=[];// Every GenContext option + light binding this build needs,

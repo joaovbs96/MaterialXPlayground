@@ -681,6 +681,13 @@
         filesRef.current = files;
         envSettingsRef.current = { rotation: envRotation, exposureLinear: envExposureLinear, backdrop, autoRotate: rotating };
         const updateProgress = (value, generation) => {
+            // Perf-only: records every progress event (loader worker phases
+            // AND renderer phases) with a timestamp, for the load-timeline
+            // harness. Zero cost when MTLX_PERF_LOG is off.
+            if (window.MTLX_PERF_LOG && value && typeof value === 'object') {
+                window.__mtlxScenePhases = window.__mtlxScenePhases || [];
+                window.__mtlxScenePhases.push({ phase: value.phase, status: value.status, t: performance.now() });
+            }
             if (!mountedRef.current || (generation != null && generation !== generationRef.current)) return;
             if (progressFractionGenRef.current !== generation) { progressFractionGenRef.current = generation; progressFractionRef.current = 0; }
             if (value && typeof value === 'object' && value.phase === 'geometry-first' && value.status === 'ready') setGeometryFirstReady(true);
