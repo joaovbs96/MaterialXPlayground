@@ -17,6 +17,21 @@
     weldHashFloat64[0] = numeric;
     return (Math.imul(weldHashWords[0], 0x9e3779b1) ^ Math.imul(weldHashWords[1], 0x85ebca6b)) >>> 0;
   }
+
+  // Numeric edge key shared by both subdivision passes: lo*MULT+hi packs two
+  // vertex ids into one double exactly (MULT^2 < 2^53), replacing a template
+  // string per edge per level with a plain number Map key.
+  const EDGE_KEY_MULT = 1 << 26;
+  function edgeKeyNum(x, y) {
+    const lo = x < y ? x : y, hi = x < y ? y : x;
+    if (hi >= EDGE_KEY_MULT) throw new Error('mesh-subdivision: vertex id exceeds numeric edge-key capacity');
+    return lo * EDGE_KEY_MULT + hi;
+  }
+  function decodeEdgeKeyNum(ek) {
+    const lo = Math.floor(ek / EDGE_KEY_MULT);
+    return [lo, ek - lo * EDGE_KEY_MULT];
+  }
+
   function subdivideMesh(mesh, levels, options = {}) {
   const positions = mesh.positions;
   if (!positions || positions.length < 9 || levels <= 0) return null;
@@ -74,7 +89,8 @@
   }
   if (weldedPositions.length < 4 || !triangles.length) return null;
 
-  const edgeKey = (x, y) => (x < y ? `${x}_${y}` : `${y}_${x}`);  let creaseSet = new Set();
+  const edgeKey = edgeKeyNum;
+  let creaseSet = new Set();
   if (creaseCapable) {
     const edgeTris0 = new Map();
     for (let ti = 0; ti < triangles.length; ti++) {
@@ -94,7 +110,7 @@
       Math.abs(n0[0] - n1[0]) > 1e-4 || Math.abs(n0[1] - n1[1]) > 1e-4 || Math.abs(n0[2] - n1[2]) > 1e-4;
     for (const [ek, adj] of edgeTris0) {
       if (adj.length !== 2) continue;
-      const [x, y] = ek.split('_').map(Number);
+      const [x, y] = decodeEdgeKeyNum(ek);
       if (differs(cornerNormalAt(adj[0], x), cornerNormalAt(adj[1], x)) ||
           differs(cornerNormalAt(adj[0], y), cornerNormalAt(adj[1], y))) creaseSet.add(ek);
     }
@@ -207,7 +223,7 @@
     if (creaseCapable) {
       const newCreaseSet = new Set();
       for (const ek of creaseSet) {
-        const [a, b] = ek.split('_').map(Number);
+        const [a, b] = decodeEdgeKeyNum(ek);
         const mid = oddIndex.get(ek);
         if (mid === undefined) continue;
         newCreaseSet.add(edgeKey(a, mid));
@@ -427,7 +443,7 @@ function subdivideCatmullClark(mesh, levels, subsets, options = {}) {
   }
   if (!faces.length) return null;
 
-  const edgeKey = (x, y) => (x < y ? `${x}_${y}` : `${y}_${x}`);
+  const edgeKey = edgeKeyNum;
   let currentFaces = faces.map(f => ({
     verts: f.verts.slice(),
     uv: f.uv ? f.uv.map(uv => uv.slice()) : null,

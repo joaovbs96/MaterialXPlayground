@@ -134,6 +134,33 @@ function arrayCopy(value, Type = Float32Array) {
   }
 }
 
+// The wasm module is only present once a runtime has booted; read every
+// field defensively since the wrapper build can change without notice.
+function wasmHeapBuffer() {
+  try {
+    const module = globalThis.__USD_WEBVIEW_MODULE__;
+    return module?.HEAPU8?.buffer ?? module?.wasmMemory?.buffer ?? module?.asm?.memory?.buffer ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// copyStageResult runs after every native draw/payload view has already been
+// copied out by snapshotDraw/snapshotPayloads, and after weldMesh/subdivide*
+// build their own fresh typed arrays. By that point mesh.positions and its
+// siblings are always plain JS-owned buffers, never a live wasm heap view, so
+// arrayCopy on them just doubles the same bytes. Reuse the array when it is
+// already the right type and not backed by the wasm heap; only fall back to
+// a real copy otherwise (a stale view, a mismatched type, or a plain array).
+function ownedTyped(value, Type) {
+  if (value == null) return undefined;
+  if (value instanceof Type) {
+    const heapBuffer = wasmHeapBuffer();
+    if (!heapBuffer || value.buffer !== heapBuffer) return value;
+  }
+  return arrayCopy(value, Type);
+}
+
 function text(value) {
   return value == null ? undefined : String(value);
 }
@@ -443,40 +470,44 @@ function copySubset(subset) {
   };
 }
 
-function copyGeomprop(prop) {
+function copyGeomprop(prop, copyFn = arrayCopy) {
   return {
     name: text(prop.name) ?? "",
     itemSize: Number(prop.itemSize ?? 0),
     interpolation: text(prop.interpolation) ?? "",
-    data: arrayCopy(prop.data, Float32Array),
+    data: copyFn(prop.data, Float32Array),
   };
 }
 
+// copyMesh only ever runs on drawSnapshot meshes: JS objects that snapshotDraw
+// already copied out of wasm memory, and that weldMesh/subdivide* only ever
+// replace with fresh JS typed arrays. So every stream here is JS-owned and
+// ownedTyped can hand the same array back instead of allocating a duplicate.
 function copyMesh(mesh, assets, materials) {
-  const positions = arrayCopy(mesh.positions ?? mesh.points, Float32Array);
+  const positions = ownedTyped(mesh.positions ?? mesh.points, Float32Array);
   if (!positions || !positions.length) return undefined;
-  const normals = arrayCopy(mesh.normals, Float32Array);
-  const uvs = arrayCopy(mesh.uvs, Float32Array);
-  const indices = arrayCopy(mesh.indices, Uint32Array);
+  const normals = ownedTyped(mesh.normals, Float32Array);
+  const uvs = ownedTyped(mesh.uvs, Float32Array);
+  const indices = ownedTyped(mesh.indices, Uint32Array);
   // The draw exposes displayColor as a single constant colour, never the
   // authored per-vertex array; kept for geompropvalue fallbacks.
   const displayColor = arrayCopy(mesh.displayColor, Float32Array);
   const vertexCount = positions.length / 3;
-  const geomprops = arrayItems(mesh.geomprops).map(copyGeomprop).filter(prop => prop.data && Number.isInteger(prop.itemSize) && prop.itemSize > 0 && prop.data.length === vertexCount * prop.itemSize);
+  const geomprops = arrayItems(mesh.geomprops).map(prop => copyGeomprop(prop, ownedTyped)).filter(prop => prop.data && Number.isInteger(prop.itemSize) && prop.itemSize > 0 && prop.data.length === vertexCount * prop.itemSize);
   const material = copyMaterial(mesh.material, assets);
   const materialPath = text(mesh.materialPath) ?? text(mesh.material?.path);
   if (materialPath && material) materials.set(materialPath, material);
   const groups = arrayItems(mesh.subsets ?? mesh.materialSubsets).map(copySubset);
-  const matrix = arrayCopy(mesh.matrix, Float64Array);
+  const matrix = ownedTyped(mesh.matrix, Float64Array);
   const hasInstanceMatrices = mesh.instanceMatrices != null;
   const instance = copyInstanceMatrices(mesh.instanceMatrices);
   const cage = mesh.cage ? {
-    positions: arrayCopy(mesh.cage.positions, Float32Array),
-    ...(mesh.cage.normals ? { normals: arrayCopy(mesh.cage.normals, Float32Array) } : {}),
-    ...(mesh.cage.uvs ? { uvs: arrayCopy(mesh.cage.uvs, Float32Array) } : {}),
-    ...(mesh.cage.indices ? { indices: arrayCopy(mesh.cage.indices, Uint32Array) } : {}),
+    positions: ownedTyped(mesh.cage.positions, Float32Array),
+    ...(mesh.cage.normals ? { normals: ownedTyped(mesh.cage.normals, Float32Array) } : {}),
+    ...(mesh.cage.uvs ? { uvs: ownedTyped(mesh.cage.uvs, Float32Array) } : {}),
+    ...(mesh.cage.indices ? { indices: ownedTyped(mesh.cage.indices, Uint32Array) } : {}),
     ...(mesh.cage.subsets?.length ? { subsets: mesh.cage.subsets.map(copySubset) } : {}),
-    ...(mesh.cage.geomprops?.length ? { geomprops: mesh.cage.geomprops.map(copyGeomprop).filter(prop => prop.data && prop.data.length) } : {}),
+    ...(mesh.cage.geomprops?.length ? { geomprops: mesh.cage.geomprops.map(prop => copyGeomprop(prop, ownedTyped)).filter(prop => prop.data && prop.data.length) } : {}),
   } : undefined;
   return {
     primPath: text(mesh.path) ?? text(mesh.primPath) ?? "",
@@ -519,7 +550,7 @@ function snapshotDraw(draw) {
     // WASM memory and the next source.get(i) below can detach it (see the
     // comment on the caller loop).
     const geomprops = arrayItems(mesh.geomprops)
-      .map(copyGeomprop)
+      .map(prop => copyGeomprop(prop))
       .filter(prop => prop.data && prop.data.length && Number.isInteger(prop.itemSize) && prop.itemSize > 0 &&
         prop.data.length === (positions.length / 3) * prop.itemSize);
     const matrix = arrayCopy(mesh.matrix, Float64Array);
@@ -2573,6 +2604,11 @@ async function load(request) {
     ...(result.diagnostics ?? {}),
     inputCache: { hits: inputCacheHits, misses: inputCacheMisses, bytes: inputCacheBytes },
   };
+  // Lets the loader decide whether this load grew the wasm heap enough that
+  // the persistent worker should be discarded instead of pinning it for the
+  // rest of the session; undefined (never negative) when unavailable.
+  const heapBuffer = wasmHeapBuffer();
+  if (heapBuffer) result.wasmHeapBytes = heapBuffer.byteLength;
   const transfer = result.transfer;
   delete result.transfer;
   try {

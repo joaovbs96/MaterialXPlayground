@@ -7,6 +7,12 @@ let nextRequestId = 1;
 // loads are queued strictly FIFO (see queueTail below).
 const IDLE_TIMEOUT_MS = 60000;
 const MAX_LOADS_PER_WORKER = 8;
+// The wasm heap only grows for the life of the worker. A load that pushes it
+// past this size is treated as a one-off: discard the worker right after
+// delivering the result instead of pinning that memory for the rest of the
+// session. Small/medium scenes stay under this and keep the persistent worker
+// (and its input cache) across settings changes.
+const DISCARD_HEAP_BYTES = 768 * 1024 * 1024;
 
 let worker = null;
 const pending = new Map(); // id -> { resolve, reject, onResult, onError, abort, onProgress, signal }
@@ -139,8 +145,10 @@ function runLoad(requestFiles, rootPath, onProgress, signal, purposePolicy, subd
         if (file?.path) lastIdentity.set(normalizePathForIdentity(file.path), identityOf(file));
       }
       lastLoadedRootPath = normalizedRoot;
+      const heapBytes = Number(value?.wasmHeapBytes);
       if (!finish(resolve, value)) return;
       if (loadsSinceBoot >= MAX_LOADS_PER_WORKER) discardWorker("load budget reached");
+      else if (Number.isFinite(heapBytes) && heapBytes > DISCARD_HEAP_BYTES) discardWorker("wasm heap grew past the discard threshold");
     };
     entry.onError = message => {
       if (finish(reject, new Error(message))) discardWorker("worker reported an error");
