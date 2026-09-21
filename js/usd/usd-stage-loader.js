@@ -19,6 +19,11 @@ let loadsSinceBoot = 0;
 // cache could otherwise serve stale bytes for it.
 let lastIdentity = new Map();
 const stats = { created: 0, discards: 0, loadsSinceBoot: 0 };
+// Root layer of the most recently completed load. The wasm heap only grows,
+// so a switch to a different root (e.g. a small auto-picked default root
+// followed by a much bigger scene) restarts the worker instead of letting
+// the new load's peak sit on top of the old one's resident heap.
+let lastLoadedRootPath = null;
 
 function normalizePathForIdentity(path) {
   return String(path ?? "").replaceAll("\\", "/").replace(/^\/+/, "");
@@ -52,6 +57,7 @@ function discardWorker(reason) {
   loadsSinceBoot = 0;
   stats.loadsSinceBoot = 0;
   lastIdentity = new Map();
+  lastLoadedRootPath = null;
   if (!pending.size) return;
   const error = reason instanceof Error ? reason : new Error(`OpenUSD worker was discarded: ${reason}`);
   const entries = Array.from(pending.values());
@@ -101,6 +107,11 @@ function runLoad(requestFiles, rootPath, onProgress, signal, purposePolicy, subd
     }
   }
 
+  const normalizedRoot = normalizePathForIdentity(rootPath);
+  if (worker && lastLoadedRootPath !== null && lastLoadedRootPath !== normalizedRoot) {
+    discardWorker("root layer switched to a different scene");
+  }
+
   clearIdleTimer();
   const activeWorker = ensureWorker();
   const id = nextRequestId++;
@@ -127,6 +138,7 @@ function runLoad(requestFiles, rootPath, onProgress, signal, purposePolicy, subd
       for (const file of requestFiles) {
         if (file?.path) lastIdentity.set(normalizePathForIdentity(file.path), identityOf(file));
       }
+      lastLoadedRootPath = normalizedRoot;
       if (!finish(resolve, value)) return;
       if (loadsSinceBoot >= MAX_LOADS_PER_WORKER) discardWorker("load budget reached");
     };

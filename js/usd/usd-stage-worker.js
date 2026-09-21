@@ -145,6 +145,17 @@ const DISPLAY_COLOR_MATERIAL_PATH = "/__displayColor__";
 const DISPLAY_COLOR_SOURCE_ASSET = "__displaycolor.mtlx";
 const DISPLAY_COLOR_MATERIAL_NAME = "M_displayColor";
 
+// Extensions no code path here ever opens: .vdb volumes are unsupported (the
+// scene graph warns from the prim type, not the file), and .rat/.tx are
+// renderer-specific texture caches no loader on either side decodes.
+const VFS_SKIP_EXTENSIONS = new Set([".vdb", ".rat", ".tx"]);
+
+function shouldSkipVfsUpload(path) {
+  const lower = String(path ?? "").toLowerCase();
+  const dot = lower.lastIndexOf(".");
+  return dot >= 0 && VFS_SKIP_EXTENSIONS.has(lower.slice(dot));
+}
+
 function normalizePath(path) {
   let value = String(path ?? "").replaceAll("\\", "/");
   value = value.replace(/^\/+/, "");
@@ -1031,6 +1042,25 @@ function decodeMtlxTextsForMaterial(material, mtlxFileTextsByPath) {
     if (fromFiles) texts.push(fromFiles);
   }
   return texts;
+}
+
+// Safe over-approximation of "this mesh's bound material can ever produce a
+// MaterialX displacement": true whenever any available text source mentions
+// "displacement" (the MaterialX node category/shader type and the UsdShade
+// output token both contain that substring). Must never return false for a
+// material that actually displaces, since the renderer only re-subdivides
+// from mesh.cage when it later confirms displacement after compiling the
+// shader; a missed cage there would silently re-subdivide the wrong mesh.
+function meshMaterialMayDisplace(mesh, mtlxFileTextsByPath, usdaTexts) {
+  if (!mesh.materialPath && !mesh.material) return false; // no bound material at all
+  const texts = decodeMtlxTextsForMaterial(mesh.material, mtlxFileTextsByPath);
+  if (texts.some((t) => /displacement/i.test(t))) return true;
+  const leaf = text(mesh.materialPath)?.split("/").filter(Boolean).pop();
+  if (!leaf) return true; // material bound but path unknown here, stay conservative
+  for (const layer of usdaTexts) {
+    if (layer.text.includes(leaf) && /displacement/i.test(layer.text)) return true;
+  }
+  return false;
 }
 
 // USD `over` blocks under a Material prim (asset file swaps, place2d scale,
@@ -2177,6 +2207,18 @@ async function load(request) {
   for (const file of request.files ?? []) {
     if (!file?.path) continue;
     const normalizedPath = normalizePath(file.path);
+    if (shouldSkipVfsUpload(normalizedPath)) {
+      // Never read or copy these bytes at all: no reader on either side of
+      // the worker ever opens them (see VFS_SKIP_EXTENSIONS above).
+      uploadedPaths.add(normalizedPath);
+      loadedFiles++;
+      postMessage({ id: request.id, type: "progress", value: {
+        phase: "worker", done: loadedFiles, total: fileTotal,
+        fraction: 0.05 + 0.2 * (loadedFiles / Math.max(1, fileTotal)),
+        message: "Reading input files",
+      } });
+      continue;
+    }
     // MEMFS is wiped by closeStage on every load, so createDataFile always
     // runs; this cache only avoids re-reading the File and re-decoding text.
     const size = Number.isFinite(file.size) ? file.size : (typeof file.data?.size === "number" ? file.data.size : undefined);
@@ -2376,7 +2418,10 @@ async function load(request) {
           : subdivideMesh(mesh, levels);
         delete mesh.faceVertexCounts;
         if (!subdivided) continue;
-        mesh.cage = {
+        // Only meshes whose bound material can possibly displace ever need
+        // the pre-subdivision cage (see meshMaterialMayDisplace); every
+        // other mesh skips this copy and its transfer to the main thread.
+        if (meshMaterialMayDisplace(mesh, mtlxFileTextsByPath, usdaTexts)) mesh.cage = {
           positions: mesh.positions,
           normals: mesh.normals,
           uvs: mesh.uvs,
