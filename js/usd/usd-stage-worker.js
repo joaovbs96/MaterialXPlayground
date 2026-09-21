@@ -2502,6 +2502,15 @@ async function load(request) {
   // and stamped their orientation, so every snapshot mesh is flipped exactly
   // once here.
   for (const mesh of drawSnapshot.meshes) applyOrientation(mesh);
+  postMessage({ id: request.id, type: "progress", value: {
+    phase: "extract-materials", done: 1, total: 1, fraction: 0.9, message: "Extracted material payloads",
+  } });
+  // Subdivision + welding are pure-JS mesh work and can run long on dense
+  // stages; give them their own phase so that time is not misattributed to
+  // "Extracting material payloads" (which already finished above).
+  postMessage({ id: request.id, type: "progress", value: {
+    phase: "prepare-geometry", done: 0, total: 0, fraction: 0, message: "Subdividing meshes",
+  } });
   {
     const levels = Math.max(0, Math.min(2, Number.isFinite(request.subdivisionLevel) ? request.subdivisionLevel : 0));
     if (levels > 0) {
@@ -2584,7 +2593,7 @@ async function load(request) {
     weldMesh(mesh);
   }
   postMessage({ id: request.id, type: "progress", value: {
-    phase: "extract-materials", done: 1, total: 1, fraction: 0.9, message: "Extracted material payloads",
+    phase: "prepare-geometry", done: 1, total: 1, fraction: 1, message: "Subdivided meshes",
   } });
   const volumePaths = Array.from(new Set(graphEntriesOfType(
     graph, name => name === "volume"

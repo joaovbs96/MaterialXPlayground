@@ -242,8 +242,9 @@
         { phase: 'worker', label: 'Reading files', segment: [0.00, 0.06] },
         { phase: 'parse', label: 'Composing stage', segment: [0.06, 0.10] },
         { phase: 'extract-geometry', label: 'Extracting meshes', segment: [0.10, 0.14] },
-        { phase: 'extract-materials', label: 'Extracting materials', segment: [0.14, 0.18] },
-        { phase: 'material', label: 'Compiling materials', segment: [0.18, 0.52] },
+        { phase: 'extract-materials', label: 'Extracting materials', segment: [0.14, 0.16] },
+        { phase: 'prepare-geometry', label: 'Subdividing meshes', segment: [0.16, 0.20] },
+        { phase: 'material', label: 'Compiling materials', segment: [0.20, 0.52] },
         { phase: 'material-bind', label: 'Binding materials', segment: [0.52, 0.56] },
         { phase: 'texture', label: 'Loading textures', segment: [0.56, 0.72] },
         { phase: 'geometry', label: 'Preparing geometry', segment: [0.72, 0.86] },
@@ -770,6 +771,13 @@
         filesRef.current = files;
         envSettingsRef.current = { rotation: envRotation, exposureLinear: envExposureLinear, backdrop, autoRotate: rotating };
         const updateProgress = (value, generation) => {
+            // Perf-only: records every progress event (loader worker phases
+            // AND renderer phases) with a timestamp, for the load-timeline
+            // harness. Zero cost when MTLX_PERF_LOG is off.
+            if (window.MTLX_PERF_LOG && value && typeof value === 'object') {
+                window.__mtlxScenePhases = window.__mtlxScenePhases || [];
+                window.__mtlxScenePhases.push({ phase: value.phase, status: value.status, t: performance.now() });
+            }
             if (!mountedRef.current || (generation != null && generation !== generationRef.current)) return;
             if (progressFractionGenRef.current !== generation) { progressFractionGenRef.current = generation; progressFractionRef.current = 0; }
             const wholeFraction = usdSceneProgressFraction(value, progressFractionRef.current);

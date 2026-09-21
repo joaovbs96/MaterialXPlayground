@@ -14,6 +14,8 @@ function loadEnsurePrefilteredEnv() {
   const context = {
     getSpecularEnvMethod: () => 'prefilter',
     mtlxWarn() {},
+    // Declared above the sliced region: false is the default (fix on).
+    legacyPrefilterLatch: false,
   };
   vm.runInNewContext(source.slice(start, end) + '\nthis.ensurePrefilteredEnv = ensurePrefilteredEnv;', context, {
     filename: enginePath,

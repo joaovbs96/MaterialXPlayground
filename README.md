@@ -121,6 +121,19 @@ localStorage.setItem('mtlxPerfLog', '1');      // log graph-editor timing (scope
 
 Remove the keys (`localStorage.removeItem(...)`) and reload to turn them off again.
 
+Compile-speed kill switches, all on by default, set to `'0'` to disable:
+
+```js
+localStorage.setItem('mtlx_light_limit', '0');            // per-tool stage-light slot tiers
+localStorage.setItem('mtlx_const_inputs', '0');            // fold compile-heavy scalar inputs into GLSL consts
+localStorage.setItem('mtlx_scene_parallel_compile', '0');  // no-await parallel driver compiles in the Scene
+localStorage.setItem('mtlx_scene_fast_display', '0');      // skip full regen on a display-transform-only change
+localStorage.setItem('mtlx_feature_gated_shaders', '0');   // generate shadow, occlusion and sky-visibility code always
+localStorage.setItem('mtlx_scene_texture_fast', '0');      // header-read dimensions and one resized PNG/JPEG decode
+localStorage.setItem('mtlx_texture_decode_limit', '0');    // cap on concurrent EXR, HDR and TIF decodes
+localStorage.setItem('mtlx_scene_prefilter_fix', '0');     // use the GGX-prefiltered environment in the Scene
+```
+
 ## VS Code extension (experimental)
 
 The playground also ships as a VS Code extension: opening a `.mtlx` file brings up the Node Graph Editor and Material Viewer beside the text editor, with edits synced live in both directions, plus in-editor validation diagnostics, hover documentation for node types, and the node library documentation as its own panel.

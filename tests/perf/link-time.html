@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>link-time</title></head>
+<body>
+<canvas id="c" width="64" height="64"></canvas>
+<script>
+// Compiles and links one program on a fresh WebGL2 context and times it until
+// KHR_parallel_shader_compile reports completion. Driven by tests/perf/link-time.mjs.
+window.__linkTime = function (vsSource, fsSource) {
+  return new Promise((resolve) => {
+    const canvas = document.getElementById('c');
+    const gl = canvas.getContext('webgl2', { antialias: false, powerPreference: 'high-performance' });
+    if (!gl) { resolve({ error: 'no webgl2' }); return; }
+    const par = gl.getExtension('KHR_parallel_shader_compile');
+    const t0 = performance.now();
+    const vs = gl.createShader(gl.VERTEX_SHADER);
+    gl.shaderSource(vs, vsSource); gl.compileShader(vs);
+    const fs = gl.createShader(gl.FRAGMENT_SHADER);
+    gl.shaderSource(fs, fsSource); gl.compileShader(fs);
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs); gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    const finish = () => {
+      const ms = performance.now() - t0;
+      const ok = !!gl.getProgramParameter(prog, gl.LINK_STATUS);
+      const info = ok ? '' : [gl.getShaderInfoLog(vs), gl.getShaderInfoLog(fs), gl.getProgramInfoLog(prog)].join('\n').slice(0, 4000);
+      resolve({ ms: ms, ok: ok, info: info, parallel: !!par });
+    };
+    if (!par) { finish(); return; }
+    const poll = () => {
+      if (gl.getProgramParameter(prog, par.COMPLETION_STATUS_KHR)) { finish(); return; }
+      if (performance.now() - t0 > 300000) { resolve({ error: 'timeout' }); return; }
+      setTimeout(poll, 8);
+    };
+    poll();
+  });
+};
+</script>
+</body>
+</html>

@@ -774,7 +774,7 @@
 Object.assign(window, {
     DEFAULT_GRAPH_URL, parseMtlxDocument, validateMtlxXml, serializeDocXml, kindOfNode,
     resolveVersionedNodeDef,
-    collectPorts, storedPos, buildScope, MTLX_PERF_LOG, ifaceColorManaged,
+    collectPorts, storedPos, buildScope, MTLX_PERF_LOG: (window.MTLX_PERF_LOG || MTLX_PERF_LOG), ifaceColorManaged,
     ifaceNumericType, ifaceLiteralType,
     docChildren, docChild, isDocLocal, resolveNodedefFor, nodedefPorts,
     definitionOutType, computeDefinitions, refreshDefinitions,
