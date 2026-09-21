@@ -1664,6 +1664,11 @@ const createMtlxSceneView = async ({
     // Read once per scene load: skip full regen on a display-transform-only
     // change (item 4). Default ON, kill switch mtlx_scene_fast_display=0.
     const fastDisplaySwitch = readDefaultOnSwitch('mtlx_scene_fast_display');
+    // Read once per scene load: warm the standalone displacement program on
+    // the hidden KHR context during the material phase, so the geometry
+    // step's compile is a driver cache hit. Kill switch
+    // mtlx_displacement_prewarm=0.
+    const displacementPrewarm = readDefaultOnSwitch('mtlx_displacement_prewarm');
     // Pending { promise, perfEntry, submitAt } prewarm joins in parallel mode,
     // awaited together right before renderer.compile (see the gpu-program step).
     const pendingPrewarms = [];
@@ -3067,10 +3072,16 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             noteGeneratedFeatures();
             let renderable = null;
             let materialName = record.materialName || null;
+            // Perf-gated phase split for the material step (resolve, module
+            // key, document build), so a slow term is attributable.
+            let __perfResolveMs = 0, __perfKeyMs = 0, __perfBuildMs = 0, __perfCacheHit = 0;
             if (hasDirectNode) {
                 renderable = record.renderable || record.node;
             } else {
+                const __perfResolveStart = scenePerf ? performance.now() : 0;
                 const sourceInfo = await resolveRenderableSource(record);
+                if (scenePerf) __perfResolveMs = performance.now() - __perfResolveStart;
+                const __perfKeyStart = scenePerf ? performance.now() : 0;
                 moduleKey = sceneCompileCacheKey({
                     version, sourceAsset: sourceInfo.source,
                     name: record.subIdentifier || record.materialName || '',
@@ -3078,6 +3089,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                     sceneRgbt: true, lightTransport: false, samplerBudget, uniformVectorBudget,
                     materialWorkspace, stageLightCount: stageLightSlotHint(), featureOptions: sceneFeatureOptions(),
                 });
+                if (scenePerf) __perfKeyMs = performance.now() - __perfKeyStart;
                 if (forceCompile) SCENE_COMPILE_CACHE.delete(moduleKey);
                 const cachedEntry = SCENE_COMPILE_CACHE.get(moduleKey);
                 if (cachedEntry) {
@@ -3096,11 +3108,17 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                     if (Number.isFinite(compiled.maxLights)) {
                         compiledStageLightSlots = compiled.maxLights - (((mxEnv && mxEnv.lightData) || []).length + 1);
                     }
+                    if (scenePerf) {
+                        scenePerf.materials.push({ label, genMs: 0, transferGenMs: 0, prewarmMs: 0,
+                            resolveMs: __perfResolveMs, keyMs: __perfKeyMs, buildMs: 0, cacheHit: 1 });
+                    }
                     report({ phase: 'material', path: record.path, label, status: 'ready' });
                     return { compiled, cacheKey, transferCompiled };
                 }
                 sceneCompileCacheMisses += 1;
+                const __perfBuildStart = scenePerf ? performance.now() : 0;
                 const loaded = await buildRenderableDocument(record, sourceInfo);
+                if (scenePerf) __perfBuildMs = performance.now() - __perfBuildStart;
                 renderable = loaded.node;
                 sourceDocument = loaded.document;
                 materialName = loaded.materialName || materialName;
@@ -3191,6 +3209,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             // false-positive a slow-but-fine compile as timed out.
             let __perfPrewarmMs = 0;
             let __perfSubmitAt = 0;
+            let __perfDispSubmitMs = 0;
             let prewarmPromise = null;
             if (window.prewarmShaderCompile) {
                 if (effectiveParallelCompile) {
@@ -3201,6 +3220,19 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                     const __perfPrewarmStart = scenePerf ? performance.now() : 0;
                     await window.prewarmShaderCompile({ vs: compiled.vs, fs: compiled.fs, isMounted, label });
                     if (scenePerf) __perfPrewarmMs = performance.now() - __perfPrewarmStart;
+                }
+                // The standalone displacement program is compiled lazily inside
+                // evaluateDisplacement, in the geometry step; warm it here so
+                // that compile is a driver cache hit. Never awaited inline.
+                if (displacementPrewarm && compiled.displacement && compiled.displacement.vs && compiled.displacement.fs) {
+                    const __perfDispSubmitStart = scenePerf ? performance.now() : 0;
+                    compiled.displacement.prewarmPromise = window.prewarmShaderCompile({
+                        vs: compiled.displacement.vs, fs: compiled.displacement.fs, isMounted,
+                        label: label + ' (displacement)',
+                        timeoutMs: Math.min(60000, 15000 + pendingPrewarms.length * 1000),
+                    });
+                    if (scenePerf) __perfDispSubmitMs = performance.now() - __perfDispSubmitStart;
+                    pendingPrewarms.push({ promise: compiled.displacement.prewarmPromise, perfEntry: null, submitAt: 0 });
                 }
             }
             compiledByPath.set(cacheKey, compiled);
@@ -3217,6 +3249,9 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             if (scenePerf) {
                 const perfEntry = {
                     label, genMs: __perfGenMs, transferGenMs, prewarmMs: __perfPrewarmMs,
+                    resolveMs: __perfResolveMs, keyMs: __perfKeyMs, buildMs: __perfBuildMs, cacheHit: __perfCacheHit,
+                    dispGenMs: (compiled.displacement && compiled.displacement.genMs) || 0,
+                    dispSubmitMs: __perfDispSubmitMs, budgetAttempts: compiled.budgetAttempts || 1,
                     fsBytes: compiled.fs ? compiled.fs.length : 0,
                     programKeyHash: scenePerfHash(compiled.programKey),
                     srcHash: scenePerfHash((compiled.vs || '') + ' ' + (compiled.fs || '')),
@@ -3970,6 +4005,15 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 const dispFileMap = buildDisplacementFileMap(range.material, range.disp);
                 let result;
                 const __perfDispStart = scenePerf ? performance.now() : 0;
+                // Joins this material's own background displacement prewarm
+                // (submitted in the material phase) so the compile below hits
+                // the driver cache instead of racing it.
+                let __perfDispWaitMs = 0;
+                if (range.disp && range.disp.prewarmPromise) {
+                    const __perfWaitStart = scenePerf ? performance.now() : 0;
+                    try { await range.disp.prewarmPromise; } catch (e) { /* prewarm never fails the evaluation */ }
+                    if (scenePerf) __perfDispWaitMs = performance.now() - __perfWaitStart;
+                }
                 try {
                     result = await window.evaluateDisplacement({
                         renderer, displacement: range.disp, geometry, worldMatrix,
@@ -3983,6 +4027,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                     const perf = (result && result.perf) || {};
                     scenePerf.displacement.push({ label,
                         srcGenMs: (range.disp && range.disp.genMs) || 0,
+                        prewarmWaitMs: __perfDispWaitMs,
                         programCompileMs: perf.compileMs || 0,
                         readbackMs: perf.readbackMs || 0,
                         evalTotalMs: performance.now() - __perfDispStart });

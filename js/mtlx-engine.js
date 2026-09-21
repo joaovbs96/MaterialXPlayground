@@ -3173,6 +3173,17 @@ const CONST_INPUT_NAMES = ['thin_film_thickness', 'thin_film_ior', 'thin_film_IO
 const CONST_INPUT_DENY = new Set(['thin_walled', 'geometry_thin_walled', 'transmission_weight',
     'transmission_color', 'transmission_depth', 'geometry_opacity']);
 const CONST_INPUT_GLSL_TYPES = { float: 'float', integer: 'int', boolean: 'bool' };
+// The standalone displacement program takes these on top: unifiednoise3d
+// evaluates perlin, cellnoise, worley AND fractal and then switches on
+// `type`, and `style` picks the worley distance metric. Displacement-only,
+// since nothing edits a displacement input live (a change regenerates).
+// `octaves` is deliberately absent: folding the fractal loop bound unrolls
+// it and measured 5 to 12 percent SLOWER to compile.
+const DISPLACEMENT_CONST_INPUT_NAMES = CONST_INPUT_NAMES.concat(['type', 'style', 'clampoutput']);
+const DISPLACEMENT_CONST_INPUTS_KEY = 'mtlx_displacement_const_inputs';
+const readDisplacementConstInputs = () => {
+    try { return localStorage.getItem(DISPLACEMENT_CONST_INPUTS_KEY) !== '0'; } catch (e) { return true; }
+};
 
 // Deterministic GLSL literal for one introspected default; floats always
 // carry a decimal point (or an exponent). Returns null when unusable.
@@ -3187,12 +3198,12 @@ const constInputLiteral = (type, data) => {
 
 // Which targeted input an introspected uniform is, or null. Prefers the
 // MaterialX path's last segment; the flattened uniform name is the fallback.
-const constInputKey = (u) => {
+const constInputKey = (u, names = CONST_INPUT_NAMES) => {
     const name = String((u && u.name) || '');
     if (!name || name.indexOf('u_') === 0) return null; // engine/private uniform
     const seg = u.path ? String(u.path).split('/').pop() : '';
-    if (seg && CONST_INPUT_NAMES.indexOf(seg) >= 0) return seg;
-    for (const n of CONST_INPUT_NAMES) {
+    if (seg && names.indexOf(seg) >= 0) return seg;
+    for (const n of names) {
         if (name === n || name.endsWith('_' + n)) return n;
     }
     return null;
@@ -3203,17 +3214,20 @@ const constInputKey = (u) => {
 // scalar float/int/bool with exactly one declaration is touched; everything
 // else is left alone. Returns the rewritten sources plus the pruned
 // introspection list, so nothing tries to bind a uniform that is now gone.
-const constifyInputUniforms = (vs, fs, introspected) => {
+const SELECTOR_CONST_INPUTS = new Set(['mode', 'type', 'style']);
+const constifyInputUniforms = (vs, fs, introspected, names = CONST_INPUT_NAMES) => {
     const constInputs = [];
     const kept = [];
     let outVs = vs;
     let outFs = fs;
     for (const u of introspected) {
         const glslType = CONST_INPUT_GLSL_TYPES[u.type];
-        const key = glslType ? constInputKey(u) : null;
-        // `mode` is a generic name: only take it when the generator typed it
-        // as an enum selector (integer), never a float or boolean input.
-        if (!key || CONST_INPUT_DENY.has(String(u.name)) || (key === 'mode' && u.type !== 'integer')) { kept.push(u); continue; }
+        const key = glslType ? constInputKey(u, names) : null;
+        // `mode`, `type` and `style` are generic names: only take them when
+        // the generator typed them as an enum selector (integer), never a
+        // float or boolean input.
+        if (!key || CONST_INPUT_DENY.has(String(u.name))
+            || (SELECTOR_CONST_INPUTS.has(key) && u.type !== 'integer')) { kept.push(u); continue; }
         const literal = u.data == null ? null : constInputLiteral(u.type, u.data);
         if (literal == null) { kept.push(u); continue; }
         const escaped = String(u.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -7301,6 +7315,22 @@ const prewarmShaderCompile = async ({ vs, fs, isMounted, label, timeoutMs }) => 
     return 'done';
 };
 
+// Submits a generated standalone displacement program to the warm context
+// WITHOUT awaiting it, so its compile overlaps the surface compile instead
+// of blocking the first evaluateDisplacement. Kill switch
+// mtlx_displacement_prewarm=0. Returns the promise (or null).
+const DISPLACEMENT_PREWARM_KEY = 'mtlx_displacement_prewarm';
+const readDisplacementPrewarm = () => {
+    try { return localStorage.getItem(DISPLACEMENT_PREWARM_KEY) !== '0'; } catch (e) { return true; }
+};
+const prewarmDisplacementSources = (srcs, isMounted, label) => {
+    const disp = srcs && srcs.displacement;
+    if (!disp || !disp.vs || !disp.fs || !readDisplacementPrewarm()) return null;
+    const promise = prewarmShaderCompile({ vs: disp.vs, fs: disp.fs, isMounted, label: label + ' (displacement)' });
+    disp.prewarmPromise = promise;
+    return promise;
+};
+
 // Background driver pre-warm for an off-screen preview target, builds,
 // generates, and pre-compiles inside ONE mxExclusive hold (so a transient
 // __pv_* wrapper is never observable by a concurrent op). NEVER call from
@@ -7762,7 +7792,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     let displacement = null;
     try {
         const __dispGenStart = window.MTLX_PERF_LOG ? performance.now() : 0;
-        displacement = generateDisplacementSourcesUnlocked({ mx, gen, genContext, renderable, materialName });
+        displacement = generateDisplacementSourcesUnlocked({ mx, gen, genContext, renderable, materialName, allowConstInputs });
         if (displacement && window.MTLX_PERF_LOG) displacement.genMs = performance.now() - __dispGenStart;
         if (displacement && displacement.notices && displacement.notices.length) {
             notices.push(...displacement.notices);
@@ -7869,7 +7899,7 @@ const fnv1aHex = (str) => {
 // generateDisplacementSourcesUnlocked: generates the standalone displacement
 // program (see evaluateDisplacement for how it's used). Must run inside the
 // existing lock; every failure is caught and turned into a notice, never a throw.
-const generateDisplacementSourcesUnlocked = ({ mx, gen, genContext, renderable, materialName }) => {
+const generateDisplacementSourcesUnlocked = ({ mx, gen, genContext, renderable, materialName, allowConstInputs }) => {
     const notices = [];
     const source = resolveDisplacementSource({ mx, renderable, materialName, notices });
     if (!source) return null;
@@ -7921,6 +7951,17 @@ const generateDisplacementSourcesUnlocked = ({ mx, gen, genContext, renderable, 
         introspected = introspected.map(plainizeMxUniformData);
         introspected = annotateFilenameSamplerModes(introspected, document);
 
+        // Const inputs, before the splices so the rewritten declarations are
+        // still the plain generator output the regexes below expect.
+        let constInputs = [];
+        if (allowConstInputs !== false && readDisplacementConstInputs()) {
+            const constified = constifyInputUniforms(vs, fs, introspected, DISPLACEMENT_CONST_INPUT_NAMES);
+            vs = constified.vs;
+            fs = constified.fs;
+            introspected = constified.introspected;
+            constInputs = constified.constInputs;
+        }
+
         // Pixel splice: retarget the discarded final assignment into a
         // little-endian floatBitsToUint pack of one offset*scale component.
         const outMatch = fs.match(/\bout\s+vec4\s+(\w+)\s*;/);
@@ -7955,7 +7996,7 @@ const generateDisplacementSourcesUnlocked = ({ mx, gen, genContext, renderable, 
         }
         const key = fnv1aHex(vs + String.fromCharCode(0) + fs + String.fromCharCode(0)
             + JSON.stringify(introspected.map((u) => ({ name: u.name, type: u.type, data: u.data, samplerModes: u.samplerModes || null }))));
-        return { vs, fs, introspected, geomprops, mode, key, notices };
+        return { vs, fs, introspected, geomprops, mode, key, notices, constInputs };
     } finally {
         if (colorspaceTransformResult) colorspaceTransformResult.restore();
         if (colorspaceAliasResult) colorspaceAliasResult.restore();
@@ -8038,7 +8079,9 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
     const dropped = [];
     let srcs = null;
     let samplerInfo = null;
+    let budgetAttempts = 0;
     for (let attempt = 0; ; attempt++) {
+        budgetAttempts = attempt + 1;
         // The scene's live feature set is the base; budget drops add to it.
         const sceneFeatureOptions = Object.assign({ materialWorkspace, specularAA }, featureOptions || null);
         for (const d of dropped) sceneFeatureOptions[d.key] = true;
@@ -8069,6 +8112,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
         samplerNames: samplerInfo.names,
         samplerBudget: { limit: budget, count: samplerInfo.count, dropped: dropped.map((d) => d.label) },
         samplerOverBudget: overBudget,
+        budgetAttempts,
         fragmentUniformVectors: { estimate: uniformInfo.estimate, limit: uniformLimit, largest: uniformInfo.largest },
         fragmentUniformOverBudget: uniformInfo.estimate > uniformLimit,
     };
@@ -10482,6 +10526,7 @@ const createMtlxRenderView = async ({
                 // Pre-warms the driver compile BEFORE the display renderer
                 // is created; the old after-renderer placement measured
                 // 0.8-2.5s WebGLRenderer init stalls from queue contention.
+                prewarmDisplacementSources(__srcs, isMounted, label);
                 const warmResult = await prewarmShaderCompile({ vs, fs, isMounted, label });
                 if (warmResult === 'bailed' || !isMounted()) { disposePartial(); return null; }
 
@@ -12130,6 +12175,7 @@ const createMtlxRenderView = async ({
                 // propagates like a first-build failure, so the UI shows
                 // the same overlay while the old material keeps rendering.
                 if (!srcs || !isMounted() || stopped) return null;
+                prewarmDisplacementSources(srcs, isMounted, label);
                 const warmResult = await prewarmShaderCompile({ vs: srcs.vs, fs: srcs.fs, isMounted, label });
                 // 'bailed' or a lost isMounted(): must not touch the
                 // still-rendering live material, leave it as-is; the
