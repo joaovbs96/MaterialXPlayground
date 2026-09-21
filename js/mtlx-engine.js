@@ -7638,8 +7638,11 @@ const generateDisplacementSourcesUnlocked = ({ mx, gen, genContext, renderable, 
         introspected = introspected.map(plainizeMxUniformData);
         introspected = annotateFilenameSamplerModes(introspected, document);
 
-        // Pixel splice: retarget the discarded final assignment into a
-        // little-endian floatBitsToUint pack of one offset*scale component.
+        // Pixel splice: retarget the discarded final assignment. u_dispPackMode
+        // selects between the legacy little-endian floatBitsToUint pack of one
+        // offset*scale component (used on rgba8 targets, one draw per
+        // component) and a raw vec3 write (used on float targets, one draw
+        // carries all three components).
         const outMatch = fs.match(/\bout\s+vec4\s+(\w+)\s*;/);
         const structMatches = [...fs.matchAll(/displacementshader\s+(\w+)\s*=/g)];
         const outVar = outMatch ? outMatch[1] : null;
@@ -7649,12 +7652,17 @@ const generateDisplacementSourcesUnlocked = ({ mx, gen, genContext, renderable, 
             const finalRe = new RegExp('\\b' + outVar + '\\s*=\\s*vec4\\(\\s*0\\.0\\s*,\\s*0\\.0\\s*,\\s*0\\.0\\s*,\\s*1\\.0\\s*\\)\\s*;(?=\\s*\\})');
             if (finalRe.test(fs)) {
                 const pack = '{\n'
-                    + '        uint dispBits = floatBitsToUint((' + structVar + '.offset * ' + structVar + '.scale)[u_dispComponent]);\n'
-                    + '        ' + outVar + ' = vec4(float(dispBits & 0xFFu), float((dispBits >> 8u) & 0xFFu), '
+                    + '        vec3 dispVec = ' + structVar + '.offset * ' + structVar + '.scale;\n'
+                    + '        if (u_dispPackMode == 1) {\n'
+                    + '            ' + outVar + ' = vec4(dispVec, 1.0);\n'
+                    + '        } else {\n'
+                    + '            uint dispBits = floatBitsToUint(dispVec[u_dispComponent]);\n'
+                    + '            ' + outVar + ' = vec4(float(dispBits & 0xFFu), float((dispBits >> 8u) & 0xFFu), '
                     + 'float((dispBits >> 16u) & 0xFFu), float((dispBits >> 24u) & 0xFFu)) / 255.0;\n'
+                    + '        }\n'
                     + '    }';
                 fs = fs.replace(finalRe, pack);
-                fs = fs.replace(/\bvoid\s+main\s*\(/, 'uniform int u_dispComponent;\nvoid main(');
+                fs = fs.replace(/\bvoid\s+main\s*\(/, 'uniform int u_dispComponent;\nuniform int u_dispPackMode;\nvoid main(');
                 psSpliced = true;
             }
         }
@@ -8206,14 +8214,42 @@ const applyIntrospectedUniformDefaults = (uniforms, introspected, { overwrite = 
     }
 };
 
-// evaluateDisplacement: draws one THREE.Points per vertex into an RGBA8
-// readback grid, one pass per x/y/z component, and decodes the little-endian
-// bit pack generateDisplacementSourcesUnlocked spliced into the pixel stage.
+// evaluateDisplacement: draws one THREE.Points per vertex into a readback
+// grid. On a float render target (u_dispPackMode = 1) one draw writes the
+// raw offset vec3 straight into RGBA32F. On a byte target (u_dispPackMode =
+// 0, no float render-target support) three draws are needed instead, one per
+// x/y/z component, decoding the little-endian bit pack
+// generateDisplacementSourcesUnlocked spliced into the pixel stage.
 // True only for a REAL authored file reference (u.data is a path string),
 // not just any 'filename'-typed uniform (library samplers like
 // u_shadowMap use that type too, with no data).
 const hasDisplacementFileRef = (displacement) =>
     !!displacement && (displacement.introspected || []).some((u) => u.type === 'filename' && typeof u.data === 'string' && u.data);
+
+// Decodes one component's rgba8 little-endian bit-packed readback (legacy
+// path, used only when the render target has no float storage) into
+// passOffsets[i*3+component].
+const decodeLegacyDisplacementComponent = (pixels, N, component, passOffsets, byteView) => {
+    for (let i = 0; i < N; i++) {
+        const p = i * 4;
+        byteView.setUint8(0, pixels[p]);
+        byteView.setUint8(1, pixels[p + 1]);
+        byteView.setUint8(2, pixels[p + 2]);
+        byteView.setUint8(3, pixels[p + 3]);
+        passOffsets[i * 3 + component] = byteView.getFloat32(0, true);
+    }
+};
+
+// Decodes a raw float32 vec3 readback (one draw carries all three
+// components) into passOffsets.
+const decodeRawDisplacementVec3 = (pixels, N, passOffsets) => {
+    for (let i = 0; i < N; i++) {
+        const p = i * 4;
+        passOffsets[i * 3] = pixels[p];
+        passOffsets[i * 3 + 1] = pixels[p + 1];
+        passOffsets[i * 3 + 2] = pixels[p + 2];
+    }
+};
 
 const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMatrix, fileMap, textureCache, textureQueue, maxTextureSize, isAlive, time = 0 }) => {
     if (!renderer || !displacement || !geometry) return null;
@@ -8291,7 +8327,7 @@ const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMat
 
         // The analytic-normal frame differences two displacement evaluations
         // eps apart (eps ~0.15mm at level 1, giving deltas ~3e-5 at a 0.2
-        // slope on egg_normals). The bit-pack readback below reconstructs a
+        // slope on egg_normals). The legacy bit-pack readback reconstructs a
         // full float32 from an RGBA8 target's bytes, but those bytes still
         // pass through the GPU's UNORM8 write path (clamp+round, and on some
         // drivers dithering) before they can be read back; any of that
@@ -8306,7 +8342,14 @@ const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMat
             wantAnalytic = false;
             notices.push('Analytic displacement normals unavailable: no float render-target readback on this GPU, using the mesh recompute');
         }
-        const readbackFormat = wantAnalytic ? 'rgba32f' : 'rgba8';
+        // Whenever a float render target is available, prefer it regardless
+        // of wantAnalytic: it lets the shader write a raw vec3 in one draw
+        // (u_dispPackMode = 1) instead of three legacy bit-packed draws, and
+        // a float target round-trips a float32 exactly, so this never loses
+        // precision versus the rgba8 path.
+        const readbackFormat = floatReadbackAvailable ? 'rgba32f' : 'rgba8';
+        const rawPack = readbackFormat === 'rgba32f';
+        uniforms.u_dispPackMode = { value: rawPack ? 1 : 0 };
         target = new THREE.WebGLRenderTarget(W, H, {
             type: readbackFormat === 'rgba32f' ? THREE.FloatType : THREE.UnsignedByteType,
             format: THREE.RGBAFormat,
@@ -8349,38 +8392,40 @@ const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMat
                 return { offsets: null, mode, notices };
             }
 
-            // rgba32f: readRenderTargetPixels wants a Float32Array and hands
-            // back the exact bytes the shader wrote (0..1, no UNORM8 clamp);
-            // rgba8: the older Uint8Array path, byte-for-byte as GL wrote it.
-            const pixels = readbackFormat === 'rgba32f' ? new Float32Array(W * H * 4) : new Uint8Array(W * H * 4);
-            const byteView = new DataView(new ArrayBuffer(4));
+            // rawPack (rgba32f, u_dispPackMode = 1): readRenderTargetPixels
+            // wants a Float32Array and hands back the exact vec3 the shader
+            // wrote, one draw per pass. Legacy (rgba8, u_dispPackMode = 0,
+            // only used when there is no float render target): the older
+            // Uint8Array path, byte-for-byte as GL wrote it, three draws per
+            // pass (one per x/y/z component). This buffer is allocated once
+            // and reused for every draw across every pass (base, tangent,
+            // bitangent).
+            const pixels = rawPack ? new Float32Array(W * H * 4) : new Uint8Array(W * H * 4);
+            const byteView = rawPack ? null : new DataView(new ArrayBuffer(4));
             renderer.autoClear = false;
             renderer.setViewport(0, 0, W, H);
-            // One pass = 3 draws (x/y/z components) against whatever
-            // i_position is currently bound on evalGeometry; the analytic-
-            // normal frame below rebinds i_position twice more to sample
-            // the same network at two tangent-offset positions.
+            // rawPack: one draw carries all three components. Legacy: 3
+            // draws (x/y/z components) against whatever i_position is
+            // currently bound on evalGeometry; the analytic-normal frame
+            // below rebinds i_position twice more to sample the same
+            // network at two tangent-offset positions.
+            const drawAndRead = () => {
+                renderer.setRenderTarget(target);
+                renderer.setClearColor(0x000000, 0);
+                renderer.clear(true, true, true);
+                renderer.render(scene, camera);
+                renderer.readRenderTargetPixels(target, 0, 0, W, H, pixels);
+            };
             const runPass = () => {
                 const passOffsets = new Float32Array(N * 3);
-                for (let c = 0; c < 3; c++) {
-                    uniforms.u_dispComponent.value = c;
-                    renderer.setRenderTarget(target);
-                    renderer.setClearColor(0x000000, 0);
-                    renderer.clear(true, true, true);
-                    renderer.render(scene, camera);
-                    renderer.readRenderTargetPixels(target, 0, 0, W, H, pixels);
-                    for (let i = 0; i < N; i++) {
-                        const p = i * 4;
-                        if (readbackFormat === 'rgba32f') {
-                            byteView.setUint8(0, Math.round(pixels[p] * 255) & 0xFF);
-                            byteView.setUint8(1, Math.round(pixels[p + 1] * 255) & 0xFF);
-                            byteView.setUint8(2, Math.round(pixels[p + 2] * 255) & 0xFF);
-                            byteView.setUint8(3, Math.round(pixels[p + 3] * 255) & 0xFF);
-                        } else {
-                            byteView.setUint8(0, pixels[p]); byteView.setUint8(1, pixels[p + 1]);
-                            byteView.setUint8(2, pixels[p + 2]); byteView.setUint8(3, pixels[p + 3]);
-                        }
-                        passOffsets[i * 3 + c] = byteView.getFloat32(0, true);
+                if (rawPack) {
+                    drawAndRead();
+                    decodeRawDisplacementVec3(pixels, N, passOffsets);
+                } else {
+                    for (let c = 0; c < 3; c++) {
+                        uniforms.u_dispComponent.value = c;
+                        drawAndRead();
+                        decodeLegacyDisplacementComponent(pixels, N, c, passOffsets, byteView);
                     }
                 }
                 return passOffsets;
