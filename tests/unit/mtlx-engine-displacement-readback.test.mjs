@@ -32,5 +32,5 @@ test('the analytic displacement-normal readback requires a float render target a
   assert.match(body, /type: readbackFormat === 'rgba32f' \? THREE\.FloatType : THREE\.UnsignedByteType/);
   // The diagnostic must be reported on the evaluator's result so callers
   // (and evaluatorCalls forwarding) can tell which precision was used.
-  assert.match(body, /return \{ offsets, offsetsTangent, offsetsBitangent, analyticFrame, mode, notices, readbackFormat \};/);
+  assert.match(body, /return \{ offsets, offsetsTangent, offsetsBitangent, analyticFrame, mode, notices, readbackFormat, perf \};/);
 });
