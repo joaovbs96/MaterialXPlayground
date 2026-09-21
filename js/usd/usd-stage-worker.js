@@ -195,6 +195,101 @@ function normalizePath(path) {
   return parts.join("/");
 }
 
+// --- Direct VFS writes for large input files ---------------------------
+// The wrapper's createDataFile() keeps a second full copy of every file's
+// bytes for the whole session (see _originalLayerData in
+// usdWebViewBindings.js), used only by setVariantSelection's text-edit
+// fallback, which this app never calls. On a large scene that permanent
+// duplicate costs hundreds of MB. Non-root input files are written straight
+// into the native VFS instead, replicating the wrapper's own path handling
+// exactly so openStage still finds every layer where it expects it.
+
+function vfsNormalizePath(path) {
+  return `/${String(path).replace(/^\/+/, "")}`;
+}
+
+function vfsDirname(path) {
+  const normalized = vfsNormalizePath(path);
+  const index = normalized.lastIndexOf("/");
+  return index <= 0 ? "/" : normalized.slice(0, index);
+}
+
+function vfsBasename(path) {
+  const normalized = vfsNormalizePath(path);
+  const index = normalized.lastIndexOf("/");
+  return normalized.slice(index + 1);
+}
+
+function ensureVfsDirectory(module, path) {
+  const normalized = vfsNormalizePath(path);
+  if (normalized === "/") return;
+  let current = "";
+  for (const part of normalized.split("/").filter(Boolean)) {
+    current += `/${part}`;
+    if (!module.FS_analyzePath(current).exists) {
+      module.FS_createPath(vfsDirname(current), vfsBasename(current), true, true);
+    }
+  }
+}
+
+// VFS paths this worker wrote directly, bypassing the wrapper's own
+// createDataFile tracking. Unlinked on stage close since the wrapper's own
+// closeStage only knows about files it wrote itself.
+const directVfsPaths = new Set();
+
+function directVfsHooksAvailable(module) {
+  return !!module &&
+    typeof module.FS_analyzePath === "function" &&
+    typeof module.FS_createPath === "function" &&
+    typeof module.FS_unlink === "function" &&
+    typeof module.FS_createDataFile === "function";
+}
+
+// Writes one input file into the native VFS. The root layer always goes
+// through api.createDataFile so the wrapper's variant-selection fallback
+// (which reads its own tracked copy) keeps working. Every other file is
+// written directly when the raw module hooks exist, skipping the wrapper's
+// permanent second byte copy; any failure falls back to api.createDataFile.
+function writeStageFile(api, path, data, isRootLayer) {
+  if (isRootLayer) {
+    api.createDataFile(path, data);
+    return;
+  }
+  const module = globalThis.__USD_WEBVIEW_MODULE__;
+  if (directVfsHooksAvailable(module)) {
+    try {
+      const filePath = vfsNormalizePath(path);
+      ensureVfsDirectory(module, vfsDirname(filePath));
+      if (module.FS_analyzePath(filePath).exists) {
+        module.FS_unlink(filePath);
+      }
+      module.FS_createDataFile(vfsDirname(filePath), vfsBasename(filePath), data, true, true, true);
+      directVfsPaths.add(filePath);
+      return;
+    } catch {
+      // Fall through and let the wrapper own this file instead.
+    }
+  }
+  api.createDataFile(path, data);
+}
+
+// Mirrors what the wrapper's own closeStage does for its tracked files:
+// unlink every directly-written path still present, then forget them, so a
+// later load in this persistent worker never sees a stale VFS entry.
+function closeDirectVfsFiles() {
+  const module = globalThis.__USD_WEBVIEW_MODULE__;
+  if (directVfsHooksAvailable(module)) {
+    for (const filePath of directVfsPaths) {
+      try {
+        if (module.FS_analyzePath(filePath).exists) module.FS_unlink(filePath);
+      } catch {
+        // Best-effort cleanup; a failed unlink here must not fail the load.
+      }
+    }
+  }
+  directVfsPaths.clear();
+}
+
 // OpenStage's public summary currently exposes upAxis but omits the resolved
 // metersPerUnit metadata.  Recover only the root USDA header here. Stage
 // metadata lives in the root layer's header; values inside customLayerData,
@@ -2210,6 +2305,7 @@ async function load(request) {
   // inside scene B.
   if (activeStage) {
     api.closeStage(activeStage);
+    closeDirectVfsFiles();
     api.deleteStageDriver?.(activeStage);
     activeStage = undefined;
   }
@@ -2294,7 +2390,7 @@ async function load(request) {
       } catch { /* skip */ }
     }
     inputCacheAdmit(cacheKey, data, resolvedText);
-    api.createDataFile(normalizedPath, data);
+    writeStageFile(api, normalizedPath, data, normalizedPath === requestedRootPath);
     loadedFiles++;
     postMessage({ id: request.id, type: "progress", value: {
       phase: "worker", done: loadedFiles, total: fileTotal,

@@ -18,7 +18,7 @@ function loadWorkerHelpers() {
   const source = sharedSource + '\n' + fs.readFileSync(workerPath, 'utf8')
     .replace('import "../shared/mesh-subdivision.js";', '')
     .replace('const RUNTIME_DIR = new URL("../../vendor/usd-webview-bindings/", import.meta.url);', 'const RUNTIME_DIR = null;')
-    + '\nthis.__helpers = { shouldSkipVfsUpload, meshMaterialMayDisplace, normalizePath, ownedTyped, arrayCopy };';
+    + '\nthis.__helpers = { shouldSkipVfsUpload, meshMaterialMayDisplace, normalizePath, ownedTyped, arrayCopy, writeStageFile, closeDirectVfsFiles, directVfsPaths };';
   const context = {
     ArrayBuffer, Blob, Float32Array, Float64Array, Int32Array, Map, Math, Number, Set,
     TextDecoder, TextEncoder, Uint8Array, Uint32Array, URL, console,
@@ -117,4 +117,90 @@ test('ownedTyped copies a value backed by the wasm heap buffer even when the typ
   const result = ownedTyped(view, Float32Array);
   assert.notEqual(result, view, 'a live wasm heap view must never be handed back directly');
   assert.deepEqual(Array.from(result), [1, 2, 3, 4]);
+});
+
+// Fake raw Emscripten module recording every FS_* call so writeStageFile's
+// path handling and cleanup can be checked without a real wasm runtime.
+function makeFakeModule() {
+  const files = new Set();
+  const calls = { createDataFile: [], unlink: [], createPath: [] };
+  return {
+    calls,
+    files,
+    FS_analyzePath(path) { return { exists: files.has(path) }; },
+    FS_createPath(parent, name) {
+      calls.createPath.push({ parent, name });
+      files.add(parent === '/' ? `/${name}` : `${parent}/${name}`);
+    },
+    FS_unlink(path) {
+      calls.unlink.push(path);
+      files.delete(path);
+    },
+    FS_createDataFile(parent, name, data, canRead, canWrite, canOwn) {
+      calls.createDataFile.push({ parent, name, data, canRead, canWrite, canOwn });
+      files.add(parent === '/' ? `/${name}` : `${parent}/${name}`);
+    },
+  };
+}
+
+test('writeStageFile writes a non-root file directly to the exact VFS path the wrapper would use', () => {
+  const { writeStageFile, directVfsPaths, context } = loadWorkerHelpers();
+  const module = makeFakeModule();
+  context.__USD_WEBVIEW_MODULE__ = module;
+  const api = { createDataFile: () => { throw new Error('must not be called'); } };
+  const data = new Uint8Array([1, 2, 3]);
+
+  writeStageFile(api, 'textures/sub/diffuse.png', data, false);
+
+  assert.equal(module.calls.createDataFile.length, 1);
+  const call = module.calls.createDataFile[0];
+  assert.equal(call.parent, '/textures/sub');
+  assert.equal(call.name, 'diffuse.png');
+  assert.equal(call.data, data);
+  assert.equal(call.canOwn, true);
+  assert.ok(directVfsPaths.has('/textures/sub/diffuse.png'));
+});
+
+test('writeStageFile routes the root layer through api.createDataFile', () => {
+  const { writeStageFile, context } = loadWorkerHelpers();
+  const module = makeFakeModule();
+  context.__USD_WEBVIEW_MODULE__ = module;
+  const calls = [];
+  const api = { createDataFile: (path, data) => calls.push({ path, data }) };
+  const data = new Uint8Array([9]);
+
+  writeStageFile(api, 'root.usda', data, true);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, 'root.usda');
+  assert.equal(module.calls.createDataFile.length, 0, 'the raw module must not see the root layer');
+});
+
+test('writeStageFile falls back to api.createDataFile when the raw module hooks are missing', () => {
+  const { writeStageFile, context } = loadWorkerHelpers();
+  context.__USD_WEBVIEW_MODULE__ = undefined;
+  const calls = [];
+  const api = { createDataFile: (path, data) => calls.push({ path, data }) };
+  const data = new Uint8Array([5]);
+
+  writeStageFile(api, 'materials/red.mtlx', data, false);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, 'materials/red.mtlx');
+});
+
+test('closeDirectVfsFiles unlinks every directly-written path still present and clears tracking', () => {
+  const { writeStageFile, closeDirectVfsFiles, directVfsPaths, context } = loadWorkerHelpers();
+  const module = makeFakeModule();
+  context.__USD_WEBVIEW_MODULE__ = module;
+  const api = { createDataFile: () => { throw new Error('must not be called'); } };
+
+  writeStageFile(api, 'geo/a.usd', new Uint8Array([1]), false);
+  writeStageFile(api, 'geo/b.usd', new Uint8Array([2]), false);
+  assert.equal(directVfsPaths.size, 2);
+
+  closeDirectVfsFiles();
+
+  assert.deepEqual(module.calls.unlink.sort(), ['/geo/a.usd', '/geo/b.usd']);
+  assert.equal(directVfsPaths.size, 0);
 });
