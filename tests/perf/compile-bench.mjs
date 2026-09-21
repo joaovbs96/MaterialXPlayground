@@ -468,7 +468,7 @@ async function main() {
         report.median[k] = median(values);
       }
     } else {
-      const keys = ['materialPhaseMs', 'bindPhaseMs', 'gpuProgramMs', 'distinctPrograms', 'firstGeometryFrameMs'];
+      const keys = ['materialPhaseMs', 'bindPhaseMs', 'gpuProgramMs', 'distinctPrograms', 'firstGeometryFrameMs', 'frameAvgMs', 'stageLightSamples', 'stageLightSlots'];
       for (const k of keys) {
         const values = report.samples.map((s) => s.scenePerf && s.scenePerf[k]).filter((v) => typeof v === 'number');
         report.median[k] = values.length ? median(values) : null;

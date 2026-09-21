@@ -1220,7 +1220,10 @@ const createMtlxSceneView = async ({
     // Perf measurement only, gated by window.MTLX_PERF_LOG; zero cost when
     // off. Published as window.__mtlxScenePerf once compile finishes.
     const scenePerf = window.MTLX_PERF_LOG ? { materials: [], materialPhaseMs: 0, bindPhaseMs: 0, gpuProgramMs: 0,
-        distinctPrograms: 0, distinctProgramsNamesStripped: 0, prewarmParallelWaitMs: 0, firstGeometryFrameMs: null } : null;
+        distinctPrograms: 0, distinctProgramsNamesStripped: 0, prewarmParallelWaitMs: 0, firstGeometryFrameMs: null,
+        frameSamples: 0, frameTotalMs: 0, frameAvgMs: null, lastFrameAt: 0,
+        texturePhaseMs: 0, texture: { decodeMs: 0, resizeMs: 0, uploadMs: 0, count: 0 } } : null;
+    if (scenePerf && window.resetTexturePerf) window.resetTexturePerf();
     const sceneLoadStart = performance.now();
     const scenePerfHash = (s) => {
         let h = 2166136261;
@@ -1384,7 +1387,15 @@ const createMtlxSceneView = async ({
     };
     const geometries = new Set();
     const textureCache = new Map();
-    const textureQueue = { tail: Promise.resolve() };
+    // Bounded decode concurrency for ordinary (non-KTX2/EXR/HDR/TIF) Scene
+    // textures: 'tails' is a small round-robin set of serial chains, one
+    // slot decoding at a time each, so several textures decode in parallel
+    // without unbounding total concurrency. The fast path (default on) makes
+    // this worth doing since each decode is now cheap; with the switch off,
+    // a single-slot queue reproduces the old fully-serial behaviour.
+    const textureFastPath = window.sceneTextureFastPathEnabled ? window.sceneTextureFastPathEnabled() : true;
+    const TEXTURE_DECODE_CONCURRENCY = textureFastPath ? 5 : 1;
+    const textureQueue = { tails: Array.from({ length: TEXTURE_DECODE_CONCURRENCY }, () => Promise.resolve()), next: 0 };
     const documents = new Set();
     const prims = [];
     let rebuildingProvisional = null;
@@ -1580,6 +1591,39 @@ const createMtlxSceneView = async ({
     let sceneRadius = 1;
     let aoEnabled = storedSceneAo();
     let aoStrength = storedSceneAoStrength();
+    // Kill switch shared with the engine: '0' generates every feature again.
+    const featureGatedShaders = () => {
+        try { return localStorage.getItem('mtlx_feature_gated_shaders') !== '0'; } catch (e) { return true; }
+    };
+    // Stage-light slots the live materials were compiled for, so a later
+    // light change past that reservation can trigger a rebuild.
+    let compiledStageLightSlots = null;
+    // A feature that is off is not generated at all. Turning one back ON
+    // regenerates the materials (regenerateForFeatures); turning one OFF
+    // keeps the larger shader, whose uniforms already hold it inert.
+    const sceneFeatureOptions = () => {
+        if (!featureGatedShaders()) return null;
+        return {
+            skipShadowMap: !shadowsEnabled,
+            skipOcclusion: !aoEnabled && !skyVisEnabled,
+            skipSkyVis: !skyVisEnabled,
+            skipAoVolume: !aoEnabled,
+        };
+    };
+    const generatedFeatures = { shadows: false, ao: false, skyVis: false };
+    // Union over one compile pass, cleared when a pass starts, so a toggle
+    // that arrives mid-pass is answered by a rebuild rather than by a stale
+    // "already generated".
+    const resetGeneratedFeatures = () => {
+        generatedFeatures.shadows = false;
+        generatedFeatures.ao = false;
+        generatedFeatures.skyVis = false;
+    };
+    const noteGeneratedFeatures = () => {
+        generatedFeatures.shadows = generatedFeatures.shadows || shadowsEnabled;
+        generatedFeatures.ao = generatedFeatures.ao || aoEnabled;
+        generatedFeatures.skyVis = generatedFeatures.skyVis || skyVisEnabled;
+    };
     const disposeThicknessResources = () => {
         thicknessTargets.forEach((target) => { try { target.dispose(); } catch (e) {} });
         thicknessTargets.clear();
@@ -1663,12 +1707,11 @@ const createMtlxSceneView = async ({
     let domeEnv = null;
     let envTilt = null;
     let stageLights = [];
-    // Stage-light slots a generated shader must reserve. convertLights caps
-    // its output at SCENE_STAGE_LIGHT_LIMIT and only the sample split (not
-    // the set of lights) depends on the bounds, so "none after the first
-    // pass" means none ever, and anything else keeps the full reservation.
+    // Stage-light slots a generated shader must reserve, rounded up to a
+    // tier by the engine. convertLights hands the whole budget out across
+    // the emitters, so the bounds pass only moves samples between lights.
     let stageLightsConverted = false;
-    const stageLightSlotHint = () => (stageLightsConverted && !stageLights.length ? 0 : SCENE_STAGE_LIGHT_LIMIT);
+    const stageLightSlotHint = () => (stageLightsConverted ? stageLights.length : SCENE_STAGE_LIGHT_LIMIT);
     let stageLightsEnabled = storedSceneStageLights();
     let stageLightsEv = storedSceneStageLightsEv();
     // Scratch-only direct-light diagnostic state. It is never read from or
@@ -2189,11 +2232,17 @@ const createMtlxSceneView = async ({
                 uniformVectorBudget = gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS);
             } catch (e) { /* keep the engine's fallback defaults */ }
             const __perfGenStart = scenePerf ? performance.now() : 0;
+            noteGeneratedFeatures();
             compiled = await window.compileMtlxSceneMaterial({
                 mx: mxEnv.mx, gen: mxEnv.gen, genContext: mxEnv.genContext,
                 renderable, label, isMounted, document: sourceDocument, sceneRgbt: true, samplerBudget, uniformVectorBudget,
-                stageLightCount: stageLightSlotHint(),
+                stageLightCount: stageLightSlotHint(), featureOptions: sceneFeatureOptions(),
             });
+            // Stage slots this source actually reserved, which is the hint
+            // rounded up to the engine's next light tier.
+            if (compiled && Number.isFinite(compiled.maxLights)) {
+                compiledStageLightSlots = compiled.maxLights - (((mxEnv && mxEnv.lightData) || []).length + 1);
+            }
             const __perfGenMs = scenePerf ? (performance.now() - __perfGenStart) : 0;
             if (!compiled) return null;
             // Uniform paths alone cannot distinguish a direct
@@ -2223,7 +2272,10 @@ const createMtlxSceneView = async ({
                 transferCompiled = null;
                 const preClassification = sceneMaterialClassification(compiled, compiled.mtlxSceneSurfaceMetadata);
                 const preThinReason = preClassification.thinWalled && preClassification.thinWalled.reason;
-                const wantsTransfer = preClassification.coverage.mode === 'static'
+                // The transmittance variant is a second full compile per
+                // material and only ever feeds the shadow atlas.
+                const wantsTransfer = (shadowsEnabled || !featureGatedShaders())
+                    && preClassification.coverage.mode === 'static'
                     && (Number(preClassification.coverage.opacity) < 0.999 || Number(preClassification.coverage.transmission) > 0.001)
                     && (preThinReason === 'constant-thin' || preThinReason === 'constant-solid' || preThinReason === 'default-solid');
                 if (wantsTransfer && window.createLightTransportUniforms) {
@@ -2233,6 +2285,7 @@ const createMtlxSceneView = async ({
                             mx: mxEnv.mx, gen: mxEnv.gen, genContext: mxEnv.genContext,
                             renderable, label: label + ' (transmittance)', isMounted, document: sourceDocument,
                             lightTransport: 4, samplerBudget, stageLightCount: stageLightSlotHint(),
+                            featureOptions: sceneFeatureOptions(),
                         });
                         if (scenePerf) transferGenMs = performance.now() - __perfTransferStart;
                         if (transferSrcs && transferSrcs.lightTransportSupported) {
@@ -2546,6 +2599,7 @@ const createMtlxSceneView = async ({
         const compileAndBindMaterials = async () => {
             const precompiled = [];
             const __perfMaterialPhaseStart = scenePerf ? performance.now() : 0;
+            resetGeneratedFeatures();
             for (let i = 0; i < materialList.length; i += 1) {
                 const record = materialList[i];
                 const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
@@ -2574,7 +2628,23 @@ const createMtlxSceneView = async ({
                 report({ phase: 'material-bind', index: i + 1, total: materialList.length, label });
             }
             if (scenePerf) scenePerf.bindPhaseMs = performance.now() - __perfBindPhaseStart;
+            const __perfTexturePhaseStart = scenePerf ? performance.now() : 0;
             await awaitTextureJobs(pendingTextures);
+            if (scenePerf) {
+                scenePerf.texturePhaseMs += performance.now() - __perfTexturePhaseStart;
+                const t = window.__mtlxTexturePerf;
+                if (t) {
+                    scenePerf.texture.decodeMs += t.decodeMs;
+                    scenePerf.texture.resizeMs += t.resizeMs;
+                    scenePerf.texture.count += t.count;
+                    // Upload (texImage2D + mipmap generation) is not timed
+                    // separately (it happens lazily at first draw, outside
+                    // this await); approximate it as the remainder of the
+                    // phase's wall time not spent decoding/resizing.
+                    scenePerf.texture.uploadMs = Math.max(0, scenePerf.texturePhaseMs - scenePerf.texture.decodeMs - scenePerf.texture.resizeMs);
+                    window.resetTexturePerf && window.resetTexturePerf();
+                }
+            }
             // These jobs have settled; only variant jobs created during mesh
             // partitioning belong to the later wait below.
             pendingTextures.length = 0;
@@ -5001,7 +5071,21 @@ const createMtlxSceneView = async ({
             const geometryLabel = String(record.primPath || '').split('/').filter(Boolean).pop() || String(record.name || '');
             report({ phase: 'geometry', index: i + 1, total: stage.meshes.length, primPath: String(record.primPath || ''), label: geometryLabel });
         }
-        if (!geometryFirst) await awaitTextureJobs(pendingTextures);
+        if (!geometryFirst) {
+            const __perfTexturePhaseStart2 = scenePerf ? performance.now() : 0;
+            await awaitTextureJobs(pendingTextures);
+            if (scenePerf) {
+                scenePerf.texturePhaseMs += performance.now() - __perfTexturePhaseStart2;
+                const t = window.__mtlxTexturePerf;
+                if (t) {
+                    scenePerf.texture.decodeMs += t.decodeMs;
+                    scenePerf.texture.resizeMs += t.resizeMs;
+                    scenePerf.texture.count += t.count;
+                    scenePerf.texture.uploadMs = Math.max(0, scenePerf.texturePhaseMs - scenePerf.texture.decodeMs - scenePerf.texture.resizeMs);
+                    window.resetTexturePerf && window.resetTexturePerf();
+                }
+            }
+        }
         if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
         // Geometry-first: show the stage now, with the neutral material,
         // before spending any time on MaterialX compiles. Bounds only depend
@@ -5107,6 +5191,10 @@ const createMtlxSceneView = async ({
         // distances it needs. The info lines from the first pass are already
         // deduped by primPath, so this only adds ones that actually changed.
         if (!stageBox.isEmpty()) convertLights(stageBox.getCenter(new THREE.Vector3()));
+        // The bounds pass moves samples between emitters without changing how
+        // many there are, so this never fires; it is the guard that keeps the
+        // light tier honest if that ever stops holding.
+        if (compiledStageLightSlots != null && stageLights.length > compiledStageLightSlots) displayRevision += 1;
         // Geometry and lights are final here, so draw the map once before the
         // first frame rather than leaving the opening frames unshadowed.
         // Materials were built during the geometry pass, before the volume
@@ -5242,6 +5330,7 @@ const createMtlxSceneView = async ({
                 rebuildingProvisional = provisional;
                 const rebuildPending = [];
                 const oldMaterials = Array.from(materials);
+                resetGeneratedFeatures();
                 for (const [path, record] of materialRecords) {
                     const result = await makeMtlxMaterial(record, true);
                     if (result) {
@@ -5438,6 +5527,8 @@ const createMtlxSceneView = async ({
         if (window.ResizeObserver) { resizeObserver = new ResizeObserver(resize); resizeObserver.observe(container); }
         reportRendererStep('first-frame');
         if (scenePerf) {
+            scenePerf.stageLightSamples = stageLights.length;
+            scenePerf.stageLightSlots = compiledStageLightSlots;
             scenePerf.distinctPrograms = new Set(scenePerf.materials.map((m) => m.srcHash)).size;
             scenePerf.distinctProgramsNamesStripped = new Set(scenePerf.materials.map((m) => m.stripHash)).size;
             window.__mtlxScenePerf = scenePerf;
@@ -5670,6 +5761,17 @@ const createMtlxSceneView = async ({
         };
         const render = () => {
             if (stopped || !active) { raf = 0; return; }
+            // Perf-gated frame timing: the first 120 frames after the scene is
+            // ready, averaged, so a feature's per-frame cost is measurable.
+            if (scenePerf && scenePerf.frameSamples < 120) {
+                const __now = performance.now();
+                if (scenePerf.lastFrameAt) {
+                    scenePerf.frameSamples += 1;
+                    scenePerf.frameTotalMs += __now - scenePerf.lastFrameAt;
+                    scenePerf.frameAvgMs = scenePerf.frameTotalMs / scenePerf.frameSamples;
+                }
+                scenePerf.lastFrameAt = __now;
+            }
             if (window.MTLX_CLOCK && typeof window.clockTick === 'function') window.clockTick(performance.now());
             if (environmentBridge && environmentBridge.update) environmentBridge.update();
             applyStudioPolarClamp();
@@ -5713,9 +5815,23 @@ const createMtlxSceneView = async ({
         };
         // Stage lights are live: both controls only re-push uniforms, no
         // recompile, because the slots were reserved at generation time.
+        // A feature the live materials were never generated with needs them
+        // rebuilt (about 1 to 2 s each). Turning one OFF needs nothing: the
+        // larger shader stays and its uniforms already hold the feature inert.
+        const regenerateForFeatures = () => {
+            if (!featureGatedShaders()) return false;
+            if ((!shadowsEnabled || generatedFeatures.shadows)
+                && (!aoEnabled || generatedFeatures.ao)
+                && (!skyVisEnabled || generatedFeatures.skyVis)) return false;
+            displayDirty = true;
+            displayRevision += 1;
+            if (queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
+            return true;
+        };
         const setShadowsEnabled = (on) => {
             shadowsEnabled = !!on;
             try { if (window.top === window) localStorage.setItem(SCENE_SHADOWS_KEY, shadowsEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            regenerateForFeatures();
             updateShadowMap();
             applyShadowMatrix();
             applyMaterialEnvironment();
@@ -5782,6 +5898,7 @@ const createMtlxSceneView = async ({
                 const skyResult = buildSkyVisibilityVolume(box);
                 if (aoEnabled && !aoVolumeTexture) buildAoVolume(box, skyResult);
             }
+            regenerateForFeatures();
             applySkyVisibility();
             applyAoVolume();
             renderFrame();
@@ -5805,6 +5922,7 @@ const createMtlxSceneView = async ({
             aoEnabled = !!on;
             try { if (window.top === window) localStorage.setItem(SCENE_AO_KEY, aoEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
             if (!aoEnabled) { applyAmbientOcclusion(null); disposeAoResources(); }
+            regenerateForFeatures();
             applyAoVolume();
             return aoEnabled;
         };

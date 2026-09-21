@@ -1462,7 +1462,7 @@ function applyOrientation(mesh) {
 // topology, and re-expands to deindexed corners with a sequential index so
 // the renderer path is unchanged. Returns null if the mesh cannot be welded
 // into a usable triangle list (degenerate/point mesh).
-function subdivideMesh(mesh, levels) {
+function subdivideMesh(mesh, levels, fastWeld = true) {
   const positions = mesh.positions;
   if (!positions || positions.length < 9 || levels <= 0) return null;
   const indices = mesh.indices;
@@ -1501,10 +1501,16 @@ function subdivideMesh(mesh, levels) {
   }
   if (weldedPositions.length < 4 || !triangles.length) return null;
 
-  const edgeKey = (x, y) => (x < y ? `${x}_${y}` : `${y}_${x}`);
+  // Numeric edge keys avoid a per-edge string allocation; safe whenever both
+  // endpoints fit under EDGE_KEY_OFFSET, which the caller's MESH_TRIANGLE_LIMIT
+  // guarantees with wide margin (falls back to the string key otherwise).
+  const EDGE_KEY_OFFSET = 16777216;
 
   for (let level = 0; level < levels; level++) {
     const n = weldedPositions.length;
+    const edgeKey = (fastWeld && n < EDGE_KEY_OFFSET)
+      ? (x, y) => (x < y ? x * EDGE_KEY_OFFSET + y : y * EDGE_KEY_OFFSET + x)
+      : (x, y) => (x < y ? `${x}_${y}` : `${y}_${x}`);
     const edgeTriangles = new Map();
     const vertexNeighbors = Array.from({ length: n }, () => new Set());
     for (let ti = 0; ti < triangles.length; ti++) {
@@ -1658,7 +1664,7 @@ function subdivideMesh(mesh, levels) {
 // UV seams and hard normal edges stay split naturally since their corners
 // differ. Corner order is preserved in the output indices, so material
 // subset start/count ranges (which are ranges over corners) stay valid.
-function weldMesh(mesh) {
+function weldMesh(mesh, fastWeld = true) {
   const positions = mesh.positions;
   const normals = mesh.normals;
   if (!positions || !normals) return mesh;
@@ -1666,26 +1672,67 @@ function weldMesh(mesh) {
   if (cornerCount < 3 || normals.length !== positions.length) return mesh;
   const uvs = mesh.uvs;
   const hasUV = uvs && uvs.length === cornerCount * 2;
-  const vertexMap = new Map();
   const outPositions = [];
   const outNormals = [];
   const outUVs = hasUV ? [] : undefined;
   const indices = new Uint32Array(cornerCount);
-  for (let c = 0; c < cornerCount; c++) {
-    const px = positions[c * 3], py = positions[c * 3 + 1], pz = positions[c * 3 + 2];
-    const nx = normals[c * 3], ny = normals[c * 3 + 1], nz = normals[c * 3 + 2];
-    const key = hasUV
-      ? `${px},${py},${pz}|${nx},${ny},${nz}|${uvs[c * 2]},${uvs[c * 2 + 1]}`
-      : `${px},${py},${pz}|${nx},${ny},${nz}`;
-    let vi = vertexMap.get(key);
-    if (vi === undefined) {
-      vi = outPositions.length / 3;
-      outPositions.push(px, py, pz);
-      outNormals.push(nx, ny, nz);
-      if (hasUV) outUVs.push(uvs[c * 2], uvs[c * 2 + 1]);
-      vertexMap.set(key, vi);
+  // Old string keys stringify -0 as "0", so -0 and +0 already weld together;
+  // normalize here so the fast path reproduces that exactly.
+  const noSignZero = (v) => (v === 0 ? 0 : v);
+  if (fastWeld) {
+    // Numeric hash of the exact float64 bit patterns, then a bucket of
+    // candidates verified with === before reuse. Same grouping as the old
+    // "stringify every component" key, without a per-corner string alloc.
+    const comps = hasUV ? 8 : 6;
+    const f64 = new Float64Array(comps);
+    const u32 = new Uint32Array(f64.buffer);
+    const buckets = new Map();
+    for (let c = 0; c < cornerCount; c++) {
+      const px = noSignZero(positions[c * 3]), py = noSignZero(positions[c * 3 + 1]), pz = noSignZero(positions[c * 3 + 2]);
+      const nx = noSignZero(normals[c * 3]), ny = noSignZero(normals[c * 3 + 1]), nz = noSignZero(normals[c * 3 + 2]);
+      const u = hasUV ? noSignZero(uvs[c * 2]) : 0, v = hasUV ? noSignZero(uvs[c * 2 + 1]) : 0;
+      f64[0] = px; f64[1] = py; f64[2] = pz; f64[3] = nx; f64[4] = ny; f64[5] = nz;
+      if (hasUV) { f64[6] = u; f64[7] = v; }
+      let h = 2166136261;
+      for (let i = 0; i < u32.length; i++) { h ^= u32[i]; h = Math.imul(h, 16777619); }
+      h = h >>> 0;
+      let bucket = buckets.get(h);
+      let vi = -1;
+      if (bucket) {
+        for (const ci of bucket) {
+          if (outPositions[ci * 3] === px && outPositions[ci * 3 + 1] === py && outPositions[ci * 3 + 2] === pz &&
+              outNormals[ci * 3] === nx && outNormals[ci * 3 + 1] === ny && outNormals[ci * 3 + 2] === nz &&
+              (!hasUV || (outUVs[ci * 2] === u && outUVs[ci * 2 + 1] === v))) { vi = ci; break; }
+        }
+      }
+      if (vi === -1) {
+        vi = outPositions.length / 3;
+        outPositions.push(px, py, pz);
+        outNormals.push(nx, ny, nz);
+        if (hasUV) outUVs.push(u, v);
+        if (!bucket) { bucket = []; buckets.set(h, bucket); }
+        bucket.push(vi);
+      }
+      indices[c] = vi;
     }
-    indices[c] = vi;
+  } else {
+    const vertexMap = new Map();
+    for (let c = 0; c < cornerCount; c++) {
+      const px = positions[c * 3], py = positions[c * 3 + 1], pz = positions[c * 3 + 2];
+      const nx = normals[c * 3], ny = normals[c * 3 + 1], nz = normals[c * 3 + 2];
+      const key = hasUV
+        ? `${px},${py},${pz}|${nx},${ny},${nz}|${uvs[c * 2]},${uvs[c * 2 + 1]}`
+        : `${px},${py},${pz}|${nx},${ny},${nz}`;
+      let vi = vertexMap.get(key);
+      if (vi === undefined) {
+        vi = outPositions.length / 3;
+        outPositions.push(px, py, pz);
+        outNormals.push(nx, ny, nz);
+        if (hasUV) outUVs.push(uvs[c * 2], uvs[c * 2 + 1]);
+        vertexMap.set(key, vi);
+      }
+      indices[c] = vi;
+    }
   }
   mesh.positions = Float32Array.from(outPositions);
   mesh.normals = Float32Array.from(outNormals);
@@ -2102,6 +2149,16 @@ async function load(request) {
   // and stamped their orientation, so every snapshot mesh is flipped exactly
   // once here.
   for (const mesh of drawSnapshot.meshes) applyOrientation(mesh);
+  postMessage({ id: request.id, type: "progress", value: {
+    phase: "extract-materials", done: 1, total: 1, fraction: 0.9, message: "Extracted material payloads",
+  } });
+  // Subdivision + welding are pure-JS mesh work and can run long on dense
+  // stages; give them their own phase so that time is not misattributed to
+  // "Extracting material payloads" (which already finished above).
+  postMessage({ id: request.id, type: "progress", value: {
+    phase: "prepare-geometry", done: 0, total: 0, fraction: 0, message: "Subdividing meshes",
+  } });
+  const fastWeld = request.fastWeld !== false;
   {
     const levels = Math.max(0, Math.min(2, Number.isFinite(request.subdivisionLevel) ? request.subdivisionLevel : 1));
     if (levels > 0) {
@@ -2137,7 +2194,7 @@ async function load(request) {
           }
           continue;
         }
-        const subdivided = subdivideMesh(mesh, levels);
+        const subdivided = subdivideMesh(mesh, levels, fastWeld);
         if (!subdivided) continue;
         stageTriangleTotal += subdivided.triangleCount - originalTriangles;
         mesh.positions = subdivided.positions;
@@ -2159,10 +2216,10 @@ async function load(request) {
   // across shared faces instead of per lone corner.
   for (const mesh of drawSnapshot.meshes) {
     if (mesh.instanceOwnerPath && !mesh.normals) continue;
-    weldMesh(mesh);
+    weldMesh(mesh, fastWeld);
   }
   postMessage({ id: request.id, type: "progress", value: {
-    phase: "extract-materials", done: 1, total: 1, fraction: 0.9, message: "Extracted material payloads",
+    phase: "prepare-geometry", done: 1, total: 1, fraction: 1, message: "Subdivided meshes",
   } });
   const cameraWarnings = [];
   const cameras = collectCameras(api, root, graph, message => cameraWarnings.push(message));

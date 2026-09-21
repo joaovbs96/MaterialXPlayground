@@ -162,6 +162,7 @@ const getMxEnv = (version) => {
                     try { ctx.getOptions().hwImplicitBitangents = false; } catch (e) { /* option absent */ }
                     // Shadow occlusion from a variance map; safe everywhere since
                     // the default u_shadowMap is white and reads as fully lit.
+                    // generatePreviewSourcesUnlocked rewrites this per generation.
                     try { ctx.getOptions().hwShadowMap = true; } catch (e) { /* option absent */ }
                     // Direct light, like the official viewer's registerLights():
                     // binds directional_light (id 1) from any <directional_light>
@@ -2473,11 +2474,22 @@ const readLightLimit = () => {
 // Stage-light slot tiers. MAX_LIGHT_SOURCES is baked into the generated
 // source, so a tool that can never hold a stage light compiles a body per
 // light slot it will never use (17 slots is 8.4s vs 3.7s on a glass shader).
-const STAGE_LIGHT_TIERS = [0, 4, STAGE_LIGHT_SLOTS];
+const STAGE_LIGHT_TIERS = [0, 4, 8, STAGE_LIGHT_SLOTS];
 // Viewer, Compare, docs previews, Graph previews and embeds bind the rig
 // plus the environment key light and nothing else (currentLights is called
 // there without stageLights), so their tier can never be exceeded.
 const PREVIEW_STAGE_LIGHT_COUNT = 0;
+// Feature-gated shaders kill switch, default ON. '0' restores the old
+// always-generate behaviour (shadow sampling and the occlusion block in
+// every material of every tool). Read per generation.
+const FEATURE_GATED_KEY = 'mtlx_feature_gated_shaders';
+const readFeatureGated = () => {
+    try { return localStorage.getItem(FEATURE_GATED_KEY) !== '0'; } catch (e) { return true; }
+};
+// Features no preview tool can ever turn on: the Viewer, Compare, docs and
+// Graph previews and the embeds bind white shadow moments and a zero-strength
+// occlusion volume, so generating either costs compile time for a no-op.
+const PREVIEW_FEATURE_OPTIONS = { skipShadowMap: true, skipOcclusion: true };
 // Smallest tier that still covers `count`; anything unknown or over the
 // ceiling falls back to the full reservation.
 const chooseStageLightTier = (count) => {
@@ -3435,16 +3447,66 @@ const loadTextureForHit = async (hit, blob, view) => {
     });
 };
 
+// Perf-only decode/resize/upload split for the Scene texture phase, gated by
+// window.MTLX_PERF_LOG; zero cost when off. usd-scene-renderer.js resets this
+// once per scene load and folds it into scenePerf when the load finishes.
+const resetTexturePerf = () => { window.__mtlxTexturePerf = { decodeMs: 0, resizeMs: 0, uploadMs: 0, count: 0 }; };
+const addTexturePerf = (key, ms) => {
+    if (!window.MTLX_PERF_LOG) return;
+    const p = window.__mtlxTexturePerf || (window.__mtlxTexturePerf = { decodeMs: 0, resizeMs: 0, uploadMs: 0, count: 0 });
+    p[key] += ms;
+};
+
+// localStorage switch for the fast Scene texture decode path below; off only
+// when explicitly set to '0' (default on).
+const sceneTextureFastPathEnabled = () => {
+    try { return localStorage.getItem('mtlx_scene_texture_fast') !== '0'; } catch (e) { return true; }
+};
+
 // Scene snapshots can contain many UDIM tiles.  When a caller supplies a
 // preview limit, decode/upload a bounded ImageBitmap while retaining the
 // source image's color and alpha semantics.  The normal viewer path does not
 // pass this option and keeps its existing TextureLoader behavior.
+//
+// Fast path (mtlx_scene_texture_fast, default on): reads the source
+// dimensions from the file header (no pixel decode) and asks
+// createImageBitmap to decode straight to the planned tier in one browser
+// -native, off-main-thread call, instead of decoding at full size first just
+// to learn the dimensions and then decoding again to resize. Same
+// colorSpaceConversion/premultiplyAlpha/resizeQuality semantics as before;
+// falls back to the old two-decode path if the header can't be read.
 const loadBoundedBitmapTexture = async (blob, maxSize) => {
     if (typeof createImageBitmap !== 'function') throw new Error('createImageBitmap is unavailable for bounded scene texture preview');
+    addTexturePerf('count', 1);
     const opts = { colorSpaceConversion: 'none', premultiplyAlpha: 'none' };
+    if (sceneTextureFastPathEnabled()) {
+        let dims = null;
+        try { dims = await readImageDimensions(blob); } catch (e) { dims = null; }
+        if (dims && dims.width > 0 && dims.height > 0) {
+            const needsResize = maxSize > 0 && Math.max(dims.width, dims.height) > maxSize;
+            const decodeOpts = !needsResize ? opts : Object.assign({}, opts, {
+                resizeWidth: Math.max(1, Math.round(dims.width * (maxSize / Math.max(dims.width, dims.height)))),
+                resizeHeight: Math.max(1, Math.round(dims.height * (maxSize / Math.max(dims.width, dims.height)))),
+                resizeQuality: 'high',
+            });
+            const t0 = performance.now();
+            let image = null;
+            try { image = await createImageBitmap(blob, decodeOpts); } catch (e) { image = null; }
+            if (image) {
+                addTexturePerf(needsResize ? 'resizeMs' : 'decodeMs', performance.now() - t0);
+                const texture = new THREE.Texture(image);
+                configureLoadedTexture(texture);
+                return texture;
+            }
+            // Header parsed but the sized decode failed; fall through to the
+            // slow path below rather than fail the whole texture.
+        }
+    }
+    const t0 = performance.now();
     let source;
     try { source = await createImageBitmap(blob, opts); }
     catch (error) { throw new Error('The source image could not be decoded for bounded scene preview.'); }
+    addTexturePerf('decodeMs', performance.now() - t0);
     let image = source;
     if (maxSize > 0 && Math.max(source.width, source.height) > maxSize) {
         const scale = maxSize / Math.max(source.width, source.height);
@@ -3453,8 +3515,10 @@ const loadBoundedBitmapTexture = async (blob, maxSize) => {
             resizeHeight: Math.max(1, Math.round(source.height * scale)),
             resizeQuality: 'high',
         });
+        const t1 = performance.now();
         try { image = await createImageBitmap(blob, resizeOpts); }
         catch (error) { if (source.close) source.close(); throw error; }
+        addTexturePerf('resizeMs', performance.now() - t1);
         if (source.close) source.close();
     }
     const texture = new THREE.Texture(image);
@@ -3745,7 +3809,20 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
                         : Promise.reject(new Error('createImageBitmap is unavailable for bounded scene texture preview'));
                 };
                 let boundedLoad;
-                if (view.textureQueue && view.textureQueue.tail) {
+                // The queue is a small round-robin set of chains (one chain
+                // per slot) instead of one, so up to that many decodes run
+                // concurrently; each chain still serializes its own slot so
+                // memory stays bounded (never more than slot-count bitmaps
+                // decoding at once). A plain {tail} queue (or none) keeps the
+                // old fully-serial behaviour.
+                if (view.textureQueue && Array.isArray(view.textureQueue.tails)) {
+                    const q = view.textureQueue;
+                    const slot = q.next % q.tails.length;
+                    q.next += 1;
+                    const previous = q.tails[slot];
+                    boundedLoad = previous.catch(() => {}).then(startBoundedLoad);
+                    q.tails[slot] = boundedLoad;
+                } else if (view.textureQueue && view.textureQueue.tail) {
                     const previous = view.textureQueue.tail;
                     boundedLoad = previous.catch(() => {}).then(startBoundedLoad);
                     view.textureQueue.tail = boundedLoad;
@@ -6199,7 +6276,7 @@ const prewarmPreviewTarget = async ({ mx, gen, genContext, buildRenderable, labe
             try {
                 return generatePreviewSourcesUnlocked({
                     mx, gen, genContext, renderable: built.renderable, label, isMounted,
-                    stageLightCount: PREVIEW_STAGE_LIGHT_COUNT,
+                    stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, sceneFeatureOptions: PREVIEW_FEATURE_OPTIONS,
                 });
             } finally {
                 // Best-effort, ALWAYS: the transient __pv_* wrappers must
@@ -6382,6 +6459,11 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     const dropThicknessMap = !!(sceneFeatureOptions && sceneFeatureOptions.dropThicknessMap);
     const skipTransmittance = !!(sceneFeatureOptions && sceneFeatureOptions.skipTransmittance);
     const skipRefraction = !!(sceneFeatureOptions && sceneFeatureOptions.skipRefraction);
+    // Feature gating: a feature that is off, or impossible in this tool, is
+    // never generated. The kill switch forces both back to "generate".
+    const featureGated = readFeatureGated();
+    const skipShadowMap = featureGated && !!(sceneFeatureOptions && sceneFeatureOptions.skipShadowMap);
+    const skipOcclusion = featureGated && !!(sceneFeatureOptions && sceneFeatureOptions.skipOcclusion);
     // Screen-space reflections are parked (see SCENE_SSR_PARKED in the renderer): skip the patch.
     const skipSsr = true || !!(sceneFeatureOptions && sceneFeatureOptions.skipSsr);
     // OFFICIAL PARITY: per-material generation options on SHARED
@@ -6418,6 +6500,10 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
             ? methods.SPECULAR_ENVIRONMENT_FIS : methods.SPECULAR_ENVIRONMENT_PREFILTER;
         if (wanted) genContext.getOptions().hwSpecularEnvironmentMethod = wanted;
     } catch (e) { /* enum absent in older bindings, keep the generator default */ }
+    // Shadow-map sampling is a generator option, so a tool or a scene with
+    // shadows off never compiles it. Written on EVERY generation, both ways,
+    // so no material leaks the previous one's setting.
+    try { genContext.getOptions().hwShadowMap = !skipShadowMap; } catch (e) { /* option absent */ }
     // Light limit: MAX_LIGHT_SOURCES is baked into the source, so a tool
     // that can never hold a stage light gets a smaller tier. Written on
     // EVERY generation while the switch is on, so no tier leaks to the next.
@@ -6546,7 +6632,9 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     fs = patchShadowLightScope(fs, { skipTransmittance });
     fs = patchLightSourceKindStruct(fs);
     fs = patchAreaLightSourceCosine(fs);
-    fs = patchAmbientOcclusion(fs, { skipSkyVis, skipAoVolume });
+    // skipOcclusion drops the whole block (screen-space AO included), which
+    // only ever ran at strength 0 in a tool that cannot bind an AO pass.
+    if (!skipOcclusion) fs = patchAmbientOcclusion(fs, { skipSkyVis, skipAoVolume });
     fs = patchTransmissionThickness(fs, { dropThicknessMap });
     // Depth-peel machinery: baked into every fragment shader
     // UNCONDITIONALLY (not just when Force Transparency is on), see
@@ -6589,7 +6677,15 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // generation. Loop-local `st` handles are left for FinalizationRegistry.
     try { mxShader.delete(); } catch (e) { /* already deleted */ }
 
-    return { vs, fs, introspected, transparent, vertexInputs, geomprops, notices, payloadSupported, lightTransportSupported, maxLights, constInputs };
+    // What this source does NOT contain, so uniform seeding can skip the
+    // same features instead of binding samplers no program declares.
+    const featureSkips = {
+        shadowMap: skipShadowMap,
+        occlusion: skipOcclusion,
+        skyVis: skipOcclusion || skipSkyVis,
+        aoVolume: skipOcclusion || skipSkyVis || skipAoVolume,
+    };
+    return { vs, fs, introspected, transparent, vertexInputs, geomprops, notices, payloadSupported, lightTransportSupported, maxLights, constInputs, featureSkips };
 };
 
 // Public entry point: serializes generatePreviewSourcesUnlocked against
@@ -6627,7 +6723,8 @@ const generatePreviewSourcesWithinBudget = async (args) => {
     const dropped = [];
     let srcs = null;
     for (let attempt = 0; ; attempt++) {
-        const sceneFeatureOptions = {};
+        // The caller's feature gating is the base; budget drops add to it.
+        const sceneFeatureOptions = Object.assign({}, args.sceneFeatureOptions || null);
         for (const d of dropped) sceneFeatureOptions[d.key] = true;
         srcs = await generatePreviewSources(Object.assign({}, args, { sceneFeatureOptions }));
         if (!srcs) return null;
@@ -6651,7 +6748,7 @@ const generatePreviewSourcesWithinBudget = async (args) => {
 // instances for each object that uses that source.
 const DEFAULT_UNIFORM_VECTOR_BUDGET = 1024;
 
-const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label = 'material', isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, samplerBudget = null, uniformVectorBudget = null, stageLightCount = null }) => {
+const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label = 'material', isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, samplerBudget = null, uniformVectorBudget = null, stageLightCount = null, featureOptions = null }) => {
     if (!renderable) throw new Error('MaterialX scene material is missing its renderable surface.');
     // Test-only override wins over the caller's live GL limit, so a headless
     // spec can force a tight budget without a real ANGLE context.
@@ -6664,7 +6761,8 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
     let srcs = null;
     let samplerInfo = null;
     for (let attempt = 0; ; attempt++) {
-        const sceneFeatureOptions = {};
+        // The scene's live feature set is the base; budget drops add to it.
+        const sceneFeatureOptions = Object.assign({}, featureOptions || null);
         for (const d of dropped) sceneFeatureOptions[d.key] = true;
         srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, isMounted, document: documentArg, sceneRgbt, lightTransport, sceneFeatureOptions, stageLightCount });
         if (!srcs) return null;
@@ -6718,9 +6816,15 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
         // curve while the Material Viewer stays on plain sRGB for parity.
         u_displayExposure: { value: displayExposureScale() },
         u_displayTransform: { value: displayTransformId(displayTransform || getDisplayTransform()) },
-        // Shadow atlas. Seeded unconditionally for the same sampler-unit
-        // reason as the sky volume below, and defaulted to "no caster on any
-        // slot", which makes the whole lookup an exact no-op.
+    };
+    // A feature this source never generated declares no uniform for it, so
+    // seeding one would only allocate. featureSkips carries what was gated
+    // out, which has()/parseUniforms cannot see for a highp sampler3D.
+    const featureSkips = (compiled && compiled.featureSkips) || {};
+    if (!featureSkips.shadowMap) Object.assign(uniforms, {
+        // Shadow atlas. Seeded whenever the source carries shadow sampling,
+        // for the same sampler-unit reason as the sky volume below, and
+        // defaulted to "no caster on any slot": an exact no-op.
         u_shadowAtlas: { value: shadowAtlas || getDummyTexWhite() },
         u_shadowMatrices: { value: shadowMatrices && shadowMatrices.length === SHADOW_FACE_SLOTS
             ? shadowMatrices : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Matrix4()) },
@@ -6756,13 +6860,14 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
             ? new Int32Array(shadowSlotFaceCount) : new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(0) },
         u_shadowDiagnosticVisibilityScale: { value: Number.isFinite(Number(shadowDiagnosticVisibilityScale))
             ? Math.max(0, Number(shadowDiagnosticVisibilityScale)) : 1 },
-        // Baked sky visibility. Seeded unconditionally, NOT through has():
-        // parseUniforms' regex has no room for a precision qualifier, so
-        // `uniform highp sampler3D` is invisible to it just as
-        // `uniform highp sampler2D u_peelPrevDepth` is. An unseeded sampler
-        // sits on texture unit 0 next to a sampler2D, and ANGLE then rejects
-        // the entire draw with "Two textures of different types use the same
-        // sampler location", so the scene renders nothing at all.
+    });
+    if (!featureSkips.occlusion) Object.assign(uniforms, {
+        // Baked sky visibility. Seeded whenever the occlusion block was
+        // generated, NOT through has(): parseUniforms' regex has no room for
+        // a precision qualifier, so `uniform highp sampler3D` is invisible.
+        // An unseeded sampler sits on texture unit 0 next to a sampler2D, and
+        // ANGLE then rejects the entire draw with "Two textures of different
+        // types use the same sampler location": the scene renders nothing.
         // A white 1x1x1 volume at strength 0 is an exact no-op.
         u_skyVisMap: { value: skyVisMap || getDummyTex3DWhite() },
         u_skyVisMin: { value: skyVisMin ? skyVisMin.clone() : new THREE.Vector3() },
@@ -6771,13 +6876,13 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
         u_skyVisStrength: { value: skyVisMap ? skyVisStrength : 0 },
         // Baked occlusion volume, same sampler-unit hazard as u_skyVisMap
         // above: a highp sampler3D is invisible to has()/parseUniforms, so
-        // this is seeded unconditionally too. White at strength 0: no-op.
+        // this is seeded alongside it. White at strength 0: no-op.
         u_aoVolumeMap: { value: aoVolumeMap || getDummyTex3DWhite() },
         u_aoVolumeMin: { value: aoVolumeMin ? aoVolumeMin.clone() : new THREE.Vector3() },
         u_aoVolumeSize: { value: aoVolumeSize ? aoVolumeSize.clone() : new THREE.Vector3(1, 1, 1) },
         u_aoVolumeCell: { value: aoVolumeCell || 0 },
         u_aoVolumeStrength: { value: aoVolumeMap ? aoVolumeStrength : 0 },
-    };
+    });
     if (compiled.payloadSupported) {
         // Scene RGB-T is opt-in at compile time and remains inactive until
         // the compositor sets these selectors.
@@ -7099,7 +7204,8 @@ const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, lab
         // Same generation options the live view was built with, else the
         // byte compare below can never match.
         srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, isMounted,
-            stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, allowConstInputs: view ? view.allowConstInputs !== false : true });
+            stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, sceneFeatureOptions: PREVIEW_FEATURE_OPTIONS,
+            allowConstInputs: view ? view.allowConstInputs !== false : true });
     } catch (e) {
         return { refreshed: false, srcs: null };
     }
@@ -8772,7 +8878,7 @@ const createMtlxRenderView = async ({
                 // See generatePreviewSources for the full breakdown;
                 // extracted so tryRefreshRenderView can reuse it for a diff.
                 const __srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, isMounted,
-                    stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, allowConstInputs });
+                    stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, sceneFeatureOptions: PREVIEW_FEATURE_OPTIONS, allowConstInputs });
                 // Bail if this build was superseded while awaiting above:
                 // nothing GL-side exists yet, so disposePartial() is a
                 // safe, idempotent no-op beyond flagging `stopped`.
@@ -9453,6 +9559,10 @@ const createMtlxRenderView = async ({
                 // ------------------------------------------------------
                 const bindMaterialUniforms = (srcs) => {
                     const { vs, fs, introspected } = srcs;
+                    // Shadow sampling and the occlusion block are gated out of
+                    // preview sources (nothing here can bind either), so their
+                    // no-op seeds are gated the same way.
+                    const featureSkips = srcs.featureSkips || {};
                     // MaterialX-generated shaders expect their own attribute
                     // names (i_position, i_normal, ...) and u_* transform
                     // uniforms, so we use RawShaderMaterial and feed both manually.
@@ -9482,9 +9592,9 @@ const createMtlxRenderView = async ({
                         u_peelHasPrev: { value: 0 },
                         u_peelPrevDepth: { value: getDummyTex() },
                         u_opaqueDepth: { value: getDummyTexWhite() },
-                        // hwShadowMap is on for every generated shader, so the
-                        // Viewer must bind white moments (fully lit) or its
-                        // materials would sample nothing and render black.
+                        // Harmless when shadow sampling was gated out (no such
+                        // uniform then); with it generated the Viewer must bind
+                        // white moments (fully lit) or its materials render black.
                         u_shadowMap: { value: getDummyTexWhite() },
                         u_shadowMatrix: { value: shadowOffMatrix() },
                         // encodeDisplay defers to finalMat only while the
@@ -9496,6 +9606,8 @@ const createMtlxRenderView = async ({
                         // supply it.
                         u_displayExposure: { value: displayExposureScale() },
                         u_displayTransform: { value: displayTransformId(getDisplayTransform()) },
+                    };
+                    if (!featureSkips.shadowMap) Object.assign(newUniforms, {
                         // No stage caster in the Viewer, so no slot is shadowed;
                         // the white dummy moments map above says the same thing.
                         // No stage caster in the Viewer: an all -1 slot map
@@ -9515,6 +9627,8 @@ const createMtlxRenderView = async ({
                         u_shadowSlotFace: { value: new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1) },
                         u_shadowSlotFaceCount: { value: new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(0) },
                         u_shadowDiagnosticVisibilityScale: { value: 1 },
+                    });
+                    if (!featureSkips.occlusion) Object.assign(newUniforms, {
                         // Same sampler-unit hazard as the Scene: see
                         // createMtlxSceneUniforms. No stage volume here, so
                         // the white 1x1x1 dummy at strength 0 is the value.
@@ -9530,7 +9644,7 @@ const createMtlxRenderView = async ({
                         u_aoVolumeSize: { value: new THREE.Vector3(1, 1, 1) },
                         u_aoVolumeCell: { value: 0 },
                         u_aoVolumeStrength: { value: 0 },
-                    };
+                    });
 
                     // GLSL ES 3.0 forbids uniform initializers, so the app
                     // must upload each default, an unset uniform reads as
@@ -10108,7 +10222,7 @@ const createMtlxRenderView = async ({
                 if (stopped || !isMounted()) return null;
                 if (!srcs) {
                     srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, isMounted,
-                        stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, allowConstInputs });
+                        stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, sceneFeatureOptions: PREVIEW_FEATURE_OPTIONS, allowConstInputs });
                 }
                 // A thrown generation error is NOT caught here, it
                 // propagates like a first-build failure, so the UI shows
@@ -10472,6 +10586,7 @@ Object.assign(window, {
     TEXTURE_CACHE, textureCacheKey, bindDroppedTextures,
     loadExrTexture, loadHdrTexture, loadTifTexture, loadKtx2Texture, capKtx2MipLevels,
     loadBoundedBitmapTexture,
+    resetTexturePerf, sceneTextureFastPathEnabled,
     readImageDimensions, boundDecodedTexture,
     collectMxUniforms, mxValueToThreeUniform,
     linToSrgb, srgbToLin, rgbToHex, hexToRgb,

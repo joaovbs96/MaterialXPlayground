@@ -207,8 +207,9 @@
         { phase: 'worker', label: 'Reading files', segment: [0.00, 0.06] },
         { phase: 'parse', label: 'Composing stage', segment: [0.06, 0.10] },
         { phase: 'extract-geometry', label: 'Extracting meshes', segment: [0.10, 0.14] },
-        { phase: 'extract-materials', label: 'Extracting materials', segment: [0.14, 0.18] },
-        { phase: 'material', label: 'Compiling materials', segment: [0.18, 0.52] },
+        { phase: 'extract-materials', label: 'Extracting materials', segment: [0.14, 0.16] },
+        { phase: 'prepare-geometry', label: 'Subdividing meshes', segment: [0.16, 0.20] },
+        { phase: 'material', label: 'Compiling materials', segment: [0.20, 0.52] },
         { phase: 'material-bind', label: 'Binding materials', segment: [0.52, 0.56] },
         { phase: 'texture', label: 'Loading textures', segment: [0.56, 0.72] },
         { phase: 'geometry', label: 'Preparing geometry', segment: [0.72, 0.86] },
@@ -782,7 +783,12 @@
             setGeometryFirstReady(false);
             window.__mtlxUsdSceneHandle = null;
             try {
-                const result = await loader({ files: loadFiles, rootPath: loadRoot, signal: controller.signal, subdivisionLevel: subdivisionLevelRef.current, onProgress: (value) => updateProgress(value, generation) });
+                // Kill switch for the fast weld/subdivision path (default on);
+                // the worker cannot read localStorage, so this rides in on the
+                // load request like subdivisionLevel.
+                let fastWeld = true;
+                try { fastWeld = localStorage.getItem('mtlx_scene_fast_weld') !== '0'; } catch (e) {}
+                const result = await loader({ files: loadFiles, rootPath: loadRoot, signal: controller.signal, subdivisionLevel: subdivisionLevelRef.current, fastWeld, onProgress: (value) => updateProgress(value, generation) });
                 if (!mountedRef.current || controller.signal.aborted || generation !== generationRef.current) return;
                 setStage(result); setStatus('loaded');
             } catch (e) {
