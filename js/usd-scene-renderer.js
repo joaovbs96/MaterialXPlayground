@@ -1624,7 +1624,7 @@ const createMtlxSceneView = async ({
         distinctPrograms: 0, distinctProgramsNamesStripped: 0, prewarmParallelWaitMs: 0, firstGeometryFrameMs: null,
         frameSamples: 0, frameTotalMs: 0, frameAvgMs: null, lastFrameAt: 0,
         texturePhaseMs: 0, texture: { decodeMs: 0, resizeMs: 0, uploadMs: 0, count: 0 },
-        envPrefilterMs: null } : null;
+        geometryPhaseMs: 0, displacement: [], envPrefilterMs: null } : null;
     if (scenePerf && window.resetTexturePerf) window.resetTexturePerf();
     const sceneLoadStart = performance.now();
     const scenePerfHash = (s) => {
@@ -3969,6 +3969,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 const label = (range.material.userData && range.material.userData.mtlxSceneSourceAsset) || range.material.name || 'material';
                 const dispFileMap = buildDisplacementFileMap(range.material, range.disp);
                 let result;
+                const __perfDispStart = scenePerf ? performance.now() : 0;
                 try {
                     result = await window.evaluateDisplacement({
                         renderer, displacement: range.disp, geometry, worldMatrix,
@@ -3977,6 +3978,14 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                     });
                 } catch (e) {
                     result = { offsets: null, notices: ['Displacement evaluation failed: ' + (e && e.message ? e.message : String(e))] };
+                }
+                if (scenePerf) {
+                    const perf = (result && result.perf) || {};
+                    scenePerf.displacement.push({ label,
+                        srcGenMs: (range.disp && range.disp.genMs) || 0,
+                        programCompileMs: perf.compileMs || 0,
+                        readbackMs: perf.readbackMs || 0,
+                        evalTotalMs: performance.now() - __perfDispStart });
                 }
                 evalResults.set(key, result);
                 for (const notice of (result && result.notices) || []) {
@@ -6647,7 +6656,9 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
             geometryRevision++;
         };
+        const __perfGeometryStart = scenePerf ? performance.now() : 0;
         await buildSceneMeshes();
+        if (scenePerf) scenePerf.geometryPhaseMs = performance.now() - __perfGeometryStart;
         // Stage box, bounds, sky/AO bakes and the shadow map: factored so a
         // later displacement-subdivision-override rebuild can redo them
         // without repeating the mesh pass; lights convert on the first build only.
@@ -7356,11 +7367,6 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             raf = requestAnimationFrame(render);
         };
         const startLoop = () => { if (!raf && !stopped && active) render(); };
-        // Geometry-first's own minimal loop (plain renderer.render(), no
-        // post/AO/shadow pipeline) hands off to the real one here, right
-        // before it takes over, so the view stays live and orbit-able for
-        // the whole wait instead of freezing once materials finish compiling.
-        if (earlyRaf) { cancelAnimationFrame(earlyRaf); earlyRaf = 0; }
         if (window.UsdScenePost) {
             presentationPipeline = window.UsdScenePost.create(renderer, {
                 getDisplayTransform: () => sceneDisplayTransform,

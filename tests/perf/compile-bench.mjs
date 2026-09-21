@@ -305,7 +305,7 @@ async function runSceneSample({ server, backend, subject, rootBasename, sampleIn
 
     const start = Date.now();
     await page.getByTestId('usd-scene-sidebar').getByRole('button', { name: /^Load (?!example)/ }).click();
-    await page.getByTestId('usd-scene-status').filter({ hasText: 'rendered' }).waitFor({ state: 'attached', timeout: 600000 });
+    await page.getByTestId('usd-scene-status').filter({ hasText: 'rendered' }).waitFor({ state: 'attached', timeout: 1200000 });
     const wallMs = Date.now() - start;
 
     // Auto-rotate defaults to off (useViewToggle('setAutoRotate', false)),

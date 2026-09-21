@@ -7761,7 +7761,9 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // a notice on the returned sources instead of a throw.
     let displacement = null;
     try {
+        const __dispGenStart = window.MTLX_PERF_LOG ? performance.now() : 0;
         displacement = generateDisplacementSourcesUnlocked({ mx, gen, genContext, renderable, materialName });
+        if (displacement && window.MTLX_PERF_LOG) displacement.genMs = performance.now() - __dispGenStart;
         if (displacement && displacement.notices && displacement.notices.length) {
             notices.push(...displacement.notices);
         }
@@ -8623,8 +8625,11 @@ const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMat
 
         // Restore on every exit: a throw from compile, render or readback must
         // never leave the live view bound to this disposed target.
+        const perf = window.MTLX_PERF_LOG ? { compileMs: 0, readbackMs: 0 } : null;
+        const __compileStart = perf ? performance.now() : 0;
         try {
             compileFilteringDriverNoise(renderer, scene, camera);
+            if (perf) perf.compileMs = performance.now() - __compileStart;
             // Attribute to THIS material's own program, not the first broken
             // program anywhere in the shared renderer (an unrelated material
             // would otherwise blame every displacement evaluation). Mirrors
@@ -8722,7 +8727,8 @@ const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMat
                 }
             }
 
-            return { offsets, offsetsTangent, offsetsBitangent, analyticFrame, mode, notices, readbackFormat };
+            if (perf) perf.readbackMs = performance.now() - __compileStart - perf.compileMs;
+            return { offsets, offsetsTangent, offsetsBitangent, analyticFrame, mode, notices, readbackFormat, perf };
         } finally {
             restore();
         }
