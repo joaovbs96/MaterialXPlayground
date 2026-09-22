@@ -23,11 +23,16 @@
             selectedNode, setSelectedNode,
             stats, applyDocFilter, showPreviews, togglePreviews, onShowHelp, collapsed, onCollapse,
         }) {
-            // Type-filter row (Inputs/Outputs) is closed by default; it opens on
-            // funnel click or whenever a type token already lives in the query.
-            const [typeRowOpen, setTypeRowOpen] = React.useState(false);
-            const hasTypeToken = !!(searchOutType || searchInType);
-            const showTypeRow = typeRowOpen || hasTypeToken;
+            // Type dot colors: shared site palette (js/shared/ui-commons.js),
+            // keyed by port type name so both MtlxSelect triggers and rows
+            // match the graph legend / port-table dots.
+            const typeDots = React.useMemo(() => {
+                const dots = {};
+                (outputTypeOptions || []).concat(takesTypeOptions || []).forEach((t) => {
+                    dots[t] = typeColor(t);
+                });
+                return dots;
+            }, [outputTypeOptions, takesTypeOptions]);
             // Single expand/collapse toggle: "open" only when every visible lib
             // and group is already expanded (search forces everything open).
             const allOpen = forceOpen || (treeData && Object.keys(treeData).length > 0 &&
@@ -141,17 +146,6 @@
                                     </button>
                                 )}
                                 <button
-                                    onClick={() => setTypeRowOpen((v) => !v)}
-                                    title="Filter by port type"
-                                    aria-label="Toggle type filters"
-                                    aria-pressed={showTypeRow}
-                                    className={`p-1 rounded transition-colors ${
-                                        showTypeRow ? 'text-blue-400 hover:text-blue-300' : 'text-gray-500 hover:text-gray-200'
-                                    }`}
-                                >
-                                    <MtlxIcon name="adjustments" className="w-3.5 h-3.5" />
-                                </button>
-                                <button
                                     onClick={allOpen ? collapseAll : expandAll}
                                     title={allOpen ? 'Collapse all' : 'Expand all'}
                                     aria-label={allOpen ? 'Collapse all' : 'Expand all'}
@@ -170,44 +164,44 @@
                             The trigger's own prefixed label ("Outputs: any",
                             "Inputs: color3") replaces the old label+chip
                             pairing, so choosing "any" alone clears a filter. */}
-                        {showTypeRow && (
-                            <div
-                                className="flex items-center gap-1.5 mb-2"
-                                role="group"
-                                aria-label="Filter by port type"
-                            >
-                                <MtlxSelect
-                                    value={searchInType || ''}
-                                    options={takesTypeOptions || []}
-                                    defValue={null}
-                                    emptyOption="any"
-                                    valuePrefix="Inputs: "
-                                    onChange={(v) => setSearchInType(v || null)}
-                                    title="Only show nodes with a signature taking this type as input (in: in the search box)"
-                                    ariaLabel="Filter by input type"
-                                    font="mono"
-                                    size="sm"
-                                    variant="field"
-                                    block
-                                    className="flex-1 min-w-0"
-                                />
-                                <MtlxSelect
-                                    value={searchOutType || ''}
-                                    options={outputTypeOptions || []}
-                                    defValue={null}
-                                    emptyOption="any"
-                                    valuePrefix="Outputs: "
-                                    onChange={(v) => setSearchOutType(v || null)}
-                                    title="Only show nodes with a signature outputting this type (out: in the search box)"
-                                    ariaLabel="Filter by output type"
-                                    font="mono"
-                                    size="sm"
-                                    variant="field"
-                                    block
-                                    className="flex-1 min-w-0"
-                                />
-                            </div>
-                        )}
+                        <div
+                            className="flex items-center gap-1.5 mb-2"
+                            role="group"
+                            aria-label="Filter by port type"
+                        >
+                            <MtlxSelect
+                                value={searchInType || ''}
+                                options={takesTypeOptions || []}
+                                dots={typeDots}
+                                defValue={null}
+                                emptyOption="any"
+                                valuePrefix="Inputs: "
+                                onChange={(v) => setSearchInType(v || null)}
+                                title="Only show nodes with a signature taking this type as input (in: in the search box)"
+                                ariaLabel="Filter by input type"
+                                font="mono"
+                                size="sm"
+                                variant="sidebar"
+                                block
+                                className="flex-1 min-w-0"
+                            />
+                            <MtlxSelect
+                                value={searchOutType || ''}
+                                options={outputTypeOptions || []}
+                                dots={typeDots}
+                                defValue={null}
+                                emptyOption="any"
+                                valuePrefix="Outputs: "
+                                onChange={(v) => setSearchOutType(v || null)}
+                                title="Only show nodes with a signature outputting this type (out: in the search box)"
+                                ariaLabel="Filter by output type"
+                                font="mono"
+                                size="sm"
+                                variant="sidebar"
+                                block
+                                className="flex-1 min-w-0"
+                            />
+                        </div>
                     </div>
                     <div className="px-4 pb-4 pt-1">
                     {docFilter !== 'all' && !forceOpen && Object.keys(treeData).length === 0 && (
@@ -330,11 +324,10 @@
                                 The left panel lists every node, grouped by library and node group. The
                                 segmented control above the search box shows all nodes, only documented, or
                                 only undocumented ones, each with its count. Use the search box to filter by
-                                name, and the icon next to it to expand or collapse everything. The funnel
-                                icon inside the search box opens a filter line for port type: "Outputs"
-                                keeps nodes with a signature that outputs the chosen type, "Inputs" keeps
-                                nodes with a signature that takes it as an input; choosing "any" clears a
-                                filter. Typing{' '}
+                                name, and the icon next to it to expand or collapse everything. The
+                                "Inputs"/"Outputs" row below filters by port type: "Outputs" keeps nodes
+                                with a signature that outputs the chosen type, "Inputs" keeps nodes with a
+                                signature that takes it as an input; choosing "any" clears a filter. Typing{' '}
                                 <code>out:&lt;type&gt;</code> or <code>in:&lt;type&gt;</code> directly into
                                 the search box (e.g. <code>out:color3</code>) does the same thing and can be
                                 combined with a name and with each other.
