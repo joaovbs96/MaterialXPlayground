@@ -55,6 +55,11 @@ export function sanitizeMtlxName(name, used) {
 function createDocument() {
   const nodes = [];
   const used = new Set();
+  const byShape = new Map();
+  // file value -> colorspaces of the image nodes kept for it, so a caller
+  // can report an image that still costs two texture reads.
+  const fileUses = new Map();
+  const shapeOf = (node) => JSON.stringify([node.category, node.type, node.inputs.map(i => [i.name, i.type, i.attrs])]);
   const doc = {
     used,
     addNode(category, name, type) {
@@ -62,6 +67,29 @@ function createDocument() {
       nodes.push(node);
       return node;
     },
+    // One texture read per distinct image node: returns an earlier node with
+    // the same category, type and inputs and drops the one just built, so
+    // slots that share an image also share a sampler. Call once, fully built.
+    share(node) {
+      const key = shapeOf(node);
+      const existing = byShape.get(key);
+      if (existing && existing !== node) {
+        const at = nodes.indexOf(node);
+        if (at >= 0) nodes.splice(at, 1);
+        used.delete(node.name);
+        return existing;
+      }
+      byShape.set(key, node);
+      const file = node.inputs.find(i => i.name === "file");
+      if (file) {
+        const value = (file.attrs.find(([k]) => k === "value") || [])[1];
+        const colorspace = (file.attrs.find(([k]) => k === "colorspace") || [])[1] || "raw";
+        if (!fileUses.has(value)) fileUses.set(value, []);
+        fileUses.get(value).push(colorspace);
+      }
+      return node;
+    },
+    fileUses,
     toXml() {
       const lines = ['<?xml version="1.0"?>', `<materialx version="${MTLX_VERSION}" colorspace="lin_rec709">`];
       for (const node of orderNodes(nodes)) {
@@ -194,16 +222,14 @@ function scaleFloat(ctx, source, name, factor, output) {
   return scaled;
 }
 
-// A float channel read: gltf_image float (red) or vector3 + extract.
+// A float channel read: gltf_image float (red) or vector3 + extract. The
+// factor is a separate multiply, so two slots on one image still share it.
 function floatTexture(ctx, ref, name, channel, factor) {
   if (channel === 0) {
-    const node = ctx.doc.addNode("gltf_image", name, "float");
-    applyGltfImageCommon(ctx, node, ref);
-    if (factor !== undefined && factor !== 1) setInput(node, "factor", "float", { value: formatNumber(factor) });
-    return node;
+    const node = ctx.doc.share(applyGltfImageCommon(ctx, ctx.doc.addNode("gltf_image", name, "float"), ref));
+    return scaleFloat(ctx, node, name + "_scaled", factor);
   }
-  const image = ctx.doc.addNode("gltf_image", name, "vector3");
-  applyGltfImageCommon(ctx, image, ref);
+  const image = ctx.doc.share(applyGltfImageCommon(ctx, ctx.doc.addNode("gltf_image", name, "vector3"), ref));
   const extract = ctx.doc.addNode("extract", name + "_channel", "float");
   connect(extract, "in", "vector3", image);
   setInput(extract, "index", "integer", { value: String(channel), uniform: "true" });
@@ -213,8 +239,7 @@ function floatTexture(ctx, ref, name, channel, factor) {
 // glTF packs the specular factor and the sheen roughness in the alpha
 // channel, which needs the color4 gltf_image plus an extract.
 function alphaTexture(ctx, ref, name, factor) {
-  const image = ctx.doc.addNode("gltf_image", name, "color4");
-  applyGltfImageCommon(ctx, image, ref);
+  const image = ctx.doc.share(applyGltfImageCommon(ctx, ctx.doc.addNode("gltf_image", name, "color4"), ref));
   const extract = ctx.doc.addNode("extract", name + "_channel", "float");
   connect(extract, "in", "color4", image);
   setInput(extract, "index", "integer", { value: "3", uniform: "true" });
@@ -225,20 +250,19 @@ function colorTexture(ctx, ref, name, factorRgba) {
   const node = ctx.doc.addNode("gltf_colorimage", name, "multioutput");
   applyGltfImageCommon(ctx, node, ref, SRGB);
   if (factorRgba) setInput(node, "color", "color4", { value: formatVector(factorRgba, 4, 1) });
-  return node;
+  return ctx.doc.share(node);
 }
 
 // gltf_normalmap has no strength input, so a scaled normal texture is built
 // from the same pieces: the glTF image read plus a normalmap with scale.
 function normalMapNode(ctx, ref, name, scale) {
   if (scale === 1) {
-    const node = ctx.doc.addNode("gltf_normalmap", name, "vector3");
-    applyGltfImageCommon(ctx, node, ref);
-    return node;
+    return ctx.doc.share(applyGltfImageCommon(ctx, ctx.doc.addNode("gltf_normalmap", name, "vector3"), ref));
   }
-  const image = ctx.doc.addNode("gltf_image", name, "vector3");
-  applyGltfImageCommon(ctx, image, ref);
-  setInput(image, "default", "vector3", { value: "0.5, 0.5, 1" });
+  const built = ctx.doc.addNode("gltf_image", name, "vector3");
+  applyGltfImageCommon(ctx, built, ref);
+  setInput(built, "default", "vector3", { value: "0.5, 0.5, 1" });
+  const image = ctx.doc.share(built);
   const normalmap = ctx.doc.addNode("normalmap", name + "_normalmap", "vector3");
   connect(normalmap, "in", "vector3", image);
   setInput(normalmap, "scale", "float", { value: formatNumber(scale) });
@@ -300,6 +324,18 @@ function setFloatSource(node, name, source) {
   else setInput(node, name, "float", { value: formatNumber(source.value) });
 }
 
+// One note per image that still costs more than one texture read, which
+// happens when one slot needs the sRGB decode and another the raw data.
+function noteRepeatedImages(ctx) {
+  for (const [file, uses] of ctx.doc.fileUses) {
+    if (uses.length < 2) continue;
+    const mixed = new Set(uses).size > 1;
+    ctx.notes.push(`${file} is read ${uses.length} times` + (mixed
+      ? ", because one slot needs the sRGB decode and another the raw values"
+      : ", because the slots using it need different sampling settings"));
+  }
+}
+
 export function gltfPbrDocument({ name, material, textureRefs, hints } = {}) {
   const source = material || {};
   const doc = createDocument();
@@ -318,6 +354,7 @@ export function gltfPbrDocument({ name, material, textureRefs, hints } = {}) {
     ? unlitShader(ctx, "SR_" + label, source, alphaMode, alphaCutoff, hasVertexColor)
     : pbrShader(ctx, "SR_" + label, source, extensions, alphaMode, alphaCutoff, hasVertexColor);
 
+  noteRepeatedImages(ctx);
   const result = finish(doc, shader, "M_" + label);
   return { xml: result.xml, materialName: result.materialName, shaderName: result.shaderName, notes: ctx.notes };
 }
@@ -356,8 +393,7 @@ function pbrShader(ctx, shaderName, source, extensions, alphaMode, alphaCutoff, 
     const roughnessFactor = num(pbr.roughnessFactor, 1);
     const mrRef = resolveRef(ctx, pbr.metallicRoughnessTexture, "metallic roughness");
     if (mrRef) {
-      const image = doc.addNode("gltf_image", "metallic_roughness_image", "vector3");
-      applyGltfImageCommon(ctx, image, mrRef);
+      const image = doc.share(applyGltfImageCommon(ctx, doc.addNode("gltf_image", "metallic_roughness_image", "vector3"), mrRef));
       connect(shader, "roughness", "float", channelOf(ctx, image, 1, "roughness", roughnessFactor));
       connect(shader, "metallic", "float", channelOf(ctx, image, 2, "metallic", metallicFactor));
     } else {
@@ -374,8 +410,7 @@ function pbrShader(ctx, shaderName, source, extensions, alphaMode, alphaCutoff, 
   }
   const occlusionRef = resolveRef(ctx, source.occlusionTexture, "occlusion");
   if (occlusionRef) {
-    const image = doc.addNode("gltf_image", "occlusion_image", "vector3");
-    applyGltfImageCommon(ctx, image, occlusionRef);
+    const image = doc.share(applyGltfImageCommon(ctx, doc.addNode("gltf_image", "occlusion_image", "vector3"), occlusionRef));
     const channel = channelOf(ctx, image, 0, "occlusion", 1);
     const strength = num(source.occlusionTexture && source.occlusionTexture.strength, 1);
     if (strength === 1) {
@@ -509,7 +544,7 @@ function applyGltfExtensions(ctx, shader, extensions) {
       applyGltfImageCommon(ctx, node, thicknessRef);
       setInput(node, "thicknessMin", "float", { value: formatNumber(thicknessMin) });
       setInput(node, "thicknessMax", "float", { value: formatNumber(thicknessMax) });
-      connect(shader, "iridescence_thickness", "float", node);
+      connect(shader, "iridescence_thickness", "float", ctx.doc.share(node));
     } else {
       setInput(shader, "iridescence_thickness", "float", { value: formatNumber(thicknessMax) });
     }
@@ -524,10 +559,11 @@ function applyGltfExtensions(ctx, shader, extensions) {
     if (ref) {
       // RG hold the tangent-space direction and B the strength multiplier;
       // gltf_anisotropy_image does the decode and the atan2 internally.
-      const node = ctx.doc.addNode("gltf_anisotropy_image", "anisotropy_image", "multioutput");
-      applyGltfImageCommon(ctx, node, ref);
-      setInput(node, "anisotropy_strength", "float", { value: formatNumber(strength) });
-      setInput(node, "anisotropy_rotation", "float", { value: formatNumber(rotation) });
+      const built = ctx.doc.addNode("gltf_anisotropy_image", "anisotropy_image", "multioutput");
+      applyGltfImageCommon(ctx, built, ref);
+      setInput(built, "anisotropy_strength", "float", { value: formatNumber(strength) });
+      setInput(built, "anisotropy_rotation", "float", { value: formatNumber(rotation) });
+      const node = ctx.doc.share(built);
       connect(shader, "anisotropy_strength", "float", node, "anisotropy_strength_out");
       connect(shader, "anisotropy_rotation", "float", node, "anisotropy_rotation_out");
     } else {
@@ -621,7 +657,7 @@ function applyMtlImageCommon(ctx, node, file, options, colorspace) {
     setInput(node, "uaddressmode", "string", { value: "clamp", uniform: "true" });
     setInput(node, "vaddressmode", "string", { value: "clamp", uniform: "true" });
   }
-  return node;
+  return ctx.doc.share(node);
 }
 
 function mtlFile(ctx, record, label) {
@@ -644,8 +680,7 @@ export function objMtlDocument({ name, mtl, textureRefs } = {}) {
   const kd = Array.isArray(source.Kd) ? source.Kd : [0.8, 0.8, 0.8];
   const kdFile = mtlFile(ctx, source.map_Kd, "base color");
   if (kdFile) {
-    const image = doc.addNode("image", "base_color_image", "color3");
-    applyMtlImageCommon(ctx, image, kdFile, source.map_Kd.options, SRGB);
+    const image = applyMtlImageCommon(ctx, doc.addNode("image", "base_color_image", "color3"), kdFile, source.map_Kd.options, SRGB);
     if (kd.some(v => num(v, 1) !== 1)) {
       const mul = doc.addNode("multiply", "base_color_tint", "color3");
       connect(mul, "in1", "color3", image);
@@ -664,8 +699,7 @@ export function objMtlDocument({ name, mtl, textureRefs } = {}) {
   if (Number.isFinite(source.Pr)) roughness = source.Pr;
   const prFile = mtlFile(ctx, source.map_Pr, "roughness");
   if (prFile) {
-    const image = doc.addNode("image", "roughness_image", "float");
-    applyMtlImageCommon(ctx, image, prFile, source.map_Pr.options);
+    const image = applyMtlImageCommon(ctx, doc.addNode("image", "roughness_image", "float"), prFile, source.map_Pr.options);
     connect(shader, "specular_roughness", "float", image);
   } else {
     setInput(shader, "specular_roughness", "float", { value: formatNumber(roughness) });
@@ -674,8 +708,7 @@ export function objMtlDocument({ name, mtl, textureRefs } = {}) {
   // Metalness.
   const pmFile = mtlFile(ctx, source.map_Pm, "metalness");
   if (pmFile) {
-    const image = doc.addNode("image", "metalness_image", "float");
-    applyMtlImageCommon(ctx, image, pmFile, source.map_Pm.options);
+    const image = applyMtlImageCommon(ctx, doc.addNode("image", "metalness_image", "float"), pmFile, source.map_Pm.options);
     connect(shader, "base_metalness", "float", image);
   } else if (Number.isFinite(source.Pm)) {
     setInput(shader, "base_metalness", "float", { value: formatNumber(source.Pm) });
@@ -688,8 +721,7 @@ export function objMtlDocument({ name, mtl, textureRefs } = {}) {
   const opacity = Number.isFinite(source.d) ? source.d : Number.isFinite(source.Tr) ? 1 - source.Tr : 1;
   const dFile = mtlFile(ctx, source.map_d, "opacity");
   if (dFile) {
-    const image = doc.addNode("image", "opacity_image", "float");
-    applyMtlImageCommon(ctx, image, dFile, source.map_d.options);
+    const image = applyMtlImageCommon(ctx, doc.addNode("image", "opacity_image", "float"), dFile, source.map_d.options);
     connect(shader, "geometry_opacity", "float", image);
   } else if (opacity !== 1) {
     setInput(shader, "geometry_opacity", "float", { value: formatNumber(opacity) });
@@ -699,8 +731,7 @@ export function objMtlDocument({ name, mtl, textureRefs } = {}) {
   const ke = Array.isArray(source.Ke) ? source.Ke : null;
   const keFile = mtlFile(ctx, source.map_Ke, "emission");
   if (keFile) {
-    const image = doc.addNode("image", "emission_image", "color3");
-    applyMtlImageCommon(ctx, image, keFile, source.map_Ke.options, SRGB);
+    const image = applyMtlImageCommon(ctx, doc.addNode("image", "emission_image", "color3"), keFile, source.map_Ke.options, SRGB);
     connect(shader, "emission_color", "color3", image);
     setInput(shader, "emission_luminance", "float", { value: "1" });
   } else if (ke && ke.some(v => num(v, 0) !== 0)) {
@@ -713,16 +744,14 @@ export function objMtlDocument({ name, mtl, textureRefs } = {}) {
   const bumpRecord = source.map_Bump || source.bump;
   const normalFile = mtlFile(ctx, normalRecord, "normal map");
   if (normalFile) {
-    const image = doc.addNode("image", "normal_image", "vector3");
-    applyMtlImageCommon(ctx, image, normalFile, normalRecord.options);
+    const image = applyMtlImageCommon(ctx, doc.addNode("image", "normal_image", "vector3"), normalFile, normalRecord.options);
     const normalmap = doc.addNode("normalmap", "normal_map", "vector3");
     connect(normalmap, "in", "vector3", image);
     connect(shader, "geometry_normal", "vector3", normalmap);
   } else {
     const bumpFile = mtlFile(ctx, bumpRecord, "bump map");
     if (bumpFile) {
-      const image = doc.addNode("image", "bump_image", "float");
-      applyMtlImageCommon(ctx, image, bumpFile, bumpRecord.options);
+      const image = applyMtlImageCommon(ctx, doc.addNode("image", "bump_image", "float"), bumpFile, bumpRecord.options);
       const height = doc.addNode("heighttonormal", "bump_to_normal", "vector3");
       connect(height, "in", "float", image);
       const bm = Number(bumpRecord.options && bumpRecord.options.bm);
@@ -738,6 +767,7 @@ export function objMtlDocument({ name, mtl, textureRefs } = {}) {
     setInput(shader, "transmission_weight", "float", { value: formatNumber(1 - opacity) });
   }
 
+  noteRepeatedImages(ctx);
   const result = finish(doc, shader, "M_" + (name || "material"));
   return { xml: result.xml, materialName: result.materialName, shaderName: result.shaderName, notes: ctx.notes };
 }
@@ -782,7 +812,7 @@ export function usdPreviewSurfaceDocument({ name, record, textureRefs } = {}) {
   if (diffuseFile) {
     const image = doc.addNode("image", "diffuse_image", "color3");
     setInput(image, "file", "filename", { value: diffuseFile, colorspace: SRGB, uniform: "true" });
-    connect(shader, "diffuseColor", "color3", image);
+    connect(shader, "diffuseColor", "color3", doc.share(image));
   } else if (Array.isArray(source.diffuseColor)) {
     setInput(shader, "diffuseColor", "color3", { value: formatVector(source.diffuseColor, 3, 0.18) });
   }
@@ -791,7 +821,7 @@ export function usdPreviewSurfaceDocument({ name, record, textureRefs } = {}) {
   if (emissiveFile) {
     const image = doc.addNode("image", "emissive_image", "color3");
     setInput(image, "file", "filename", { value: emissiveFile, colorspace: SRGB, uniform: "true" });
-    connect(shader, "emissiveColor", "color3", image);
+    connect(shader, "emissiveColor", "color3", doc.share(image));
   } else if (Array.isArray(source.emissiveColor)) {
     setInput(shader, "emissiveColor", "color3", { value: formatVector(source.emissiveColor, 3, 0) });
   }
@@ -802,7 +832,7 @@ export function usdPreviewSurfaceDocument({ name, record, textureRefs } = {}) {
     if (!file) continue;
     const image = doc.addNode("image", nodeName, "float");
     setInput(image, "file", "filename", { value: file, uniform: "true" });
-    connect(shader, input, "float", image);
+    connect(shader, input, "float", doc.share(image));
     textured.add(input);
   }
   for (const [field, input] of USD_FLOAT_VALUES) {
@@ -817,10 +847,11 @@ export function usdPreviewSurfaceDocument({ name, record, textureRefs } = {}) {
     const image = doc.addNode("image", "normal_image", "vector3");
     setInput(image, "file", "filename", { value: normalFile, uniform: "true" });
     setInput(image, "default", "vector3", { value: "0.5, 0.5, 1" });
-    connect(shader, "normal", "vector3", image);
+    connect(shader, "normal", "vector3", doc.share(image));
   }
 
   ctx.notes.push("Channel picks, wrap modes and texture transforms are not available in the flattened USD payload");
+  noteRepeatedImages(ctx);
   const result = finish(doc, shader, "M_" + (name || "material"));
   return { xml: result.xml, materialName: result.materialName, shaderName: result.shaderName, notes: ctx.notes };
 }
