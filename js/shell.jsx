@@ -271,6 +271,9 @@ const VIEW_DEPS = {
             'vendor/dagre/dagre.min.js',
             'embed/mtlx-viewer.js',
         ],
+        // The docs implementation panel loads this bundle in the webview,
+        // where embed/ is not packaged (see graph.webviewSkip).
+        webviewSkip: ['embed/mtlx-viewer.js'],
         babelScripts: [
             'js/graph/model.jsx',
             'js/graph/style.jsx',
