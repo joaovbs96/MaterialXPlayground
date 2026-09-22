@@ -374,15 +374,19 @@
     };
 
     // Pure: keeps a panel rect fully inside bounds, shrinking it first when
-    // it is larger than the container. No side effects, safe for a Node test.
-    const clampPanelRect = (rect, bounds) => {
+    // it is larger than the container. `minY` keeps the top edge below a HUD
+    // row (e.g. the scene toolbar); it never grows the rect past the bottom.
+    // No side effects, safe for a Node test.
+    const clampPanelRect = (rect, bounds, minY) => {
         // Empty bounds mean the view is hidden (display none); clamping
         // against them would collapse the rect to nothing, so keep it.
         if (!bounds || !(bounds.width > 0) || !(bounds.height > 0)) return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        const top = minY || 0;
         const width = Math.max(0, Math.min(rect.width, bounds.width));
         const height = Math.max(0, Math.min(rect.height, bounds.height));
         const x = Math.max(0, Math.min(rect.x, bounds.width - width));
-        const y = Math.max(0, Math.min(rect.y, bounds.height - height));
+        const maxY = Math.max(0, bounds.height - height);
+        const y = Math.min(Math.max(rect.y, top), maxY);
         return { x, y, width, height };
     };
     window.usdSceneClampPanelRect = clampPanelRect;
@@ -390,6 +394,10 @@
     const MATERIAL_PREVIEW_RECT_KEY = 'mtlx_scene_material_preview_rect';
     const MATERIAL_PREVIEW_DEFAULT_SIZE = { width: 640, height: 420 };
     const MATERIAL_PREVIEW_MIN_SIZE = { width: 320, height: 220 };
+    // Click offset and HUD-row clearance for a fresh open. 44px clears the
+    // top-2 (8px) HUD row of h-7 (28px) pills plus a small margin.
+    const MATERIAL_PREVIEW_CLICK_OFFSET = 12;
+    const MATERIAL_PREVIEW_TOP_INSET = 44;
     const readStoredMaterialPreviewRect = () => {
         try {
             const raw = localStorage.getItem(MATERIAL_PREVIEW_RECT_KEY);
@@ -441,28 +449,43 @@
         React.useEffect(() => {
             if (!containerRef.current) return;
             const bounds = containerRef.current.getBoundingClientRect();
-            setRect((prev) => (prev ? clampPanelRect(prev, bounds) : prev));
+            setRect((prev) => (prev ? clampPanelRect(prev, bounds, MATERIAL_PREVIEW_TOP_INSET) : prev));
             // eslint-disable-next-line react-hooks/exhaustive-deps
         }, []);
 
-        // First-ever open with no persisted rect: default 640x420 anchored
-        // at the click. A later open keeps whatever rect the user left.
-        React.useEffect(() => {
+        // First-ever open with no persisted rect: default 640x420, top-left
+        // offset from the click point, clamped inside the viewport and below
+        // the HUD row. useLayoutEffect (not useEffect) so the panel never
+        // paints a frame at the wrong spot before this runs. An open with no
+        // anchor (keyboard, or a re-open before any click) centres instead.
+        React.useLayoutEffect(() => {
             if (!open || !containerRef.current) return;
             const bounds = containerRef.current.getBoundingClientRect();
             // A remembered rect is re-clamped on every open so one saved from
             // a larger window still lands inside the current viewport.
-            if (rectRef.current) { setRect(clampPanelRect(rectRef.current, bounds)); return; }
-            if (!anchor) return;
-            const base = {
-                x: anchor.x - MATERIAL_PREVIEW_DEFAULT_SIZE.width / 2,
-                y: anchor.y - MATERIAL_PREVIEW_DEFAULT_SIZE.height / 2,
-                width: MATERIAL_PREVIEW_DEFAULT_SIZE.width,
-                height: MATERIAL_PREVIEW_DEFAULT_SIZE.height,
-            };
-            setRect(clampPanelRect(base, bounds));
+            if (rectRef.current) { setRect(clampPanelRect(rectRef.current, bounds, MATERIAL_PREVIEW_TOP_INSET)); return; }
+            const width = MATERIAL_PREVIEW_DEFAULT_SIZE.width;
+            const height = MATERIAL_PREVIEW_DEFAULT_SIZE.height;
+            const base = anchor
+                ? { x: anchor.x + MATERIAL_PREVIEW_CLICK_OFFSET, y: anchor.y + MATERIAL_PREVIEW_CLICK_OFFSET, width, height }
+                : { x: (bounds.width - width) / 2, y: (bounds.height - height) / 2, width, height };
+            setRect(clampPanelRect(base, bounds, MATERIAL_PREVIEW_TOP_INSET));
             // eslint-disable-next-line react-hooks/exhaustive-deps
         }, [open, anchor]);
+
+        // The container's own ResizeObserver (below) covers layout-driven
+        // resizes; a window resize (e.g. leaving fullscreen) can change the
+        // viewport without necessarily firing that observer first.
+        React.useEffect(() => {
+            if (!open) return undefined;
+            const onWindowResize = () => {
+                if (!containerRef.current) return;
+                const bounds = containerRef.current.getBoundingClientRect();
+                setRect((prev) => (prev ? clampPanelRect(prev, bounds, MATERIAL_PREVIEW_TOP_INSET) : prev));
+            };
+            window.addEventListener('resize', onWindowResize);
+            return () => window.removeEventListener('resize', onWindowResize);
+        }, [open]);
 
         React.useEffect(() => {
             if (!rect) return;
@@ -514,7 +537,7 @@
                 x: drag.rect.x + (e.clientX - drag.startX),
                 y: drag.rect.y + (e.clientY - drag.startY),
                 width: drag.rect.width, height: drag.rect.height,
-            }, bounds);
+            }, bounds, MATERIAL_PREVIEW_TOP_INSET);
             setRect(next);
         };
         const onResizeMove = (e) => {
@@ -525,7 +548,7 @@
                 x: drag.rect.x, y: drag.rect.y,
                 width: Math.max(MATERIAL_PREVIEW_MIN_SIZE.width, drag.rect.width + (e.clientX - drag.startX)),
                 height: Math.max(MATERIAL_PREVIEW_MIN_SIZE.height, drag.rect.height + (e.clientY - drag.startY)),
-            }, bounds);
+            }, bounds, MATERIAL_PREVIEW_TOP_INSET);
             setRect(next);
         };
 
