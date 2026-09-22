@@ -5,6 +5,9 @@
 // behaves like the rest of the toolset.
 (() => {
     const ROOT_EXTENSIONS = ['.usd', '.usda', '.usdc', '.usdz'];
+    // glTF/OBJ roots route through window.MtlxSceneSources (js/usd-scene-sources.js)
+    // instead of the USD worker; see detectRootKind() and load() below.
+    const MODEL_ROOT_EXTENSIONS = ['.glb', '.gltf', '.obj'];
     const EXAMPLE_ROOT = 'tests/fixtures/usd-scene/root.usda';
     const EXAMPLE_FILES = [
         EXAMPLE_ROOT,
@@ -29,11 +32,14 @@
 
     const asPath = (file) => String(file.webkitRelativePath || file.relativePath || file.name || '').replace(/\\/g, '/');
     const ext = (path) => { const i = path.lastIndexOf('.'); return i < 0 ? '' : path.slice(i).toLowerCase(); };
+    const ALL_ROOT_EXTENSIONS = ROOT_EXTENSIONS.concat(MODEL_ROOT_EXTENSIONS);
+    const isUsdRootPath = (path) => ROOT_EXTENSIONS.indexOf(ext(path)) >= 0;
+    const isModelRootPath = (path) => MODEL_ROOT_EXTENSIONS.indexOf(ext(path)) >= 0;
     const rootCandidates = (files) => {
-        // Keep every supplied USD layer selectable. A nested layer may be the
-        // intentional root of a folder upload, while the default still picks
-        // a conventional top-level root in pickDefaultRootLayer().
-        return files.filter((f) => ROOT_EXTENSIONS.indexOf(ext(f.path)) >= 0);
+        // Keep every supplied USD or model (glTF/OBJ) root selectable; the
+        // default still picks a conventional top-level root in
+        // pickDefaultRootLayer().
+        return files.filter((f) => ALL_ROOT_EXTENSIONS.indexOf(ext(f.path)) >= 0);
     };
     const dirOf = (path) => { const i = String(path).lastIndexOf('/'); return i < 0 ? '' : path.slice(0, i); };
     // Collapses '.' and '..' segments without touching the filesystem, the
@@ -84,9 +90,39 @@
         rootLayerCache.set(key, value);
         return value;
     };
+    // Shallowest-first, then alphabetical, the same tiebreak
+    // pickDefaultUsdRootLayer uses for composition roots below.
+    const shallowestFirst = (a, b) => {
+        const depthDiff = String(a.path).split('/').length - String(b.path).split('/').length;
+        if (depthDiff !== 0) return depthDiff;
+        const aPath = String(a.path), bPath = String(b.path);
+        return aPath < bPath ? -1 : (aPath > bPath ? 1 : 0);
+    };
+    // Model-only root selection (no USD candidate present): a single root
+    // wins outright; otherwise prefer the shallowest .gltf/.glb over any
+    // .obj, since glTF roots carry their own scene graph and .obj does not.
+    function pickDefaultModelRoot(modelCandidates) {
+        if (modelCandidates.length === 0) return '';
+        if (modelCandidates.length === 1) return modelCandidates[0].path;
+        const gltfLike = modelCandidates.filter((f) => ext(f.path) === '.gltf' || ext(f.path) === '.glb');
+        const pool = (gltfLike.length ? gltfLike : modelCandidates.filter((f) => ext(f.path) === '.obj')) || [];
+        const sorted = (pool.length ? pool : modelCandidates).slice().sort(shallowestFirst);
+        return sorted[0].path;
+    }
+    // A USD root always wins the default pick over a co-uploaded model
+    // root, which comes back as an ignoredModelRoots entry for the
+    // caller's diagnostics; with no USD root, a model root is picked.
     async function pickDefaultRootLayer(files) {
-        const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
         const candidates = rootCandidates(files);
+        if (candidates.length === 0) return { path: '', ignoredModelRoots: [] };
+        const usdCandidates = candidates.filter((f) => isUsdRootPath(f.path));
+        const modelCandidates = candidates.filter((f) => isModelRootPath(f.path));
+        if (usdCandidates.length === 0) return { path: pickDefaultModelRoot(modelCandidates), ignoredModelRoots: [] };
+        const path = await pickDefaultUsdRootLayer(usdCandidates);
+        return { path, ignoredModelRoots: modelCandidates.map((f) => f.path) };
+    }
+    async function pickDefaultUsdRootLayer(candidates) {
+        const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
         if (candidates.length === 0) return '';
         if (candidates.length === 1) return candidates[0].path;
         const cacheKey = candidates.map((f) => {
@@ -795,6 +831,9 @@
             setSelectedCamera(defaultCameraPathFor(stageCameras) || 'default');
         }, [stage]);
         const [rootTouched, setRootTouched] = React.useState(false);
+        // Model (glTF/OBJ) root candidates set aside when a USD root layer
+        // was also supplied; surfaced as an info-level diagnostic below.
+        const [ignoredModelRoots, setIgnoredModelRoots] = React.useState([]);
         const [envFileName, setEnvFileName] = React.useState('');
         const [envImportError, setEnvImportError] = React.useState(null);
         const [envRotation, setEnvRotation] = React.useState(0);
@@ -1067,9 +1106,10 @@
         const applyChosenFiles = async (next, generation) => {
             if (!mountedRef.current || generation !== generationRef.current) return;
             setFiles(next);
-            const preferredRoot = await pickDefaultRootLayer(next);
+            const { path: preferredRoot, ignoredModelRoots } = await pickDefaultRootLayer(next);
             if (!mountedRef.current || generation !== generationRef.current) return;
             setRootPath(preferredRoot);
+            setIgnoredModelRoots(ignoredModelRoots);
             setRootTouched(false);
             setStage(null);
             setStatus(next.length ? 'ready-to-load' : 'idle');
@@ -1097,9 +1137,16 @@
             applyChosenFiles(filesFromMap(map), generation);
         };
         const load = async (loadFiles = filesRef.current, loadRoot = rootPath) => {
-            const loader = apiFunction('loadUsdStage');
-            if (typeof loader !== 'function') { setError('USD stage loader is unavailable in this build.'); setStatus('error'); return; }
-            if (!loadRoot) { setError('Select one USD root layer before loading.'); setStatus('error'); return; }
+            if (!loadRoot) { setError('Select one root layer before loading.'); setStatus('error'); return; }
+            // js/usd-scene-sources.js tells a glTF/OBJ root apart from a
+            // USD one; its loaders resolve to the same neutral stage
+            // payload, so everything downstream stays identical either way.
+            const sources = window.MtlxSceneSources;
+            const kind = (sources && typeof sources.detectRootKind === 'function') ? sources.detectRootKind(loadRoot) : 'usd';
+            const loader = kind === 'gltf' ? (sources && sources.loadGltfStage)
+                : kind === 'obj' ? (sources && sources.loadObjStage)
+                : apiFunction('loadUsdStage');
+            if (typeof loader !== 'function') { setError('Scene loader is unavailable in this build.'); setStatus('error'); return; }
             const generation = ++generationRef.current;
             if (abortRef.current) abortRef.current.abort();
             const controller = new AbortController();
@@ -1108,6 +1155,9 @@
             handleRef.current = null; setHandle(null); setStage(null); setError(''); setStatus('loading');
             window.__mtlxUsdSceneHandle = null;
             try {
+                // subdivisionLevel/triangleLimits are USD-only knobs; a
+                // glTF/OBJ stage arrives already tessellated, so the model
+                // loaders simply ignore the two fields.
                 const result = await loader({ files: loadFiles, rootPath: loadRoot, signal: controller.signal, subdivisionLevel: subdivisionLevelRef.current, triangleLimits: triangleLimitsRef.current, onProgress: (value) => updateProgress(value, generation) });
                 if (!mountedRef.current || controller.signal.aborted || generation !== generationRef.current) return;
                 setStage(result); setStatus('loaded');
@@ -1306,7 +1356,11 @@
         const meshes = stageMeshes(stage);
         const cameras = Array.isArray(stage && stage.cameras) ? stage.cameras : [];
         const materials = stageMaterials(stage);
-        const warningDetails = warningRecords(materialWarningList(stage).concat(handle && Array.isArray(handle.warnings) ? handle.warnings.map(String) : []));
+        // A USD root layer always wins over a co-uploaded glTF/OBJ root; the
+        // ignored model roots surface here as [info], the same tag prefix
+        // severityOf() below already recognizes.
+        const ignoredRootWarnings = ignoredModelRoots.map((path) => '[info] Ignored model root (a USD root layer was found): ' + path);
+        const warningDetails = warningRecords(materialWarningList(stage).concat(ignoredRootWarnings).concat(handle && Array.isArray(handle.warnings) ? handle.warnings.map(String) : []));
         const warnings = warningDetails.map((record) => record.label);
         // Diagnostics carry no severity of their own, so classify by wording:
         // anything that stopped working is an error, anything that merely
@@ -2141,7 +2195,7 @@
                                 placeholder="No stage loaded"
                                 multiple
                                 icon="files"
-                                accept=".usd,.usda,.usdc,.usdz,.mtlx,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff,.ktx2"
+                                accept=".usd,.usda,.usdc,.usdz,.glb,.gltf,.obj,.mtl,.bin,.mtlx,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff,.ktx2"
                                 onFiles={chooseFiles}
                                 inputTestId="usd-scene-file-picker"
                             />
@@ -2476,7 +2530,7 @@
                             />
                             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center px-6">
                                 <div className="text-gray-500 text-sm max-w-sm">
-                                    Drop a USD stage (.usd, .usda, .usdc, .usdz) and its referenced files
+                                    Drop a USD stage (.usd, .usda, .usdc, .usdz), a glTF (.gltf, .glb) or an OBJ (.obj) and its referenced files
                                 </div>
                                 <button type="button" onClick={loadExample} className={PILL_ACTION}>
                                     <MtlxIcon name="file-upload" className="w-3.5 h-3.5" /> Load example
