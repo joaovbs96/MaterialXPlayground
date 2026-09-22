@@ -3,6 +3,12 @@
 (() => {
     const modes = new Set(['studio', 'studio-dark', 'environment', 'none']);
 
+    // The ShadowMaterial catcher reads as fully shadowed wherever the spot's
+    // shadow map is missing, painting its frustum as a grey quad, so it only
+    // shows once three has actually drawn one. Pure: see
+    // tests/unit/usd-scene-studio-catcher.test.mjs.
+    const studioCatcherVisible = (studio, hasShadowMap) => !!(studio && hasShadowMap);
+
     const createUsdSceneEnvironment = ({ scene, renderer, camera, contentRoot, THREE = window.THREE } = {}) => {
         if (!scene || !renderer || !THREE) throw new Error('USD scene environment requires a Three.js scene and renderer.');
         const studio = window.MtlxStudio;
@@ -89,10 +95,19 @@
             const center = bounds.getCenter(new THREE.Vector3());
             const direction = rotatedEnvDirection() || new THREE.Vector3(-0.4, -1.0, 0.7).normalize();
             studio.placeUsdSceneStudioLight(studioLight, center, direction, studioScale);
+            markShadowDirty();
+        };
+        // The scene's RGB-T frame turns renderer.shadowMap.autoUpdate off so
+        // the map is drawn once per multi-pass frame, which leaves the studio
+        // spot without one; the rig asks for a redraw whenever it moves.
+        const markShadowDirty = () => { if (renderer.shadowMap) renderer.shadowMap.needsUpdate = true; };
+        const syncCatcherVisibility = () => {
+            if (!studioCatcher) return;
+            studioCatcher.visible = studioCatcherVisible(isStudio(), !!(studioLight.shadow && studioLight.shadow.map));
         };
         const applyVisibility = () => {
             if (studioMesh) studioMesh.visible = isStudio();
-            if (studioCatcher) studioCatcher.visible = isStudio();
+            syncCatcherVisibility();
             studioLight.visible = isStudio();
             // Shadow only: MaterialX RawShaderMaterials ignore three lights.
             studioLight.intensity = 0;
@@ -166,6 +181,7 @@
             }
             updateLight();
             environmentSky.position.copy(center);
+            markShadowDirty();
         };
         const update = () => {
             if (disposed || !camera) return;
@@ -175,6 +191,7 @@
             environmentSky.position.copy(camera.position);
             if (studioMesh && bounds) studioMesh.position.y = bounds.min.y - Math.max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z) * 0.003;
             if (studioCatcher && bounds) studioCatcher.position.y = bounds.min.y - Math.max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, bounds.max.z - bounds.min.z) * 0.003;
+            syncCatcherVisibility();
         };
         // Both updateBounds and update keep studioMesh/studioCatcher in sync
         // at the same world Y, so reading either back gives the floor's
