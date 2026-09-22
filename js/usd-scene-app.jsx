@@ -589,6 +589,7 @@
                             controls={['zoom']}
                             autoFocus="fit"
                             chrome="card"
+                            flush
                             height={bodyHeight || (MATERIAL_PREVIEW_DEFAULT_SIZE.height - 60)}
                         />
                     )}

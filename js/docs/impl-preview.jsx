@@ -194,6 +194,7 @@
                                     controls={['zoom']}
                                     autoFocus="fit"
                                     chrome="card"
+                                    flush
                                     height={isFullscreen ? '100%' : 352}
                                 />
                             </PreviewErrorBoundary>

@@ -317,6 +317,11 @@
                 scope: initialScope = '',
                 drill = true,
                 chrome = 'none',
+                // Card chrome only: drops the card's own border/radius so a
+                // host that already draws its own outer frame (e.g. a
+                // docked panel) gets exactly one border. Default false
+                // keeps every existing chrome="card" caller unchanged.
+                flush = false,
                 controls = [],
                 transparent,
                 height = 'auto',
@@ -780,7 +785,7 @@
                 // stray line along the graph's own outer edge.
                 if (chrome === 'card' && previewSupported && !previewCollapsed) classNames.push('border-r', 'border-gray-700');
             } else {
-                if (chrome === 'card') classNames.push('border', 'border-gray-700', 'rounded-lg');
+                if (chrome === 'card' && !flush) classNames.push('border', 'border-gray-700', 'rounded-lg');
                 if (!isTransparent) classNames.push('bg-gray-900');
             }
 
@@ -918,7 +923,7 @@
             // one surface; overflow-hidden clips the flush preview column to
             // the same outside-only corner radius.
             const rowClassNames = ['flex', 'items-stretch'];
-            if (chrome === 'card') rowClassNames.push('border', 'border-gray-700', 'rounded-lg', 'overflow-hidden');
+            if (chrome === 'card' && !flush) rowClassNames.push('border', 'border-gray-700', 'rounded-lg', 'overflow-hidden');
             if (!isTransparent) rowClassNames.push('bg-gray-900');
 
             const previewColumnStyle = previewResizable ? { width: previewWidth } : undefined;
