@@ -397,7 +397,14 @@ const useSplitFileDrop = (activeRef) => {
 // WebGL construction fails for any reason.
 const createGpuDiffView = (canvas) => {
     try {
-        const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false });
+        // Acquire WebGL2 ourselves so three never silently falls back to
+        // a WebGL1 context on this canvas, which would poison it for good.
+        const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: true, stencil: true,
+            premultipliedAlpha: true, preserveDrawingBuffer: false, powerPreference: 'default', failIfMajorPerformanceCaveat: false });
+        if (!gl) {
+            throw new Error('WebGL2 context could not be created for this preview (the browser refused WebGL2). Reload the tab or check the browser GPU settings.');
+        }
+        const renderer = new THREE.WebGLRenderer({ canvas, context: gl, antialias: false, alpha: false });
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
         const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
         const scene = new THREE.Scene();

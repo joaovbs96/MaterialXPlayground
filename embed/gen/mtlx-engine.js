@@ -1314,7 +1314,7 @@ const loadHdrTexture=async blob=>{if(typeof THREE.RGBELoader==='undefined'){cons
 // result is cached and the probe renderer released, not kept alive.
 let _ktx2Loader=null;let _ktx2SupportDetected=false;const getKtx2Loader=view=>{if(!_ktx2Loader){if(typeof THREE.KTX2Loader==='undefined')return null;_ktx2Loader=new THREE.KTX2Loader();_ktx2Loader.setTranscoderPath(new URL('vendor/three/basis/',document.baseURI).href);}if(!_ktx2SupportDetected){const viewRenderer=view&&view.renderer;// No caller renderer yet: a throwaway hidden renderer, never
 // attached to the DOM or reused elsewhere, safe to release below.
-const renderer=viewRenderer||new THREE.WebGLRenderer();_ktx2Loader.detectSupport(renderer);_ktx2SupportDetected=true;if(!viewRenderer){try{renderer.dispose();}catch(e){/* best-effort */}try{renderer.forceContextLoss();}catch(e){/* best-effort */}}}return _ktx2Loader;};// Parses a dropped .ktx2 Blob via THREE.KTX2Loader into a CompressedTexture
+const renderer=viewRenderer||new THREE.WebGLRenderer();_ktx2Loader.detectSupport(renderer);_ktx2SupportDetected=true;if(!viewRenderer){try{renderer.dispose();}catch(e){/* best-effort */}}}return _ktx2Loader;};// Parses a dropped .ktx2 Blob via THREE.KTX2Loader into a CompressedTexture
 // carrying its full mip chain. flipY stays false and no flip is baked at
 // encode time (scripts/cook-textures.mjs never flips): our uncompressed
 // textures already upload with flipY=false, relying on the MaterialX
@@ -2847,12 +2847,10 @@ prewarmDisplacementSources(__srcs,isMounted,label);const warmResult=await prewar
 const cw=canvas.clientWidth||canvas.parentElement&&canvas.parentElement.clientWidth||400;const ch=canvas.clientHeight||256;// Bail before allocating the WebGL context if this build
 // was superseded during shader generation above,
 // disposePartial() is still a safe no-op here.
-if(!isMounted()){disposePartial();return null;}const __rendererPerfStart=window.MTLX_PERF_LOG?performance.now():0;renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true});// three tries 'webgl2' then silently falls back to 'webgl'. Our
-// RawShaderMaterial always requests glslVersion THREE.GLSL3
-// (#version 300 es), which a WebGL1 context cannot compile;
-// left alone that reads only as an opaque ANGLE/driver error
-// ("unsupported shader version 300"), so fail clearly here.
-if(!renderer.capabilities.isWebGL2){try{renderer.dispose();}catch(e){/* best-effort */}try{renderer.forceContextLoss();}catch(e){/* best-effort */}renderer=null;throw new Error('WebGL2 is unavailable in this tab (the browser fell back to WebGL1), so MaterialX previews cannot compile. Reload the tab or check the browser GPU settings.');}// A reused canvas still carries GL state left by the prior
+if(!isMounted()){disposePartial();return null;}const __rendererPerfStart=window.MTLX_PERF_LOG?performance.now():0;// Acquire WebGL2 ourselves and pass it via `context`, so
+// three skips its own getContext('webgl2')-then-'webgl'
+// fallback: a transient failure throws instead of poisoning this canvas with WebGL1.
+const gl=canvas.getContext('webgl2',{antialias:true,alpha:true,depth:true,stencil:true,premultipliedAlpha:true,preserveDrawingBuffer:false,powerPreference:'default',failIfMajorPerformanceCaveat:false});if(!gl){throw new Error('WebGL2 context could not be created for this preview (the browser refused WebGL2). Reload the tab or check the browser GPU settings.');}renderer=new THREE.WebGLRenderer({canvas,context:gl,antialias:true,alpha:true});// A reused canvas still carries GL state left by the prior
 // renderer, but fresh r128 state caches assume defaults, so
 // leaked blending corrupts the PMREM bake below; resync both.
 renderer.resetState();// restored re-inits three's GL state but not render-target

@@ -6454,7 +6454,14 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 environmentBridge.refreshDisplayTransform();
             }
         };
-        renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+        // Acquire WebGL2 ourselves so three never silently falls back to
+        // a WebGL1 context on this canvas, which would poison it for good.
+        const gl = canvas.getContext('webgl2', { antialias: true, alpha: true, depth: true, stencil: true,
+            premultipliedAlpha: true, preserveDrawingBuffer: false, powerPreference: 'default', failIfMajorPerformanceCaveat: false });
+        if (!gl) {
+            throw new Error('WebGL2 context could not be created for this preview (the browser refused WebGL2). Reload the tab or check the browser GPU settings.');
+        }
+        renderer = new THREE.WebGLRenderer({ canvas, context: gl, antialias: true, alpha: true });
         // r128's blend-state cache otherwise corrupts VSM and PMREM passes;
         // see js/mtlx-engine.js:4290-4292 for the same reset after construction.
         renderer.resetState();
