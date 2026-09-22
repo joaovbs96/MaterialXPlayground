@@ -1,8 +1,11 @@
 /* site-header.css — complete, self-contained styling for the shared site
-   shell (header + footer) injected by js/site-header.js into
-   <div id="site-header"> / <div id="site-footer"> on every surface: the
-   SPA (index.html), the tutorials MkDocs subsite, and the VS Code
-   webview.
+   header injected by js/site-header.js into <div id="site-header"> on
+   every surface: the SPA (index.html), the tutorials MkDocs subsite, and
+   the VS Code webview.
+
+   Also styles the About dialog's disclaimer paragraphs (js/shell.jsx
+   AboutDialog), mounted by React into #root, not #site-header, so the
+   .mtlx-about-* rules below are deliberately unscoped.
 
    Must render IDENTICALLY on all three, with or without Tailwind present
    — this stylesheet is Tailwind-free and token-driven (see
@@ -14,18 +17,18 @@
 
    Class scheme: semantic, `mtlx-`-prefixed classes, one per component
    piece (see js/site-header.js, which builds the markup using exactly
-   these class names). A small mini-reset (scoped to #site-header /
-   #site-footer via zero-specificity :where()) stands in for the parts of
-   Tailwind's preflight the markup used to depend on, so real component
-   classes below always win regardless of source order. */
+   these class names). A small mini-reset (scoped to #site-header via
+   zero-specificity :where()) stands in for the parts of Tailwind's
+   preflight the markup used to depend on, so real component classes
+   below always win regardless of source order. */
 
-:where(#site-header, #site-header *, #site-footer, #site-footer *) {
+:where(#site-header, #site-header *) {
     box-sizing: border-box;
     margin: 0;
     border: 0 solid var(--site-gray-200);
 }
 
-:where(#site-header, #site-footer) :where(button) {
+:where(#site-header) :where(button) {
     font: inherit;
     color: inherit;
     background: transparent;
@@ -33,16 +36,15 @@
     cursor: pointer;
 }
 
-:where(#site-header, #site-footer) :where(svg, img) {
+:where(#site-header) :where(svg, img) {
     display: block;
     vertical-align: middle;
 }
 
-/* Link reset: no underline, inherit color. The footer's inline text link
-   (.mtlx-footer-link below) opts back into an underline via its own real
-   class, which — thanks to :where() contributing zero specificity here —
-   wins outright. */
-:where(#site-header, #site-footer) :where(a) {
+/* Link reset: no underline, inherit color. The About dialog's inline text
+   links (.mtlx-about-link/-amber below) opt back in via their own real
+   class, which wins outright thanks to :where()'s zero specificity. */
+:where(#site-header) :where(a) {
     color: inherit;
     text-decoration: none;
 }
@@ -50,8 +52,7 @@
 /* Base typography: matches the SPA's own body font/smoothing so the
    header/footer render identically inside mkdocs (which sets its own
    body font-size/smoothing) and inside the VS Code webview. */
-.mtlx-header,
-.mtlx-footer {
+.mtlx-header {
     font-family: var(--site-font-sans);
     font-size: 16px;
     line-height: 1.5;
@@ -814,7 +815,7 @@
 }
 /* The :where() reset near the top of this file sets svg{display:block};
    this icon sits inline with the row's text, so override that here,
-   same as .mtlx-footer-warn-icon does below. */
+   same as .mtlx-about-warn-icon does above. */
 .mtlx-build-banner-icon {
     display: inline;
     width: 16px;
@@ -867,148 +868,63 @@
     opacity: 1;
 }
 
-/* ---- Footer --------------------------------------------------------- */
-/* On hover-capable pointers the footer rests collapsed and hover-expands
-   (click pins it open); that state machine lives entirely in
-   site-header.js's mountFooter() — no CSS :hover rule opens the footer,
-   applyFooter() is the single writer of .is-collapsed. */
+/* ---- About dialog disclaimer paragraphs ------------------------------ */
+/* Rendered by js/shell.jsx's AboutDialog (mounted into #root, not
+   #site-header), so these rules are deliberately unscoped. The footer
+   strip that used to share this markup is gone. */
 
-.mtlx-footer {
-    position: relative;
-    flex-shrink: 0;
-    border-top: 1px solid var(--site-gray-800);
-    background-color: var(--site-gray-900);
-}
-
-/* Expanded body: an overlay above the strip — the in-flow footer is
-   always just the 28px strip, so expanding never resizes #root (and
-   never disturbs the graph/viewer canvases). */
-.mtlx-footer-pop {
-    position: absolute;
-    bottom: 100%;
-    left: 0;
-    right: 0;
-    z-index: 40; /* above in-page HUDs, below modal dialogs (z-50) */
-    background-color: var(--site-gray-900);
-    border-top: 1px solid var(--site-gray-800);
-    box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.45);
-}
-
-/* Slim toggle strip: a full-width native <button> (the :where() reset at
-   the top of this file supplies font/cursor); its own inner span is
-   width-capped/centered like every other row so it lines up with the
-   header/footer content above and below it. */
-.mtlx-footer-toggle {
-    display: block;
-    width: 100%;
-    text-align: left;
-}
-.mtlx-footer-toggle-inner {
-    max-width: var(--site-max-width);
-    margin-left: auto;
-    margin-right: auto;
-    padding: 4px 12px; /* 28px strip */
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    line-height: 20px;
-    font-weight: 500;
-    color: var(--site-gray-400);
-    transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.mtlx-footer-toggle:hover .mtlx-footer-toggle-inner {
-    color: var(--site-gray-200);
-}
-@media (min-width: 640px) {
-    .mtlx-footer-toggle-inner {
-        padding: 4px 24px;
-    }
-}
-.mtlx-footer-chevron {
-    width: 16px;
-    height: 16px;
-    transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.mtlx-footer.is-collapsed .mtlx-footer-chevron {
-    transform: rotate(180deg);
-}
-/* .mtlx-footer-pop is an overlay (see the rule above), so expanding it
-   never resizes #root or thrashes the graph/viewer ResizeObservers/WebGL
-   buffers — collapse just stays instant (display:none) for simplicity.
-   Only the chevron rotation above animates. */
-.mtlx-footer.is-collapsed .mtlx-footer-pop {
-    display: none;
-}
-
-.mtlx-footer-inner {
-    max-width: var(--site-max-width);
-    margin-left: auto;
-    margin-right: auto;
-    padding: 10px 12px 12px;
+.mtlx-about-inner {
     font-size: 13px;
     line-height: 18px;
     color: var(--site-gray-400);
 }
-@media (min-width: 640px) {
-    .mtlx-footer-inner {
-        padding: 10px 24px 12px;
-    }
-}
-/* Two stacked paragraphs (Experimental Preview, then affiliation) inside
-   the same collapsible body — the :where() reset zeroes out <p> margins,
-   so space them by hand. */
-.mtlx-footer-inner p {
+/* The :where() reset only scopes #site-header, and this paragraph pair
+   lives outside it, so zero <p> margins by hand here too. */
+.mtlx-about-inner p {
     margin: 0;
 }
-.mtlx-footer-inner p + p {
+.mtlx-about-inner p + p {
     margin-top: 6px;
 }
 
-.mtlx-footer-link {
+.mtlx-about-link {
     text-decoration: underline;
     color: var(--site-gray-200);
     transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.mtlx-footer-link:hover {
+.mtlx-about-link:hover {
     color: var(--site-gray-100);
 }
 
-/* Experimental Preview paragraph, moved here from the docs page's own
-   bottom-of-page banner so it shows on every route (see js/site-header.js
-   footerHtml). Amber accent + alert-triangle icon kept from the original
-   banner; text sized down to match the rest of the footer body. */
-.mtlx-footer-experimental {
+/* Experimental Preview paragraph. Amber accent + alert-triangle icon. */
+.mtlx-about-experimental {
     color: var(--site-amber-300);
     opacity: 0.9;
 }
-.mtlx-footer-experimental strong {
+.mtlx-about-experimental strong {
     font-weight: 600;
     opacity: 1;
 }
-/* The :where() reset above sets svg{display:block} — this icon sits
-   inline with the paragraph's text, so override that explicitly. */
-.mtlx-footer-warn-icon {
+.mtlx-about-warn-icon {
     display: inline;
     width: 14px;
     height: 14px;
     vertical-align: -2px;
     margin-right: 4px;
 }
-.mtlx-footer-link-amber {
+.mtlx-about-link-amber {
     text-decoration: underline;
     color: var(--site-amber-200);
     transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.mtlx-footer-link-amber:hover {
+.mtlx-about-link-amber:hover {
     color: var(--site-amber-100);
 }
 
-/* DesktopAboutDialog (js/shell.jsx) wraps the same experimental-notice
-   markup in the site's amber warning box idiom instead of the footer
-   strip; neutralize the footer's own amber color/opacity here so the
-   box's Tailwind text color is not fought paragraph-side. */
-.mtlx-about-disclaimer .mtlx-footer-experimental {
+/* AboutDialog wraps this in the site's amber warning box idiom; neutralize
+   .mtlx-about-experimental's own color/opacity so the box's Tailwind
+   text color is not fought paragraph-side. */
+.mtlx-about-disclaimer .mtlx-about-experimental {
     color: inherit;
     opacity: 1;
 }

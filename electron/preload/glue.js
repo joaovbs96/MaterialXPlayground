@@ -102,7 +102,7 @@
         window.dispatchEvent(new CustomEvent('mtlx-desktop-notice', { detail: notice }));
     });
 
-    // Shell-level About dialog (js/shell.jsx's DesktopAboutDialog),
+    // Shell-level About dialog (js/shell.jsx's AboutDialog),
     // opened from the header help button (js/site-header.js).
     window.__mtlxGetAbout = function () {
         return window.mtlxDesktop.getAbout();

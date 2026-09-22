@@ -60,6 +60,10 @@ async function buildHtml(context, webview, initialHash, docsOnly) {
     html = html.split('${bootstrapUri}').join(bootstrapUri.toString());
     html = html.split('${initialHash}').join(initialHash);
     html = html.split('${docsOnly}').join(docsOnly ? '1' : '');
+    // Fed to media/bootstrap.js (window.__MTLX_VSCODE_VERSIONS__), consumed
+    // by js/shell.jsx's AboutDialog for its VS Code version block.
+    html = html.split('${extensionVersion}').join(String(context.extension.packageJSON.version || ''));
+    html = html.split('${vscodeVersion}').join(String(vscode.version || ''));
 
     webview.html = html;
     return repoRootUri;

@@ -831,16 +831,16 @@ function DesktopSettingsDialog() {
 }
 
 // Curated display name + license URL per vendor-manifest.json `source`
-// string, so raw package specs/URLs never leak into the About dialog.
-// Several sources map to the same library (react/react-dom, three/three-147,
-// the two tailwindcss entries) and are deduped by name when rendered.
-// License URLs are GitHub blob links pinned to HEAD (never main/master).
+// string, deduped by name when rendered (several sources share a library).
+// License URLs are GitHub blob links pinned to HEAD, or to a commit/tag
+// when the source itself is pinned to one.
 const VENDOR_LIBRARY_MAP = {
     '@babel/standalone@7.26.10': { name: 'Babel', licenseUrl: 'https://github.com/babel/babel/blob/HEAD/LICENSE' },
     '@highlightjs/cdn-assets@11.9.0': { name: 'highlight.js', licenseUrl: 'https://github.com/highlightjs/highlight.js/blob/HEAD/LICENSE' },
     'dagre@0.8.5': { name: 'Dagre', licenseUrl: 'https://github.com/dagrejs/dagre/blob/HEAD/LICENSE' },
     'jszip@3.10.1': { name: 'JSZip', licenseUrl: 'https://github.com/Stuk/jszip/blob/HEAD/LICENSE.markdown' },
     'katex@0.16.47': { name: 'KaTeX', licenseUrl: 'https://github.com/KaTeX/KaTeX/blob/HEAD/LICENSE' },
+    'pako@1.0.11': { name: 'pako', licenseUrl: 'https://github.com/nodeca/pako/blob/HEAD/LICENSE' },
     'react@18.3.1': { name: 'React', licenseUrl: 'https://github.com/facebook/react/blob/HEAD/LICENSE' },
     'react-dom@18.3.1': { name: 'React', licenseUrl: 'https://github.com/facebook/react/blob/HEAD/LICENSE' },
     'reactflow@11.11.4': { name: 'React Flow', licenseUrl: 'https://github.com/xyflow/xyflow/blob/HEAD/LICENSE' },
@@ -850,32 +850,70 @@ const VENDOR_LIBRARY_MAP = {
     'https://cdn.tailwindcss.com/3.4.17': { name: 'Tailwind CSS', licenseUrl: 'https://github.com/tailwindlabs/tailwindcss/blob/HEAD/LICENSE' },
     'https://raw.githubusercontent.com/tailwindlabs/tailwindcss/v3.4.17/LICENSE': { name: 'Tailwind CSS', licenseUrl: 'https://github.com/tailwindlabs/tailwindcss/blob/HEAD/LICENSE' },
     'https://raw.githubusercontent.com/google/draco/1.5.7/LICENSE': { name: 'Draco', licenseUrl: 'https://github.com/google/draco/blob/HEAD/LICENSE' },
+    'https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/webgl/encoder/build/basis_encoder.js': { name: 'Basis Universal', licenseUrl: 'https://github.com/BinomialLLC/basis_universal/blob/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/LICENSE' },
+    'https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/webgl/encoder/build/basis_encoder.wasm': { name: 'Basis Universal', licenseUrl: 'https://github.com/BinomialLLC/basis_universal/blob/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/LICENSE' },
+    'https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/LICENSE': { name: 'Basis Universal', licenseUrl: 'https://github.com/BinomialLLC/basis_universal/blob/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/LICENSE' },
+    'https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/LICENSES.txt': { name: 'OpenUSD WebView Bindings', licenseUrl: 'https://github.com/joaovbs96/USDBindings/releases/tag/v2026.9.1' },
+    'https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/usdWebViewBindings.js': { name: 'OpenUSD WebView Bindings', licenseUrl: 'https://github.com/joaovbs96/USDBindings/releases/tag/v2026.9.1' },
+    'https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/usdWebViewBindingsModule.js': { name: 'OpenUSD WebView Bindings', licenseUrl: 'https://github.com/joaovbs96/USDBindings/releases/tag/v2026.9.1' },
+    'https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/usdWebViewBindingsModule.wasm': { name: 'OpenUSD WebView Bindings', licenseUrl: 'https://github.com/joaovbs96/USDBindings/releases/tag/v2026.9.1' },
 };
-// MaterialX itself ships via vendor/materialx (fetched separately by
-// `npm run vendor:offline`, gitignored) so it never appears in
-// vendor-manifest.json; list it by hand instead.
+// MaterialX ships via vendor/materialx (gitignored, fetched separately by
+// `npm run vendor:offline`) so it never appears in vendor-manifest.json;
+// list it and other hand-vendored assets not in VENDOR_LIBRARY_MAP by hand.
 const MATERIALX_LIBRARY = { name: 'MaterialX', licenseUrl: 'https://github.com/AcademySoftwareFoundation/MaterialX/blob/HEAD/LICENSE' };
+const STATIC_LIBRARIES = [
+    MATERIALX_LIBRARY,
+    // Inlined as SVG paths in js/shared/ui-commons.js and js/site-header.js,
+    // not fetched at runtime, so it never appears in vendor-manifest.json.
+    { name: 'Tabler Icons', licenseUrl: 'https://github.com/tabler/tabler-icons/blob/HEAD/LICENSE' },
+    // js/vendor/EXRLoader.js: a patched copy of three.js's EXRLoader, see
+    // js/vendor/VENDORED-CHANGES.md for the exact diff and provenance.
+    { name: 'three.js EXRLoader (patched)', licenseUrl: 'https://github.com/mrdoob/three.js/blob/HEAD/LICENSE' },
+    // images/materialx-logo.svg, used only to identify the MaterialX
+    // project (README.md "Trademarks"), not fetched from vendor-manifest.json.
+    { name: 'MaterialX logo (Academy Software Foundation)', licenseUrl: 'https://github.com/AcademySoftwareFoundation/artwork' },
+];
 
-// About dialog opened from the header help button (js/site-header.js),
-// replacing the native menu's unreachable "About MaterialX Playground"
-// item. Same popup language as DesktopSettingsDialog above, just taller
-// and wider to hold the license text (which is the part that scrolls).
+// Fallback for a manifest `source` string with no VENDOR_LIBRARY_MAP entry:
+// renders the raw package/repo name instead of silently dropping it, so a
+// newly vendored library can never go missing from this list unnoticed.
+function fallbackLibraryFor(source) {
+    const pkgMatch = /^([^@]+)@/.exec(source);
+    if (pkgMatch) return { name: pkgMatch[1], licenseUrl: null };
+    const ghMatch = /github(?:usercontent)?\.com\/([^/]+\/[^/]+)/.exec(source);
+    if (ghMatch) return { name: ghMatch[1], licenseUrl: null };
+    return { name: source, licenseUrl: null };
+}
+
+// About dialog opened from the header help button, available in every
+// host now, and the only place the two disclaimer paragraphs render since
+// the footer strip is gone. Taller/wider than DesktopSettingsDialog to fit the license text.
 let __licenseCache = null;
 let __vendorEntriesCache = null;
-function DesktopAboutDialog() {
+let __libVersionsCache = null;
+function AboutDialog() {
     const [open, setOpen] = React.useState(false);
     const [about, setAbout] = React.useState(null);
     const [license, setLicense] = React.useState(__licenseCache);
     const [licenseError, setLicenseError] = React.useState(false);
     const [vendorEntries, setVendorEntries] = React.useState(__vendorEntriesCache);
+    const [libVersions, setLibVersions] = React.useState(__libVersionsCache);
+    const [webRelease, setWebRelease] = React.useState(undefined); // undefined = loading, null = none yet
     const panelRef = React.useRef(null);
 
+    const isElectron = !!window.__MTLX_ELECTRON__;
+    const isVSCode = !!window.__MTLX_VSCODE__;
+    const isWeb = !isElectron && !isVSCode;
+
     React.useEffect(() => {
-        if (!window.__MTLX_ELECTRON__) return undefined;
         const onOpen = () => {
             setOpen(true);
-            if (typeof window.__mtlxGetAbout === 'function') {
+            if (isElectron && typeof window.__mtlxGetAbout === 'function') {
                 window.__mtlxGetAbout().then((info) => { if (info) setAbout(info); });
+            }
+            if (isWeb && window.mtlxSourceFacts) {
+                window.mtlxSourceFacts.then((facts) => setWebRelease((facts && facts.version) || null));
             }
             if (__licenseCache === null) {
                 fetch('LICENSE')
@@ -887,10 +925,12 @@ function DesktopAboutDialog() {
                 fetch('vendor/vendor-manifest.json')
                     .then((res) => { if (!res.ok) throw new Error('bad response'); return res.json(); })
                     .then((manifest) => {
-                        const libs = (manifest.entries || [])
-                            .map((e) => VENDOR_LIBRARY_MAP[String(e.source)])
-                            .filter(Boolean);
-                        libs.push(MATERIALX_LIBRARY);
+                        const entries = manifest.entries || [];
+                        const libs = entries.map((e) => {
+                            const source = String(e.source);
+                            return VENDOR_LIBRARY_MAP[source] || fallbackLibraryFor(source);
+                        });
+                        libs.push(...STATIC_LIBRARIES);
                         const seen = new Set();
                         const unique = libs.filter((lib) => {
                             if (seen.has(lib.name)) return false;
@@ -899,12 +939,24 @@ function DesktopAboutDialog() {
                         }).sort((a, b) => a.name.localeCompare(b.name));
                         __vendorEntriesCache = unique;
                         setVendorEntries(unique);
+
+                        // three.js + React versions for the version block
+                        // below, parsed straight off their manifest `source`
+                        // strings ("three@0.128.0" / "react@18.3.1").
+                        const threeEntry = entries.find((e) => /^three@/.test(String(e.source)));
+                        const reactEntry = entries.find((e) => /^react@/.test(String(e.source)));
+                        const versions = {
+                            three: threeEntry ? String(threeEntry.source).split('@')[1] : null,
+                            react: reactEntry ? String(reactEntry.source).split('@')[1] : null,
+                        };
+                        __libVersionsCache = versions;
+                        setLibVersions(versions);
                     })
                     .catch(() => { /* silently skip the third-party list */ });
             }
         };
-        window.addEventListener('mtlx-desktop-about', onOpen);
-        return () => window.removeEventListener('mtlx-desktop-about', onOpen);
+        window.addEventListener('mtlx-about', onOpen);
+        return () => window.removeEventListener('mtlx-about', onOpen);
     }, []);
 
     React.useEffect(() => {
@@ -937,6 +989,7 @@ function DesktopAboutDialog() {
     const disclaimerParts = window.SITE_DISCLAIMER_PARTS || {};
     const logoPaths = window.SITE_LOGO_PATHS || '';
     const title = window.SITE_TITLE || 'MaterialX Playground';
+    const vscodeVersions = window.__MTLX_VSCODE_VERSIONS__ || {};
 
     return (
         <div
@@ -965,20 +1018,31 @@ function DesktopAboutDialog() {
                 </div>
 
                 <div className="text-[12px] text-gray-300 leading-relaxed mb-3">
-                    {about ? (
+                    {isElectron ? (
+                        about ? (
+                            <div>
+                                <div>Version {about.appVersion}</div>
+                                <div>Electron {about.electron} &middot; Chromium {about.chrome} &middot; Node {about.node}</div>
+                            </div>
+                        ) : (
+                            <div className="text-gray-500">Loading version info&hellip;</div>
+                        )
+                    ) : isVSCode ? (
                         <div>
-                            <div>Version {about.appVersion}</div>
-                            <div>Electron {about.electron} &middot; Chromium {about.chrome} &middot; Node {about.node}</div>
+                            <div>Extension {vscodeVersions.extension || 'n/a'}</div>
+                            <div>VS Code {vscodeVersions.vscode || 'n/a'}</div>
                         </div>
                     ) : (
-                        <div className="text-gray-500">Loading version info&hellip;</div>
+                        <div>Release {webRelease === undefined ? '…' : (webRelease || 'development build')}</div>
                     )}
                     {mtlxVersion ? <div>MaterialX {mtlxVersion}</div> : null}
+                    {libVersions && libVersions.three ? <div>three.js {libVersions.three}</div> : null}
+                    {libVersions && libVersions.react ? <div>React {libVersions.react}</div> : null}
                     {buildId ? <div>Build {buildId}</div> : null}
                 </div>
 
                 <div className="flex flex-wrap gap-3 text-[12px] mb-3">
-                    {links.site ? (
+                    {links.site && !isWeb ? (
                         <a href={links.site} target="_blank" rel="noopener noreferrer"
                             className="text-blue-400 hover:text-blue-300 underline">Website</a>
                     ) : null}
@@ -992,12 +1056,9 @@ function DesktopAboutDialog() {
                     ) : null}
                 </div>
 
-                {/* Same two paragraphs as the web/VS Code footer strip
-                    (js/site-header.js SITE_DISCLAIMER_PARTS), shown here
-                    instead since Electron hides that footer entirely. The
-                    experimental notice gets the site's amber warning box;
-                    .mtlx-about-disclaimer neutralizes the footer's own
-                    amber styling so it does not fight the box's colors. */}
+                {/* Only place these two paragraphs render now (footer strip
+                    is gone). .mtlx-about-disclaimer neutralizes
+                    .mtlx-about-experimental's own amber styling. */}
                 {disclaimerParts.experimental ? (
                     <div
                         className="mtlx-about-disclaimer flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200 mt-1 mb-3"
@@ -1006,8 +1067,8 @@ function DesktopAboutDialog() {
                 ) : null}
                 {disclaimerParts.affiliation ? (
                     <div
-                        className="mtlx-footer-inner mb-4"
-                        style={{ padding: 0, maxWidth: 'none', margin: 0, marginBottom: '1rem' }}
+                        className="mtlx-about-inner mb-4"
+                        style={{ margin: 0, marginBottom: '1rem' }}
                         dangerouslySetInnerHTML={{ __html: disclaimerParts.affiliation }}
                     />
                 ) : null}
@@ -1018,12 +1079,22 @@ function DesktopAboutDialog() {
                         {vendorEntries.map((lib, i) => (
                             <React.Fragment key={lib.name}>
                                 {i > 0 ? ', ' : ''}
-                                <a href={lib.licenseUrl} target="_blank" rel="noopener noreferrer"
-                                    className="text-blue-400 hover:text-blue-300 underline">{lib.name}</a>
+                                {lib.licenseUrl ? (
+                                    <a href={lib.licenseUrl} target="_blank" rel="noopener noreferrer"
+                                        className="text-blue-400 hover:text-blue-300 underline">{lib.name}</a>
+                                ) : lib.name}
                             </React.Fragment>
                         ))}
                     </div>
                 ) : null}
+                <div className="text-[11px] text-gray-400 mb-1">
+                    <span className="text-gray-300">Assets: </span>
+                    Shader Ball and Cloth mesh (CC BY 4.0), MaterialX Shader Ball (Apache-2.0), HDRIs (CC BY 4.0 / CC0), UV checker texture and Motley Patchwork Rug (MIT). See the{' '}
+                    {links.repo ? (
+                        <a href={links.repo + '#asset-credits'} target="_blank" rel="noopener noreferrer"
+                            className="text-blue-400 hover:text-blue-300 underline">README</a>
+                    ) : 'README'}{' '}for full attribution.
+                </div>
                 {vendorEntries && vendorEntries.length ? (
                     <div className="text-[11px] text-gray-500 mb-3">
                         We believe this list to be complete. If we are missing anything,{' '}
@@ -1357,7 +1428,7 @@ function Shell() {
             <DesktopCloseConfirmDialog />
             <DesktopNoticeBar />
             <DesktopSettingsDialog />
-            <DesktopAboutDialog />
+            <AboutDialog />
         </div>
     );
 }

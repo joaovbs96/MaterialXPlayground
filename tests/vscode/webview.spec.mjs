@@ -39,6 +39,8 @@ async function routeWebview(page, baseURL, { initialHash, docsOnly }) {
     bootstrapUri: baseURL + '/vscode_extension/media/bootstrap.js',
     initialHash,
     docsOnly,
+    extensionVersion: 'test',
+    vscodeVersion: 'test',
   });
   await page.route(baseURL + WEBVIEW_PATH + '**', (route) => {
     route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: html });

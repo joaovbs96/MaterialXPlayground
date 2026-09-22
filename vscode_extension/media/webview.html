@@ -16,7 +16,7 @@
          focus-outline CSS near the bottom) are fragments defined in
          scripts/build-webview.mjs — edit them there instead. Loaders:
          RGBELoader, GLTFLoader, DRACOLoader, OBJLoader, OrbitControls.
-         Contains five ${...} placeholders substituted at runtime by
+         Contains seven ${...} placeholders substituted at runtime by
          vscode_extension/src/editorProvider.js's buildHtml().
          ================================================================ -->
 
@@ -98,8 +98,10 @@
          js/site-header.js to hide the file-bound Viewer/Graph tabs in the
          standalone docs panel), installs the in-page link interceptor,
          and wires up the extension <-> webview postMessage contract. See
-         vscode_extension/media/bootstrap.js. -->
-    <script src="${bootstrapUri}" data-initial-hash="${initialHash}" data-docs-only="${docsOnly}"></script>
+         vscode_extension/media/bootstrap.js.
+         data-extension-version/data-vscode-version feed window.__MTLX_VSCODE_VERSIONS__,
+         read by js/shell.jsx's AboutDialog. -->
+    <script src="${bootstrapUri}" data-initial-hash="${initialHash}" data-docs-only="${docsOnly}" data-extension-version="${extensionVersion}" data-vscode-version="${vscodeVersion}"></script>
 
     <title>MaterialX Playground — Node Library, Viewer & Graph Editor</title>
     <link rel="icon" type="image/x-icon" href="favicon.ico">
@@ -134,7 +136,7 @@
             }
         })();
     </script>
-    <script>window.__MTLX_BUILD = '47e3969db87e47ed';</script>
+    <script>window.__MTLX_BUILD = '313a775b63bd8b94';</script>
     <!-- Build-id probe. Lives here, beside the stamp, deliberately: every
          other script (shell.jsx, mtlx-assets.js) is separately cached and
          may itself be the stale file this is meant to detect. -->
@@ -201,7 +203,7 @@
     <style>
         /* Embed mode (the graph editor's docs dialog iframe): hide the
            shared chrome — the iframe shows only the focused docs view. */
-        .embed-mode #site-header, .embed-mode #site-footer { display: none; }
+        .embed-mode #site-header { display: none; }
     </style>
 
     <!-- Shared header/footer styling: plain CSS, no Tailwind — shared
@@ -301,9 +303,6 @@
             </div>
         </div>
     </noscript>
-
-    <!-- Shared footer: filled by js/site-header.js at DOMContentLoaded. -->
-    <div id="site-footer" class="shrink-0"></div>
 
     <!-- Shared engine + shell (must load after #root exists). The per-view
          CDN/local dependencies (KaTeX, JSZip, React Flow, dagre, doc-ui.jsx,
