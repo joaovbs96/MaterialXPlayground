@@ -2773,7 +2773,7 @@ const normalizeSelectOptions = (options, labels, extras) => {
 
 const MtlxSelect = ({
     value, options, labels = {}, badges, dots, defValue, onChange, title, className, popWidth,
-    icon, icons, titles, disabledOptions, disabled, placeholder, emptyOption,
+    icon, icons, titles, disabledOptions, disabled, placeholder, emptyOption, valuePrefix,
     size = 'sm', variant = 'toolbar', block, font, maxWidth,
     popMaxHeight, theme,
     commitFocus = 'trigger', ariaLabel, align,
@@ -3112,10 +3112,13 @@ const MtlxSelect = ({
     const selectedLabel = selected ? selected.label : (labels[value] || value);
     const showPlaceholder = placeholder != null && (!selected || value === '' || value == null);
     const triggerLabel = showPlaceholder ? placeholder : selectedLabel;
+    // valuePrefix: additive, trigger-only text (e.g. "Outputs: "). It never
+    // reaches the popover rows, which always render the bare `label`.
+    const prefixedTriggerLabel = valuePrefix ? valuePrefix + triggerLabel : triggerLabel;
     // Tooltip: always includes the full selected label (a truncated
     // trigger otherwise has no way to reveal it), plus the caller's own
     // `title` when one is set.
-    const triggerTitle = [title, selectedLabel].filter((s) => s != null && s !== '').join('\n') || undefined;
+    const triggerTitle = [title, prefixedTriggerLabel].filter((s) => s != null && s !== '').join('\n') || undefined;
 
     // POPOVER font: explicit font prop or theme.font wins; else the
     // ambient value captured off the trigger (fixes the portal losing
@@ -3285,7 +3288,7 @@ const MtlxSelect = ({
                         style={{ backgroundColor: selected.dot }}
                     />
                 )}
-                <span className="truncate min-w-0" style={{ color: showPlaceholder ? MXS_MUTED : undefined }}>{triggerLabel}</span>
+                <span className="truncate min-w-0" style={{ color: showPlaceholder ? MXS_MUTED : undefined }}>{prefixedTriggerLabel}</span>
                 {/* Right-stuck regardless of alignLeft: ml-auto pins the
                     chevron to the field's right edge even when a non-block
                     trigger's fitStyle minWidth leaves extra room after the

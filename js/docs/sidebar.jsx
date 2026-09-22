@@ -23,7 +23,7 @@
             selectedNode, setSelectedNode,
             stats, applyDocFilter, showPreviews, togglePreviews, onShowHelp, collapsed, onCollapse,
         }) {
-            // Type-filter row (Outputs/Takes) is closed by default; it opens on
+            // Type-filter row (Outputs/Input) is closed by default; it opens on
             // funnel click or whenever a type token already lives in the query.
             const [typeRowOpen, setTypeRowOpen] = React.useState(false);
             const hasTypeToken = !!(searchOutType || searchInType);
@@ -42,19 +42,6 @@
                 // content (long node names) push past a fixed track instead
                 // of wrapping, which would make the panel visually resize.
                 <div className={(collapsed ? 'md:hidden ' : 'md:col-span-1 md:min-w-0 ') + 'bg-gray-800 rounded-xl border border-gray-800 max-h-[45vh] md:max-h-none md:min-h-0 overflow-y-auto custom-scrollbar [scrollbar-gutter:stable]'}>
-                    {/* Ghost chrome for the type-filter segments below. MtlxSelect's
-                        trigger has no render-prop escape hatch (fixed icon/label/
-                        chevron layout, see js/shared/mtlx-ui.jsx around :2745-3293),
-                        so this line uses plain native <select>s styled as ghost
-                        controls instead of fighting that layout with !important. */}
-                    <style>{`
-                        .docs-type-wrap { position: relative; display: flex; align-items: center; min-width: 0; border-radius: 4px; border: 1px solid transparent; }
-                        .docs-type-wrap:hover, .docs-type-wrap:focus-within { border-color: #374151; background: rgba(255,255,255,0.03); }
-                        .docs-type-native { appearance: none; -webkit-appearance: none; background: transparent; border: none; outline: none; color: #6b7280; font-size: 11px; min-width: 0; width: 100%; padding: 3px 16px 3px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
-                        .docs-type-native::-ms-expand { display: none; }
-                        .docs-type-native--active { color: #60a5fa; }
-                        .docs-type-chevron { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); pointer-events: none; color: #6b7280; }
-                    `}</style>
                     {/* Sticky header stays visible while the tree scrolls beneath it. The
                         scroll container is unpadded; the sticky block and tree wrapper
                         carry their own padding so the header sits flush at top with no overlap. */}
@@ -178,75 +165,47 @@
                                 </button>
                             </div>
                         </div>
-                        {/* Integrated type-filter line: reads as part of the search
-                            block, not a second control. Each segment is a muted
-                            "Outputs"/"Takes" label glued to a native <select>
-                            styled as a ghost control (scoped CSS above); an active
-                            filter's value turns accent-blue and gets an inline ×
-                            instead of a separate removable-chip row. */}
+                        {/* Integrated type-filter line: two MtlxSelect dropdowns
+                            (the site-wide custom control), each half the row.
+                            The trigger's own prefixed label ("Outputs: any",
+                            "Input: color3") replaces the old label+chip
+                            pairing, so choosing "any" alone clears a filter. */}
                         {showTypeRow && (
                             <div
-                                className="flex items-center gap-1 h-7 mb-2 text-xs"
+                                className="flex items-center gap-1.5 mb-2"
                                 role="group"
                                 aria-label="Filter by port type"
                             >
-                                <div className="flex items-center gap-1 min-w-0 flex-1">
-                                    <span className="text-[11px] text-gray-500 shrink-0">Outputs</span>
-                                    <div className="docs-type-wrap min-w-0 flex-1">
-                                        <select
-                                            value={searchOutType || ''}
-                                            onChange={(e) => setSearchOutType(e.target.value || null)}
-                                            title="Only show nodes with a signature outputting this type (out: in the search box)"
-                                            aria-label="Filter by output type"
-                                            className={'docs-type-native font-mono' + (searchOutType ? ' docs-type-native--active' : '')}
-                                        >
-                                            <option value="">any</option>
-                                            {(outputTypeOptions || []).map((t) => (
-                                                <option key={t} value={t}>{t}</option>
-                                            ))}
-                                        </select>
-                                        <MtlxIcon name="chevron-down" className="w-3 h-3 docs-type-chevron" />
-                                    </div>
-                                    {searchOutType && (
-                                        <button
-                                            onClick={() => setSearchOutType(null)}
-                                            title="Remove output type filter"
-                                            aria-label={`Remove output type filter (${searchOutType})`}
-                                            className="shrink-0 text-gray-500 hover:text-gray-200"
-                                        >
-                                            <MtlxIcon name="x" className="w-3 h-3" />
-                                        </button>
-                                    )}
-                                </div>
-                                <div className="w-px self-stretch bg-gray-700/70 shrink-0" aria-hidden="true" />
-                                <div className="flex items-center gap-1 min-w-0 flex-1">
-                                    <span className="text-[11px] text-gray-500 shrink-0">Takes</span>
-                                    <div className="docs-type-wrap min-w-0 flex-1">
-                                        <select
-                                            value={searchInType || ''}
-                                            onChange={(e) => setSearchInType(e.target.value || null)}
-                                            title="Only show nodes with a signature taking this type as input (in: in the search box)"
-                                            aria-label="Filter by input type"
-                                            className={'docs-type-native font-mono' + (searchInType ? ' docs-type-native--active' : '')}
-                                        >
-                                            <option value="">any</option>
-                                            {(takesTypeOptions || []).map((t) => (
-                                                <option key={t} value={t}>{t}</option>
-                                            ))}
-                                        </select>
-                                        <MtlxIcon name="chevron-down" className="w-3 h-3 docs-type-chevron" />
-                                    </div>
-                                    {searchInType && (
-                                        <button
-                                            onClick={() => setSearchInType(null)}
-                                            title="Remove input type filter"
-                                            aria-label={`Remove input type filter (${searchInType})`}
-                                            className="shrink-0 text-gray-500 hover:text-gray-200"
-                                        >
-                                            <MtlxIcon name="x" className="w-3 h-3" />
-                                        </button>
-                                    )}
-                                </div>
+                                <MtlxSelect
+                                    value={searchOutType || ''}
+                                    options={outputTypeOptions || []}
+                                    defValue={null}
+                                    emptyOption="any"
+                                    valuePrefix="Outputs: "
+                                    onChange={(v) => setSearchOutType(v || null)}
+                                    title="Only show nodes with a signature outputting this type (out: in the search box)"
+                                    ariaLabel="Filter by output type"
+                                    font="mono"
+                                    size="sm"
+                                    variant="field"
+                                    block
+                                    className="flex-1 min-w-0"
+                                />
+                                <MtlxSelect
+                                    value={searchInType || ''}
+                                    options={takesTypeOptions || []}
+                                    defValue={null}
+                                    emptyOption="any"
+                                    valuePrefix="Input: "
+                                    onChange={(v) => setSearchInType(v || null)}
+                                    title="Only show nodes with a signature taking this type as input (in: in the search box)"
+                                    ariaLabel="Filter by input type"
+                                    font="mono"
+                                    size="sm"
+                                    variant="field"
+                                    block
+                                    className="flex-1 min-w-0"
+                                />
                             </div>
                         )}
                     </div>
@@ -373,9 +332,9 @@
                                 only undocumented ones, each with its count. Use the search box to filter by
                                 name, and the icon next to it to expand or collapse everything. The funnel
                                 icon inside the search box opens a filter line for port type: "Outputs"
-                                keeps nodes with a signature that outputs the chosen type, "Takes" keeps
-                                nodes with a signature that takes it as an input; an active filter's value
-                                turns blue with a small × next to it to clear it. Typing{' '}
+                                keeps nodes with a signature that outputs the chosen type, "Input" keeps
+                                nodes with a signature that takes it as an input; choosing "any" clears a
+                                filter. Typing{' '}
                                 <code>out:&lt;type&gt;</code> or <code>in:&lt;type&gt;</code> directly into
                                 the search box (e.g. <code>out:color3</code>) does the same thing and can be
                                 combined with a name and with each other.

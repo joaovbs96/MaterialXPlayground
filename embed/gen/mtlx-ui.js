@@ -3156,6 +3156,7 @@ const MtlxSelect = ({
   disabled,
   placeholder,
   emptyOption,
+  valuePrefix,
   size = 'sm',
   variant = 'toolbar',
   block,
@@ -3546,10 +3547,13 @@ const MtlxSelect = ({
   const selectedLabel = selected ? selected.label : labels[value] || value;
   const showPlaceholder = placeholder != null && (!selected || value === '' || value == null);
   const triggerLabel = showPlaceholder ? placeholder : selectedLabel;
+  // valuePrefix: additive, trigger-only text (e.g. "Outputs: "). It never
+  // reaches the popover rows, which always render the bare `label`.
+  const prefixedTriggerLabel = valuePrefix ? valuePrefix + triggerLabel : triggerLabel;
   // Tooltip: always includes the full selected label (a truncated
   // trigger otherwise has no way to reveal it), plus the caller's own
   // `title` when one is set.
-  const triggerTitle = [title, selectedLabel].filter(s => s != null && s !== '').join('\n') || undefined;
+  const triggerTitle = [title, prefixedTriggerLabel].filter(s => s != null && s !== '').join('\n') || undefined;
 
   // POPOVER font: explicit font prop or theme.font wins; else the
   // ambient value captured off the trigger (fixes the portal losing
@@ -3728,7 +3732,7 @@ const MtlxSelect = ({
     style: {
       color: showPlaceholder ? MXS_MUTED : undefined
     }
-  }, triggerLabel), /*#__PURE__*/React.createElement(MtlxIcon, {
+  }, prefixedTriggerLabel), /*#__PURE__*/React.createElement(MtlxIcon, {
     name: "chevron-down",
     className: "w-3 h-3 flex-none opacity-70 ml-auto"
   })), popover && ReactDOM.createPortal(popover, fullscreenPortalRoot()));
