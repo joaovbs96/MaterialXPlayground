@@ -23,7 +23,7 @@
             selectedNode, setSelectedNode,
             stats, applyDocFilter, showPreviews, togglePreviews, onShowHelp, collapsed, onCollapse,
         }) {
-            // Type-filter row (Outputs/Input) is closed by default; it opens on
+            // Type-filter row (Inputs/Outputs) is closed by default; it opens on
             // funnel click or whenever a type token already lives in the query.
             const [typeRowOpen, setTypeRowOpen] = React.useState(false);
             const hasTypeToken = !!(searchOutType || searchInType);
@@ -168,7 +168,7 @@
                         {/* Integrated type-filter line: two MtlxSelect dropdowns
                             (the site-wide custom control), each half the row.
                             The trigger's own prefixed label ("Outputs: any",
-                            "Input: color3") replaces the old label+chip
+                            "Inputs: color3") replaces the old label+chip
                             pairing, so choosing "any" alone clears a filter. */}
                         {showTypeRow && (
                             <div
@@ -176,6 +176,21 @@
                                 role="group"
                                 aria-label="Filter by port type"
                             >
+                                <MtlxSelect
+                                    value={searchInType || ''}
+                                    options={takesTypeOptions || []}
+                                    defValue={null}
+                                    emptyOption="any"
+                                    valuePrefix="Inputs: "
+                                    onChange={(v) => setSearchInType(v || null)}
+                                    title="Only show nodes with a signature taking this type as input (in: in the search box)"
+                                    ariaLabel="Filter by input type"
+                                    font="mono"
+                                    size="sm"
+                                    variant="field"
+                                    block
+                                    className="flex-1 min-w-0"
+                                />
                                 <MtlxSelect
                                     value={searchOutType || ''}
                                     options={outputTypeOptions || []}
@@ -185,21 +200,6 @@
                                     onChange={(v) => setSearchOutType(v || null)}
                                     title="Only show nodes with a signature outputting this type (out: in the search box)"
                                     ariaLabel="Filter by output type"
-                                    font="mono"
-                                    size="sm"
-                                    variant="field"
-                                    block
-                                    className="flex-1 min-w-0"
-                                />
-                                <MtlxSelect
-                                    value={searchInType || ''}
-                                    options={takesTypeOptions || []}
-                                    defValue={null}
-                                    emptyOption="any"
-                                    valuePrefix="Input: "
-                                    onChange={(v) => setSearchInType(v || null)}
-                                    title="Only show nodes with a signature taking this type as input (in: in the search box)"
-                                    ariaLabel="Filter by input type"
                                     font="mono"
                                     size="sm"
                                     variant="field"
@@ -332,7 +332,7 @@
                                 only undocumented ones, each with its count. Use the search box to filter by
                                 name, and the icon next to it to expand or collapse everything. The funnel
                                 icon inside the search box opens a filter line for port type: "Outputs"
-                                keeps nodes with a signature that outputs the chosen type, "Input" keeps
+                                keeps nodes with a signature that outputs the chosen type, "Inputs" keeps
                                 nodes with a signature that takes it as an input; choosing "any" clears a
                                 filter. Typing{' '}
                                 <code>out:&lt;type&gt;</code> or <code>in:&lt;type&gt;</code> directly into
