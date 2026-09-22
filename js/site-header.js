@@ -45,7 +45,8 @@
     // hardcoded — consumed by the GitHub repo widget markup below and by
     // initSourceFacts' api.github.com calls.
     var REPO_SLUG = LINKS.repo.replace(/^https?:\/\/github\.com\//, '');
-    // Split for the desktop widget's owner/name styling (D below).
+    // Split so the widgets below can show just REPO_NAME, and LINKS.site
+    // (below) can derive the Pages URL from REPO_OWNER.
     var REPO_OWNER = REPO_SLUG.split('/')[0];
     var REPO_NAME = REPO_SLUG.split('/').slice(1).join('/');
     // Public GitHub Pages URL, derived the same way (About dialog).
@@ -87,10 +88,13 @@
             '<path d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0" />' +
         '</svg>';
 
-    // Electron-only header help button (Tabler outline "help"), same
-    // viewBox/stroke/normalization convention as ICON_SETTINGS above.
+    // Header help button (Tabler outline "help"), same stroke/normalization
+    // convention as ICON_SETTINGS above. viewBox cropped to "2 2 20 20"
+    // (not "0 0 24 24"): the ring's outer stroke edge sits at 2..22 in the
+    // original grid, so this crop fills the icon's box edge to edge like
+    // the octocat glyph does, instead of leaving visible padding around it.
     var ICON_ABOUT =
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<svg viewBox="2 2 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
             '<path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" />' +
             '<path d="M12 17l0 .01" />' +
             '<path d="M12 13.5a1.5 1.5 0 0 1 1 -1.5a2.6 2.6 0 1 0 -3 -4" />' +
@@ -98,7 +102,7 @@
     // Same glyph as ICON_ABOUT, with .mtlx-source-icon so it matches the
     // mobile GitHub row's 20px icon column (see the mobile About row below).
     var ICON_ABOUT_MOBILE =
-        '<svg class="mtlx-source-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<svg class="mtlx-source-icon" viewBox="2 2 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
             '<path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" />' +
             '<path d="M12 17l0 .01" />' +
             '<path d="M12 13.5a1.5 1.5 0 0 1 1 -1.5a2.6 2.6 0 1 0 -3 -4" />' +
@@ -456,30 +460,37 @@
                         // double up with the space already between them.
                         '<span><span class="mtlx-badge-word">MaterialX </span><span data-role="ver">\u2026</span></span>' +
                     '</a>' +
-                    // GitHub repo widget (mkdocs-material style): octocat +
-                    // repo slug + async facts row, filled in below. In
-                    // Electron this compacts to an icon-only button (CSS,
+                    // About button, immediately left of the GitHub widget.
+                    // Dispatches an event for js/shell.jsx's AboutDialog to
+                    // pick up (same "just a CustomEvent" contract as the
+                    // settings cog below).
+                    '<button type="button" id="mtlx-about-btn" class="mtlx-icon-btn"' +
+                        ' title="About" aria-label="About">' +
+                        ICON_ABOUT +
+                    '</button>' +
+                    // GitHub repo widget (flat icon + text link, no pill
+                    // chrome): octocat + short repo name + async facts row,
+                    // filled in below. Visible name is REPO_NAME only
+                    // (REPO_OWNER dropped); title/aria-label carry the full
+                    // REPO_SLUG so the owner is still available on hover/to
+                    // screen readers. Rightmost item of the cluster (before
+                    // the Electron-only settings cog). In Electron this
+                    // compacts to an icon-only button (CSS,
                     // SOURCE_COMPACT_CLASS above); the meta span stays in the
                     // DOM (just hidden) so initSourceFacts' lookups below
                     // never see a missing node.
                     // LINKS.issues stays defined too (About dialog, footer).
                     '<a id="mtlx-source-widget" href="' + LINKS.repo + '" target="_blank" rel="noopener noreferrer"' +
-                        ' title="View the source code on GitHub" class="mtlx-source' + SOURCE_COMPACT_CLASS + '">' +
+                        ' title="View ' + REPO_SLUG + ' on GitHub" aria-label="View ' + REPO_SLUG + ' on GitHub"' +
+                        ' class="mtlx-source' + SOURCE_COMPACT_CLASS + '">' +
                         '<svg class="mtlx-source-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
                             ICON_OCTOCAT +
                         '</svg>' +
                         '<span class="mtlx-source-meta">' +
-                            '<span class="mtlx-source-repo"><span class="mtlx-source-owner">' + REPO_OWNER + '/</span>' + REPO_NAME + '</span>' +
+                            '<span class="mtlx-source-repo">' + REPO_NAME + '</span>' +
                             '<span id="mtlx-source-facts" class="mtlx-source-facts"></span>' +
                         '</span>' +
                     '</a>' +
-                    // About button, every host. Dispatches an event for
-                    // js/shell.jsx's AboutDialog to pick up (same "just a
-                    // CustomEvent" contract as the settings cog below).
-                    '<button type="button" id="mtlx-about-btn" class="mtlx-icon-btn"' +
-                        ' title="About" aria-label="About">' +
-                        ICON_ABOUT +
-                    '</button>' +
                     // Electron-only settings cog, rightmost in the cluster.
                     // Dispatches an event for js/shell.jsx's
                     // DesktopSettingsDialog to pick up (same "just a
@@ -522,26 +533,30 @@
                         // doesn't double up with the space already there.
                         '<span><span class="mtlx-badge-word">MaterialX </span><span data-role="ver">\u2026</span></span>' +
                     '</a>' +
+                    // Mobile copy of the About button (desktop-only cluster
+                    // is hidden on narrow widths): opens js/shell.jsx's
+                    // AboutDialog, same event as the header button above.
+                    // Ordered right before the GitHub row, mirroring the
+                    // desktop cluster's About-then-GitHub order.
+                    '<button type="button" id="mtlx-about-btn-mobile" class="mtlx-mobile-link mtlx-mobile-link-brand">' +
+                        ICON_ABOUT_MOBILE +
+                        '<span>About</span>' +
+                    '</button>' +
                     // Flat copy of the desktop GitHub widget (octocat +
                     // repo slug + facts row) instead of a plain "Source"
                     // link; initSourceFacts() below fills both containers.
+                    // Rightmost/last item, matching the desktop cluster.
                     '<a id="mtlx-source-widget-mobile" href="' + LINKS.repo + '" target="_blank" rel="noopener noreferrer"' +
+                        ' title="View ' + REPO_SLUG + ' on GitHub" aria-label="View ' + REPO_SLUG + ' on GitHub"' +
                         ' class="mtlx-mobile-link mtlx-source-mobile">' +
                         '<svg class="mtlx-source-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
                             ICON_OCTOCAT +
                         '</svg>' +
                         '<span class="mtlx-source-meta">' +
-                            '<span class="mtlx-source-repo-mobile">' + REPO_SLUG + '</span>' +
+                            '<span class="mtlx-source-repo-mobile">' + REPO_NAME + '</span>' +
                             '<span id="mtlx-source-facts-mobile" class="mtlx-source-facts"></span>' +
                         '</span>' +
                     '</a>' +
-                    // Mobile copy of the About button (desktop-only cluster
-                    // is hidden on narrow widths): opens js/shell.jsx's
-                    // AboutDialog, same event as the header button above.
-                    '<button type="button" id="mtlx-about-btn-mobile" class="mtlx-mobile-link mtlx-mobile-link-brand">' +
-                        ICON_ABOUT_MOBILE +
-                        '<span>About</span>' +
-                    '</button>' +
                 '</div>' +
             '</div>' +
         '</header>';
