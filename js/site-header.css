@@ -355,22 +355,25 @@
     height: 14px;
 }
 
-/* align-items: stretch (not center) so the About button and settings cog
-   below always stretch to match the GitHub widget's height — 30px before
-   its facts row loads, 42px after — with no hardcoded height on either
-   side. align-self: center is required alongside it: .mtlx-header-bar is
-   itself `align-items: stretch`, so without this the whole cluster would
-   stretch to fill the 56px bar and its children would fill it edge-to-edge
-   with no gap. align-self makes .mtlx-nav-right hug its tallest child (the
-   GitHub widget) and center that within the bar, while align-items:
-   stretch still grows the other items to match. */
+/* --mtlx-ctl-h is the explicit shared height for the About button, the
+   Electron settings cog, and the GitHub widget. Computed from the
+   widget's own two-line content: repo line-height 16px + 2px meta gap +
+   facts line-height 14px = 32px, plus its 4px top/bottom padding = 40px,
+   plus its 1px top/bottom border = 42px. A flex-stretch token was tried
+   before (2af03de) and failed: align-items: stretch resolves each
+   child's cross size AFTER aspect-ratio has already sized
+   .mtlx-icon-btn's width from its own hypothetical (unstretched) height,
+   so the button never actually squared up to its stretched height. An
+   explicit variable sidesteps that ordering problem entirely.
+   align-items: center now centers children against this fixed height
+   instead of stretch driving it. */
 .mtlx-nav-right {
     display: none;
     margin-left: auto;
-    align-items: stretch;
-    align-self: center;
+    align-items: center;
     gap: 6px;
     white-space: nowrap;
+    --mtlx-ctl-h: 42px;
 }
 @media (min-width: 640px) {
     .mtlx-nav-right {
@@ -406,11 +409,15 @@
 .mtlx-source {
     display: inline-flex;
     align-items: center;
+    box-sizing: border-box;
+    height: var(--mtlx-ctl-h);
     /* Shrinking would clip its nowrap content AND hide the overflow from
-       measure()'s collapse check below. */
+       measure()'s collapse check below. Horizontal padding gives the
+       hover background room on both sides instead of hugging the text;
+       set at rest too so nothing shifts on hover. */
     flex-shrink: 0;
     gap: 8px;
-    padding: 4px 2px;
+    padding: 0 12px;
     border-radius: 8px;
     border: 1px solid transparent;
     background-color: transparent;
@@ -474,20 +481,18 @@
    settings cog, and the compacted GitHub widget in Electron, sized/shaped
    as a matched set. Sits after .mtlx-source above so its square sizing
    wins over that widget's own padding/gap for the GitHub button.
-   Height is NOT a hardcoded number: #mtlx-nav-right's align-items:
-   stretch (see its own comment above) is the shared height token, it
-   grows every child, including this one, to match the tallest sibling
-   (the GitHub widget, 30px before its facts row loads, 42px after), so
-   the two can't drift apart. aspect-ratio: 1 then derives width from
-   that same stretched height, keeping the button square without a
-   second magic number. */
+   Width and height are both the --mtlx-ctl-h token (set on
+   #mtlx-nav-right), so the square's side always equals the widget's
+   height, explicitly rather than via flex stretch. */
 .mtlx-icon-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    aspect-ratio: 1 / 1;
+    box-sizing: border-box;
+    width: var(--mtlx-ctl-h);
+    height: var(--mtlx-ctl-h);
     flex-shrink: 0;
-    padding: 6px;
+    padding: 0;
     gap: 0;
     border-radius: 8px;
     /* Transparent at rest, but keep the 1px border reserving its own
