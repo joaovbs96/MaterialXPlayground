@@ -42,14 +42,18 @@
                 // content (long node names) push past a fixed track instead
                 // of wrapping, which would make the panel visually resize.
                 <div className={(collapsed ? 'md:hidden ' : 'md:col-span-1 md:min-w-0 ') + 'bg-gray-800 rounded-xl border border-gray-800 max-h-[45vh] md:max-h-none md:min-h-0 overflow-y-auto custom-scrollbar [scrollbar-gutter:stable]'}>
-                    {/* Ghost chrome for the type-filter segments below: MtlxSelect
-                        (js/shared/mtlx-ui.jsx) always paints its own background/
-                        border via inline style, so beating it needs !important
-                        here rather than an edit to that shared component. */}
+                    {/* Ghost chrome for the type-filter segments below. MtlxSelect's
+                        trigger has no render-prop escape hatch (fixed icon/label/
+                        chevron layout, see js/shared/mtlx-ui.jsx around :2745-3293),
+                        so this line uses plain native <select>s styled as ghost
+                        controls instead of fighting that layout with !important. */}
                     <style>{`
-                        .docs-type-ghost { background: transparent !important; border: 1px solid transparent !important; padding-left: 4px !important; padding-right: 2px !important; }
-                        .docs-type-ghost:hover, .docs-type-ghost:focus-visible { border-color: #374151 !important; background: rgba(255,255,255,0.03) !important; }
-                        .docs-type-ghost--active { color: #60a5fa !important; }
+                        .docs-type-wrap { position: relative; display: flex; align-items: center; min-width: 0; border-radius: 4px; border: 1px solid transparent; }
+                        .docs-type-wrap:hover, .docs-type-wrap:focus-within { border-color: #374151; background: rgba(255,255,255,0.03); }
+                        .docs-type-native { appearance: none; -webkit-appearance: none; background: transparent; border: none; outline: none; color: #6b7280; font-size: 11px; min-width: 0; width: 100%; padding: 3px 16px 3px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+                        .docs-type-native::-ms-expand { display: none; }
+                        .docs-type-native--active { color: #60a5fa; }
+                        .docs-type-chevron { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); pointer-events: none; color: #6b7280; }
                     `}</style>
                     {/* Sticky header stays visible while the tree scrolls beneath it. The
                         scroll container is unpadded; the sticky block and tree wrapper
@@ -176,10 +180,10 @@
                         </div>
                         {/* Integrated type-filter line: reads as part of the search
                             block, not a second control. Each segment is a muted
-                            "Outputs"/"Takes" label glued to a borderless MtlxSelect
-                            (variant="plain", ghost chrome from the scoped CSS below);
-                            an active filter's value turns accent-blue and gets an
-                            inline × instead of a separate removable-chip row. */}
+                            "Outputs"/"Takes" label glued to a native <select>
+                            styled as a ghost control (scoped CSS above); an active
+                            filter's value turns accent-blue and gets an inline ×
+                            instead of a separate removable-chip row. */}
                         {showTypeRow && (
                             <div
                                 className="flex items-center gap-1 h-7 mb-2 text-xs"
@@ -188,21 +192,21 @@
                             >
                                 <div className="flex items-center gap-1 min-w-0 flex-1">
                                     <span className="text-[11px] text-gray-500 shrink-0">Outputs</span>
-                                    <MtlxSelect
-                                        value={searchOutType || ''}
-                                        options={outputTypeOptions || []}
-                                        onChange={(v) => setSearchOutType(v || null)}
-                                        emptyOption="any"
-                                        placeholder="any"
-                                        defValue={null}
-                                        title="Only show nodes with a signature outputting this type (out: in the search box)"
-                                        ariaLabel="Filter by output type"
-                                        font="mono"
-                                        size="sm"
-                                        variant="plain"
-                                        align="left"
-                                        className={'docs-type-ghost flex-1 min-w-0' + (searchOutType ? ' docs-type-ghost--active' : '')}
-                                    />
+                                    <div className="docs-type-wrap min-w-0 flex-1">
+                                        <select
+                                            value={searchOutType || ''}
+                                            onChange={(e) => setSearchOutType(e.target.value || null)}
+                                            title="Only show nodes with a signature outputting this type (out: in the search box)"
+                                            aria-label="Filter by output type"
+                                            className={'docs-type-native font-mono' + (searchOutType ? ' docs-type-native--active' : '')}
+                                        >
+                                            <option value="">any</option>
+                                            {(outputTypeOptions || []).map((t) => (
+                                                <option key={t} value={t}>{t}</option>
+                                            ))}
+                                        </select>
+                                        <MtlxIcon name="chevron-down" className="w-3 h-3 docs-type-chevron" />
+                                    </div>
                                     {searchOutType && (
                                         <button
                                             onClick={() => setSearchOutType(null)}
@@ -214,24 +218,24 @@
                                         </button>
                                     )}
                                 </div>
-                                <span className="text-gray-700 shrink-0" aria-hidden="true">&middot;</span>
+                                <div className="w-px self-stretch bg-gray-700/70 shrink-0" aria-hidden="true" />
                                 <div className="flex items-center gap-1 min-w-0 flex-1">
                                     <span className="text-[11px] text-gray-500 shrink-0">Takes</span>
-                                    <MtlxSelect
-                                        value={searchInType || ''}
-                                        options={takesTypeOptions || []}
-                                        onChange={(v) => setSearchInType(v || null)}
-                                        emptyOption="any"
-                                        placeholder="any"
-                                        defValue={null}
-                                        title="Only show nodes with a signature taking this type as input (in: in the search box)"
-                                        ariaLabel="Filter by input type"
-                                        font="mono"
-                                        size="sm"
-                                        variant="plain"
-                                        align="left"
-                                        className={'docs-type-ghost flex-1 min-w-0' + (searchInType ? ' docs-type-ghost--active' : '')}
-                                    />
+                                    <div className="docs-type-wrap min-w-0 flex-1">
+                                        <select
+                                            value={searchInType || ''}
+                                            onChange={(e) => setSearchInType(e.target.value || null)}
+                                            title="Only show nodes with a signature taking this type as input (in: in the search box)"
+                                            aria-label="Filter by input type"
+                                            className={'docs-type-native font-mono' + (searchInType ? ' docs-type-native--active' : '')}
+                                        >
+                                            <option value="">any</option>
+                                            {(takesTypeOptions || []).map((t) => (
+                                                <option key={t} value={t}>{t}</option>
+                                            ))}
+                                        </select>
+                                        <MtlxIcon name="chevron-down" className="w-3 h-3 docs-type-chevron" />
+                                    </div>
                                     {searchInType && (
                                         <button
                                             onClick={() => setSearchInType(null)}
