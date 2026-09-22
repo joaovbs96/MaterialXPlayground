@@ -415,6 +415,15 @@
     border: 1px solid transparent;
     background-color: transparent;
     white-space: nowrap;
+    transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+        border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* Hover matches .mtlx-icon-btn:hover exactly (same bg/border tokens and
+   radius, below) so the flat-at-rest widget picks up the same "pressable"
+   affordance as the About button beside it. */
+.mtlx-source:hover {
+    background-color: var(--site-gray-700);
+    border-color: var(--site-gray-600);
 }
 .mtlx-source:hover .mtlx-source-icon,
 .mtlx-source:hover .mtlx-source-repo {
@@ -465,20 +474,19 @@
    settings cog, and the compacted GitHub widget in Electron, sized/shaped
    as a matched set. Sits after .mtlx-source above so its square sizing
    wins over that widget's own padding/gap for the GitHub button.
-   align-self: center is required because #mtlx-nav-right is
-   align-items: stretch (see its own comment above): this button's
-   explicit 32px height opts it out of stretching, so without an explicit
-   align-self it falls back to flex-start and sits high instead of
-   centered against a taller sibling (the GitHub widget once its facts
-   row loads). */
+   Height is NOT a hardcoded number: #mtlx-nav-right's align-items:
+   stretch (see its own comment above) is the shared height token, it
+   grows every child, including this one, to match the tallest sibling
+   (the GitHub widget, 30px before its facts row loads, 42px after), so
+   the two can't drift apart. aspect-ratio: 1 then derives width from
+   that same stretched height, keeping the button square without a
+   second magic number. */
 .mtlx-icon-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    align-self: center;
+    aspect-ratio: 1 / 1;
     flex-shrink: 0;
-    width: 32px;
-    height: 32px;
     padding: 6px;
     gap: 0;
     border-radius: 8px;
