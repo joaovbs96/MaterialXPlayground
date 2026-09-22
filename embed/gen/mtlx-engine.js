@@ -1121,7 +1121,10 @@ mxRemoveAttr(inp,'value');}if(inp&&wantedType&&mxElType(inp)!==wantedType){mtlxW
 const CONST_INPUTS_KEY='mtlx_const_inputs';const readConstInputs=()=>{try{return localStorage.getItem(CONST_INPUTS_KEY)!=='0';}catch(e){return true;}};// MaterialX input names whose value multiplies compile time: a uniform
 // thin-film thickness keeps the mx_fresnel_airy branch alive and a uniform
 // selector keeps every arm of its if-chain alive, in every closure context.
-const CONST_INPUT_NAMES=['thin_film_thickness','thin_film_ior','thin_film_IOR','thinfilm_thickness','thinfilm_ior','distribution','scatter_mode','retroreflective','energy_compensation','mode'];// Names the Scene's thin-wall / light-transport patches and uniform builders
+// `index` is the extract family's array subscript: left uniform it becomes
+// an ANGLE dyn_index_* helper per node, and a few hundred of those reset
+// the GPU process during the HLSL compile.
+const CONST_INPUT_NAMES=['thin_film_thickness','thin_film_ior','thin_film_IOR','thinfilm_thickness','thinfilm_ior','distribution','scatter_mode','retroreflective','energy_compensation','mode','index'];// Names the Scene's thin-wall / light-transport patches and uniform builders
 // match on by declaration or function signature; never rewrite these.
 const CONST_INPUT_DENY=new Set(['thin_walled','geometry_thin_walled','transmission_weight','transmission_color','transmission_depth','geometry_opacity']);const CONST_INPUT_GLSL_TYPES={float:'float',integer:'int',boolean:'bool'};// The standalone displacement program takes these on top: unifiednoise3d
 // evaluates perlin, cellnoise, worley AND fractal and then switches on
@@ -1139,7 +1142,7 @@ const seg=u.path?String(u.path).split('/').pop():'';if(seg&&names.indexOf(seg)>=
 // scalar float/int/bool with exactly one declaration is touched; everything
 // else is left alone. Returns the rewritten sources plus the pruned
 // introspection list, so nothing tries to bind a uniform that is now gone.
-const SELECTOR_CONST_INPUTS=new Set(['mode','type','style']);const constifyInputUniforms=(vs,fs,introspected,names=CONST_INPUT_NAMES)=>{const constInputs=[];const kept=[];let outVs=vs;let outFs=fs;for(const u of introspected){const glslType=CONST_INPUT_GLSL_TYPES[u.type];const key=glslType?constInputKey(u,names):null;// `mode`, `type` and `style` are generic names: only take them when
+const SELECTOR_CONST_INPUTS=new Set(['mode','type','style','index']);const constifyInputUniforms=(vs,fs,introspected,names=CONST_INPUT_NAMES)=>{const constInputs=[];const kept=[];let outVs=vs;let outFs=fs;for(const u of introspected){const glslType=CONST_INPUT_GLSL_TYPES[u.type];const key=glslType?constInputKey(u,names):null;// `mode`, `type` and `style` are generic names: only take them when
 // the generator typed them as an enum selector (integer), never a
 // float or boolean input.
 if(!key||CONST_INPUT_DENY.has(String(u.name))||SELECTOR_CONST_INPUTS.has(key)&&u.type!=='integer'){kept.push(u);continue;}const literal=u.data==null?null:constInputLiteral(u.type,u.data);if(literal==null){kept.push(u);continue;}const escaped=String(u.name).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');const declRe=new RegExp('(^|\\n)([ \\t]*)uniform[ \\t]+(?:(?:low|medium|high)p[ \\t]+)?'+glslType+'[ \\t]+'+escaped+'[ \\t]*;','g');const hits=(outVs.match(declRe)||[]).length+(outFs.match(declRe)||[]).length;if(hits!==1){kept.push(u);continue;}const replacement='$1$2const '+glslType+' '+u.name+' = '+literal+';';outVs=outVs.replace(declRe,replacement);outFs=outFs.replace(declRe,replacement);constInputs.push({name:u.name,path:u.path||null,value:u.data});}return{vs:outVs,fs:outFs,introspected:kept,constInputs};};// Sweep run before every writeToXmlString call, fixing two attributes

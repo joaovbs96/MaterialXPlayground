@@ -3163,8 +3163,11 @@ const readConstInputs = () => {
 // MaterialX input names whose value multiplies compile time: a uniform
 // thin-film thickness keeps the mx_fresnel_airy branch alive and a uniform
 // selector keeps every arm of its if-chain alive, in every closure context.
+// `index` is the extract family's array subscript: left uniform it becomes
+// an ANGLE dyn_index_* helper per node, and a few hundred of those reset
+// the GPU process during the HLSL compile.
 const CONST_INPUT_NAMES = ['thin_film_thickness', 'thin_film_ior', 'thin_film_IOR', 'thinfilm_thickness', 'thinfilm_ior',
-    'distribution', 'scatter_mode', 'retroreflective', 'energy_compensation', 'mode'];
+    'distribution', 'scatter_mode', 'retroreflective', 'energy_compensation', 'mode', 'index'];
 // Names the Scene's thin-wall / light-transport patches and uniform builders
 // match on by declaration or function signature; never rewrite these.
 const CONST_INPUT_DENY = new Set(['thin_walled', 'geometry_thin_walled', 'transmission_weight',
@@ -3211,7 +3214,7 @@ const constInputKey = (u, names = CONST_INPUT_NAMES) => {
 // scalar float/int/bool with exactly one declaration is touched; everything
 // else is left alone. Returns the rewritten sources plus the pruned
 // introspection list, so nothing tries to bind a uniform that is now gone.
-const SELECTOR_CONST_INPUTS = new Set(['mode', 'type', 'style']);
+const SELECTOR_CONST_INPUTS = new Set(['mode', 'type', 'style', 'index']);
 const constifyInputUniforms = (vs, fs, introspected, names = CONST_INPUT_NAMES) => {
     const constInputs = [];
     const kept = [];
