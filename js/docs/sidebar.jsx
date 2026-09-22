@@ -23,6 +23,16 @@
             selectedNode, setSelectedNode,
             stats, applyDocFilter, showPreviews, togglePreviews, onShowHelp, collapsed, onCollapse,
         }) {
+            // Type-filter row (Outputs/Takes) is closed by default; it opens on
+            // funnel click or whenever a type token already lives in the query.
+            const [typeRowOpen, setTypeRowOpen] = React.useState(false);
+            const hasTypeToken = !!(searchOutType || searchInType);
+            const showTypeRow = typeRowOpen || hasTypeToken;
+            // Single expand/collapse toggle: "open" only when every visible lib
+            // and group is already expanded (search forces everything open).
+            const allOpen = forceOpen || (treeData && Object.keys(treeData).length > 0 &&
+                Object.entries(treeData).every(([lib, groups]) =>
+                    expandedLibs[lib] && Object.keys(groups).every((g) => expandedGroups[`${lib}-${g}`])));
             return (
                 // [scrollbar-gutter:stable]: this element is both the scroll
                 // container and (at md+) the min-content grid column; reserve
@@ -46,6 +56,21 @@
                                     <MtlxIcon name="help" className="w-4 h-4" />
                                 </button>
                                 <button
+                                    onClick={togglePreviews}
+                                    aria-pressed={showPreviews}
+                                    aria-label="Toggle 3D previews"
+                                    title={showPreviews
+                                        ? '3D previews are on — click to disable the WebGL node previews (saves resources on slow machines)'
+                                        : '3D previews are off — click to enable the WebGL node previews'}
+                                    className={`p-1 rounded-md transition-colors ${
+                                        showPreviews
+                                            ? 'text-blue-400 hover:text-blue-300 hover:bg-blue-500/10'
+                                            : 'text-amber-400 hover:text-amber-300 hover:bg-amber-500/10'
+                                    }`}
+                                >
+                                    <MtlxIcon name={showPreviews ? 'cube' : 'cube-off'} className="w-4 h-4" />
+                                </button>
+                                <button
                                     onClick={onCollapse}
                                     title="Collapse the node library panel"
                                     aria-label="Collapse the node library panel"
@@ -55,152 +80,146 @@
                                 </button>
                             </div>
                         </div>
-                        <p className="text-xs text-gray-500 pb-2">
-                            Documentation browser and live previews for the MaterialX node libraries.
-                        </p>
-                        {stats && (
-                            <div className="grid grid-cols-2 gap-1.5 mb-2 text-center">
-                                <div className="rounded-lg border border-blue-500 bg-blue-500/[0.12] px-2 py-1.5 flex flex-col gap-0.5">
-                                    <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-blue-300">Nodes</span>
-                                    <span className="text-sm font-semibold text-blue-300">{stats.total}</span>
-                                </div>
-                                <div className="rounded-lg border border-amber-700/60 bg-amber-900/20 px-2 py-1.5 flex flex-col gap-0.5">
-                                    <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-400">
-                                        Without docs
-                                    </span>
-                                    <span className="text-sm font-semibold text-amber-300">{stats.undoc}</span>
-                                </div>
-                            </div>
-                        )}
-                        {/* Both controls are intrinsically sized (invisible-sizer technique,
-                            not flex-1); this row drives the sidebar's min-content grid column
-                            (js/docs-app.jsx), so it always fits on one line without flex-wrap. */}
-                        <div className="flex items-center gap-1.5 pb-2">
-                            <div className="inline-flex shrink-0 rounded-lg border border-gray-700 overflow-hidden" role="group" aria-label="Documentation filter">
-                                {[
-                                    { mode: 'all', icon: 'file-infinity', label: 'All Nodes' },
-                                    { mode: 'documented', icon: 'file-check', label: 'Documented' },
-                                    { mode: 'undocumented', icon: 'file-x', label: 'Undocumented' },
-                                ].map(({ mode, icon, label }, i) => {
-                                    const active = docFilter === mode;
-                                    const activeCls = mode === 'undocumented'
-                                        ? 'bg-amber-900/20 text-amber-400 ring-1 ring-inset ring-amber-700/60'
-                                        : 'bg-blue-500/[0.12] text-blue-300 ring-1 ring-inset ring-blue-500/60';
-                                    return (
-                                        <button
-                                            key={mode}
-                                            onClick={() => applyDocFilter(mode)}
-                                            title={label}
-                                            aria-label={label}
-                                            aria-pressed={active}
-                                            className={`p-1.5 flex items-center gap-1 transition-colors first:rounded-l-[7px] last:rounded-r-[7px] ${i > 0 ? `border-l ${active && mode === 'undocumented' ? 'border-amber-700/60' : 'border-gray-700'}` : ''} ${
-                                                active
-                                                    ? activeCls
-                                                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
-                                            }`}
-                                        >
-                                            <MtlxIcon name={icon} className="w-4 h-4 shrink-0" />
-                                            {docFilter === mode && (
-                                                /* Invisible sizer: the longest label ("Undocumented") reserves the
-                                                   column width, the real label overlays it — the group's total width
-                                                   is therefore identical whichever segment is active. */
-                                                <span className="text-xs grid text-left whitespace-nowrap">
-                                                    <span className="invisible col-start-1 row-start-1" aria-hidden="true">Undocumented</span>
-                                                    <span className="col-start-1 row-start-1">{label}</span>
-                                                </span>
-                                            )}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                            <button
-                                onClick={togglePreviews}
-                                aria-pressed={showPreviews}
-                                aria-label="Toggle 3D previews"
-                                title={showPreviews
-                                    ? '3D previews are on — click to disable the WebGL node previews (saves resources on slow machines)'
-                                    : '3D previews are off — click to enable the WebGL node previews'}
-                                className={`shrink-0 p-1.5 rounded-lg border flex items-center gap-1 transition-colors ${
-                                    showPreviews
-                                        ? 'bg-blue-500/[0.12] border-blue-500 text-blue-300 hover:bg-blue-500/20'
-                                        : 'bg-gray-800 border-amber-700/60 text-amber-400 hover:bg-gray-700'
-                                }`}
-                            >
-                                <MtlxIcon name={showPreviews ? 'cube' : 'cube-off'} className="w-4 h-4 shrink-0" />
-                                <span className="text-xs whitespace-nowrap">3D Preview</span>
-                            </button>
+                        {/* Three-option segmented control: replaces the old stat cards
+                            and the separate documented/undocumented filter icons. Each
+                            segment's own count swaps for the live match count while a
+                            search or type filter narrows the tree. */}
+                        <div className="flex items-stretch rounded-md border border-gray-700 overflow-hidden mb-2 h-8" role="group" aria-label="Documentation filter">
+                            {[
+                                { mode: 'all', label: 'All', count: stats ? stats.total : 0 },
+                                { mode: 'documented', label: 'Documented', count: stats ? stats.total - stats.undoc : 0 },
+                                { mode: 'undocumented', label: 'No docs', count: stats ? stats.undoc : 0 },
+                            ].map(({ mode, label, count }, i) => {
+                                const active = docFilter === mode;
+                                const shownCount = active && matchCount !== null ? matchCount : count;
+                                const countCls = mode === 'undocumented'
+                                    ? 'text-amber-400'
+                                    : (active ? 'text-blue-300' : 'text-gray-500');
+                                return (
+                                    <button
+                                        key={mode}
+                                        onClick={() => applyDocFilter(mode)}
+                                        title={label}
+                                        aria-label={label}
+                                        aria-pressed={active}
+                                        className={`flex-1 min-w-0 flex items-center justify-center gap-1 text-xs transition-colors ${i > 0 ? 'border-l border-gray-700' : ''} ${
+                                            active
+                                                ? 'bg-blue-500/[0.12] text-blue-300'
+                                                : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
+                                        }`}
+                                    >
+                                        <span className="truncate">{label}</span>
+                                        <span className={`font-semibold ${countCls}`}>
+                                            {active && matchCount !== null ? `· ${shownCount}` : shownCount}
+                                        </span>
+                                    </button>
+                                );
+                            })}
                         </div>
-                        <div className="flex items-center gap-1 pb-2">
-                            <div className="relative flex-1 min-w-0">
-                                <input
-                                    type="text"
-                                    value={searchQuery}
-                                    onChange={(e) => setSearchQuery(e.target.value)}
-                                    placeholder="Search nodes..."
-                                    className="w-full bg-gray-900 border border-gray-700 rounded-md px-3 py-1.5 pr-8 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                                />
+                        <div className="relative mb-1">
+                            <input
+                                type="text"
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                placeholder="Search nodes..."
+                                className="w-full bg-gray-900 border border-gray-700 rounded-md h-8 pl-3 pr-16 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                            />
+                            <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
                                 {searchQuery && (
                                     <button
                                         onClick={() => setSearchQuery('')}
                                         title="Clear search"
-                                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-200"
+                                        aria-label="Clear search"
+                                        className="p-1 rounded text-gray-500 hover:text-gray-200"
                                     >
                                         <MtlxIcon name="x" className="w-3.5 h-3.5" />
                                     </button>
                                 )}
+                                <button
+                                    onClick={() => setTypeRowOpen((v) => !v)}
+                                    title="Filter by port type"
+                                    aria-label="Toggle type filters"
+                                    aria-pressed={showTypeRow}
+                                    className={`p-1 rounded transition-colors ${
+                                        showTypeRow ? 'text-blue-400 hover:text-blue-300' : 'text-gray-500 hover:text-gray-200'
+                                    }`}
+                                >
+                                    <MtlxIcon name="adjustments" className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                    onClick={allOpen ? collapseAll : expandAll}
+                                    title={allOpen ? 'Collapse all' : 'Expand all'}
+                                    aria-label={allOpen ? 'Collapse all' : 'Expand all'}
+                                    className="p-1 rounded text-gray-500 hover:text-gray-200"
+                                >
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        {allOpen
+                                            ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 10l5-5 5 5M7 19l5-5 5 5" />
+                                            : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 5l5 5 5-5M7 14l5 5 5-5" />}
+                                    </svg>
+                                </button>
                             </div>
-                            <button
-                                onClick={expandAll}
-                                title="Expand all"
-                                className="shrink-0 p-1 rounded-md text-gray-500 hover:text-gray-200 hover:bg-gray-700"
-                            >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 5l5 5 5-5M7 14l5 5 5-5" />
-                                </svg>
-                            </button>
-                            <button
-                                onClick={collapseAll}
-                                title="Collapse all"
-                                className="shrink-0 p-1 rounded-md text-gray-500 hover:text-gray-200 hover:bg-gray-700"
-                            >
-                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 10l5-5 5 5M7 19l5-5 5 5" />
-                                </svg>
-                            </button>
                         </div>
-                        <div className="flex items-center gap-1.5 pb-2">
-                            <MtlxSelect
-                                value={searchOutType || ''}
-                                options={outputTypeOptions || []}
-                                onChange={(v) => setSearchOutType(v || null)}
-                                emptyOption="any"
-                                placeholder="Outputs: any"
-                                defValue={null}
-                                title="Only show nodes with a signature outputting this type (out: in the search box)"
-                                ariaLabel="Filter by output type"
-                                font="mono"
-                                size="sm"
-                                variant="field"
-                                className="flex-1 min-w-0"
-                            />
-                            <MtlxSelect
-                                value={searchInType || ''}
-                                options={takesTypeOptions || []}
-                                onChange={(v) => setSearchInType(v || null)}
-                                emptyOption="any"
-                                placeholder="Takes: any"
-                                defValue={null}
-                                title="Only show nodes with a signature taking this type as input (in: in the search box)"
-                                ariaLabel="Filter by input type"
-                                font="mono"
-                                size="sm"
-                                variant="field"
-                                className="flex-1 min-w-0"
-                            />
-                        </div>
-                        {matchCount !== null && (
-                            <div className="text-xs text-gray-500 pb-1">
-                                {matchCount} {matchCount === 1 ? 'match' : 'matches'}
+                        {(searchOutType || searchInType) && (
+                            <div className="flex flex-wrap items-center gap-1 pb-1">
+                                {searchOutType && (
+                                    <span className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full border border-gray-700 bg-gray-900 text-[11px] font-mono text-gray-300">
+                                        out: {searchOutType}
+                                        <button
+                                            onClick={() => setSearchOutType(null)}
+                                            title="Remove output type filter"
+                                            aria-label={`Remove output type filter (${searchOutType})`}
+                                            className="text-gray-500 hover:text-gray-200"
+                                        >
+                                            <MtlxIcon name="x" className="w-3 h-3" />
+                                        </button>
+                                    </span>
+                                )}
+                                {searchInType && (
+                                    <span className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full border border-gray-700 bg-gray-900 text-[11px] font-mono text-gray-300">
+                                        in: {searchInType}
+                                        <button
+                                            onClick={() => setSearchInType(null)}
+                                            title="Remove input type filter"
+                                            aria-label={`Remove input type filter (${searchInType})`}
+                                            className="text-gray-500 hover:text-gray-200"
+                                        >
+                                            <MtlxIcon name="x" className="w-3 h-3" />
+                                        </button>
+                                    </span>
+                                )}
+                            </div>
+                        )}
+                        {showTypeRow && (
+                            <div className="flex items-center gap-1.5 pb-2">
+                                <MtlxSelect
+                                    value={searchOutType || ''}
+                                    options={outputTypeOptions || []}
+                                    onChange={(v) => setSearchOutType(v || null)}
+                                    emptyOption="any"
+                                    placeholder="Outputs: any"
+                                    defValue={null}
+                                    title="Only show nodes with a signature outputting this type (out: in the search box)"
+                                    ariaLabel="Filter by output type"
+                                    font="mono"
+                                    size="sm"
+                                    variant="field"
+                                    className="flex-1 min-w-0"
+                                />
+                                <MtlxSelect
+                                    value={searchInType || ''}
+                                    options={takesTypeOptions || []}
+                                    onChange={(v) => setSearchInType(v || null)}
+                                    emptyOption="any"
+                                    placeholder="Takes: any"
+                                    defValue={null}
+                                    title="Only show nodes with a signature taking this type as input (in: in the search box)"
+                                    ariaLabel="Filter by input type"
+                                    font="mono"
+                                    size="sm"
+                                    variant="field"
+                                    className="flex-1 min-w-0"
+                                />
                             </div>
                         )}
                     </div>
@@ -312,6 +331,9 @@
                         </div>
                         <div className="space-y-3 text-sm text-gray-300">
                             <p>
+                                Documentation browser and live previews for the MaterialX node libraries.
+                            </p>
+                            <p>
                                 This page is a browsable reference for the MaterialX node libraries. The
                                 documentation is parsed live from the official specification (pinned to the
                                 version shown in the header) and joined with the node definitions reported
@@ -319,17 +341,17 @@
                             </p>
                             <p>
                                 <span className="font-semibold text-gray-100">Browsing.</span>{' '}
-                                The left panel lists every node, grouped by library and node group. Use the
-                                search box to filter by name, the arrows next to the search box to expand
-                                or collapse everything, and the three filter icons above the search box to
-                                show all nodes, only documented, or only undocumented ones. The counters at
-                                the top of the panel show how many nodes have documentation. The two
-                                dropdowns below the search box filter by port type: "Outputs" keeps nodes
-                                with a signature that outputs the chosen type, "Takes" keeps nodes with a
-                                signature that takes it as an input. Typing <code>out:&lt;type&gt;</code> or{' '}
-                                <code>in:&lt;type&gt;</code> directly into the search box (e.g.{' '}
-                                <code>out:color3</code>) does the same thing and can be combined with a
-                                name and with each other.
+                                The left panel lists every node, grouped by library and node group. The
+                                segmented control above the search box shows all nodes, only documented, or
+                                only undocumented ones, each with its count. Use the search box to filter by
+                                name, and the icon next to it to expand or collapse everything. The funnel
+                                icon inside the search box opens two dropdowns that filter by port type:
+                                "Outputs" keeps nodes with a signature that outputs the chosen type, "Takes"
+                                keeps nodes with a signature that takes it as an input; active type filters
+                                show as removable chips under the search box. Typing{' '}
+                                <code>out:&lt;type&gt;</code> or <code>in:&lt;type&gt;</code> directly into
+                                the search box (e.g. <code>out:color3</code>) does the same thing and can be
+                                combined with a name and with each other.
                             </p>
                             <p>
                                 <span className="font-semibold text-gray-100">Documentation.</span>{' '}
@@ -344,7 +366,7 @@
                                 rotation, show the environment as background, save a PNG preview, and go
                                 full screen. Editing values in the parameter panel regenerates the shader,
                                 and the node can be downloaded as a .mtlx document with the current values.
-                                The cube button in the left panel toggles all WebGL previews globally, to
+                                The cube button in the panel header toggles all WebGL previews globally, to
                                 save resources on slow machines.
                             </p>
                             <p className="text-gray-400">
