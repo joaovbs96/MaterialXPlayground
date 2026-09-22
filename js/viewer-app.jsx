@@ -1423,12 +1423,14 @@
                         <SliderField
                             label="Environment rotation" unit="deg"
                             value={envUI.rotation} min={0} max={360} step={1}
+                            defaultValue={0}
                             onSlider={(v) => setEnvRotationDeg(Number(v))}
                             onNumber={(v) => setEnvRotationDeg(Number(v))}
                         />
                         <SliderField
                             label="Exposure" unit="EV"
                             value={linearToEv(envUI.exposure)} min={EV_MIN} max={EV_MAX} step={EV_STEP}
+                            defaultValue={0}
                             onSlider={(v) => setEnvExposureVal(evToLinear(v))}
                             onNumber={(v) => setEnvExposureVal(evToLinear(v))}
                         />
@@ -1500,7 +1502,7 @@
                         <div className="mt-1 text-[11px] text-gray-400">
                             Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.
                         </div>
-                            <DisplacementSettingsRows />
+                            <DisplacementSettingsRows labelClassName="text-xs font-medium text-gray-400" />
                     </SectionCard>
 
                     {texReport && texReport.missing.length > 0 && (

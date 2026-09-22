@@ -47,6 +47,7 @@ const MTLX_ICON_PATHS = {
     x: { filled: false, inner: '<path d="M18 6l-12 12"/><path d="M6 6l12 12"/>' },
     'settings-cog': { filled: false, inner: '<path d="M12.003 21c-.732 .001 -1.465 -.438 -1.678 -1.317a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c.886 .215 1.325 .957 1.318 1.694" /><path d="M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0" /><path d="M17.001 19a2 2 0 1 0 4 0a2 2 0 1 0 -4 0" /><path d="M19.001 15.5v1.5" /><path d="M19.001 21v1.5" /><path d="M22.032 17.25l-1.299 .75" /><path d="M17.27 20l-1.3 .75" /><path d="M15.97 17.25l1.3 .75" /><path d="M20.733 20l1.3 .75" />' },
     'presets': { filled: false, inner: '<path d="M12 21a9 9 0 1 1 0 -18a9 9 0 0 1 0 18" /><path d="M18 12a6 6 0 0 1 -6 6" />' },
+    'bolt': { filled: false, inner: '<path d="M13 3l0 7l6 0l-8 11l0 -7l-6 0l8 -11" />' },
     'camera-reset': { filled: false, inner: '<path d="M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /><path d="M4 8v-2a2 2 0 0 1 2 -2h2" /><path d="M4 16v2a2 2 0 0 0 2 2h2" /><path d="M16 4h2a2 2 0 0 1 2 2v2" /><path d="M16 20h2a2 2 0 0 0 2 -2v-2" />' },
     'alert-triangle': { filled: false, inner: '<path d="M12 9v4"/><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0"/><path d="M12 16h.01"/>' },
     'info-circle': { filled: false, inner: '<path d="M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0"/><path d="M12 9h.01"/><path d="M11 12h1v4h1"/>' },
@@ -135,8 +136,12 @@ const MtlxIcon = (props) => {
 
 // Shared floating-pill family for controls overlaid on 3D stages, two
 // sizes: PILL_ACTION (default) and PILL_ACTION_SM (compact variant).
-const PILL_ACTION = 'inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-gray-600/50 bg-gray-900/70 text-xs font-medium text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 [&:hover_svg]:text-gray-100 transition-colors disabled:opacity-60 disabled:cursor-wait';
-const PILL_ACTION_SM = 'inline-flex items-center gap-1 h-6 px-2 rounded-md border border-gray-600/50 bg-gray-900/70 text-[11px] font-medium text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 [&:hover_svg]:text-gray-100 transition-colors disabled:opacity-60 disabled:cursor-wait';
+// disabled:cursor-not-allowed, not cursor-wait: `disabled` on these
+// buttons is not always "an async op is in flight" (e.g. the Scene Apply
+// pill is also disabled when there is simply nothing staged to apply),
+// so a wait cursor there is a false busy signal.
+const PILL_ACTION = 'inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-gray-600/50 bg-gray-900/70 text-xs font-medium text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 [&:hover_svg]:text-gray-100 transition-colors disabled:opacity-60 disabled:cursor-not-allowed';
+const PILL_ACTION_SM = 'inline-flex items-center gap-1 h-6 px-2 rounded-md border border-gray-600/50 bg-gray-900/70 text-[11px] font-medium text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 [&:hover_svg]:text-gray-100 transition-colors disabled:opacity-60 disabled:cursor-not-allowed';
 
 Object.assign(window, { MtlxIcon, MTLX_ICON_PATHS, PILL_ACTION, PILL_ACTION_SM });
 

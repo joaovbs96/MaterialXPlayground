@@ -69,8 +69,8 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 
 ## Desktop App
 
-- [in progress] **Electron merge**: an experimental desktop build is merged, with native open and save, recent files, file watching and a Windows jump list; still needs testing, CI validation and a first release.
-- [idea] **Mac verification**: traffic-light gutter, Reveal in Finder, ad-hoc signing on the runner, general testing and validation.
+- [done] **Electron merge**: an experimental desktop build is merged, with native open and save, recent files, file watching and a Windows jump list, and CI builds and smoke-tests installers for Windows, macOS and Linux on every release.
+- [done] **Mac verification**: traffic-light gutter, Reveal in Finder, ad-hoc signing on the runner, general testing and validation.
 
 ## Tutorials
 

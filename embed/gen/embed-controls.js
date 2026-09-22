@@ -246,7 +246,14 @@ const EmbedControls = ({
     max: "360",
     step: "1",
     value: envRotation,
-    onChange: e => setEnvRotation(Number(e.target.value))
+    title: "Right click to reset",
+    onChange: e => setEnvRotation(Number(e.target.value)),
+    onContextMenu: rangeResetOnContextMenu({
+      defaultValue: 0,
+      min: 0,
+      max: 360,
+      commit: v => setEnvRotation(Number(v))
+    })
   })), /*#__PURE__*/React.createElement("div", {
     className: "mtlx-ec-panel-row mtlx-ec-panel-row--slider"
   }, /*#__PURE__*/React.createElement("div", {
@@ -257,7 +264,14 @@ const EmbedControls = ({
     max: EV_MAX,
     step: EV_STEP,
     value: linearToEv(envExposure),
-    onChange: e => setEnvExposure(evToLinear(e.target.value))
+    title: "Right click to reset",
+    onChange: e => setEnvExposure(evToLinear(e.target.value)),
+    onContextMenu: rangeResetOnContextMenu({
+      defaultValue: 0,
+      min: EV_MIN,
+      max: EV_MAX,
+      commit: v => setEnvExposure(evToLinear(v))
+    })
   }))), openPanel === 'settings' && /*#__PURE__*/React.createElement("div", {
     className: "mtlx-ec-panel"
   }, /*#__PURE__*/React.createElement("div", {

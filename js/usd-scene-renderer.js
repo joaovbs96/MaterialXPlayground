@@ -32,6 +32,8 @@ const storedSceneTextureMaxSize = () => {
 // match a reference by eye instead of us hardcoding a factor.
 const SCENE_STAGE_LIGHTS_KEY = 'mtlx_scene_stage_lights';
 const SCENE_STAGE_LIGHTS_EV_KEY = 'mtlx_scene_stage_lights_ev';
+const SCENE_STAGE_LIGHTS_DEFAULT = true;
+const SCENE_STAGE_LIGHTS_EV_DEFAULT = 0;
 // Analytic stage-light slots, must match STAGE_LIGHT_SLOTS in js/mtlx-engine.js.
 const SCENE_STAGE_LIGHT_LIMIT = 16;
 const SCENE_SHADOWS_KEY = 'mtlx_scene_shadows';
@@ -89,6 +91,7 @@ const storedSceneSpecularAA = () => {
 // one-off cost per stage.
 const SCENE_SKYVIS_KEY = 'mtlx_scene_skyvis';
 const SCENE_SKYVIS_STRENGTH_KEY = 'mtlx_scene_skyvis_strength';
+const SCENE_SKYVIS_STRENGTH_DEFAULT = 1;
 const storedSceneSkyVis = () => {
     if (window.top !== window) return false;
     try { return localStorage.getItem(SCENE_SKYVIS_KEY) !== '0'; } catch (e) { return true; }
@@ -106,6 +109,7 @@ const storedSceneSkyVisStrength = () => {
 // Screen-space ambient occlusion: the visibility term MaterialX's IBL lacks.
 const SCENE_AO_KEY = 'mtlx_scene_ao';
 const SCENE_AO_STRENGTH_KEY = 'mtlx_scene_ao_strength';
+const SCENE_AO_STRENGTH_DEFAULT = 0.85;
 
 // Default on. The environment is most of the light in an interior and it has
 // no visibility term of its own, so without this every object sits on its
@@ -151,6 +155,7 @@ const storedSceneAoStrength = () => {
 // can only add light, never remove it or invert sign; default-on is safe.
 const SCENE_BOUNCE_KEY = 'mtlx_scene_bounce';
 const SCENE_BOUNCE_STRENGTH_KEY = 'mtlx_scene_bounce_strength';
+const SCENE_BOUNCE_STRENGTH_DEFAULT = 1;
 const storedSceneBounce = () => {
     if (window.top !== window) return false;
     try { return localStorage.getItem(SCENE_BOUNCE_KEY) !== '0'; } catch (e) { return true; }
@@ -176,6 +181,9 @@ const SCENE_SSR_PARKED = true;
 const SCENE_SSR_KEY = 'mtlx_scene_ssr';
 const SCENE_SSR_STRENGTH_KEY = 'mtlx_scene_ssr_strength';
 const SCENE_SSR_MAX_ROUGHNESS_KEY = 'mtlx_scene_ssr_max_roughness';
+const SCENE_SSR_DEFAULT = false;
+const SCENE_SSR_STRENGTH_DEFAULT = 1;
+const SCENE_SSR_MAX_ROUGHNESS_DEFAULT = 0.5;
 const storedSceneSsr = () => {
     if (SCENE_SSR_PARKED || window.top !== window) return false;
     try { return localStorage.getItem(SCENE_SSR_KEY) !== '0'; } catch (e) { return true; }
@@ -209,6 +217,7 @@ const storedSceneSsrMaxRoughness = () => {
 const SCENE_LOCAL_ENV_PARKED = false;
 const SCENE_LOCAL_ENV_KEY = 'mtlx_scene_local_reflections';
 const SCENE_LOCAL_ENV_STRENGTH_KEY = 'mtlx_scene_local_reflections_strength';
+const SCENE_LOCAL_ENV_STRENGTH_DEFAULT = 1;
 const storedSceneLocalReflections = () => {
     if (SCENE_LOCAL_ENV_PARKED || window.top !== window) return false;
     try { return localStorage.getItem(SCENE_LOCAL_ENV_KEY) === '1'; } catch (e) { return false; }
@@ -569,6 +578,26 @@ const setStoredSceneTriangleLimits = (value) => {
     if (window.top === window) {
         try { localStorage.setItem(SCENE_TRIANGLE_LIMITS_KEY, String(value !== false)); } catch (e) { /* privacy mode */ }
     }
+};
+
+// Governed quality-preset keys needing a full worker reparse (subdivision
+// has no live setter; triangleLimits' worker budgets need the same reparse).
+// Shared by applySceneSettings/describeSceneSettingsCost so they cannot drift.
+const SCENE_SETTINGS_RELOAD_KEYS = ['subdivision', 'triangleLimits'];
+const SCENE_SETTINGS_REBUILD_KEYS = ['textureMaxSize', 'textureBudgetGib', 'shadows', 'ao', 'skyVis', 'specularAA'];
+const SCENE_SETTINGS_GEOMETRY_KEYS = ['displacement', 'displacementSubdivision'];
+
+// Pure preview for the quality-preset UI: says whether current -> target
+// needs a reload, a display/shader rebuild, or a geometry-only rebuild,
+// without applying anything. Static per key so it works before a stage exists.
+const describeSceneSettingsCost = (current, target) => {
+    const cur = current || {};
+    const tgt = target || {};
+    const changed = (key) => Object.prototype.hasOwnProperty.call(tgt, key) && tgt[key] !== cur[key];
+    const reload = SCENE_SETTINGS_RELOAD_KEYS.some(changed);
+    const rebuild = !reload && SCENE_SETTINGS_REBUILD_KEYS.some(changed);
+    const geometry = !reload && SCENE_SETTINGS_GEOMETRY_KEYS.some(changed);
+    return { reload, rebuild, geometry };
 };
 
 // Serializes rebuilds and coalesces rapid setting changes into one latest pass.
@@ -7839,6 +7868,43 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             requestSceneRebuild();
             return triangleLimitsEnabled;
         };
+        // Single entry point for the quality-preset UI: applies any subset of
+        // the governed values by calling the setters above (never duplicating
+        // their logic). When reload is coming, queueDisplayRebuild is pulled
+        // out so those setters cannot start a shader rebuild the reload discards.
+        const applySceneSettings = (partial) => {
+            if (!partial || typeof partial !== 'object') return { reload: false, rebuild: false, geometry: false };
+            const has = (key) => Object.prototype.hasOwnProperty.call(partial, key);
+            const reload = SCENE_SETTINGS_RELOAD_KEYS.some(has);
+            const savedQueue = queueDisplayRebuild;
+            if (reload) queueDisplayRebuild = null;
+            const beforeRevision = displayRevision;
+            try {
+                if (has('textureMaxSize')) setTextureMaxSize(partial.textureMaxSize);
+                if (has('textureBudgetGib')) setTextureBudgetBytes(Number(partial.textureBudgetGib) * GIB);
+                if (has('shadows')) setShadowsEnabled(!!partial.shadows);
+                if (has('ao')) setAmbientOcclusionEnabled(!!partial.ao);
+                if (has('skyVis')) setSkyVisibility(!!partial.skyVis);
+                if (has('specularAA')) setSceneSpecularAA(!!partial.specularAA);
+                if (has('bounce')) setSceneBounceEnabled(!!partial.bounce);
+                if (has('localReflections')) setLocalReflections(!!partial.localReflections);
+                if (has('triangleLimits')) setTriangleLimits(!!partial.triangleLimits);
+                if (has('displacementSubdivision')) setDisplacementSubdivisionOverride(partial.displacementSubdivision);
+                if (has('subdivision')) setStoredSceneSubdivisionLevel(Number(partial.subdivision));
+                if (has('displacement') && window.setDisplacementEnabled) window.setDisplacementEnabled(!!partial.displacement);
+                if (has('transparency') && window.setUsdSceneTransparency) window.setUsdSceneTransparency(!!partial.transparency);
+            } finally {
+                queueDisplayRebuild = savedQueue;
+            }
+            // The reload discards this handle; clear the latch so nothing
+            // still holding a reference (e.g. a late wake()) can start a
+            // rebuild the reload is about to make wasted work.
+            if (reload) displayDirty = false;
+            const rebuild = !reload && displayRevision !== beforeRevision;
+            const geometry = !reload && !rebuild && SCENE_SETTINGS_GEOMETRY_KEYS.some(has);
+            if (rebuild && queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
+            return { reload, rebuild, geometry };
+        };
         // Called by setDisplacementEnabled/setPreviewSubdivisionLevel through
         // LIVE_VIEWS; Scene ignores previewSubdivision (its own select
         // covers that) and only acts on the shared enabled flag.
@@ -7887,6 +7953,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             setDisplacementSubdivisionOverride,
             getTriangleLimits,
             setTriangleLimits,
+            applySceneSettings,
             refreshDisplacement,
             whenDisplacementSettled: () => sceneRebuildQueue.whenSettled(),
             getTextureStats: () => ({

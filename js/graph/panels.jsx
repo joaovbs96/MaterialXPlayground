@@ -759,6 +759,16 @@
                     const parse = (s) => (inp.type === 'integer' ? parseInt(s, 10) : parseFloat(s));
                     const cur = parseFloat(draft);
                     const curN = isFinite(cur) ? cur : 0;
+                    // inp.defValue is the nodedef's own declared default
+                    // (js/graph/model.jsx), already in hand — right click
+                    // resets to it, same as SliderField.
+                    const paramDefault = (inp.defValue !== undefined && inp.defValue !== '') ? parseFloat(inp.defValue) : null;
+                    const resetParam = rangeResetOnContextMenu({
+                        defaultValue: paramDefault,
+                        min: hasRange ? lo : undefined, max: hasRange ? hi : undefined,
+                        commit: (v) => commitNow(numStr(parse(v))),
+                    });
+                    const hasParamDefault = paramDefault != null && Number.isFinite(paramDefault);
                     return (
                         <div className="flex items-center gap-1.5">
                             {hasRange && (
@@ -766,7 +776,9 @@
                                     type="range" className="flex-1 min-w-0 accent-blue-500"
                                     min={lo} max={hi} step={step}
                                     value={Math.max(lo, Math.min(hi, curN))}
+                                    title={hasParamDefault ? 'Right click to reset' : undefined}
                                     onChange={(e) => commitSoon(numStr(parse(e.target.value)))}
+                                    onContextMenu={resetParam}
                                     onFocus={() => { focusedRef.current = true; }}
                                     onBlur={() => { focusedRef.current = false; }}
                                 />
@@ -775,6 +787,7 @@
                                 type="number"
                                 className={(hasRange ? 'w-16 flex-none' : 'w-full min-w-0') + ' px-1 py-0.5 ' + boxCls}
                                 step={step} value={draft}
+                                onContextMenu={resetParam}
                                 onChange={(e) => {
                                     const raw = e.target.value;
                                     const n = parse(raw);

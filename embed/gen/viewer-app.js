@@ -1496,6 +1496,7 @@ function MaterialViewerApp({
     min: 0,
     max: 360,
     step: 1,
+    defaultValue: 0,
     onSlider: v => setEnvRotationDeg(Number(v)),
     onNumber: v => setEnvRotationDeg(Number(v))
   }), /*#__PURE__*/React.createElement(SliderField, {
@@ -1505,6 +1506,7 @@ function MaterialViewerApp({
     min: EV_MIN,
     max: EV_MAX,
     step: EV_STEP,
+    defaultValue: 0,
     onSlider: v => setEnvExposureVal(evToLinear(v)),
     onNumber: v => setEnvExposureVal(evToLinear(v))
   }), /*#__PURE__*/React.createElement("div", {
@@ -1576,7 +1578,9 @@ function MaterialViewerApp({
     }
   })), /*#__PURE__*/React.createElement("div", {
     className: "mt-1 text-[11px] text-gray-400"
-  }, "Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews."), /*#__PURE__*/React.createElement(DisplacementSettingsRows, null)), texReport && texReport.missing.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
+  }, "Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews."), /*#__PURE__*/React.createElement(DisplacementSettingsRows, {
+    labelClassName: "text-xs font-medium text-gray-400"
+  })), texReport && texReport.missing.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
     icon: "alert-triangle",
     title: "Textures",
     summary: texReport.missing.length + ' unresolved',

@@ -530,40 +530,218 @@
         ? SCENE_SUBDIVISION_DEFAULT
         : (typeof storedSceneSubdivisionLevel === 'function' ? storedSceneSubdivisionLevel() : 1);
 
-    // Not governed by a quality level, on purpose: stage lights (a lighting
-    // change, not a quality one); display transform, exposure, bloom,
-    // backdrop and env rotation (look, not cost); SSR (force-parked);
-    // heightToNormalTexel and the specular env method (engine-global,
-    // shared with other tools, no Scene UI); HDR presentation, MSAA sample
-    // count and FXAA (they live only on the renderer handle, so they cannot
-    // be set before a stage loads).
+    // Excluded on purpose: backdrop and env rotation (look, not cost);
+    // heightToNormalTexel (engine-global, shared with other tools, no Scene
+    // UI); MSAA sample count and FXAA (renderer-only test hooks, no row).
+    // Same fallback idiom as the texture/subdivision consts above: read the
+    // renderer's own default consts when available so "Default" can never
+    // drift from what a fresh profile actually ships.
+    const QUALITY_DISPLACEMENT_SUBDIVISION_DEFAULT = (typeof SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT !== 'undefined')
+        ? SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT
+        : (typeof storedSceneDisplacementSubdivision === 'function' ? storedSceneDisplacementSubdivision() : 'follow');
+    const QUALITY_TRIANGLE_LIMITS_DEFAULT = (typeof SCENE_TRIANGLE_LIMITS_DEFAULT !== 'undefined')
+        ? SCENE_TRIANGLE_LIMITS_DEFAULT
+        : (typeof storedSceneTriangleLimits === 'function' ? storedSceneTriangleLimits() : true);
+    // Live-key defaults (apply instantly, no draft): same fallback idiom,
+    // reading the renderer's own *_DEFAULT consts added alongside them.
+    const QUALITY_DISPLAY_TRANSFORM_DEFAULT = (typeof SCENE_DISPLAY_TRANSFORM_DEFAULT !== 'undefined') ? SCENE_DISPLAY_TRANSFORM_DEFAULT : 'neutral';
+    const QUALITY_MATERIAL_WORKSPACE_DEFAULT = (typeof SCENE_MATERIAL_WORKSPACE_DEFAULT !== 'undefined') ? SCENE_MATERIAL_WORKSPACE_DEFAULT : 'rec709';
+    // No exported const for this one (js/mtlx-engine.js:5249, initDisplayExposure's own fallback); shared engine-wide, not Scene-only.
+    const QUALITY_DISPLAY_EXPOSURE_DEFAULT = 0;
+    const QUALITY_STAGE_LIGHTS_DEFAULT = (typeof SCENE_STAGE_LIGHTS_DEFAULT !== 'undefined') ? SCENE_STAGE_LIGHTS_DEFAULT : true;
+    const QUALITY_STAGE_LIGHTS_EV_DEFAULT = (typeof SCENE_STAGE_LIGHTS_EV_DEFAULT !== 'undefined') ? SCENE_STAGE_LIGHTS_EV_DEFAULT : 0;
+    const QUALITY_AO_STRENGTH_DEFAULT = (typeof SCENE_AO_STRENGTH_DEFAULT !== 'undefined') ? SCENE_AO_STRENGTH_DEFAULT : 0.85;
+    const QUALITY_BOUNCE_STRENGTH_DEFAULT = (typeof SCENE_BOUNCE_STRENGTH_DEFAULT !== 'undefined') ? SCENE_BOUNCE_STRENGTH_DEFAULT : 1;
+    const QUALITY_SKYVIS_STRENGTH_DEFAULT = (typeof SCENE_SKYVIS_STRENGTH_DEFAULT !== 'undefined') ? SCENE_SKYVIS_STRENGTH_DEFAULT : 1;
+    const QUALITY_LOCAL_ENV_STRENGTH_DEFAULT = (typeof SCENE_LOCAL_ENV_STRENGTH_DEFAULT !== 'undefined') ? SCENE_LOCAL_ENV_STRENGTH_DEFAULT : 1;
+    const QUALITY_SSR_DEFAULT = (typeof SCENE_SSR_DEFAULT !== 'undefined') ? SCENE_SSR_DEFAULT : false;
+    const QUALITY_SSR_STRENGTH_DEFAULT = (typeof SCENE_SSR_STRENGTH_DEFAULT !== 'undefined') ? SCENE_SSR_STRENGTH_DEFAULT : 1;
+    const QUALITY_SSR_MAX_ROUGHNESS_DEFAULT = (typeof SCENE_SSR_MAX_ROUGHNESS_DEFAULT !== 'undefined') ? SCENE_SSR_MAX_ROUGHNESS_DEFAULT : 0.5;
+    // No exported const (js/mtlx-engine.js:606, DIFFUSE_ENV_METHOD's own fallback is 'convolve'); shared engine-wide.
+    const QUALITY_DIFFUSE_ENV_CONVOLVE_DEFAULT = true;
+    // Matches the shipped React.useState default below verbatim (single
+    // source): HDR presentation is app-owned state, not a persisted const.
+    const SCENE_PRESENTATION_DEFAULT = { enabled: true, bloom: false, strength: 0.25, threshold: 1, knee: 0.5, radius: 0.65, antialias: true, samples: 4, debugView: 'final', supported: true };
+    const SCENE_QUALITY_STORAGE_KEY = 'mtlx_scene_quality';
+    // Live keys carry the SAME value on every level (today's shipped
+    // default): they stay instant, never staged, so a level never fights an
+    // in-progress drag; only Reset and the toolbar menu force them.
+    const LIVE_QUALITY_VALUES = {
+        displayTransform: QUALITY_DISPLAY_TRANSFORM_DEFAULT, materialWorkspace: QUALITY_MATERIAL_WORKSPACE_DEFAULT,
+        displayExposure: QUALITY_DISPLAY_EXPOSURE_DEFAULT, presentation: SCENE_PRESENTATION_DEFAULT,
+        stageLightsOn: QUALITY_STAGE_LIGHTS_DEFAULT, stageLightsEv: QUALITY_STAGE_LIGHTS_EV_DEFAULT,
+        aoStrength: QUALITY_AO_STRENGTH_DEFAULT, bounceStrength: QUALITY_BOUNCE_STRENGTH_DEFAULT,
+        skyVisStrength: QUALITY_SKYVIS_STRENGTH_DEFAULT, localEnvStrength: QUALITY_LOCAL_ENV_STRENGTH_DEFAULT,
+        ssrOn: QUALITY_SSR_DEFAULT, ssrStrength: QUALITY_SSR_STRENGTH_DEFAULT, ssrMaxRoughness: QUALITY_SSR_MAX_ROUGHNESS_DEFAULT,
+        diffuseEnvConvolve: QUALITY_DIFFUSE_ENV_CONVOLVE_DEFAULT,
+    };
+    const LIVE_QUALITY_KEYS = Object.keys(LIVE_QUALITY_VALUES);
     const SCENE_QUALITY_LEVELS = [
         {
-            id: 'performance', label: 'Performance',
+            id: 'performance', label: 'Performance', icon: 'bolt',
             title: 'Lowest settings, fastest loading and drawing',
             values: {
                 textureMaxSize: 512, textureBudgetGib: 1, subdivision: 0,
                 shadows: false, ao: false, skyVis: false, transparency: false,
+                displacement: false, displacementSubdivision: QUALITY_DISPLACEMENT_SUBDIVISION_DEFAULT,
+                triangleLimits: true, bounce: false, localReflections: false, specularAA: false,
+                ...LIVE_QUALITY_VALUES,
             },
         },
         {
-            id: 'default', label: 'Default',
+            id: 'default', label: 'Default', icon: 'restore',
             title: 'Balanced quality and speed',
             values: {
                 textureMaxSize: QUALITY_TEXTURE_MAX_SIZE_DEFAULT, textureBudgetGib: QUALITY_TEXTURE_BUDGET_DEFAULT_GIB, subdivision: QUALITY_SUBDIVISION_DEFAULT,
                 shadows: true, ao: true, skyVis: true, transparency: true,
+                displacement: true, displacementSubdivision: QUALITY_DISPLACEMENT_SUBDIVISION_DEFAULT,
+                triangleLimits: QUALITY_TRIANGLE_LIMITS_DEFAULT, bounce: true, localReflections: false, specularAA: true,
+                ...LIVE_QUALITY_VALUES,
             },
         },
         {
-            id: 'quality', label: 'Quality',
+            id: 'quality', label: 'Quality', icon: 'sparkles',
             title: 'Highest settings, slowest loading and drawing',
             values: {
-                textureMaxSize: Infinity, textureBudgetGib: 4, subdivision: 2,
+                textureMaxSize: 4096, textureBudgetGib: 4, subdivision: 2,
                 shadows: true, ao: true, skyVis: true, transparency: true,
+                displacement: true, displacementSubdivision: 3,
+                triangleLimits: false, bounce: true, localReflections: true, specularAA: true,
+                ...LIVE_QUALITY_VALUES,
             },
         },
     ];
 
+    // Render-settings popover row shells, hoisted to module scope (not
+    // declared inside SceneViewerApp) so their component TYPE stays the
+    // same across every render. A component declared inside a render body
+    // is a brand-new function every time, so React unmounts and remounts
+    // every instance on each re-render — which dropped a slider's pointer
+    // capture mid-drag and remounted the MtlxSelect rows (flicker) on every
+    // keystroke. See js/usd-scene-app.jsx's SceneRowCtx.Provider (wraps
+    // SceneViewerApp's return) for the per-render values these still need.
+    const SceneRowCtx = React.createContext({ rowDirtyFor: () => false, draftDiff: {}, hasStage: true });
+    const EXP_BADGE = <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>;
+    const DirtyDot = ({ show }) => (show ? <span title="Differs from the selected quality level" className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" /> : null);
+    const settingsCostKind = (key) => {
+        if ((typeof SCENE_SETTINGS_RELOAD_KEYS !== 'undefined' ? SCENE_SETTINGS_RELOAD_KEYS : []).includes(key)) return 'reload';
+        if ((typeof SCENE_SETTINGS_REBUILD_KEYS !== 'undefined' ? SCENE_SETTINGS_REBUILD_KEYS : []).includes(key)) return 'rebuild';
+        if ((typeof SCENE_SETTINGS_GEOMETRY_KEYS !== 'undefined' ? SCENE_SETTINGS_GEOMETRY_KEYS : []).includes(key)) return 'geometry';
+        return null;
+    };
+    const COST_KIND_ICON = { reload: 'refresh', rebuild: 'code', geometry: 'cube' };
+    const COST_KIND_TITLE = {
+        reload: 'Changing this reloads the stage', rebuild: 'Changing this recompiles materials', geometry: 'Changing this rebuilds geometry',
+    };
+    // settingKey drives DirtyDot (amber, differs from the level) and
+    // CostBadge (reload/rebuild/geometry, tinted if pending) via context.
+    const CostBadge = ({ settingKey }) => {
+        const { draftDiff, hasStage } = React.useContext(SceneRowCtx);
+        const kind = settingKey ? settingsCostKind(settingKey) : null;
+        if (!kind) return null;
+        // Muted with no scene loaded: Apply will only persist the value,
+        // never actually pay this cost, see applyQualityDraft.
+        const pending = hasStage && settingKey in draftDiff;
+        return (
+            <span title={COST_KIND_TITLE[kind]} className={'inline-flex ' + (pending ? 'text-amber-400' : 'text-gray-500')}>
+                <MtlxIcon name={COST_KIND_ICON[kind]} className="w-3 h-3" />
+            </span>
+        );
+    };
+    const ToggleRow = ({ label, experimental, checked, onChange, disabled, title, description, dirty, settingKey }) => {
+        const { rowDirtyFor } = React.useContext(SceneRowCtx);
+        return (
+            <div className="py-2 border-b border-gray-700/60 last:border-b-0">
+                <label className="flex items-center justify-between gap-2 cursor-pointer" title={title}>
+                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-300">
+                        <DirtyDot show={rowDirtyFor(settingKey, dirty)} /><span>{label}</span>{experimental ? EXP_BADGE : null}<CostBadge settingKey={settingKey} />
+                    </span>
+                    <Toggle checked={checked} onChange={onChange} disabled={disabled} />
+                </label>
+                {description ? <div className="mt-1 text-[11px] text-gray-400">{description}</div> : null}
+            </div>
+        );
+    };
+    const SelectRow = ({ label, experimental, control, description, title, dirty, settingKey }) => {
+        const { rowDirtyFor } = React.useContext(SceneRowCtx);
+        return (
+            <div className="py-2 border-b border-gray-700/60 last:border-b-0" title={title}>
+                <div className="flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-300">
+                        <DirtyDot show={rowDirtyFor(settingKey, dirty)} /><span>{label}</span>{experimental ? EXP_BADGE : null}<CostBadge settingKey={settingKey} />
+                    </span>
+                    {control}
+                </div>
+                {description ? <div className="mt-1 text-[11px] text-gray-400">{description}</div> : null}
+            </div>
+        );
+    };
+    const SliderRow = ({ children, description, dirty, settingKey }) => {
+        const { rowDirtyFor } = React.useContext(SceneRowCtx);
+        return (
+            <div className="py-2 border-b border-gray-700/60 last:border-b-0">
+                {rowDirtyFor(settingKey, dirty) ? <div className="flex items-center gap-1.5 mb-1"><DirtyDot show /><span className="text-[10px] text-amber-300/80">Differs from the selected quality level</span></div> : null}
+                {children}
+                {description ? <div className="mt-1 text-[11px] text-gray-400">{description}</div> : null}
+            </div>
+        );
+    };
+    const ButtonRow = ({ label, onClick, disabled, title, description }) => (
+        <div className="py-2 border-b border-gray-700/60 last:border-b-0">
+            <button type="button" onClick={onClick} disabled={disabled} title={title} className={BTN_SECONDARY + ' w-full'}>{label}</button>
+            {description ? <div className="mt-1 text-[11px] text-gray-400">{description}</div> : null}
+        </div>
+    );
+    // Three-way quality control used by the Render settings popover.
+    // Kept local rather than moved into js/shared/mtlx-ui.jsx, which
+    // feeds the embed bundle where Tailwind utilities silently no-op.
+    const QUALITY_SEGMENT_TONES = {
+        hud: {
+            wrap: 'inline-flex rounded-lg border border-gray-600/50 overflow-hidden',
+            idle: 'bg-gray-900/70 backdrop-blur text-gray-300 hover:bg-gray-700 hover:text-gray-100',
+            active: 'bg-blue-600/80 text-white border-blue-500',
+        },
+        panel: {
+            wrap: 'flex flex-1 rounded-lg border border-gray-600/50 overflow-hidden',
+            idle: 'bg-gray-800/80 text-gray-300 hover:bg-gray-700/80',
+            active: 'bg-blue-500/[0.12] text-blue-300',
+        },
+    };
+    const QualitySegments = ({ value, onChange, disabled, tone }) => {
+        const cls = QUALITY_SEGMENT_TONES[tone] || QUALITY_SEGMENT_TONES.hud;
+        return (
+            <div
+                role="group"
+                aria-label="Render quality"
+                data-testid={tone === 'panel' ? 'usd-scene-quality-popover' : 'usd-scene-quality-toolbar'}
+                className={cls.wrap}
+            >
+                {SCENE_QUALITY_LEVELS.map((level, i) => {
+                    const active = value === level.id;
+                    return (
+                        <button
+                            key={level.id}
+                            type="button"
+                            data-testid={'usd-scene-quality-' + level.id}
+                            data-active={active ? 'true' : undefined}
+                            aria-pressed={active}
+                            title={level.title}
+                            disabled={disabled}
+                            onClick={() => onChange(level.id)}
+                            className={'h-7 px-2.5 flex items-center gap-1 text-[11px] font-medium whitespace-nowrap transition-colors '
+                                + 'first:rounded-l-[7px] last:rounded-r-[7px] disabled:opacity-60 disabled:cursor-not-allowed '
+                                + (tone === 'panel' ? 'flex-1 justify-center ' : '')
+                                + (i > 0 ? 'border-l border-gray-600/50 ' : '')
+                                + (active ? cls.active : cls.idle)}
+                        >
+                            {level.icon && <MtlxIcon name={level.icon} className="w-3.5 h-3.5 flex-none" />}
+                            {level.label}
+                        </button>
+                    );
+                })}
+            </div>
+        );
+    };
     function SceneViewerApp({ active = true }) {
         const narrow = useNarrowPane();
         const [sidebarOpen, setSidebarOpen] = React.useState(!narrow);
@@ -671,15 +849,16 @@
         const [stageLightInfo, setStageLightInfo] = React.useState({ count: 0, enabled: true, ev: 0 });
         const [stageLightsOn, setStageLightsOn] = React.useState(true);
         const [stageLightsEv, setStageLightsEv] = React.useState(0);
-        const [presentation, setPresentation] = React.useState({ enabled: true, bloom: false, strength: 0.25, threshold: 1, knee: 0.5, radius: 0.65, antialias: true, samples: 4, debugView: 'final', supported: true });
+        const [presentation, setPresentation] = React.useState(SCENE_PRESENTATION_DEFAULT);
         const [shadowsOn, setShadowsOn] = React.useState(true);
         const [aoOn, setAoOn] = React.useState(true);
         const [aoStrength, setAoStrength] = React.useState(0.85);
-        // Default OFF: see storedSceneBounce's safety-override comment in
-        // js/usd-scene-renderer.js (an unresolved renderer hang was found
-        // when this is enabled; opt-in only until root-caused).
+        // Default on (v3, 2026-09-20): see storedSceneBounce in
+        // js/usd-scene-renderer.js. Strength default must track
+        // QUALITY_BOUNCE_STRENGTH_DEFAULT or a fresh profile opens with a
+        // stray dot and Reset already enabled.
         const [bounceOn, setBounceOn] = React.useState(true);
-        const [bounceStrength, setBounceStrength] = React.useState(0.8);
+        const [bounceStrength, setBounceStrength] = React.useState(QUALITY_BOUNCE_STRENGTH_DEFAULT);
         // Screen-space reflections are parked: rows hidden, state and handlers kept.
         const SSR_ROWS_HIDDEN = true;
         const [ssrOn, setSsrOn] = React.useState(false);
@@ -697,6 +876,12 @@
         const RENDER_TABS = ['display', 'lighting', 'effects', 'geometry'];
         const [renderSettingsOpen, setRenderSettingsOpen] = React.useState(false);
         const [renderSettingsMounted, setRenderSettingsMounted] = React.useState(false);
+        // Quality draft (staged governed values, null until first touched),
+        // the live-control snapshot taken when the popover opens (for
+        // Cancel), and the label shown while an Apply is in flight.
+        const [qualityDraft, setQualityDraft] = React.useState(null);
+        const [liveSnapshot, setLiveSnapshot] = React.useState(null);
+        const [presetApplying, setPresetApplying] = React.useState(null);
         const [renderTab, setRenderTab] = React.useState(() => {
             try { const v = localStorage.getItem(RENDER_TAB_KEY); return RENDER_TABS.indexOf(v) >= 0 ? v : 'display'; }
             catch (e) { return 'display'; }
@@ -1409,39 +1594,259 @@
         // mutation that doesn't otherwise touch React state.
         void textureSizeTick;
 
-        // Kept next to SCENE_QUALITY_LEVELS's definition in spirit (see the
-        // module-level block above) so the table and this comparison cannot
-        // drift apart: whichever level matches every governed setting wins.
-        const activeQualityLevel = SCENE_QUALITY_LEVELS.find((level) => {
-            const v = level.values;
-            return Number(textureMaxSize) === v.textureMaxSize
-                && Number(textureBudgetGib) === v.textureBudgetGib
-                && Number(subdivisionLevel) === v.subdivision
-                && shadowsOn === v.shadows
-                && aoOn === v.ao
-                && skyVisOn === v.skyVis
-                && sceneTransparency === v.transparency;
-        });
-        const activeQualityPreset = activeQualityLevel ? activeQualityLevel.id : 'custom';
-        // Fans out through the existing handlers so each governed value keeps
-        // its usual setState + callHandle + localStorage write; never
-        // reimplements those writes. Order: textures, then booleans, then
-        // subdivision last (only it reloads the stage). Any step whose
-        // value already matches is skipped.
-        const applyQualityPreset = (id) => {
+        // Every governed value, read the same way the popover controls read
+        // them today (live handle first, stored fallback otherwise).
+        const currentQualityValues = {
+            textureMaxSize: Number(textureMaxSize), textureBudgetGib: Number(textureBudgetGib), subdivision: Number(subdivisionLevel),
+            shadows: shadowsOn, ao: aoOn, skyVis: skyVisOn, transparency: sceneTransparency,
+            displacement: displacementEnabled, displacementSubdivision: displacementSubdivisionOverride,
+            triangleLimits, bounce: bounceOn, localReflections: localEnvOn, specularAA: specularAAOn,
+        };
+        const QUALITY_GOVERNED_KEYS = Object.keys(currentQualityValues);
+        // Live keys: every other popover row. Same shape as captureLiveSnapshot
+        // below (which just copies this), read straight off React state.
+        const currentLiveValues = {
+            displayTransform, materialWorkspace, displayExposure, presentation,
+            stageLightsOn, stageLightsEv, aoStrength, bounceStrength, skyVisStrength,
+            localEnvStrength, ssrOn, ssrStrength, ssrMaxRoughness, diffuseEnvConvolve,
+        };
+        const ALL_QUALITY_KEYS = QUALITY_GOVERNED_KEYS.concat(LIVE_QUALITY_KEYS);
+        // Exact match first (handles Infinity, matching strings/booleans).
+        // Numbers compare with an epsilon (slider drift/float rounding).
+        // The one object value (presentation) compares field by field over
+        // b's keys, never JSON.stringify: key order or an extra field on a
+        // (e.g. a hardware-derived flag) must not fake a difference.
+        const valuesEqual = (a, b) => {
+            if (a === b) return true;
+            if (typeof a === 'number' && typeof b === 'number') return Math.abs(a - b) < 1e-6;
+            if (a && b && typeof a === 'object') return Object.keys(b).every((k) => valuesEqual(a[k], b[k]));
+            return false;
+        };
+        // "Custom" is derived, never stored: the active level is the stored
+        // id (inferred by exact match the first time, else 'default'), and
+        // overrides are every governed key (staged or live) that no longer
+        // matches it.
+        const selectedQualityId = (() => {
+            let stored = null;
+            try { stored = localStorage.getItem(SCENE_QUALITY_STORAGE_KEY); } catch (e) { /* privacy mode */ }
+            if (SCENE_QUALITY_LEVELS.some((entry) => entry.id === stored)) return stored;
+            const inferred = SCENE_QUALITY_LEVELS.find((level) =>
+                QUALITY_GOVERNED_KEYS.every((key) => currentQualityValues[key] === level.values[key])
+                && LIVE_QUALITY_KEYS.every((key) => valuesEqual(currentLiveValues[key], level.values[key])));
+            return inferred ? inferred.id : 'default';
+        })();
+        const selectedQualityLevel = SCENE_QUALITY_LEVELS.find((entry) => entry.id === selectedQualityId);
+        // One forced-apply dispatcher for Reset and the preset segments
+        // (the places that move live keys): reuses each row's own handler.
+        const forceLiveValue = (key, value) => {
+            if (key === 'displayTransform') return pickDisplayTransform(value);
+            if (key === 'materialWorkspace') return pickMaterialWorkspace(value);
+            if (key === 'displayExposure') return applyDisplayExposure(value);
+            if (key === 'presentation') return updatePresentation(value);
+            if (key === 'stageLightsOn') return setStageLightsOnValue(value);
+            if (key === 'stageLightsEv') return applyStageLightsEv(value);
+            if (key === 'aoStrength') return applyAoStrength(value);
+            if (key === 'bounceStrength') return applyBounceStrength(value);
+            if (key === 'skyVisStrength') return applySkyVisStrength(value);
+            if (key === 'localEnvStrength') return applyLocalEnvStrength(value);
+            if (key === 'ssrOn') return setSsrOnValue(value);
+            if (key === 'ssrStrength') return applySsrStrength(value);
+            if (key === 'ssrMaxRoughness') return applySsrMaxRoughness(value);
+            if (key === 'diffuseEnvConvolve') return setDiffuseEnvConvolveValue(value);
+        };
+        // Shared with restoreLiveSnapshot and forceLiveValue: the three live
+        // toggles whose onChange body is more than one call, factored once
+        // instead of copied at each of their three call sites.
+        const setStageLightsOnValue = (next) => { setStageLightsOn(next); callHandle('setStageLightsEnabled', next); writeStoredSceneBool('mtlx_scene_stage_lights', next); };
+        const setSsrOnValue = (next) => { setSsrOn(next); callHandle('setScreenSpaceReflections', next); writeStoredSceneBool('mtlx_scene_ssr', next); };
+        const setDiffuseEnvConvolveValue = (next) => {
+            setDiffuseEnvConvolveState(next);
+            window.setDiffuseEnvMethod && window.setDiffuseEnvMethod(next ? 'convolve' : 'sh');
+            if (currentEnvironmentRef.current) callHandle('setEnvironment', currentEnvironmentRef.current);
+        };
+        // No stage handle yet: matches the persist-only fallback every single
+        // governed handler falls back to with no handle (writeStoredSceneBool/
+        // setStored*); displacement and transparency are globals, still live.
+        const persistSceneSettingsForNextLoad = (diff) => {
+            if ('textureMaxSize' in diff && typeof setStoredSceneTextureMaxSize === 'function') setStoredSceneTextureMaxSize(diff.textureMaxSize);
+            if ('textureBudgetGib' in diff && typeof setStoredSceneTextureBudgetBytes === 'function') setStoredSceneTextureBudgetBytes(diff.textureBudgetGib * 1024 * 1024 * 1024);
+            if ('shadows' in diff) writeStoredSceneBool('mtlx_scene_shadows', diff.shadows);
+            if ('ao' in diff) writeStoredSceneBool('mtlx_scene_ao', diff.ao);
+            if ('skyVis' in diff) writeStoredSceneBool('mtlx_scene_skyvis', diff.skyVis);
+            if ('specularAA' in diff) writeStoredSceneBool('mtlx_scene_specular_aa', diff.specularAA);
+            if ('bounce' in diff) writeStoredSceneBool('mtlx_scene_bounce', diff.bounce);
+            if ('localReflections' in diff) writeStoredSceneBool('mtlx_scene_local_reflections', diff.localReflections);
+            if ('triangleLimits' in diff && typeof setStoredSceneTriangleLimits === 'function') setStoredSceneTriangleLimits(diff.triangleLimits);
+            if ('displacementSubdivision' in diff && typeof setStoredSceneDisplacementSubdivision === 'function') setStoredSceneDisplacementSubdivision(diff.displacementSubdivision);
+            if ('subdivision' in diff && typeof setStoredSceneSubdivisionLevel === 'function') setStoredSceneSubdivisionLevel(diff.subdivision);
+            if ('displacement' in diff && window.setDisplacementEnabled) window.setDisplacementEnabled(diff.displacement);
+            if ('transparency' in diff && window.setUsdSceneTransparency) window.setUsdSceneTransparency(diff.transparency);
+            return { reload: false, rebuild: false, geometry: false };
+        };
+        // Shared apply path for the toolbar's immediate preset and the
+        // popover's Apply: one applySceneSettings call, state sync, reload
+        // only if asked.
+        const commitQualitySettings = (diff, id) => {
+            if (id) { try { localStorage.setItem(SCENE_QUALITY_STORAGE_KEY, id); } catch (e) { /* privacy mode */ } }
+            if (!Object.keys(diff).length) return { reload: false, rebuild: false, geometry: false, reloadPromise: null };
+            const result = (handle && typeof handle.applySceneSettings === 'function')
+                ? handle.applySceneSettings(diff)
+                : persistSceneSettingsForNextLoad(diff);
+            if ('textureMaxSize' in diff || 'textureBudgetGib' in diff) setTextureSizeTick((t) => t + 1);
+            if ('shadows' in diff) setShadowsOn(diff.shadows);
+            if ('ao' in diff) setAoOn(diff.ao);
+            if ('skyVis' in diff) setSkyVisOn(diff.skyVis);
+            if ('transparency' in diff) setSceneTransparencyState(diff.transparency);
+            if ('displacement' in diff) setDisplacementEnabledState(diff.displacement);
+            if ('displacementSubdivision' in diff) {
+                setDisplacementSubdivisionOverrideState(diff.displacementSubdivision);
+                displacementSubdivisionRef.current = diff.displacementSubdivision;
+            }
+            if ('triangleLimits' in diff) { setTriangleLimitsState(diff.triangleLimits); triangleLimitsRef.current = diff.triangleLimits; }
+            if ('bounce' in diff) setBounceOn(diff.bounce);
+            if ('localReflections' in diff) setLocalEnvOn(diff.localReflections);
+            if ('specularAA' in diff) setSpecularAAOn(diff.specularAA);
+            if ('subdivision' in diff) { setSubdivisionLevel(diff.subdivision); subdivisionLevelRef.current = diff.subdivision; }
+            const reloadPromise = (result && result.reload && files.length && rootPath) ? load() : null;
+            return Object.assign({ reload: false, rebuild: false, geometry: false }, result, { reloadPromise });
+        };
+        // Draft model for the popover: governed rows edit `qualityDraft`
+        // (null until first touched) instead of calling their handlers;
+        // nothing reaches the renderer until Apply.
+        const draftLevel = qualityDraft ? SCENE_QUALITY_LEVELS.find((entry) => entry.id === qualityDraft.qualityId) : selectedQualityLevel;
+        const draftValues = qualityDraft ? qualityDraft.values : currentQualityValues;
+        // Value a row actually shows: the draft for a staged key, the live
+        // current value for a live key (live keys are never staged).
+        const rowValue = (key) => (LIVE_QUALITY_KEYS.includes(key) ? currentLiveValues[key] : draftValues[key]);
+        const draftAllOverrides = draftLevel ? ALL_QUALITY_KEYS.filter((key) => !valuesEqual(rowValue(key), draftLevel.values[key])) : [];
+        // Staged-only overrides: drives the popover's own segmented control,
+        // which only ever stages (never reflects live-key drift).
+        const draftStagedOverrides = draftLevel ? QUALITY_GOVERNED_KEYS.filter((key) => draftValues[key] !== draftLevel.values[key]) : [];
+        const draftDiff = {};
+        QUALITY_GOVERNED_KEYS.forEach((key) => { if (draftValues[key] !== currentQualityValues[key]) draftDiff[key] = draftValues[key]; });
+        const draftDirty = Object.keys(draftDiff).length > 0;
+        // Enabled whenever ANY key (staged or live) differs from the level.
+        const draftResetDirty = draftAllOverrides.length > 0;
+        // Dev aid: with mtlxDebugShaders on, print exactly which key(s) made
+        // Reset dirty and both of their values, so a report of "Reset is
+        // enabled with no dots" can be checked against real data instead of
+        // re-deriving this comparison by hand.
+        const draftOverridesKey = draftAllOverrides.join(',');
+        React.useEffect(() => {
+            let debugOn = false;
+            try { debugOn = localStorage.getItem('mtlxDebugShaders') === '1'; } catch (e) { /* privacy mode */ }
+            if (!debugOn || !draftOverridesKey || !draftLevel) return;
+            console.log('[usd-scene] Reset dirty vs "' + draftLevel.id + '":', draftOverridesKey.split(',').map((key) => ({
+                key, current: rowValue(key), level: draftLevel.values[key],
+            })));
+        }, [draftOverridesKey, draftLevel]);
+        const draftCost = (typeof describeSceneSettingsCost === 'function')
+            ? describeSceneSettingsCost(currentQualityValues, draftDiff)
+            : { reload: false, rebuild: false, geometry: false };
+        const stageQualityValue = (key, value) => {
+            setQualityDraft((d) => {
+                const base = d || { qualityId: selectedQualityId, values: { ...currentQualityValues } };
+                return { qualityId: base.qualityId, values: { ...base.values, [key]: value } };
+            });
+        };
+        const stageQualityLevel = (id) => {
             const level = SCENE_QUALITY_LEVELS.find((entry) => entry.id === id);
             if (!level) return;
-            const v = level.values;
-            if (Number(textureMaxSize) !== v.textureMaxSize) pickTextureMaxSize(v.textureMaxSize);
-            if (Number(textureBudgetGib) !== v.textureBudgetGib) pickTextureBudgetGib(v.textureBudgetGib);
-            if (shadowsOn !== v.shadows) { setShadowsOn(v.shadows); callHandle('setShadowsEnabled', v.shadows); writeStoredSceneBool('mtlx_scene_shadows', v.shadows); }
-            if (aoOn !== v.ao) { setAoOn(v.ao); callHandle('setAmbientOcclusionEnabled', v.ao); writeStoredSceneBool('mtlx_scene_ao', v.ao); }
-            if (skyVisOn !== v.skyVis) { setSkyVisOn(v.skyVis); callHandle('setSkyVisibility', v.skyVis); writeStoredSceneBool('mtlx_scene_skyvis', v.skyVis); }
-            if (sceneTransparency !== v.transparency) {
-                setSceneTransparencyState(v.transparency);
-                if (window.setUsdSceneTransparency) window.setUsdSceneTransparency(v.transparency);
+            setQualityDraft({ qualityId: id, values: { ...level.values } });
+            // Live keys are never staged (a row's value comes straight off
+            // live state, see rowValue above), so a preset pick must force
+            // them immediately too — otherwise a row like Sky visibility
+            // strength or Stage light intensity keeps its old value while
+            // the segmented control already shows the new preset picked.
+            // Exactly what Reset already does for live keys.
+            LIVE_QUALITY_KEYS.forEach((key) => {
+                if (!valuesEqual(currentLiveValues[key], level.values[key])) forceLiveValue(key, level.values[key]);
+            });
+        };
+        const captureLiveSnapshot = () => ({ ...currentLiveValues });
+        // Restores every live control through its existing handler (same
+        // dispatcher Reset and the toolbar menu use); nothing duplicated here.
+        const restoreLiveSnapshot = (snap) => {
+            if (!snap) return;
+            LIVE_QUALITY_KEYS.forEach((key) => forceLiveValue(key, snap[key]));
+        };
+        // One editing session per popover visit: taken only when none is in
+        // progress, cleared by Apply/Cancel, so close-and-reopen restores
+        // from when the session began, not from the last reopen.
+        React.useEffect(() => {
+            if (renderSettingsOpen && !liveSnapshot) setLiveSnapshot(captureLiveSnapshot());
+        }, [renderSettingsOpen, liveSnapshot]);
+        const lastCurrentQualityRef = React.useRef(currentQualityValues);
+        // currentQualityValues is a fresh object every render, so this still
+        // runs each time one of its fields actually changes; the dep array
+        // just documents that (and drops the effect on unrelated renders,
+        // e.g. a plain slider drag that never touches a governed key).
+        React.useEffect(() => {
+            const prev = lastCurrentQualityRef.current;
+            if (qualityDraft) {
+                let next = null;
+                QUALITY_GOVERNED_KEYS.forEach((key) => {
+                    if (currentQualityValues[key] !== prev[key] && qualityDraft.values[key] === prev[key]) {
+                        next = next || { ...qualityDraft.values };
+                        next[key] = currentQualityValues[key];
+                    }
+                });
+                if (next) setQualityDraft((d) => (d ? { qualityId: d.qualityId, values: next } : d));
             }
-            if (v.subdivision !== subdivisionLevel) pickSubdivisionLevel(v.subdivision);
+            lastCurrentQualityRef.current = currentQualityValues;
+        }, [currentQualityValues, qualityDraft]);
+        const applyQualityDraft = () => {
+            if (!draftDirty) return;
+            // No scene loaded: nothing to reload, recompile or rebuild, so
+            // commitQualitySettings already falls through to the persist-only
+            // path below; just skip the "Applying ..." label for it too.
+            if (hasStage) setPresetApplying(draftStagedOverrides.length ? 'Custom' : (draftLevel ? draftLevel.label : 'Custom'));
+            const id = qualityDraft ? qualityDraft.qualityId : selectedQualityId;
+            const { reloadPromise } = commitQualitySettings(draftDiff, id);
+            const applied = { ...draftValues };
+            setQualityDraft({ qualityId: id, values: applied });
+            setLiveSnapshot(null); // ends the editing session, live keys were left alone
+            if (reloadPromise) reloadPromise.finally(() => setPresetApplying(null));
+            else setPresetApplying(null);
+        };
+        const cancelQualityDraft = () => {
+            restoreLiveSnapshot(liveSnapshot);
+            setLiveSnapshot(null);
+            setQualityDraft(null);
+            setRenderSettingsOpen(false);
+        };
+        // Forces every key (staged and live) to the selected level's values:
+        // staged goes into the draft, live goes through forceLiveValue so
+        // sliders visibly move right away.
+        const resetQualityDraft = () => {
+            if (!draftLevel) return;
+            const id = qualityDraft ? qualityDraft.qualityId : selectedQualityId;
+            setQualityDraft({ qualityId: id, values: { ...draftLevel.values } });
+            LIVE_QUALITY_KEYS.forEach((key) => { if (!valuesEqual(currentLiveValues[key], draftLevel.values[key])) forceLiveValue(key, draftLevel.values[key]); });
+        };
+        // Plain sentence for the footer: nothing when no staged change is
+        // pending, else the pending count plus what Apply will actually do.
+        const footerHintText = () => {
+            const n = Object.keys(draftDiff).length;
+            if (!n) return '';
+            const count = n + ' change' + (n === 1 ? '' : 's') + '.';
+            if (!hasStage) return count + ' Applies when a scene is loaded';
+            const action = draftCost.reload ? 'Applying will reload the stage'
+                : draftCost.rebuild ? 'Applying will recompile materials'
+                : draftCost.geometry ? 'Applying will rebuild geometry'
+                : 'Applying will apply instantly';
+            return count + ' ' + action;
+        };
+        const qualitySummaryText = () => {
+            const v = draftValues;
+            const parts = [
+                (v.textureMaxSize === Infinity ? 'Original' : v.textureMaxSize + 'px') + ' textures',
+                v.textureBudgetGib + ' GB',
+                v.subdivision ? ('subdivision ' + v.subdivision) : 'no subdivision',
+                v.displacement ? 'displacement on' : 'displacement off',
+                (v.shadows && v.ao) ? 'shadows and ambient occlusion on' : (v.shadows ? 'shadows on' : (v.ao ? 'ambient occlusion on' : 'shadows and ambient occlusion off')),
+            ];
+            return parts.join(', ');
         };
 
         const fraction = progress.fraction;
@@ -1464,92 +1869,19 @@
         const hasStage = !!stage || files.length > 0;
 
         const RENDER_TAB_LABELS = { display: 'Display', lighting: 'Lighting', effects: 'Effects', geometry: 'Geometry and Textures' };
-        const EXP_BADGE = <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>;
-        // Row shells for the render settings popover: label/control on top,
-        // a short description below. Kept local since only this popover uses them.
-        const ToggleRow = ({ label, experimental, checked, onChange, disabled, title, description }) => (
-            <div className="py-2 border-b border-gray-700/60 last:border-b-0">
-                <label className="flex items-center justify-between gap-2 cursor-pointer" title={title}>
-                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-300"><span>{label}</span>{experimental ? EXP_BADGE : null}</span>
-                    <Toggle checked={checked} onChange={onChange} disabled={disabled} />
-                </label>
-                {description ? <div className="mt-1 text-[11px] text-gray-400">{description}</div> : null}
-            </div>
-        );
-        const SelectRow = ({ label, experimental, control, description, title }) => (
-            <div className="py-2 border-b border-gray-700/60 last:border-b-0" title={title}>
-                <div className="flex items-center justify-between gap-2">
-                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-300"><span>{label}</span>{experimental ? EXP_BADGE : null}</span>
-                    {control}
-                </div>
-                {description ? <div className="mt-1 text-[11px] text-gray-400">{description}</div> : null}
-            </div>
-        );
-        const SliderRow = ({ children, description }) => (
-            <div className="py-2 border-b border-gray-700/60 last:border-b-0">
-                {children}
-                {description ? <div className="mt-1 text-[11px] text-gray-400">{description}</div> : null}
-            </div>
-        );
-        const ButtonRow = ({ label, onClick, disabled, title, description }) => (
-            <div className="py-2 border-b border-gray-700/60 last:border-b-0">
-                <button type="button" onClick={onClick} disabled={disabled} title={title} className={BTN_SECONDARY + ' w-full'}>{label}</button>
-                {description ? <div className="mt-1 text-[11px] text-gray-400">{description}</div> : null}
-            </div>
-        );
-        // Three-way quality control shared by the toolbar and the popover.
-        // Kept local rather than moved into js/shared/mtlx-ui.jsx, which
-        // feeds the embed bundle where Tailwind utilities silently no-op.
-        const QUALITY_SEGMENT_TONES = {
-            hud: {
-                wrap: 'inline-flex rounded-lg border border-gray-600/50 overflow-hidden',
-                idle: 'bg-gray-900/70 backdrop-blur text-gray-300 hover:bg-gray-700 hover:text-gray-100',
-                active: 'bg-blue-600/80 text-white border-blue-500',
-            },
-            panel: {
-                wrap: 'flex flex-1 rounded-lg border border-gray-600/50 overflow-hidden',
-                idle: 'bg-gray-800/80 text-gray-300 hover:bg-gray-700/80',
-                active: 'bg-blue-500/[0.12] text-blue-300',
-            },
-        };
-        const QualitySegments = ({ value, onChange, disabled, tone }) => {
-            const cls = QUALITY_SEGMENT_TONES[tone] || QUALITY_SEGMENT_TONES.hud;
-            return (
-                <div
-                    role="group"
-                    aria-label="Render quality"
-                    data-testid={tone === 'panel' ? 'usd-scene-quality-popover' : 'usd-scene-quality-toolbar'}
-                    className={cls.wrap}
-                >
-                    {SCENE_QUALITY_LEVELS.map((level, i) => {
-                        const active = value === level.id;
-                        return (
-                            <button
-                                key={level.id}
-                                type="button"
-                                data-testid={'usd-scene-quality-' + level.id}
-                                data-active={active ? 'true' : undefined}
-                                aria-pressed={active}
-                                title={level.title}
-                                disabled={disabled}
-                                onClick={() => onChange(level.id)}
-                                className={'h-7 px-2.5 text-[11px] font-medium whitespace-nowrap transition-colors '
-                                    + 'first:rounded-l-[7px] last:rounded-r-[7px] disabled:opacity-60 disabled:cursor-not-allowed '
-                                    + (tone === 'panel' ? 'flex-1 ' : '')
-                                    + (i > 0 ? 'border-l border-gray-600/50 ' : '')
-                                    + (active ? cls.active : cls.idle)}
-                            >
-                                {level.label}
-                            </button>
-                        );
-                    })}
-                </div>
-            );
-        };
+        // rowDirtyFor closes over this render's draft/live state; it is a
+        // plain function (not a component), so recreating it every render
+        // only changes a context VALUE, never a component TYPE — passing it
+        // through SceneRowCtx keeps ToggleRow/SelectRow/SliderRow/CostBadge
+        // (module-scope, hoisted below SCENE_QUALITY_LEVELS) mounted once
+        // instead of remounting on every keystroke/drag tick.
+        const rowDirtyFor = (settingKey, dirty) => (settingKey
+            ? (!!draftLevel && !valuesEqual(rowValue(settingKey), draftLevel.values[settingKey]))
+            : !!dirty);
         const renderDisplayTab = () => (
             <React.Fragment>
                 <SelectRow
-                    label="Display transform" experimental
+                    label="Display transform" experimental settingKey="displayTransform"
                     title="This is the Scene's own setting; the Material Viewer keeps sRGB."
                     control={
                         <MtlxSelect
@@ -1564,7 +1896,7 @@
                     description="How the linear render is encoded for display. Neutral rolls highlights off while keeping hue; sRGB clips at 1.0 and matches the official MaterialX viewer."
                 />
                 <SelectRow
-                    label="Material working space" experimental
+                    label="Material working space" experimental settingKey="materialWorkspace"
                     title="This is the Scene's own setting; the Material Viewer, Compare, Builder and Graph previews always assume Rec.709."
                     control={
                         <MtlxSelect
@@ -1578,23 +1910,29 @@
                     }
                     description="How untagged colour numbers in the material (constants, interface values, USD overrides, displayColor) are read. Rec.709 takes them literally; ACEScg treats them as Houdini/Karma's scene-linear space and converts them, which matches Karma's albedo more closely. Tagged textures and colorspace-tagged inputs are unaffected."
                 />
-                <ToggleRow label="Specular anti-aliasing" experimental checked={specularAAOn}
-                    title={specularAAOn ? 'Turn off geometric specular anti-aliasing' : 'Widen specular roughness where it is changing fast on screen'}
-                    onChange={(next) => { setSpecularAAOn(next); callHandle('setSceneSpecularAA', next); writeStoredSceneBool('mtlx_scene_specular_aa', next); }}
-                    description="Widens anisotropic specular roughness by the screen-space variance of the shading normal and of the roughness input, so a fine procedural roughness noise network does not sparkle under a single-sample rasterizer the way a multi-sample path tracer would not. Smooth, constant-roughness materials are essentially unaffected." />
-                <SliderRow description="Scales the whole image before the display transform, the way a camera would. The Environment card's exposure only gains the image based lighting.">
-                    <SliderField label="Camera exposure" unit="EV" value={displayExposure} min={-8} max={8} step={0.25}
+                <ToggleRow label="Specular anti-aliasing" experimental checked={draftValues.specularAA}
+                    settingKey="specularAA"
+                    title={draftValues.specularAA ? 'Turn off geometric specular anti-aliasing' : 'Widen specular roughness where it is changing fast on screen'}
+                    onChange={(next) => stageQualityValue('specularAA', next)}
+                    description="Widens anisotropic specular roughness by the screen-space variance of the shading normal and of the roughness input, so a fine procedural roughness noise network does not sparkle under a single-sample rasterizer the way a multi-sample path tracer would not. Smooth, constant-roughness materials are essentially unaffected. Staged: takes effect on Apply." />
+                <SliderRow settingKey="displayExposure" description="Scales the whole image before the display transform, the way a camera would. The Environment card's exposure only gains the image based lighting.">
+                    <SliderField label="Camera exposure" unit="EV" value={displayExposure} min={-8} max={8} step={0.25} decimals={2}
+                        defaultValue={draftLevel && draftLevel.values.displayExposure}
                         onSlider={applyDisplayExposure} onNumber={applyDisplayExposure} />
                 </SliderRow>
                 <ToggleRow label="HDR presentation" checked={!!presentation.enabled} disabled={!handle || !presentation.supported}
+                    settingKey="presentation"
                     onChange={(enabled) => updatePresentation({ enabled })}
                     description="Capture scene-linear HDR before a single display transform. Off uses the previous rendering path." />
                 <ToggleRow label="Highlight glow" checked={!!presentation.bloom} disabled={!handle || !presentation.enabled || !presentation.supported}
+                    dirty={presentation.bloom !== SCENE_PRESENTATION_DEFAULT.bloom}
                     onChange={(bloom) => updatePresentation({ bloom })}
                     description="Optical glow from actual HDR highlights. This does not add lighting to nearby geometry." />
                 {presentation.enabled && presentation.bloom && presentation.supported ? (
-                    <SliderRow description="Controls how much of the glow highlight bleeds into the image.">
-                        <SliderField label="Glow strength" value={presentation.strength} min={0} max={1} step={0.025}
+                    <SliderRow description="Controls how much of the glow highlight bleeds into the image."
+                        dirty={!valuesEqual(presentation.strength, SCENE_PRESENTATION_DEFAULT.strength)}>
+                        <SliderField label="Glow strength" value={presentation.strength} min={0} max={1} step={0.025} decimals={3}
+                            defaultValue={SCENE_PRESENTATION_DEFAULT.strength}
                             onSlider={(strength) => updatePresentation({ strength })} onNumber={(strength) => updatePresentation({ strength })} />
                     </SliderRow>
                 ) : null}
@@ -1602,6 +1940,7 @@
                     <SelectRow
                         label="HDR view"
                         title={handle ? undefined : 'Load a stage first'}
+                        dirty={(presentation.debugView || 'final') !== SCENE_PRESENTATION_DEFAULT.debugView}
                         control={
                             <MtlxSelect
                                 value={presentation.debugView || 'final'}
@@ -1618,16 +1957,22 @@
                 ) : null}
                 {presentation.supported && presentation.enabled && presentation.bloom ? (
                     <React.Fragment>
-                        <SliderRow description="Luminance level above which highlights start to glow.">
-                            <SliderField label="Glow threshold" value={presentation.threshold} min={0.01} max={1000} step={0.01}
+                        <SliderRow description="Luminance level above which highlights start to glow."
+                            dirty={!valuesEqual(presentation.threshold, SCENE_PRESENTATION_DEFAULT.threshold)}>
+                            <SliderField label="Glow threshold" value={presentation.threshold} min={0.01} max={1000} step={0.01} decimals={2}
+                                defaultValue={SCENE_PRESENTATION_DEFAULT.threshold}
                                 onSlider={(threshold) => updatePresentation({ threshold })} onNumber={(threshold) => updatePresentation({ threshold })} />
                         </SliderRow>
-                        <SliderRow description="How softly the glow threshold transitions.">
-                            <SliderField label="Glow knee" value={presentation.knee} min={0} max={1} step={0.01}
+                        <SliderRow description="How softly the glow threshold transitions."
+                            dirty={!valuesEqual(presentation.knee, SCENE_PRESENTATION_DEFAULT.knee)}>
+                            <SliderField label="Glow knee" value={presentation.knee} min={0} max={1} step={0.01} decimals={2}
+                                defaultValue={SCENE_PRESENTATION_DEFAULT.knee}
                                 onSlider={(knee) => updatePresentation({ knee })} onNumber={(knee) => updatePresentation({ knee })} />
                         </SliderRow>
-                        <SliderRow description="How far the glow spreads from each highlight.">
-                            <SliderField label="Glow radius" value={presentation.radius} min={0} max={1} step={0.01}
+                        <SliderRow description="How far the glow spreads from each highlight."
+                            dirty={!valuesEqual(presentation.radius, SCENE_PRESENTATION_DEFAULT.radius)}>
+                            <SliderField label="Glow radius" value={presentation.radius} min={0} max={1} step={0.01} decimals={2}
+                                defaultValue={SCENE_PRESENTATION_DEFAULT.radius}
                                 onSlider={(radius) => updatePresentation({ radius })} onNumber={(radius) => updatePresentation({ radius })} />
                         </SliderRow>
                     </React.Fragment>
@@ -1642,26 +1987,31 @@
         const renderLightingTab = () => (
             <React.Fragment>
                 <ToggleRow label="Stage lights" experimental checked={stageLightsOn}
+                    settingKey="stageLightsOn"
                     title={stageLightsOn ? 'Ignore the lights authored on this stage' : 'Light the stage with its own lights'}
-                    onChange={(next) => { setStageLightsOn(next); callHandle('setStageLightsEnabled', next); writeStoredSceneBool('mtlx_scene_stage_lights', next); }}
+                    onChange={setStageLightsOnValue}
                     description={(stageLightInfo.count || 0) + ' light(s) imported from the stage. Area lights are split into several point samples across their surface, sharing the emitter\'s power.'} />
                 {stageLightsOn ? (
-                    <SliderRow description="Scales the imported stage lights' overall brightness.">
-                        <SliderField label="Stage light intensity" unit="EV" value={stageLightsEv} min={-8} max={8} step={0.25}
+                    <SliderRow settingKey="stageLightsEv" description="Scales the imported stage lights' overall brightness.">
+                        <SliderField label="Stage light intensity" unit="EV" value={stageLightsEv} min={-8} max={8} step={0.25} decimals={2}
+                            defaultValue={draftLevel && draftLevel.values.stageLightsEv}
                             onSlider={applyStageLightsEv} onNumber={applyStageLightsEv} />
                     </SliderRow>
                 ) : null}
-                <ToggleRow label="Shadows" experimental checked={shadowsOn}
-                    title={shadowsOn ? 'Turn shadows off' : 'Cast shadows from the brightest light'}
-                    onChange={(next) => { setShadowsOn(next); callHandle('setShadowsEnabled', next); writeStoredSceneBool('mtlx_scene_shadows', next); }}
-                    description="Up to 32 shadow faces, packed into one shadow atlas, chosen by the light they deliver to sampled receivers. The atlas is rebuilt when the camera or lighting changes." />
-                <ToggleRow label="Sky visibility" experimental checked={skyVisOn}
-                    title={skyVisOn ? 'Turn baked sky visibility off' : 'Let room geometry block the environment light'}
-                    onChange={(next) => { setSkyVisOn(next); callHandle('setSkyVisibility', next); writeStoredSceneBool('mtlx_scene_skyvis', next); }}
-                    description="Environment light has no visibility term, so a wall does not block the sky and interiors read flat and overlit. This bakes how much sky each part of the stage can see into a coarse volume." />
+                <ToggleRow label="Shadows" experimental checked={draftValues.shadows}
+                    settingKey="shadows"
+                    title={draftValues.shadows ? 'Turn shadows off' : 'Cast shadows from the brightest light'}
+                    onChange={(next) => stageQualityValue('shadows', next)}
+                    description="Up to 32 shadow faces, packed into one shadow atlas, chosen by the light they deliver to sampled receivers. The atlas is rebuilt when the camera or lighting changes. Staged: takes effect on Apply." />
+                <ToggleRow label="Sky visibility" experimental checked={draftValues.skyVis}
+                    settingKey="skyVis"
+                    title={draftValues.skyVis ? 'Turn baked sky visibility off' : 'Let room geometry block the environment light'}
+                    onChange={(next) => stageQualityValue('skyVis', next)}
+                    description="Environment light has no visibility term, so a wall does not block the sky and interiors read flat and overlit. This bakes how much sky each part of the stage can see into a coarse volume. Staged: takes effect on Apply." />
                 {skyVisOn ? (
-                    <SliderRow description="How strongly the baked sky visibility darkens occluded areas.">
-                        <SliderField label="Sky visibility strength" value={skyVisStrength} min={0} max={1} step={0.05}
+                    <SliderRow settingKey="skyVisStrength" description="How strongly the baked sky visibility darkens occluded areas.">
+                        <SliderField label="Sky visibility strength" value={skyVisStrength} min={0} max={1} step={0.05} decimals={2}
+                            defaultValue={draftLevel && draftLevel.values.skyVisStrength}
                             onSlider={applySkyVisStrength} onNumber={applySkyVisStrength} />
                     </SliderRow>
                 ) : null}
@@ -1669,103 +2019,116 @@
         );
         const renderEffectsTab = () => (
             <React.Fragment>
-                <ToggleRow label="Ambient occlusion" experimental checked={aoOn}
-                    title={aoOn ? 'Turn ambient occlusion off' : 'Occlude environment light in creases and corners'}
-                    onChange={(next) => { setAoOn(next); callHandle('setAmbientOcclusionEnabled', next); writeStoredSceneBool('mtlx_scene_ao', next); }}
-                    description="Environment light reaches every surface equally, including ones facing a wall, which makes interiors read flat. This estimates how much sky each pixel can actually see." />
+                <ToggleRow label="Ambient occlusion" experimental checked={draftValues.ao}
+                    settingKey="ao"
+                    title={draftValues.ao ? 'Turn ambient occlusion off' : 'Occlude environment light in creases and corners'}
+                    onChange={(next) => stageQualityValue('ao', next)}
+                    description="Environment light reaches every surface equally, including ones facing a wall, which makes interiors read flat. This estimates how much sky each pixel can actually see. Staged: takes effect on Apply." />
                 {aoOn ? (
-                    <SliderRow description="How strongly the estimated occlusion darkens creases and corners.">
-                        <SliderField label="Ambient occlusion strength" value={aoStrength} min={0} max={1} step={0.05}
+                    <SliderRow settingKey="aoStrength" description="How strongly the estimated occlusion darkens creases and corners.">
+                        <SliderField label="Ambient occlusion strength" value={aoStrength} min={0} max={1} step={0.05} decimals={2}
+                            defaultValue={draftLevel && draftLevel.values.aoStrength}
                             onSlider={applyAoStrength} onNumber={applyAoStrength} />
                     </SliderRow>
                 ) : null}
-                <ToggleRow label="Diffuse bounce" experimental checked={bounceOn}
-                    title={bounceOn ? 'Turn the baked diffuse bounce off' : 'Bounce blocked sky light back off nearby surfaces'}
-                    onChange={(next) => { setBounceOn(next); callHandle('setSceneBounceEnabled', next); writeStoredSceneBool('mtlx_scene_bounce', next); }}
-                    description="Environment light is not reflected back off the room, so shadowed sides and corners lose the light the walls and floor bounce onto them. This bakes a coarse estimate of that bounce and adds it back where the sky is blocked." />
+                <ToggleRow label="Diffuse bounce" experimental checked={draftValues.bounce}
+                    settingKey="bounce"
+                    title={draftValues.bounce ? 'Turn the baked diffuse bounce off' : 'Bounce blocked sky light back off nearby surfaces'}
+                    onChange={(next) => stageQualityValue('bounce', next)}
+                    description="Environment light is not reflected back off the room, so shadowed sides and corners lose the light the walls and floor bounce onto them. This bakes a coarse estimate of that bounce and adds it back where the sky is blocked. Staged: takes effect on Apply." />
                 {bounceOn ? (
-                    <SliderRow description="How strongly the baked bounce term fills back in.">
-                        <SliderField label="Diffuse bounce strength" value={bounceStrength} min={0} max={1} step={0.05}
+                    <SliderRow settingKey="bounceStrength" description="How strongly the baked bounce term fills back in.">
+                        <SliderField label="Diffuse bounce strength" value={bounceStrength} min={0} max={1} step={0.05} decimals={2}
+                            defaultValue={draftLevel && draftLevel.values.bounceStrength}
                             onSlider={applyBounceStrength} onNumber={applyBounceStrength} />
                     </SliderRow>
                 ) : null}
-                <ToggleRow label="Local reflections" experimental checked={localEnvOn}
-                    title={localEnvOn ? 'Turn the local reflection capture off' : 'Reflect the captured studio set instead of only the environment'}
-                    onChange={(next) => { setLocalEnvOn(next); callHandle('setLocalReflections', next); writeStoredSceneBool('mtlx_scene_local_reflections', next); }}
-                    description="Reflections only show the environment, so the floor and the wall of a studio set never appear in a metal or a glossy surface. This captures the scene once from the subject and reflects that instead wherever it covers the sky." />
+                <ToggleRow label="Local reflections" experimental checked={draftValues.localReflections}
+                    settingKey="localReflections"
+                    title={draftValues.localReflections ? 'Turn the local reflection capture off' : 'Reflect the captured studio set instead of only the environment'}
+                    onChange={(next) => stageQualityValue('localReflections', next)}
+                    description="Reflections only show the environment, so the floor and the wall of a studio set never appear in a metal or a glossy surface. This captures the scene once from the subject and reflects that instead wherever it covers the sky. Staged: takes effect on Apply." />
                 {localEnvOn ? (
-                    <SliderRow description="How strongly the captured local reflection blends in.">
-                        <SliderField label="Local reflection strength" value={localEnvStrength} min={0} max={1} step={0.05}
+                    <SliderRow settingKey="localEnvStrength" description="How strongly the captured local reflection blends in.">
+                        <SliderField label="Local reflection strength" value={localEnvStrength} min={0} max={1} step={0.05} decimals={2}
+                            defaultValue={draftLevel && draftLevel.values.localEnvStrength}
                             onSlider={applyLocalEnvStrength} onNumber={applyLocalEnvStrength} />
                     </SliderRow>
                 ) : null}
                 {SSR_ROWS_HIDDEN ? null : (<React.Fragment>
                 <ToggleRow label="Screen-space reflections" experimental checked={ssrOn}
+                    settingKey="ssrOn"
                     title={ssrOn ? 'Turn screen-space reflections off' : 'Reflect the scene colour in specular through a screen-space trace'}
-                    onChange={(next) => { setSsrOn(next); callHandle('setScreenSpaceReflections', next); writeStoredSceneBool('mtlx_scene_ssr', next); }}
+                    onChange={setSsrOnValue}
                     description="Traces a screen-space ray through last frame's colour buffer for a reflection, falling back to the environment when it misses." />
                 {ssrOn ? (
                     <React.Fragment>
-                        <SliderRow description="How much of the traced reflection blends into specular.">
-                            <SliderField label="Reflection strength" value={ssrStrength} min={0} max={1} step={0.05}
+                        <SliderRow settingKey="ssrStrength" description="How much of the traced reflection blends into specular.">
+                            <SliderField label="Reflection strength" value={ssrStrength} min={0} max={1} step={0.05} decimals={2}
+                                defaultValue={draftLevel && draftLevel.values.ssrStrength}
                                 onSlider={applySsrStrength} onNumber={applySsrStrength} />
                         </SliderRow>
-                        <SliderRow description="Roughest surface that still receives a screen-space reflection.">
-                            <SliderField label="Reflection max roughness" value={ssrMaxRoughness} min={0.05} max={1} step={0.05}
+                        <SliderRow settingKey="ssrMaxRoughness" description="Roughest surface that still receives a screen-space reflection.">
+                            <SliderField label="Reflection max roughness" value={ssrMaxRoughness} min={0.05} max={1} step={0.05} decimals={2}
+                                defaultValue={draftLevel && draftLevel.values.ssrMaxRoughness}
                                 onSlider={applySsrMaxRoughness} onNumber={applySsrMaxRoughness} />
                         </SliderRow>
                     </React.Fragment>
                 ) : null}
                 </React.Fragment>)}
-                <ToggleRow label="Transparency" experimental checked={sceneTransparency}
-                    title={sceneTransparency ? 'Disable scene material transparency' : 'Enable scene material transparency'}
-                    onChange={(next) => { setSceneTransparencyState(next); window.setUsdSceneTransparency && window.setUsdSceneTransparency(next); }}
-                    description="Render opacity/transmission authored by scene materials. When off, transparent materials render opaque." />
+                <ToggleRow label="Transparency" experimental checked={draftValues.transparency}
+                    settingKey="transparency"
+                    title={draftValues.transparency ? 'Disable scene material transparency' : 'Enable scene material transparency'}
+                    onChange={(next) => stageQualityValue('transparency', next)}
+                    description="Render opacity/transmission authored by scene materials. When off, transparent materials render opaque. Staged: takes effect on Apply." />
                 <ToggleRow label="Convolved diffuse environment" checked={diffuseEnvConvolve}
+                    settingKey="diffuseEnvConvolve"
                     title={diffuseEnvConvolve ? 'Use the second-order spherical harmonic fit instead' : 'Cosine-convolve the environment on the GPU instead'}
-                    onChange={(next) => {
-                        setDiffuseEnvConvolveState(next);
-                        window.setDiffuseEnvMethod && window.setDiffuseEnvMethod(next ? 'convolve' : 'sh');
-                        if (currentEnvironmentRef.current) callHandle('setEnvironment', currentEnvironmentRef.current);
-                    }}
+                    onChange={setDiffuseEnvConvolveValue}
                     description="Cosine-convolves the environment instead of a 9 term spherical harmonic fit. More accurate diffuse under small bright lights." />
             </React.Fragment>
         );
         const renderGeometryTab = () => (
             <React.Fragment>
                 <SelectRow label="Texture resolution"
+                    settingKey="textureMaxSize"
                     control={
-                        <MtlxSelect value={textureMaxSize} options={[512, 1024, 2048, 4096, Infinity]}
+                        <MtlxSelect value={draftValues.textureMaxSize} options={[512, 1024, 2048, 4096, Infinity]}
                             labels={{ 512: '512 px', 1024: '1024 px', 2048: '2048 px', 4096: '4096 px', Infinity: 'Original' }}
-                            onChange={pickTextureMaxSize} defValue={2048} size="sm" disabled={busy} />
+                            onChange={(next) => stageQualityValue('textureMaxSize', next)} defValue={2048} size="sm" disabled={busy} />
                     }
-                    description="The maximum size each texture loads at. Higher values show finer detail in color, normal and roughness maps, but loading takes longer and uses more memory. If all textures together would go over Texture memory, they load smaller than this." />
+                    description="The maximum size each texture loads at. Higher values show finer detail in color, normal and roughness maps, but loading takes longer and uses more memory. If all textures together would go over Texture memory, they load smaller than this. Staged: takes effect on Apply." />
                 <SelectRow label="Texture memory"
+                    settingKey="textureBudgetGib"
                     control={
-                        <MtlxSelect value={textureBudgetGib} options={[1, 2, 4]} labels={{ 1: '1 GB', 2: '2 GB', 4: '4 GB' }}
-                            onChange={pickTextureBudgetGib} defValue={1} size="sm" disabled={busy} />
+                        <MtlxSelect value={draftValues.textureBudgetGib} options={[1, 2, 4]} labels={{ 1: '1 GB', 2: '2 GB', 4: '4 GB' }}
+                            onChange={(next) => stageQualityValue('textureBudgetGib', next)} defValue={1} size="sm" disabled={busy} />
                     }
-                    description="How much memory all scene textures may use. Over the limit, all textures load at a lower resolution (1024, then 512 px) until they fit; if they still do not fit, the rest are left out (default values, grey UDIM tiles). Too high a value can exceed GPU memory and blank the view." />
+                    description="How much memory all scene textures may use. Over the limit, all textures load at a lower resolution (1024, then 512 px) until they fit; if they still do not fit, the rest are left out (default values, grey UDIM tiles). Too high a value can exceed GPU memory and blank the view. Staged: takes effect on Apply." />
                 <SelectRow label="Subdivision"
+                    settingKey="subdivision"
                     control={
-                        <MtlxSelect value={subdivisionLevel} options={[0, 1, 2]} labels={{ 0: 'Off', 1: '1', 2: '2' }}
-                            onChange={pickSubdivisionLevel} defValue={0} size="sm" disabled={busy} />
+                        <MtlxSelect value={draftValues.subdivision} options={[0, 1, 2]} labels={{ 0: 'Off', 1: '1', 2: '2' }}
+                            onChange={(next) => stageQualityValue('subdivision', Number(next))} defValue={0} size="sm" disabled={busy} />
                     }
-                    description="Loop-subdivides catmullClark meshes for preview; the runtime cannot expose the cage, so this approximates the limit surface." />
-                <ToggleRow label="Displacement" checked={displacementEnabled}
-                    title={displacementEnabled ? 'Disable displacement' : 'Enable displacement'}
-                    onChange={(next) => { setDisplacementEnabledState(next); window.setDisplacementEnabled && window.setDisplacementEnabled(next); }}
-                    description="Moves geometry bound to a displaced MaterialX material." />
+                    description="Loop-subdivides catmullClark meshes for preview; the runtime cannot expose the cage, so this approximates the limit surface. Staged: reloads the stage on Apply." />
+                <ToggleRow label="Displacement" checked={draftValues.displacement}
+                    settingKey="displacement"
+                    title={draftValues.displacement ? 'Disable displacement' : 'Enable displacement'}
+                    onChange={(next) => stageQualityValue('displacement', next)}
+                    description="Moves geometry bound to a displaced MaterialX material. Staged: takes effect on Apply." />
                 <SelectRow label="Displacement subdivision"
+                    settingKey="displacementSubdivision"
                     control={
-                        <MtlxSelect value={displacementSubdivisionOverride} options={['follow', 0, 1, 2, 3]}
+                        <MtlxSelect value={draftValues.displacementSubdivision} options={['follow', 0, 1, 2, 3]}
                             labels={{ follow: 'Follow stage', 0: 'Off', 1: '1', 2: '2', 3: '3' }}
-                            onChange={pickDisplacementSubdivisionOverride} defValue="follow" size="sm" disabled={busy} />
+                            onChange={(next) => stageQualityValue('displacementSubdivision', next === 'follow' ? 'follow' : Number(next))} defValue="follow" size="sm" disabled={busy} />
                     }
-                    description="Subdivision applied to meshes bound to displaced MaterialX materials." />
-                <ToggleRow label="Triangle limits" checked={triangleLimits}
-                    onChange={pickTriangleLimits} disabled={busy}
-                    description="Skips or lowers subdivision and displacement detail that would exceed 700,000 triangles per mesh or 6,000,000 per scene. Turning this off can run out of memory or freeze the tab on heavy scenes." />
+                    description="Subdivision applied to meshes bound to displaced MaterialX materials. Staged: takes effect on Apply." />
+                <ToggleRow label="Triangle limits" checked={draftValues.triangleLimits}
+                    settingKey="triangleLimits"
+                    onChange={(next) => stageQualityValue('triangleLimits', next !== false)} disabled={busy}
+                    description="Skips or lowers subdivision and displacement detail that would exceed 700,000 triangles per mesh or 6,000,000 per scene. Turning this off can run out of memory or freeze the tab on heavy scenes. Staged: reloads the stage on Apply." />
             </React.Fragment>
         );
         const sidebarBody = (
@@ -1897,14 +2260,16 @@
                     <SliderField
                         disabled={!canTuneEnvironment}
                         label="Environment rotation" unit="deg"
-                        value={envRotation} min={0} max={360} step={1}
+                        value={envRotation} min={0} max={360} step={1} decimals={0}
+                        defaultValue={0}
                         onSlider={applyEnvRotation}
                         onNumber={applyEnvRotation}
                     />
                     <SliderField
                         disabled={!canTuneEnvironment}
                         label="Exposure" unit="EV"
-                        value={linearToEv(envExposureLinear)} min={EV_MIN} max={EV_MAX} step={EV_STEP}
+                        value={linearToEv(envExposureLinear)} min={EV_MIN} max={EV_MAX} step={EV_STEP} decimals={1}
+                        defaultValue={0}
                         onSlider={(v) => setEnvExposureVal(evToLinear(v))}
                         onNumber={(v) => setEnvExposureVal(evToLinear(v))}
                     />
@@ -1986,7 +2351,11 @@
             </div>
         );
 
-        return <div data-testid="usd-scene-viewer" className="absolute inset-0 overflow-hidden flex bg-gray-900">
+        // Context value, not a component type: rowDirtyFor/draftDiff are new
+        // every render, but that only re-renders the hoisted row consumers,
+        // it never remounts them (see the rowDirtyFor comment above).
+        return <SceneRowCtx.Provider value={{ rowDirtyFor, draftDiff, hasStage }}>
+        <div data-testid="usd-scene-viewer" className="absolute inset-0 overflow-hidden flex bg-gray-900">
             <span className="sr-only" data-testid="usd-scene-status">{status}</span>
             {dragOver && (
                 <div className="fixed left-0 right-0 bottom-0 top-14 z-40 pointer-events-none p-2 sm:p-4">
@@ -2157,14 +2526,16 @@
                             type="button"
                             ref={renderSettingsBtnRef}
                             data-testid="usd-scene-render-settings"
-                            title="Render settings"
+                            title={draftDirty ? 'Render settings (unapplied changes)' : 'Render settings'}
                             onClick={() => setRenderSettingsOpen((o) => !o)}
-                            className={renderSettingsOpen ? HUD_PILL_ACTIVE : HUD_PILL}
+                            className={(renderSettingsOpen ? HUD_PILL_ACTIVE : HUD_PILL) + ' relative'}
                         >
                             <MtlxIcon name="settings-cog" className="w-4 h-4" />
                             <span>Render settings</span>
+                            {draftDirty ? (
+                                <span title="Unapplied changes" className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-400 border border-gray-900" />
+                            ) : null}
                         </button>
-                        <QualitySegments tone="hud" value={activeQualityPreset} onChange={applyQualityPreset} disabled={busy} />
                     </div>
 
                     {renderSettingsMounted && (
@@ -2176,13 +2547,11 @@
                         >
                             <div className="flex-none px-3 py-2 border-b border-gray-700">
                                 <div className="flex items-center gap-2">
-                                    <span className="text-xs font-medium text-gray-300">Quality</span>
-                                    <QualitySegments tone="panel" value={activeQualityPreset} onChange={applyQualityPreset} disabled={busy} />
-                                    {activeQualityPreset === 'custom' ? (
-                                        <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-gray-700/60 border border-gray-500/50 text-gray-300">Custom</span>
-                                    ) : null}
+                                    <span className="text-xs font-medium text-gray-300">Preset</span>
+                                    <QualitySegments tone="panel" value={draftStagedOverrides.length ? 'custom' : (draftLevel ? draftLevel.id : 'default')}
+                                        onChange={stageQualityLevel} disabled={busy || !!presetApplying} />
                                 </div>
-                                <div className="mt-1 text-[11px] text-gray-400">Changing any individual setting below switches this to Custom.</div>
+                                <div className="mt-1 text-[11px] text-gray-400">{qualitySummaryText()}</div>
                             </div>
                             <div className="flex-none flex items-center gap-1 px-2 pt-2 border-b border-gray-700 overflow-x-auto">
                                 {RENDER_TABS.map((tab) => (
@@ -2202,6 +2571,22 @@
                                 {renderTab === 'lighting' && renderLightingTab()}
                                 {renderTab === 'effects' && renderEffectsTab()}
                                 {renderTab === 'geometry' && renderGeometryTab()}
+                            </div>
+                            <div className="flex-none flex items-center justify-between gap-2 px-3 py-2 border-t border-gray-700">
+                                <span className="text-[11px] text-gray-400 truncate">
+                                    {presetApplying ? ('Applying ' + presetApplying) : footerHintText()}
+                                </span>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                    <button type="button" data-testid="usd-scene-quality-reset" disabled={busy || !!presetApplying || !draftResetDirty}
+                                        onClick={resetQualityDraft} className={BTN_SECONDARY + ' gap-1'}>
+                                        <MtlxIcon name="restore" className="w-3.5 h-3.5 flex-none" />Reset</button>
+                                    <button type="button" data-testid="usd-scene-quality-cancel" disabled={busy || !!presetApplying}
+                                        onClick={cancelQualityDraft} className={BTN_SECONDARY + ' gap-1'}>
+                                        <MtlxIcon name="x" className="w-3.5 h-3.5 flex-none" />Cancel</button>
+                                    <button type="button" data-testid="usd-scene-quality-apply" disabled={busy || !!presetApplying || !draftDirty}
+                                        onClick={applyQualityDraft} className={BTN_SECONDARY + ' gap-1'}>
+                                        <MtlxIcon name="check" className="w-3.5 h-3.5 flex-none" />Apply</button>
+                                </div>
                             </div>
                         </div>
                     )}
@@ -2252,7 +2637,8 @@
                 <RecordGifDialog open={recordOpen} onClose={() => setRecordOpen(false)}
                     viewRef={handleRef} baseName={rootBasename ? rootBasename.replace(/\.[^.]+$/, '') : 'usd-scene'} transparent={false} />
             )}
-        </div>;
+        </div>
+        </SceneRowCtx.Provider>;
     }
     window.SceneViewerApp = SceneViewerApp;
 })();

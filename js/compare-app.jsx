@@ -1733,12 +1733,14 @@ function MaterialCompareApp({ active = true } = {}) {
                             <SliderField
                                 label="Environment rotation" unit="deg"
                                 value={envUI.rotation} min={0} max={360} step={1}
+                                defaultValue={0}
                                 onSlider={(v) => setEnvRotationDeg(Number(v))}
                                 onNumber={(v) => setEnvRotationDeg(Number(v))}
                             />
                             <SliderField
                                 label="Exposure" unit="EV"
                                 value={linearToEv(envUI.exposure)} min={EV_MIN} max={EV_MAX} step={EV_STEP}
+                                defaultValue={0}
                                 onSlider={(v) => setEnvExposureVal(evToLinear(v))}
                                 onNumber={(v) => setEnvExposureVal(evToLinear(v))}
                             />
@@ -1810,7 +1812,7 @@ function MaterialCompareApp({ active = true } = {}) {
                             <div className="mt-1 text-[11px] text-gray-400">
                                 Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.
                             </div>
-                            <DisplacementSettingsRows />
+                            <DisplacementSettingsRows labelClassName="text-xs font-medium text-gray-400" />
                         </SectionCard>
                     </div>
 
@@ -1832,7 +1834,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                     type="button"
                                     onClick={() => setStatsHelpOpen((o) => !o)}
                                     title="About these statistics"
-                                    className="w-5 h-5 inline-flex items-center justify-center rounded-full border border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600 transition-colors"
+                                    className="w-5 h-5 inline-flex items-center justify-center text-gray-500 hover:text-gray-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-full"
                                 >
                                     <MtlxIcon name="help" className="w-3.5 h-3.5" />
                                 </button>

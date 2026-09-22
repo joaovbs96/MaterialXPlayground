@@ -74,10 +74,13 @@
     backdrop-filter: blur(8px);
 }
 
+/* Full-width row, no centered max-width container: the brand + desktop
+   nav sit at the left edge, #mtlx-nav-right's margin-left: auto (below)
+   carries the version/source cluster to the right edge. Matches the
+   desktop shell's own layout, which used to be a desktop-only override
+   of this same rule (see the WCO block below for what's still
+   genuinely desktop-only: drag regions, titlebar insets, mac gutter). */
 .mtlx-header-bar {
-    max-width: var(--site-max-width);
-    margin-left: auto;
-    margin-right: auto;
     padding-left: 12px;
     padding-right: 12px;
     height: var(--site-header-height);
@@ -108,12 +111,6 @@
 .mtlx-header-bar.mtlx-desktop-titlebar {
     -webkit-app-region: drag;
     app-region: drag;
-}
-/* Desktop only: no max-width pins brand/tabs at the window's left edge;
-   #mtlx-nav-right's margin-left: auto (below) then carries version/
-   source to the right edge, instead of both sitting centered. */
-.mtlx-header-bar.mtlx-desktop-titlebar {
-    max-width: none;
 }
 /* Reserves the overlay button corner via titlebar-area-x/width (absent
    means zero extra padding); only the inner bar's own content needs to

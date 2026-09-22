@@ -1613,11 +1613,13 @@ function BuilderApp({ active } = {}) {
             </div>
             <SliderField
                 label="Environment rotation" unit="deg" value={env} min={0} max={360} step={1} placeholder="0"
+                defaultValue={0}
                 onSlider={(v) => patch({ env: Number(v) === 0 ? '' : v })}
                 onNumber={(v) => patch({ env: v })}
             />
             <SliderField
                 label="Exposure" unit="EV" value={builderExposureEv(exposure)} min={-3} max={3} step={0.1} placeholder="0"
+                defaultValue={0}
                 onSlider={(v) => patch({ exposure: builderEvToExposure(v) })}
                 onNumber={(v) => patch({ exposure: builderEvToExposure(v) })}
             />
@@ -1680,6 +1682,7 @@ function BuilderApp({ active } = {}) {
             </div>
             <SliderField
                 label="HUD corner radius" unit="px" value={radius} min={0} max={24} step={1} placeholder={BUILDER_THEME_DEFAULTS.radius}
+                defaultValue={Number(BUILDER_THEME_DEFAULTS.radius)}
                 onSlider={(v) => patch({ radius: v })}
                 onNumber={(v) => patch({ radius: v })}
             />

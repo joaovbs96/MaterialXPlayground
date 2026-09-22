@@ -256,7 +256,9 @@ const EmbedControls = ({
                         <input
                             type="range" min="0" max="360" step="1"
                             value={envRotation}
+                            title="Right click to reset"
                             onChange={(e) => setEnvRotation(Number(e.target.value))}
+                            onContextMenu={rangeResetOnContextMenu({ defaultValue: 0, min: 0, max: 360, commit: (v) => setEnvRotation(Number(v)) })}
                         />
                     </div>
                     <div className="mtlx-ec-panel-row mtlx-ec-panel-row--slider">
@@ -267,7 +269,9 @@ const EmbedControls = ({
                         <input
                             type="range" min={EV_MIN} max={EV_MAX} step={EV_STEP}
                             value={linearToEv(envExposure)}
+                            title="Right click to reset"
                             onChange={(e) => setEnvExposure(evToLinear(e.target.value))}
+                            onContextMenu={rangeResetOnContextMenu({ defaultValue: 0, min: EV_MIN, max: EV_MAX, commit: (v) => setEnvExposure(evToLinear(v)) })}
                         />
                     </div>
                 </div>
