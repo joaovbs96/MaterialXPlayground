@@ -86,10 +86,10 @@
                             search or type filter narrows the tree. */}
                         <div className="flex items-stretch rounded-md border border-gray-700 overflow-hidden mb-2 h-8" role="group" aria-label="Documentation filter">
                             {[
-                                { mode: 'all', label: 'All', count: stats ? stats.total : 0 },
-                                { mode: 'documented', label: 'Documented', count: stats ? stats.total - stats.undoc : 0 },
-                                { mode: 'undocumented', label: 'No docs', count: stats ? stats.undoc : 0 },
-                            ].map(({ mode, label, count }, i) => {
+                                { mode: 'all', label: 'All', title: 'All', count: stats ? stats.total : 0 },
+                                { mode: 'documented', label: 'Docs', title: 'Documented nodes', count: stats ? stats.total - stats.undoc : 0 },
+                                { mode: 'undocumented', label: 'No docs', title: 'No docs', count: stats ? stats.undoc : 0 },
+                            ].map(({ mode, label, title, count }, i) => {
                                 const active = docFilter === mode;
                                 const shownCount = active && matchCount !== null ? matchCount : count;
                                 const countCls = mode === 'undocumented'
@@ -99,10 +99,11 @@
                                     <button
                                         key={mode}
                                         onClick={() => applyDocFilter(mode)}
-                                        title={label}
-                                        aria-label={label}
+                                        title={title}
+                                        aria-label={title}
                                         aria-pressed={active}
-                                        className={`flex-1 min-w-0 flex items-center justify-center gap-1 text-xs transition-colors ${i > 0 ? 'border-l border-gray-700' : ''} ${
+                                        style={{ flex: '1 1 auto', whiteSpace: 'nowrap', paddingLeft: '6px', paddingRight: '6px' }}
+                                        className={`min-w-0 flex items-center justify-center gap-1 text-xs transition-colors ${i > 0 ? 'border-l border-gray-700' : ''} ${
                                             active
                                                 ? 'bg-blue-500/[0.12] text-blue-300'
                                                 : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
