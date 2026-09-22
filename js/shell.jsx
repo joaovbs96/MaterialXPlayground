@@ -147,6 +147,7 @@ const VIEW_DEPS = {
             'js/docs/rich-text.jsx',
             'js/docs/port-tables.jsx',
             'js/docs/impl-matrix.jsx',
+            'js/docs/impl-preview.jsx',
             'js/docs/sidebar.jsx',
             'js/node-preview.jsx',
         ],
