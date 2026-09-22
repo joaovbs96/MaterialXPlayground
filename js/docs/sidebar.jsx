@@ -35,9 +35,22 @@
                     expandedLibs[lib] && Object.keys(groups).every((g) => expandedGroups[`${lib}-${g}`])));
             return (
                 // [scrollbar-gutter:stable]: this element is both the scroll
-                // container and (at md+) the min-content grid column; reserve
-                // the gutter so width stays constant as the scrollbar toggles.
-                <div className={(collapsed ? 'md:hidden ' : 'md:col-span-1 ') + 'bg-gray-800 rounded-xl border border-gray-800 max-h-[45vh] md:max-h-none md:min-h-0 overflow-y-auto custom-scrollbar [scrollbar-gutter:stable]'}>
+                // container and (at md+) the fixed 340px grid column
+                // (js/docs-app.jsx); reserve the gutter so width stays
+                // constant as the scrollbar toggles.
+                // min-w-0: a grid item's default min-width:auto lets wide
+                // content (long node names) push past a fixed track instead
+                // of wrapping, which would make the panel visually resize.
+                <div className={(collapsed ? 'md:hidden ' : 'md:col-span-1 md:min-w-0 ') + 'bg-gray-800 rounded-xl border border-gray-800 max-h-[45vh] md:max-h-none md:min-h-0 overflow-y-auto custom-scrollbar [scrollbar-gutter:stable]'}>
+                    {/* Ghost chrome for the type-filter segments below: MtlxSelect
+                        (js/shared/mtlx-ui.jsx) always paints its own background/
+                        border via inline style, so beating it needs !important
+                        here rather than an edit to that shared component. */}
+                    <style>{`
+                        .docs-type-ghost { background: transparent !important; border: 1px solid transparent !important; padding-left: 4px !important; padding-right: 2px !important; }
+                        .docs-type-ghost:hover, .docs-type-ghost:focus-visible { border-color: #374151 !important; background: rgba(255,255,255,0.03) !important; }
+                        .docs-type-ghost--active { color: #60a5fa !important; }
+                    `}</style>
                     {/* Sticky header stays visible while the tree scrolls beneath it. The
                         scroll container is unpadded; the sticky block and tree wrapper
                         carry their own padding so the header sits flush at top with no overlap. */}
@@ -161,66 +174,75 @@
                                 </button>
                             </div>
                         </div>
-                        {(searchOutType || searchInType) && (
-                            <div className="flex flex-wrap items-center gap-1 pb-1">
-                                {searchOutType && (
-                                    <span className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full border border-gray-700 bg-gray-900 text-[11px] font-mono text-gray-300">
-                                        out: {searchOutType}
+                        {/* Integrated type-filter line: reads as part of the search
+                            block, not a second control. Each segment is a muted
+                            "Outputs"/"Takes" label glued to a borderless MtlxSelect
+                            (variant="plain", ghost chrome from the scoped CSS below);
+                            an active filter's value turns accent-blue and gets an
+                            inline × instead of a separate removable-chip row. */}
+                        {showTypeRow && (
+                            <div
+                                className="flex items-center gap-1 h-7 mb-2 text-xs"
+                                role="group"
+                                aria-label="Filter by port type"
+                            >
+                                <div className="flex items-center gap-1 min-w-0 flex-1">
+                                    <span className="text-[11px] text-gray-500 shrink-0">Outputs</span>
+                                    <MtlxSelect
+                                        value={searchOutType || ''}
+                                        options={outputTypeOptions || []}
+                                        onChange={(v) => setSearchOutType(v || null)}
+                                        emptyOption="any"
+                                        placeholder="any"
+                                        defValue={null}
+                                        title="Only show nodes with a signature outputting this type (out: in the search box)"
+                                        ariaLabel="Filter by output type"
+                                        font="mono"
+                                        size="sm"
+                                        variant="plain"
+                                        align="left"
+                                        className={'docs-type-ghost flex-1 min-w-0' + (searchOutType ? ' docs-type-ghost--active' : '')}
+                                    />
+                                    {searchOutType && (
                                         <button
                                             onClick={() => setSearchOutType(null)}
                                             title="Remove output type filter"
                                             aria-label={`Remove output type filter (${searchOutType})`}
-                                            className="text-gray-500 hover:text-gray-200"
+                                            className="shrink-0 text-gray-500 hover:text-gray-200"
                                         >
                                             <MtlxIcon name="x" className="w-3 h-3" />
                                         </button>
-                                    </span>
-                                )}
-                                {searchInType && (
-                                    <span className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full border border-gray-700 bg-gray-900 text-[11px] font-mono text-gray-300">
-                                        in: {searchInType}
+                                    )}
+                                </div>
+                                <span className="text-gray-700 shrink-0" aria-hidden="true">&middot;</span>
+                                <div className="flex items-center gap-1 min-w-0 flex-1">
+                                    <span className="text-[11px] text-gray-500 shrink-0">Takes</span>
+                                    <MtlxSelect
+                                        value={searchInType || ''}
+                                        options={takesTypeOptions || []}
+                                        onChange={(v) => setSearchInType(v || null)}
+                                        emptyOption="any"
+                                        placeholder="any"
+                                        defValue={null}
+                                        title="Only show nodes with a signature taking this type as input (in: in the search box)"
+                                        ariaLabel="Filter by input type"
+                                        font="mono"
+                                        size="sm"
+                                        variant="plain"
+                                        align="left"
+                                        className={'docs-type-ghost flex-1 min-w-0' + (searchInType ? ' docs-type-ghost--active' : '')}
+                                    />
+                                    {searchInType && (
                                         <button
                                             onClick={() => setSearchInType(null)}
                                             title="Remove input type filter"
                                             aria-label={`Remove input type filter (${searchInType})`}
-                                            className="text-gray-500 hover:text-gray-200"
+                                            className="shrink-0 text-gray-500 hover:text-gray-200"
                                         >
                                             <MtlxIcon name="x" className="w-3 h-3" />
                                         </button>
-                                    </span>
-                                )}
-                            </div>
-                        )}
-                        {showTypeRow && (
-                            <div className="flex items-center gap-1.5 pb-2">
-                                <MtlxSelect
-                                    value={searchOutType || ''}
-                                    options={outputTypeOptions || []}
-                                    onChange={(v) => setSearchOutType(v || null)}
-                                    emptyOption="any"
-                                    placeholder="Outputs: any"
-                                    defValue={null}
-                                    title="Only show nodes with a signature outputting this type (out: in the search box)"
-                                    ariaLabel="Filter by output type"
-                                    font="mono"
-                                    size="sm"
-                                    variant="field"
-                                    className="flex-1 min-w-0"
-                                />
-                                <MtlxSelect
-                                    value={searchInType || ''}
-                                    options={takesTypeOptions || []}
-                                    onChange={(v) => setSearchInType(v || null)}
-                                    emptyOption="any"
-                                    placeholder="Takes: any"
-                                    defValue={null}
-                                    title="Only show nodes with a signature taking this type as input (in: in the search box)"
-                                    ariaLabel="Filter by input type"
-                                    font="mono"
-                                    size="sm"
-                                    variant="field"
-                                    className="flex-1 min-w-0"
-                                />
+                                    )}
+                                </div>
                             </div>
                         )}
                     </div>
@@ -346,10 +368,10 @@
                                 segmented control above the search box shows all nodes, only documented, or
                                 only undocumented ones, each with its count. Use the search box to filter by
                                 name, and the icon next to it to expand or collapse everything. The funnel
-                                icon inside the search box opens two dropdowns that filter by port type:
-                                "Outputs" keeps nodes with a signature that outputs the chosen type, "Takes"
-                                keeps nodes with a signature that takes it as an input; active type filters
-                                show as removable chips under the search box. Typing{' '}
+                                icon inside the search box opens a filter line for port type: "Outputs"
+                                keeps nodes with a signature that outputs the chosen type, "Takes" keeps
+                                nodes with a signature that takes it as an input; an active filter's value
+                                turns blue with a small × next to it to clear it. Typing{' '}
                                 <code>out:&lt;type&gt;</code> or <code>in:&lt;type&gt;</code> directly into
                                 the search box (e.g. <code>out:color3</code>) does the same thing and can be
                                 combined with a name and with each other.

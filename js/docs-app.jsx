@@ -765,10 +765,11 @@
                                    for edge-to-edge (md-scoped: collapse only
                                    exists at md+); md:gap-0 keeps the strip flush. */
                                 ? 'grid grid-cols-1 md:grid-cols-[auto_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)] gap-3 sm:gap-6 md:gap-0 md:flex-1 md:min-h-[20rem] md:-m-6'
-                                // Expanded: sizes the sidebar column to its min-content —
-                                // just wide enough for the filter tri-state + "3D Preview"
-                                // row. The doc pane's columns stay minmax(0,1fr).
-                                : 'grid grid-cols-1 md:grid-cols-[min-content_repeat(3,minmax(0,1fr))] md:grid-rows-[minmax(0,1fr)] gap-3 sm:gap-6 md:flex-1 md:min-h-[20rem]')}>
+                                // Expanded: fixed 340px sidebar column (widest content:
+                                // the two type-filter segments on one line plus padding)
+                                // so the panel never resizes when the filter row toggles.
+                                // The doc pane's columns stay minmax(0,1fr).
+                                : 'grid grid-cols-1 md:grid-cols-[340px_repeat(3,minmax(0,1fr))] md:grid-rows-[minmax(0,1fr)] gap-3 sm:gap-6 md:flex-1 md:min-h-[20rem]')}>
 
                             {/* Vertical twin of the footer's collapsed "Disclaimer" strip: a slim
                                 full-height in-flow bar in the grid's auto column; click re-opens
