@@ -92,7 +92,8 @@ test('gltf: textures, channel extracts and vertex color', () => {
   assert.match(inputLine(xml, 'base_color_image', 'uaddressmode'), /value="clamp"/);
   assert.match(inputLine(xml, 'base_color_image', 'vaddressmode'), /value="periodic"/);
   assert.match(inputLine(xml, 'base_color_image', 'filtertype'), /value="closest"/);
-  assert.match(inputLine(xml, 'SR_tex', 'alpha'), /nodename="base_color_image" output="outa"/);
+  // OPAQUE ignores alpha entirely, so nothing is wired to it
+  assert.equal(inputLine(xml, 'SR_tex', 'alpha'), null);
   // vertex color multiply sits between the image and base_color
   assert.match(inputLine(xml, 'base_color_vertex', 'in1'), /nodename="base_color_image" output="outcolor"/);
   assert.match(inputLine(xml, 'vertex_color', 'geomprop'), /value="color"/);
@@ -103,11 +104,45 @@ test('gltf: textures, channel extracts and vertex color', () => {
   assert.match(inputLine(xml, 'metallic_channel', 'index'), /value="2"/);
   assert.match(inputLine(xml, 'metallic_scaled', 'in2'), /value="0\.5"/);
   assert.match(inputLine(xml, 'SR_tex', 'metallic'), /nodename="metallic_scaled"/);
-  // normal and occlusion
-  assert.match(nodeLine(xml, 'normal_image'), /<gltf_normalmap name="normal_image" type="vector3">/);
+  // normal scale 2 needs the image plus a normalmap, gltf_normalmap has no scale
+  assert.match(nodeLine(xml, 'normal_image'), /<gltf_image name="normal_image" type="vector3">/);
+  assert.match(inputLine(xml, 'normal_image', 'default'), /value="0\.5, 0\.5, 1"/);
+  assert.match(inputLine(xml, 'normal_image_normalmap', 'scale'), /value="2"/);
+  assert.match(inputLine(xml, 'SR_tex', 'normal'), /nodename="normal_image_normalmap"/);
   assert.match(inputLine(xml, 'occlusion_channel', 'index'), /value="0"/);
   assert.match(inputLine(xml, 'SR_tex', 'emissive'), /nodename="emissive_image" output="outcolor"/);
-  assert.deepEqual(notes, ['Normal texture scale 2 is not supported by gltf_normalmap and is ignored']);
+  assert.deepEqual(notes, []);
+});
+
+test('gltf: an unscaled normal texture stays on gltf_normalmap', () => {
+  const { xml } = gltfPbrDocument({
+    name: 'n',
+    material: { normalTexture: { index: 0 } },
+    textureRefs: allRefs,
+  });
+  assert.match(nodeLine(xml, 'normal_image'), /<gltf_normalmap name="normal_image" type="vector3">/);
+  assert.match(inputLine(xml, 'SR_n', 'normal'), /nodename="normal_image"/);
+});
+
+test('gltf: occlusion strength becomes a mix against 1', () => {
+  const { xml } = gltfPbrDocument({
+    name: 'ao',
+    material: { occlusionTexture: { index: 0, strength: 0.25 } },
+    textureRefs: allRefs,
+  });
+  assert.match(inputLine(xml, 'occlusion_strength', 'fg'), /nodename="occlusion_channel"/);
+  assert.match(inputLine(xml, 'occlusion_strength', 'bg'), /value="1"/);
+  assert.match(inputLine(xml, 'occlusion_strength', 'mix'), /value="0\.25"/);
+  assert.match(inputLine(xml, 'SR_ao', 'occlusion'), /nodename="occlusion_strength"/);
+});
+
+test('gltf: base color alpha only reaches alpha when the mode is not OPAQUE', () => {
+  const material = {
+    alphaMode: 'BLEND',
+    pbrMetallicRoughness: { baseColorFactor: [1, 1, 1, 1], baseColorTexture: { index: 0 } },
+  };
+  const { xml } = gltfPbrDocument({ name: 'b', material, textureRefs: allRefs });
+  assert.match(inputLine(xml, 'SR_b', 'alpha'), /nodename="base_color_image" output="outa"/);
 });
 
 test('gltf: alpha modes', () => {
@@ -133,7 +168,8 @@ test('gltf: extensions map onto gltf_pbr inputs, unknown ones are noted', () => 
         KHR_materials_iridescence: { iridescenceFactor: 1, iridescenceIor: 1.8, iridescenceThicknessMaximum: 550 },
         KHR_materials_anisotropy: { anisotropyStrength: 0.6, anisotropyRotation: 1.2 },
         KHR_materials_emissive_strength: { emissiveStrength: 4 },
-        KHR_materials_pbrSpecularGlossiness: {},
+        KHR_materials_dispersion: { dispersion: 0.2 },
+        KHR_materials_diffuse_transmission: {},
       },
     },
     textureRefs: () => null,
@@ -154,7 +190,119 @@ test('gltf: extensions map onto gltf_pbr inputs, unknown ones are noted', () => 
   assert.match(inputLine(xml, 'SR_ext', 'anisotropy_strength'), /value="0\.6"/);
   assert.match(inputLine(xml, 'SR_ext', 'anisotropy_rotation'), /value="1\.2"/);
   assert.match(inputLine(xml, 'SR_ext', 'emissive_strength'), /value="4"/);
-  assert.deepEqual(notes, ['Unsupported glTF extension: KHR_materials_pbrSpecularGlossiness (ignored)']);
+  assert.match(inputLine(xml, 'SR_ext', 'dispersion'), /value="0\.2"/);
+  assert.deepEqual(notes, ['Unsupported glTF extension: KHR_materials_diffuse_transmission (ignored)']);
+});
+
+test('gltf: anisotropy texture goes through gltf_anisotropy_image', () => {
+  const { xml, notes } = gltfPbrDocument({
+    name: 'an',
+    material: {
+      extensions: {
+        KHR_materials_anisotropy: { anisotropyStrength: 0.8, anisotropyRotation: 1.2, anisotropyTexture: { index: 0 } },
+      },
+    },
+    textureRefs: allRefs,
+  });
+  assert.match(nodeLine(xml, 'anisotropy_image'), /<gltf_anisotropy_image name="anisotropy_image" type="multioutput">/);
+  assert.match(inputLine(xml, 'anisotropy_image', 'anisotropy_strength'), /value="0\.8"/);
+  assert.match(inputLine(xml, 'anisotropy_image', 'anisotropy_rotation'), /value="1\.2"/);
+  assert.match(inputLine(xml, 'SR_an', 'anisotropy_strength'), /nodename="anisotropy_image" output="anisotropy_strength_out"/);
+  assert.match(inputLine(xml, 'SR_an', 'anisotropy_rotation'), /nodename="anisotropy_image" output="anisotropy_rotation_out"/);
+  assert.deepEqual(notes, []);
+});
+
+test('gltf: specular and sheen roughness read the alpha channel', () => {
+  const { xml } = gltfPbrDocument({
+    name: 'a',
+    material: {
+      extensions: {
+        KHR_materials_specular: { specularFactor: 0.5, specularTexture: { index: 0 } },
+        KHR_materials_sheen: { sheenRoughnessFactor: 0.5, sheenRoughnessTexture: { index: 1 } },
+      },
+    },
+    textureRefs: allRefs,
+  });
+  assert.match(nodeLine(xml, 'specular_image'), /<gltf_image name="specular_image" type="color4">/);
+  assert.match(inputLine(xml, 'specular_image_channel', 'index'), /value="3"/);
+  assert.match(inputLine(xml, 'specular_image_scaled', 'in2'), /value="0\.5"/);
+  assert.match(inputLine(xml, 'SR_a', 'specular'), /nodename="specular_image_scaled"/);
+  assert.match(inputLine(xml, 'sheen_roughness_image_channel', 'index'), /value="3"/);
+  assert.match(inputLine(xml, 'SR_a', 'sheen_roughness'), /nodename="sheen_roughness_image_scaled"/);
+});
+
+test('gltf: KHR_materials_pbrSpecularGlossiness maps onto gltf_pbr', () => {
+  const constant = gltfPbrDocument({
+    name: 'sg',
+    material: {
+      extensions: {
+        KHR_materials_pbrSpecularGlossiness: {
+          diffuseFactor: [0.8, 0.6, 0.4, 1], specularFactor: [0.9, 0.9, 1], glossinessFactor: 0.75,
+        },
+      },
+    },
+    textureRefs: () => null,
+  });
+  assert.match(inputLine(constant.xml, 'SR_sg', 'base_color'), /value="0\.8, 0\.6, 0\.4"/);
+  assert.match(inputLine(constant.xml, 'SR_sg', 'metallic'), /value="0"/);
+  assert.match(inputLine(constant.xml, 'SR_sg', 'specular_color'), /value="0\.9, 0\.9, 1"/);
+  assert.match(inputLine(constant.xml, 'SR_sg', 'roughness'), /value="0\.25"/);
+  assert.ok(constant.notes.some(note => note.startsWith('KHR_materials_pbrSpecularGlossiness is legacy')));
+
+  const textured = gltfPbrDocument({
+    name: 'sgt',
+    material: {
+      extensions: {
+        KHR_materials_pbrSpecularGlossiness: {
+          diffuseTexture: { index: 0 }, glossinessFactor: 1,
+          specularGlossinessTexture: { index: 1 }, specularFactor: [1, 1, 1],
+        },
+      },
+    },
+    textureRefs: allRefs,
+  });
+  assert.match(nodeLine(textured.xml, 'base_color_image'), /<gltf_colorimage/);
+  assert.match(inputLine(textured.xml, 'SR_sgt', 'specular_color'), /nodename="specular_glossiness_image" output="outcolor"/);
+  assert.match(inputLine(textured.xml, 'glossiness_to_roughness', 'in1'), /value="1"/);
+  assert.match(inputLine(textured.xml, 'glossiness_to_roughness', 'in2'), /nodename="specular_glossiness_image" output="outa"/);
+  assert.match(inputLine(textured.xml, 'SR_sgt', 'roughness'), /nodename="glossiness_to_roughness"/);
+});
+
+test('gltf: KHR_materials_unlit becomes surface_unlit', () => {
+  const blend = gltfPbrDocument({
+    name: 'u',
+    material: {
+      alphaMode: 'BLEND',
+      pbrMetallicRoughness: { baseColorFactor: [1, 0.2, 0.2, 0.5] },
+      extensions: { KHR_materials_unlit: {} },
+    },
+    textureRefs: () => null,
+  });
+  assert.match(nodeLine(blend.xml, 'SR_u'), /<surface_unlit name="SR_u" type="surfaceshader">/);
+  assert.match(inputLine(blend.xml, 'SR_u', 'emission'), /value="1"/);
+  assert.match(inputLine(blend.xml, 'SR_u', 'emission_color'), /value="1, 0\.2, 0\.2"/);
+  assert.match(inputLine(blend.xml, 'SR_u', 'opacity'), /value="0\.5"/);
+  assert.ok(blend.notes.some(note => note.startsWith('KHR_materials_unlit')));
+
+  const masked = gltfPbrDocument({
+    name: 'um',
+    material: {
+      alphaMode: 'MASK', alphaCutoff: 0.4,
+      pbrMetallicRoughness: { baseColorTexture: { index: 0 } },
+      extensions: { KHR_materials_unlit: {} },
+    },
+    textureRefs: allRefs,
+  });
+  assert.match(inputLine(masked.xml, 'alpha_cutoff_mask', 'value1'), /nodename="base_color_image" output="outa"/);
+  assert.match(inputLine(masked.xml, 'alpha_cutoff_mask', 'value2'), /value="0\.4"/);
+  assert.match(inputLine(masked.xml, 'SR_um', 'opacity'), /nodename="alpha_cutoff_mask"/);
+
+  const opaque = gltfPbrDocument({
+    name: 'uo',
+    material: { pbrMetallicRoughness: { baseColorFactor: [1, 1, 1, 0.2] }, extensions: { KHR_materials_unlit: {} } },
+    textureRefs: () => null,
+  });
+  assert.equal(inputLine(opaque.xml, 'SR_uo', 'opacity'), null);
 });
 
 test('gltf: iridescence thickness texture uses gltf_iridescence_thickness', () => {
@@ -202,7 +350,7 @@ test('gltf: KHR_texture_transform and the second UV set', () => {
 test('gltf: a missing texture falls back to the factor and records a note', () => {
   const { xml, notes } = gltfPbrDocument({
     name: 'miss',
-    material: { pbrMetallicRoughness: { baseColorFactor: [0.2, 0.3, 0.4, 0.5], baseColorTexture: { index: 0 } } },
+    material: { alphaMode: 'BLEND', pbrMetallicRoughness: { baseColorFactor: [0.2, 0.3, 0.4, 0.5], baseColorTexture: { index: 0 } } },
     textureRefs: () => null,
   });
   assert.ok(!xml.includes('name="file"'));

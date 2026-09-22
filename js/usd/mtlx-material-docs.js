@@ -135,6 +135,7 @@ const KNOWN_GLTF_EXTENSIONS = new Set([
   "KHR_materials_ior", "KHR_materials_sheen", "KHR_materials_specular",
   "KHR_materials_iridescence", "KHR_materials_anisotropy", "KHR_materials_dispersion",
   "KHR_materials_emissive_strength", "KHR_texture_transform",
+  "KHR_materials_unlit", "KHR_materials_pbrSpecularGlossiness",
 ]);
 
 function num(value, fallback) {
@@ -185,6 +186,14 @@ function resolveRef(ctx, textureInfo, label) {
   return ref;
 }
 
+function scaleFloat(ctx, source, name, factor, output) {
+  if (factor === undefined || factor === 1) return source;
+  const scaled = ctx.doc.addNode("multiply", name, "float");
+  connect(scaled, "in1", "float", source, output);
+  setInput(scaled, "in2", "float", { value: formatNumber(factor) });
+  return scaled;
+}
+
 // A float channel read: gltf_image float (red) or vector3 + extract.
 function floatTexture(ctx, ref, name, channel, factor) {
   if (channel === 0) {
@@ -198,11 +207,18 @@ function floatTexture(ctx, ref, name, channel, factor) {
   const extract = ctx.doc.addNode("extract", name + "_channel", "float");
   connect(extract, "in", "vector3", image);
   setInput(extract, "index", "integer", { value: String(channel), uniform: "true" });
-  if (factor === undefined || factor === 1) return extract;
-  const scaled = ctx.doc.addNode("multiply", name + "_scaled", "float");
-  connect(scaled, "in1", "float", extract);
-  setInput(scaled, "in2", "float", { value: formatNumber(factor) });
-  return scaled;
+  return scaleFloat(ctx, extract, name + "_scaled", factor);
+}
+
+// glTF packs the specular factor and the sheen roughness in the alpha
+// channel, which needs the color4 gltf_image plus an extract.
+function alphaTexture(ctx, ref, name, factor) {
+  const image = ctx.doc.addNode("gltf_image", name, "color4");
+  applyGltfImageCommon(ctx, image, ref);
+  const extract = ctx.doc.addNode("extract", name + "_channel", "float");
+  connect(extract, "in", "color4", image);
+  setInput(extract, "index", "integer", { value: "3", uniform: "true" });
+  return scaleFloat(ctx, extract, name + "_scaled", factor);
 }
 
 function colorTexture(ctx, ref, name, factorRgba) {
@@ -212,69 +228,166 @@ function colorTexture(ctx, ref, name, factorRgba) {
   return node;
 }
 
+// gltf_normalmap has no strength input, so a scaled normal texture is built
+// from the same pieces: the glTF image read plus a normalmap with scale.
+function normalMapNode(ctx, ref, name, scale) {
+  if (scale === 1) {
+    const node = ctx.doc.addNode("gltf_normalmap", name, "vector3");
+    applyGltfImageCommon(ctx, node, ref);
+    return node;
+  }
+  const image = ctx.doc.addNode("gltf_image", name, "vector3");
+  applyGltfImageCommon(ctx, image, ref);
+  setInput(image, "default", "vector3", { value: "0.5, 0.5, 1" });
+  const normalmap = ctx.doc.addNode("normalmap", name + "_normalmap", "vector3");
+  connect(normalmap, "in", "vector3", image);
+  setInput(normalmap, "scale", "float", { value: formatNumber(scale) });
+  return normalmap;
+}
+
+// Extract one channel of an existing gltf_image vector3 and scale it.
+function channelOf(ctx, image, index, name, factor) {
+  const extract = ctx.doc.addNode("extract", name + "_channel", "float");
+  connect(extract, "in", "vector3", image);
+  setInput(extract, "index", "integer", { value: String(index), uniform: "true" });
+  return scaleFloat(ctx, extract, name + "_scaled", factor);
+}
+
+// Base color and its alpha, shared by gltf_pbr, the legacy spec/gloss
+// mapping and the unlit surface. Returns the factor when there is no map.
+function gltfBaseColor(ctx, pbr, hasVertexColor) {
+  const factor = Array.isArray(pbr.baseColorFactor) ? pbr.baseColorFactor : [1, 1, 1, 1];
+  const ref = resolveRef(ctx, pbr.baseColorTexture, "base color");
+  let color = null;
+  let alpha = null;
+  if (ref) {
+    const image = colorTexture(ctx, ref, "base_color_image", factor);
+    color = { node: image, output: "outcolor" };
+    alpha = { node: image, output: "outa" };
+  }
+  if (hasVertexColor) {
+    const vertex = ctx.doc.addNode("geompropvalue", "vertex_color", "color3");
+    setInput(vertex, "geomprop", "string", { value: "color", uniform: "true" });
+    setInput(vertex, "default", "color3", { value: "1, 1, 1" });
+    const mul = ctx.doc.addNode("multiply", "base_color_vertex", "color3");
+    if (color) connect(mul, "in1", "color3", color.node, color.output);
+    else setInput(mul, "in1", "color3", { value: formatVector(factor, 3, 1) });
+    connect(mul, "in2", "color3", vertex);
+    color = { node: mul };
+  }
+  return { color, alpha, factor };
+}
+
+// glTF ignores alpha entirely when the mode is OPAQUE; MASK is a hard cut
+// at the cutoff, which surface_unlit needs spelled out as an ifgreater.
+function alphaSource(ctx, base, alphaMode, alphaCutoff, masked) {
+  if (alphaMode === "OPAQUE") return null;
+  let source = base.alpha ? { node: base.alpha.node, output: base.alpha.output } : null;
+  const constant = num(base.factor[3], 1);
+  if (!masked) return source || { value: constant };
+  const cut = ctx.doc.addNode("ifgreater", "alpha_cutoff_mask", "float");
+  if (source) connect(cut, "value1", "float", source.node, source.output);
+  else setInput(cut, "value1", "float", { value: formatNumber(constant) });
+  setInput(cut, "value2", "float", { value: formatNumber(alphaCutoff) });
+  setInput(cut, "in1", "float", { value: "1" });
+  setInput(cut, "in2", "float", { value: "0" });
+  return { node: cut };
+}
+
+function setFloatSource(node, name, source) {
+  if (!source) return;
+  if (source.node) connect(node, name, "float", source.node, source.output);
+  else setInput(node, name, "float", { value: formatNumber(source.value) });
+}
+
 export function gltfPbrDocument({ name, material, textureRefs, hints } = {}) {
   const source = material || {};
   const doc = createDocument();
   const ctx = { doc, textureRefs, notes: [], uv1: null };
-  const shaderName = "SR_" + (name || "material");
-  const shader = doc.addNode("gltf_pbr", shaderName, "surfaceshader");
-  const pbr = source.pbrMetallicRoughness || {};
+  const label = name || "material";
+  const extensions = source.extensions && typeof source.extensions === "object" ? source.extensions : {};
   const hasVertexColor = !!(hints && hints.hasVertexColor);
+  const alphaMode = String(source.alphaMode || "OPAQUE").toUpperCase();
+  const alphaCutoff = num(source.alphaCutoff, 0.5);
 
-  // Base color and alpha.
-  const baseFactor = Array.isArray(pbr.baseColorFactor) ? pbr.baseColorFactor : [1, 1, 1, 1];
-  const baseRef = resolveRef(ctx, pbr.baseColorTexture, "base color");
-  let baseSource = null;
-  if (baseRef) {
-    const image = colorTexture(ctx, baseRef, "base_color_image", baseFactor);
-    baseSource = { node: image, output: "outcolor" };
-    connect(shader, "alpha", "float", image, "outa");
-  } else {
-    setInput(shader, "alpha", "float", { value: formatNumber(num(baseFactor[3], 1)) });
+  for (const key of Object.keys(extensions)) {
+    if (!KNOWN_GLTF_EXTENSIONS.has(key)) ctx.notes.push(`Unsupported glTF extension: ${key} (ignored)`);
   }
-  if (hasVertexColor) {
-    const vertex = doc.addNode("geompropvalue", "vertex_color", "color3");
-    setInput(vertex, "geomprop", "string", { value: "color", uniform: "true" });
-    setInput(vertex, "default", "color3", { value: "1, 1, 1" });
-    const mul = doc.addNode("multiply", "base_color_vertex", "color3");
-    if (baseSource) connect(mul, "in1", "color3", baseSource.node, baseSource.output);
-    else setInput(mul, "in1", "color3", { value: formatVector(baseFactor, 3, 1) });
-    connect(mul, "in2", "color3", vertex);
-    baseSource = { node: mul };
-  }
-  if (baseSource) connect(shader, "base_color", "color3", baseSource.node, baseSource.output);
-  else setInput(shader, "base_color", "color3", { value: formatVector(baseFactor, 3, 1) });
 
-  // Metallic and roughness share one texture: G roughness, B metallic.
-  const metallicFactor = num(pbr.metallicFactor, 1);
-  const roughnessFactor = num(pbr.roughnessFactor, 1);
-  const mrRef = resolveRef(ctx, pbr.metallicRoughnessTexture, "metallic roughness");
-  if (mrRef) {
-    const image = doc.addNode("gltf_image", "metallic_roughness_image", "vector3");
-    applyGltfImageCommon(ctx, image, mrRef);
-    connect(shader, "roughness", "float", channelOf(ctx, image, 1, "roughness", roughnessFactor));
-    connect(shader, "metallic", "float", channelOf(ctx, image, 2, "metallic", metallicFactor));
-  } else {
-    setInput(shader, "roughness", "float", { value: formatNumber(roughnessFactor) });
-    setInput(shader, "metallic", "float", { value: formatNumber(metallicFactor) });
+  const shader = extensions.KHR_materials_unlit
+    ? unlitShader(ctx, "SR_" + label, source, alphaMode, alphaCutoff, hasVertexColor)
+    : pbrShader(ctx, "SR_" + label, source, extensions, alphaMode, alphaCutoff, hasVertexColor);
+
+  const result = finish(doc, shader, "M_" + label);
+  return { xml: result.xml, materialName: result.materialName, shaderName: result.shaderName, notes: ctx.notes };
+}
+
+// KHR_materials_unlit has no gltf_pbr equivalent, so the base color is shown
+// as unlit emission, the same substitution materialxgltf makes.
+function unlitShader(ctx, shaderName, source, alphaMode, alphaCutoff, hasVertexColor) {
+  const shader = ctx.doc.addNode("surface_unlit", shaderName, "surfaceshader");
+  const base = gltfBaseColor(ctx, source.pbrMetallicRoughness || {}, hasVertexColor);
+  setInput(shader, "emission", "float", { value: "1" });
+  if (base.color) connect(shader, "emission_color", "color3", base.color.node, base.color.output);
+  else setInput(shader, "emission_color", "color3", { value: formatVector(base.factor, 3, 1) });
+  setFloatSource(shader, "opacity", alphaSource(ctx, base, alphaMode, alphaCutoff, alphaMode === "MASK"));
+  ctx.notes.push("KHR_materials_unlit has no gltf_pbr equivalent, the base color is emitted as unlit emission and lighting is ignored");
+  return shader;
+}
+
+function pbrShader(ctx, shaderName, source, extensions, alphaMode, alphaCutoff, hasVertexColor) {
+  const doc = ctx.doc;
+  const shader = doc.addNode("gltf_pbr", shaderName, "surfaceshader");
+  const specGloss = extensions.KHR_materials_pbrSpecularGlossiness;
+  const pbr = source.pbrMetallicRoughness || {};
+
+  // Base color and alpha, then metallic and roughness. The legacy
+  // spec/gloss extension replaces both of those blocks.
+  const base = specGloss
+    ? specularGlossiness(ctx, shader, specGloss, hasVertexColor)
+    : gltfBaseColor(ctx, pbr, hasVertexColor);
+  if (base.color) connect(shader, "base_color", "color3", base.color.node, base.color.output);
+  else setInput(shader, "base_color", "color3", { value: formatVector(base.factor, 3, 1) });
+  setFloatSource(shader, "alpha", alphaSource(ctx, base, alphaMode, alphaCutoff, false));
+
+  if (!specGloss) {
+    // Metallic and roughness share one texture: G roughness, B metallic.
+    const metallicFactor = num(pbr.metallicFactor, 1);
+    const roughnessFactor = num(pbr.roughnessFactor, 1);
+    const mrRef = resolveRef(ctx, pbr.metallicRoughnessTexture, "metallic roughness");
+    if (mrRef) {
+      const image = doc.addNode("gltf_image", "metallic_roughness_image", "vector3");
+      applyGltfImageCommon(ctx, image, mrRef);
+      connect(shader, "roughness", "float", channelOf(ctx, image, 1, "roughness", roughnessFactor));
+      connect(shader, "metallic", "float", channelOf(ctx, image, 2, "metallic", metallicFactor));
+    } else {
+      setInput(shader, "roughness", "float", { value: formatNumber(roughnessFactor) });
+      setInput(shader, "metallic", "float", { value: formatNumber(metallicFactor) });
+    }
   }
 
   // Normal, occlusion, emissive.
   const normalRef = resolveRef(ctx, source.normalTexture, "normal");
   if (normalRef) {
-    const node = doc.addNode("gltf_normalmap", "normal_image", "vector3");
-    applyGltfImageCommon(ctx, node, normalRef);
-    connect(shader, "normal", "vector3", node);
     const scale = num(source.normalTexture && source.normalTexture.scale, 1);
-    if (scale !== 1) ctx.notes.push(`Normal texture scale ${formatNumber(scale)} is not supported by gltf_normalmap and is ignored`);
+    connect(shader, "normal", "vector3", normalMapNode(ctx, normalRef, "normal_image", scale));
   }
   const occlusionRef = resolveRef(ctx, source.occlusionTexture, "occlusion");
   if (occlusionRef) {
     const image = doc.addNode("gltf_image", "occlusion_image", "vector3");
     applyGltfImageCommon(ctx, image, occlusionRef);
-    connect(shader, "occlusion", "float", channelOf(ctx, image, 0, "occlusion", 1));
+    const channel = channelOf(ctx, image, 0, "occlusion", 1);
     const strength = num(source.occlusionTexture && source.occlusionTexture.strength, 1);
-    if (strength !== 1) ctx.notes.push(`Occlusion strength ${formatNumber(strength)} is not applied`);
+    if (strength === 1) {
+      connect(shader, "occlusion", "float", channel);
+    } else {
+      // glTF: 1 + strength * (occlusion - 1), which is mix(1, occlusion).
+      const mix = doc.addNode("mix", "occlusion_strength", "float");
+      connect(mix, "fg", "float", channel);
+      setInput(mix, "bg", "float", { value: "1" });
+      setInput(mix, "mix", "float", { value: formatNumber(strength) });
+      connect(shader, "occlusion", "float", mix);
+    }
   }
   const emissiveFactor = Array.isArray(source.emissiveFactor) ? source.emissiveFactor : [0, 0, 0];
   const emissiveRef = resolveRef(ctx, source.emissiveTexture, "emissive");
@@ -286,35 +399,41 @@ export function gltfPbrDocument({ name, material, textureRefs, hints } = {}) {
   }
 
   // Alpha mode.
-  const alphaMode = String(source.alphaMode || "OPAQUE").toUpperCase();
   const alphaModeValue = alphaMode === "MASK" ? 1 : alphaMode === "BLEND" ? 2 : 0;
   setInput(shader, "alpha_mode", "integer", { value: String(alphaModeValue), uniform: "true" });
   if (alphaModeValue === 1) {
-    setInput(shader, "alpha_cutoff", "float", { value: formatNumber(num(source.alphaCutoff, 0.5)), uniform: "true" });
+    setInput(shader, "alpha_cutoff", "float", { value: formatNumber(alphaCutoff), uniform: "true" });
   }
 
-  applyGltfExtensions(ctx, shader, source.extensions);
-  const result = finish(doc, shader, "M_" + (name || "material"));
-  return { xml: result.xml, materialName: result.materialName, shaderName: result.shaderName, notes: ctx.notes };
+  applyGltfExtensions(ctx, shader, extensions);
+  return shader;
 }
 
-// Extract one channel of an existing gltf_image vector3 and scale it.
-function channelOf(ctx, image, index, name, factor) {
-  const extract = ctx.doc.addNode("extract", name + "_channel", "float");
-  connect(extract, "in", "vector3", image);
-  setInput(extract, "index", "integer", { value: String(index), uniform: "true" });
-  if (factor === undefined || factor === 1) return extract;
-  const scaled = ctx.doc.addNode("multiply", name + "_scaled", "float");
-  connect(scaled, "in1", "float", extract);
-  setInput(scaled, "in2", "float", { value: formatNumber(factor) });
-  return scaled;
+// KHR_materials_pbrSpecularGlossiness: diffuse becomes the base color of a
+// non-metal, the specular colour drives F0 and glossiness inverts.
+function specularGlossiness(ctx, shader, sg, hasVertexColor) {
+  const diffuse = Array.isArray(sg.diffuseFactor) ? sg.diffuseFactor : [1, 1, 1, 1];
+  const specular = Array.isArray(sg.specularFactor) ? sg.specularFactor : [1, 1, 1];
+  const glossiness = num(sg.glossinessFactor, 1);
+  const base = gltfBaseColor(ctx, { baseColorFactor: diffuse, baseColorTexture: sg.diffuseTexture }, hasVertexColor);
+  setInput(shader, "metallic", "float", { value: "0" });
+  const ref = resolveRef(ctx, sg.specularGlossinessTexture, "specular glossiness");
+  if (ref) {
+    const image = colorTexture(ctx, ref, "specular_glossiness_image", [specular[0], specular[1], specular[2], glossiness]);
+    connect(shader, "specular_color", "color3", image, "outcolor");
+    const roughness = ctx.doc.addNode("subtract", "glossiness_to_roughness", "float");
+    setInput(roughness, "in1", "float", { value: "1" });
+    connect(roughness, "in2", "float", image, "outa");
+    connect(shader, "roughness", "float", roughness);
+  } else {
+    setInput(shader, "specular_color", "color3", { value: formatVector(specular, 3, 1) });
+    setInput(shader, "roughness", "float", { value: formatNumber(1 - glossiness) });
+  }
+  ctx.notes.push("KHR_materials_pbrSpecularGlossiness is legacy: diffuse becomes the base color with metallic 0, the specular color drives specular_color and glossiness becomes roughness");
+  return base;
 }
 
 function applyGltfExtensions(ctx, shader, extensions) {
-  if (!extensions || typeof extensions !== "object") return;
-  for (const key of Object.keys(extensions)) {
-    if (!KNOWN_GLTF_EXTENSIONS.has(key)) ctx.notes.push(`Unsupported glTF extension: ${key} (ignored)`);
-  }
   const clearcoat = extensions.KHR_materials_clearcoat;
   if (clearcoat) {
     const factor = num(clearcoat.clearcoatFactor, 0);
@@ -327,9 +446,8 @@ function applyGltfExtensions(ctx, shader, extensions) {
     else setInput(shader, "clearcoat_roughness", "float", { value: formatNumber(roughness) });
     const normalRef = resolveRef(ctx, clearcoat.clearcoatNormalTexture, "clearcoat normal");
     if (normalRef) {
-      const node = ctx.doc.addNode("gltf_normalmap", "clearcoat_normal_image", "vector3");
-      applyGltfImageCommon(ctx, node, normalRef);
-      connect(shader, "clearcoat_normal", "vector3", node);
+      const scale = num(clearcoat.clearcoatNormalTexture && clearcoat.clearcoatNormalTexture.scale, 1);
+      connect(shader, "clearcoat_normal", "vector3", normalMapNode(ctx, normalRef, "clearcoat_normal_image", scale));
     }
   }
   const transmission = extensions.KHR_materials_transmission;
@@ -362,19 +480,15 @@ function applyGltfExtensions(ctx, shader, extensions) {
     else setInput(shader, "sheen_color", "color3", { value: formatVector(color, 3, 0) });
     const roughness = num(sheen.sheenRoughnessFactor, 0);
     const roughRef = resolveRef(ctx, sheen.sheenRoughnessTexture, "sheen roughness");
-    if (roughRef) {
-      connect(shader, "sheen_roughness", "float", floatTexture(ctx, roughRef, "sheen_roughness_image", 0, roughness));
-      ctx.notes.push("Sheen roughness is stored in the alpha channel in glTF, the red channel is read here");
-    } else setInput(shader, "sheen_roughness", "float", { value: formatNumber(roughness) });
+    if (roughRef) connect(shader, "sheen_roughness", "float", alphaTexture(ctx, roughRef, "sheen_roughness_image", roughness));
+    else setInput(shader, "sheen_roughness", "float", { value: formatNumber(roughness) });
   }
   const specular = extensions.KHR_materials_specular;
   if (specular) {
     const factor = num(specular.specularFactor, 1);
     const ref = resolveRef(ctx, specular.specularTexture, "specular");
-    if (ref) {
-      connect(shader, "specular", "float", floatTexture(ctx, ref, "specular_image", 0, factor));
-      ctx.notes.push("Specular is stored in the alpha channel in glTF, the red channel is read here");
-    } else setInput(shader, "specular", "float", { value: formatNumber(factor) });
+    if (ref) connect(shader, "specular", "float", alphaTexture(ctx, ref, "specular_image", factor));
+    else setInput(shader, "specular", "float", { value: formatNumber(factor) });
     const color = Array.isArray(specular.specularColorFactor) ? specular.specularColorFactor : [1, 1, 1];
     const colorRef = resolveRef(ctx, specular.specularColorTexture, "specular color");
     if (colorRef) connect(shader, "specular_color", "color3", colorTexture(ctx, colorRef, "specular_color_image", [color[0], color[1], color[2], 1]), "outcolor");
@@ -402,9 +516,24 @@ function applyGltfExtensions(ctx, shader, extensions) {
   }
   const anisotropy = extensions.KHR_materials_anisotropy;
   if (anisotropy) {
-    setInput(shader, "anisotropy_strength", "float", { value: formatNumber(num(anisotropy.anisotropyStrength, 0)) });
-    setInput(shader, "anisotropy_rotation", "float", { value: formatNumber(num(anisotropy.anisotropyRotation, 0)) });
-    if (anisotropy.anisotropyTexture) ctx.notes.push("Anisotropy texture is not supported and is ignored");
+    // Both are radians: gltf_pbr turns anisotropy_rotation into degrees with
+    // a -57.29578 multiply, and glTF stores the rotation in radians too.
+    const strength = num(anisotropy.anisotropyStrength, 0);
+    const rotation = num(anisotropy.anisotropyRotation, 0);
+    const ref = resolveRef(ctx, anisotropy.anisotropyTexture, "anisotropy");
+    if (ref) {
+      // RG hold the tangent-space direction and B the strength multiplier;
+      // gltf_anisotropy_image does the decode and the atan2 internally.
+      const node = ctx.doc.addNode("gltf_anisotropy_image", "anisotropy_image", "multioutput");
+      applyGltfImageCommon(ctx, node, ref);
+      setInput(node, "anisotropy_strength", "float", { value: formatNumber(strength) });
+      setInput(node, "anisotropy_rotation", "float", { value: formatNumber(rotation) });
+      connect(shader, "anisotropy_strength", "float", node, "anisotropy_strength_out");
+      connect(shader, "anisotropy_rotation", "float", node, "anisotropy_rotation_out");
+    } else {
+      setInput(shader, "anisotropy_strength", "float", { value: formatNumber(strength) });
+      setInput(shader, "anisotropy_rotation", "float", { value: formatNumber(rotation) });
+    }
   }
   const dispersion = extensions.KHR_materials_dispersion;
   if (dispersion) setInput(shader, "dispersion", "float", { value: formatNumber(num(dispersion.dispersion, 0)) });
