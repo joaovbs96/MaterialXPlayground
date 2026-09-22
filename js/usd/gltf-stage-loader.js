@@ -23,6 +23,7 @@ const KNOWN_TOP_EXTENSIONS = new Set([
   "KHR_materials_volume", "KHR_materials_ior", "KHR_materials_sheen",
   "KHR_materials_specular", "KHR_materials_iridescence", "KHR_materials_anisotropy",
   "KHR_materials_dispersion", "KHR_materials_emissive_strength",
+  "KHR_lights_punctual",
 ]);
 
 function checkAborted(signal) {
@@ -255,6 +256,135 @@ export function gltfMaterialIndexForNode(json, nodeIndex, primitiveIndex) {
   const primitive = primitives[primitiveIndex] || (primitives.length === 1 ? primitives[0] : null);
   if (!primitive || !Number.isInteger(primitive.material)) return -1;
   return primitive.material;
+}
+
+// USD-style camera records use a physical aperture + focal length pair,
+// glTF perspective cameras use a vertical field of view. 36mm horizontal
+// aperture (full-frame stills) is the fixed reference; the vertical one
+// follows the aspect ratio, and focalLength is solved from the same
+// fov = 2*atan(verticalAperture / (2*focalLength)) relation the renderer
+// uses to turn a USD camera record back into a fov.
+const USD_HORIZONTAL_APERTURE_MM = 36;
+const DEFAULT_ASPECT = 16 / 9;
+
+export function apertureAndFocalLengthFromYfov(yfovRadians, aspectRatio) {
+  const aspect = Number.isFinite(aspectRatio) && aspectRatio > 0 ? aspectRatio : DEFAULT_ASPECT;
+  const horizontalAperture = USD_HORIZONTAL_APERTURE_MM;
+  const verticalAperture = horizontalAperture / aspect;
+  const yfov = Number.isFinite(yfovRadians) && yfovRadians > 0 ? yfovRadians : 0.8;
+  const focalLength = (verticalAperture / 2) / Math.tan(yfov / 2);
+  return { horizontalAperture, verticalAperture, focalLength };
+}
+
+// KHR_lights_punctual spot cones are inner/outer angles in radians; the USD
+// sphere-light shaping API this maps onto is a cone angle (degrees) plus a
+// 0..1 softness fraction between the inner and outer cosines. Solving
+// coneOf()'s own inner = outer + (1-outer)*softness for softness given both
+// cosines keeps the reconstructed cone exact.
+export function spotConeSoftnessFromAngles(innerConeAngleRadians, outerConeAngleRadians) {
+  const inner = Number.isFinite(innerConeAngleRadians) ? innerConeAngleRadians : 0;
+  const outer = Number.isFinite(outerConeAngleRadians) ? outerConeAngleRadians : Math.PI / 4;
+  const cosInner = Math.cos(Math.min(Math.max(inner, 0), Math.PI / 2));
+  const cosOuter = Math.cos(Math.min(Math.max(outer, 0), Math.PI / 2));
+  const denom = 1 - cosOuter;
+  if (!(denom > 1e-6)) return 0;
+  return Math.min(1, Math.max(0, (cosInner - cosOuter) / denom));
+}
+
+// Shared shape for every light record this loader emits, matching the
+// fields js/usd/usd-stage-worker.js's collectLights() produces so
+// js/usd-scene-lights.js needs no glTF-specific branch.
+function baseLightRecord() {
+  return {
+    primPath: "", name: "", type: "",
+    matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+    textureFile: null, textureFormat: "automatic",
+    intensity: 1, exposure: 0, diffuse: 1, specular: 1,
+    color: [1, 1, 1],
+    enableColorTemperature: false, colorTemperature: 6500,
+    radius: null, width: null, height: null, length: null, angle: null,
+    normalize: false, treatAsPoint: false,
+    coneAngle: null, coneSoftness: null,
+  };
+}
+
+// A point/spot's tiny sphere radius: small enough it never reads as a
+// visible sphere, large enough validAreaDimensions() in usd-scene-lights.js
+// accepts it. Sphere lights use `normalize: true`, which makes
+// radianceOf() apply a fixed 0.25 factor instead of the sphere's surface
+// area, so this radius choice does not change the delivered intensity.
+const GLTF_POINT_LIGHT_RADIUS = 0.01;
+
+// Maps one KHR_lights_punctual light def + its node's world matrix onto a
+// USD-shaped light record. glTF intensity is candela (point/spot) or lux
+// (directional); both are passed through as-is into `intensity` the same
+// way collectLights() passes through UsdLux inputs:intensity, since neither
+// schema commits to a shared radiometric convention to convert against.
+export function gltfLightToRecord(lightDef, matrixArray, primPath, name) {
+  const record = baseLightRecord();
+  record.primPath = primPath;
+  record.name = name;
+  record.matrix = matrixArray;
+  const color = Array.isArray(lightDef.color) && lightDef.color.length >= 3 ? lightDef.color.slice(0, 3) : [1, 1, 1];
+  record.color = color;
+  const intensity = Number.isFinite(lightDef.intensity) ? lightDef.intensity : 1;
+  record.intensity = intensity;
+
+  const kind = lightDef.type;
+  if (kind === "directional") {
+    record.type = "distantlight";
+    return record;
+  }
+  // point and spot both become a sphere light with a token radius; a spot
+  // additionally authors the shaping cone usd-scene-lights.js reads.
+  record.type = "spherelight";
+  record.radius = GLTF_POINT_LIGHT_RADIUS;
+  record.normalize = true;
+  if (kind === "spot") {
+    const spot = lightDef.spot || {};
+    const inner = Number.isFinite(spot.innerConeAngle) ? spot.innerConeAngle : 0;
+    const outer = Number.isFinite(spot.outerConeAngle) ? spot.outerConeAngle : Math.PI / 4;
+    record.coneAngle = outer * (180 / Math.PI);
+    record.coneSoftness = spotConeSoftnessFromAngles(inner, outer);
+  }
+  return record;
+}
+
+// Maps one glTF camera def + its node's world matrix onto a USD-shaped
+// camera record. Orthographic cameras are emitted faithfully (apertures
+// from xmag/ymag) even though the current Scene Viewer camera rig only
+// ever computes a perspective fov from aperture/focalLength; see the
+// caller's warning.
+export function gltfCameraToRecord(cameraDef, matrixArray, primPath, name) {
+  const record = {
+    primPath, name, matrix: matrixArray,
+    focalLength: 50, horizontalAperture: 36, verticalAperture: 24,
+    clippingRange: [0.1, 1000000], focusDistance: 0, projection: "perspective",
+  };
+  if (cameraDef.type === "orthographic") {
+    const params = cameraDef.orthographic || {};
+    const xmag = Number.isFinite(params.xmag) ? params.xmag : 1;
+    const ymag = Number.isFinite(params.ymag) ? params.ymag : 1;
+    record.projection = "orthographic";
+    record.horizontalAperture = xmag * 2;
+    record.verticalAperture = ymag * 2;
+    record.clippingRange = [
+      Number.isFinite(params.znear) ? params.znear : 0.01,
+      Number.isFinite(params.zfar) ? params.zfar : 1000000,
+    ];
+    return record;
+  }
+  const params = cameraDef.perspective || {};
+  const { horizontalAperture, verticalAperture, focalLength } =
+    apertureAndFocalLengthFromYfov(params.yfov, params.aspectRatio);
+  record.horizontalAperture = horizontalAperture;
+  record.verticalAperture = verticalAperture;
+  record.focalLength = focalLength;
+  record.clippingRange = [
+    Number.isFinite(params.znear) ? params.znear : 0.01,
+    Number.isFinite(params.zfar) ? params.zfar : 1000000,
+  ];
+  return record;
 }
 
 function bufferHasExternalUri(bufferDef) {
@@ -593,6 +723,51 @@ export async function loadGltfStage({ files, rootPath, signal, onProgress } = {}
 
     if (!meshRecords.length) throw new Error("No renderable meshes in " + root);
 
+    // Cameras and KHR_lights_punctual lights, read from the source JSON via
+    // each object's node association the same way materialPathFor() reads
+    // materials: immune to GLTFLoader's own defaulting and cloning.
+    const usedCameraNames = new Set();
+    const usedLightNames = new Set();
+    const cameraRecords = [];
+    const lightRecords = [];
+    const lightsExtRoot = rawJson.extensions && rawJson.extensions.KHR_lights_punctual;
+    sceneRoot.traverse((object) => {
+      if (object.isCamera) {
+        const location = gltfPrimitiveLocation(object, parser.associations);
+        const nodeDef = location ? rawJson.nodes[location.nodeIndex] : null;
+        const cameraIndex = nodeDef && Number.isInteger(nodeDef.camera) ? nodeDef.camera : null;
+        const cameraDef = Number.isInteger(cameraIndex) && Array.isArray(rawJson.cameras) ? rawJson.cameras[cameraIndex] : null;
+        if (!cameraDef) return;
+        const baseName = (nodeDef && nodeDef.name) || cameraDef.name || object.name || ("camera" + cameraIndex);
+        const camName = sanitizeMtlxName(baseName, usedCameraNames);
+        cameraRecords.push(gltfCameraToRecord(cameraDef, Array.from(object.matrixWorld.elements), "/Cameras/" + camName, baseName));
+        return;
+      }
+      if (object.isLight) {
+        const location = gltfPrimitiveLocation(object, parser.associations);
+        const nodeDef = location ? rawJson.nodes[location.nodeIndex] : null;
+        const lightExt = nodeDef && nodeDef.extensions && nodeDef.extensions.KHR_lights_punctual;
+        const lightIndex = lightExt && Number.isInteger(lightExt.light) ? lightExt.light : null;
+        const lightDef = Number.isInteger(lightIndex) && lightsExtRoot && Array.isArray(lightsExtRoot.lights)
+          ? lightsExtRoot.lights[lightIndex] : null;
+        if (!lightDef) return;
+        const baseName = (nodeDef && nodeDef.name) || lightDef.name || object.name || ("light" + lightIndex);
+        const lightName = sanitizeMtlxName(baseName, usedLightNames);
+        lightRecords.push(gltfLightToRecord(lightDef, Array.from(object.matrixWorld.elements), "/Lights/" + lightName, baseName));
+      }
+    });
+    // glTF has no default-camera concept; the first camera in traversal
+    // order gets the flag, the same fallback markDefaultCamera() in
+    // js/usd/usd-stage-worker.js uses once no RenderSettings prim claims one.
+    if (cameraRecords.length) cameraRecords[0].defaultCamera = true;
+    const orthoCameraCount = cameraRecords.filter((c) => c.projection === "orthographic").length;
+    if (orthoCameraCount) {
+      warnings.push("[info] " + orthoCameraCount + " orthographic camera(s) imported; the camera picker frames them as perspective");
+    }
+    if (cameraRecords.length || lightRecords.length) {
+      warnings.push("[info] " + cameraRecords.length + " camera(s) and " + lightRecords.length + " light(s) imported from glTF");
+    }
+
     report("extract-geometry", 1, 1, "Extracted meshes");
     report("extract-materials", 1, 1, "Extracted materials");
     report("prepare-geometry", 1, 1, "Prepared geometry");
@@ -618,8 +793,8 @@ export async function loadGltfStage({ files, rootPath, signal, onProgress } = {}
       meshes: meshRecords,
       materials: materialEntries,
       assets,
-      cameras: [],
-      lights: [],
+      cameras: cameraRecords,
+      lights: lightRecords,
       warnings,
       transfer: [],
     };

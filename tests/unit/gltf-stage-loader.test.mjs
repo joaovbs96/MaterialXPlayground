@@ -7,12 +7,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  apertureAndFocalLengthFromYfov,
   attributeToFloat32,
   decodeDataUri,
   flipUvV,
+  gltfCameraToRecord,
+  gltfLightToRecord,
   gltfMaterialIndexForNode,
   gltfPrimitiveLocation,
   resolveGltfBuffers,
+  spotConeSoftnessFromAngles,
 } from '../../js/usd/gltf-stage-loader.js';
 
 function fileByPathOf(entries) {
@@ -183,4 +187,101 @@ test('gltfPrimitiveLocation: child nodes do not shift the primitive index', () =
 test('gltfPrimitiveLocation: no association anywhere returns null', () => {
   const mesh = { isMesh: true, parent: null };
   assert.equal(gltfPrimitiveLocation(mesh, new Map()), null);
+});
+
+test('apertureAndFocalLengthFromYfov: round-trips through the renderer\'s own fov formula', () => {
+  // fov = 2*atan(verticalAperture / (2*focalLength)), aspect 1.5, focal 50mm.
+  const yfov = 2 * Math.atan(24 / (2 * 50));
+  const out = apertureAndFocalLengthFromYfov(yfov, 1.5);
+  assert.equal(out.horizontalAperture, 36);
+  assert.ok(Math.abs(out.verticalAperture - 24) < 1e-9);
+  assert.ok(Math.abs(out.focalLength - 50) < 1e-6);
+});
+
+test('apertureAndFocalLengthFromYfov: missing aspectRatio falls back to 16:9', () => {
+  const out = apertureAndFocalLengthFromYfov(0.8, undefined);
+  assert.ok(Math.abs(out.verticalAperture - 36 / (16 / 9)) < 1e-9);
+});
+
+test('spotConeSoftnessFromAngles: glTF default cone (inner 0) is a full-softness cone', () => {
+  const softness = spotConeSoftnessFromAngles(0, Math.PI / 4);
+  assert.ok(Math.abs(softness - 1) < 1e-9);
+});
+
+test('spotConeSoftnessFromAngles: equal inner/outer is a hard edge', () => {
+  const softness = spotConeSoftnessFromAngles(Math.PI / 6, Math.PI / 6);
+  assert.equal(softness, 0);
+});
+
+test('spotConeSoftnessFromAngles: a cone halfway between hard and full-soft', () => {
+  const inner = Math.PI / 8;
+  const outer = Math.PI / 4;
+  const softness = spotConeSoftnessFromAngles(inner, outer);
+  assert.ok(softness > 0 && softness < 1);
+  // Reconstructing coneOf()'s own inner cosine from this softness matches.
+  const cosOuter = Math.cos(outer);
+  const rebuiltCosInner = cosOuter + (1 - cosOuter) * softness;
+  assert.ok(Math.abs(rebuiltCosInner - Math.cos(inner)) < 1e-9);
+});
+
+const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+
+test('gltfLightToRecord: directional light maps to a distant light, intensity passed through', () => {
+  const record = gltfLightToRecord({ type: 'directional', intensity: 3.5, color: [1, 0.9, 0.8] }, IDENTITY, '/Lights/sun', 'sun');
+  assert.equal(record.type, 'distantlight');
+  assert.equal(record.intensity, 3.5);
+  assert.deepEqual(record.color, [1, 0.9, 0.8]);
+  assert.equal(record.radius, null);
+  assert.equal(record.coneAngle, null);
+});
+
+test('gltfLightToRecord: point light maps to a normalized sphere light', () => {
+  const record = gltfLightToRecord({ type: 'point', intensity: 1000 }, IDENTITY, '/Lights/bulb', 'bulb');
+  assert.equal(record.type, 'spherelight');
+  assert.equal(record.intensity, 1000);
+  assert.equal(record.normalize, true);
+  assert.ok(record.radius > 0 && record.radius < 1);
+  assert.equal(record.coneAngle, null);
+});
+
+test('gltfLightToRecord: spot light adds a shaping cone in degrees', () => {
+  const record = gltfLightToRecord({
+    type: 'spot', intensity: 500,
+    spot: { innerConeAngle: 0, outerConeAngle: Math.PI / 6 },
+  }, IDENTITY, '/Lights/spot', 'spot');
+  assert.equal(record.type, 'spherelight');
+  assert.ok(Math.abs(record.coneAngle - 30) < 1e-6);
+  assert.ok(Math.abs(record.coneSoftness - 1) < 1e-9);
+});
+
+test('gltfLightToRecord: missing intensity/color fall back to glTF defaults', () => {
+  const record = gltfLightToRecord({ type: 'point' }, IDENTITY, '/Lights/bulb', 'bulb');
+  assert.equal(record.intensity, 1);
+  assert.deepEqual(record.color, [1, 1, 1]);
+});
+
+test('gltfCameraToRecord: perspective camera derives focalLength/apertures from yfov', () => {
+  const cameraDef = { type: 'perspective', perspective: { yfov: 0.4711, aspectRatio: 1.5, znear: 0.1, zfar: 500 } };
+  const record = gltfCameraToRecord(cameraDef, IDENTITY, '/Cameras/main', 'main');
+  assert.equal(record.projection, 'perspective');
+  assert.equal(record.horizontalAperture, 36);
+  assert.ok(Math.abs(record.verticalAperture - 24) < 1e-6);
+  assert.ok(Math.abs(record.focalLength - 50) < 0.01);
+  assert.deepEqual(record.clippingRange, [0.1, 500]);
+});
+
+test('gltfCameraToRecord: perspective camera without aspectRatio still produces a usable focalLength', () => {
+  const cameraDef = { type: 'perspective', perspective: { yfov: 0.8 } };
+  const record = gltfCameraToRecord(cameraDef, IDENTITY, '/Cameras/main', 'main');
+  assert.ok(Number.isFinite(record.focalLength) && record.focalLength > 0);
+  assert.deepEqual(record.clippingRange, [0.01, 1000000]);
+});
+
+test('gltfCameraToRecord: orthographic camera derives apertures from xmag/ymag', () => {
+  const cameraDef = { type: 'orthographic', orthographic: { xmag: 2, ymag: 1, znear: 0.05, zfar: 200 } };
+  const record = gltfCameraToRecord(cameraDef, IDENTITY, '/Cameras/ortho', 'ortho');
+  assert.equal(record.projection, 'orthographic');
+  assert.equal(record.horizontalAperture, 4);
+  assert.equal(record.verticalAperture, 2);
+  assert.deepEqual(record.clippingRange, [0.05, 200]);
 });
