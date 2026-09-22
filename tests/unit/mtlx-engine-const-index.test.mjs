@@ -41,8 +41,8 @@ const INTROSPECTED = [
   { name: 'u_time', type: 'float', path: '', data: 0.5 },
 ];
 
-test('index is one of the constant-folded input names', () => {
-  assert.ok(CONST_INPUT_NAMES.includes('index'));
+test('index is folded by usage, not by name', () => {
+  assert.ok(!CONST_INPUT_NAMES.includes('index'));
 });
 
 test('extract index uniforms become const literals with their authored value', () => {

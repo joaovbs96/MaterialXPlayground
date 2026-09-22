@@ -3167,11 +3167,10 @@ const readConstInputs = () => {
 // MaterialX input names whose value multiplies compile time: a uniform
 // thin-film thickness keeps the mx_fresnel_airy branch alive and a uniform
 // selector keeps every arm of its if-chain alive, in every closure context.
-// `index` is the extract family's array subscript: left uniform it becomes
-// an ANGLE dyn_index_* helper per node, and a few hundred of those reset
-// the GPU process during the HLSL compile.
+// Array subscripts (the extract family's `index`) are handled by usage
+// instead, see selectDynamicIndexUniforms below.
 const CONST_INPUT_NAMES = ['thin_film_thickness', 'thin_film_ior', 'thin_film_IOR', 'thinfilm_thickness', 'thinfilm_ior',
-    'distribution', 'scatter_mode', 'retroreflective', 'energy_compensation', 'mode', 'index'];
+    'distribution', 'scatter_mode', 'retroreflective', 'energy_compensation', 'mode'];
 // Names the Scene's thin-wall / light-transport patches and uniform builders
 // match on by declaration or function signature; never rewrite these.
 const CONST_INPUT_DENY = new Set(['thin_walled', 'geometry_thin_walled', 'transmission_weight',
@@ -3213,25 +3212,118 @@ const constInputKey = (u, names = CONST_INPUT_NAMES) => {
     return null;
 };
 
+// Everything a usage scan must not see: line and block comments, the
+// preprocessor preamble, and every uniform declaration (a declaration is
+// not a use, and `uniform int foo[4];` is an array, not a subscript).
+const stripGlslForUsage = (src) => String(src || '')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/[^\n]*/g, ' ')
+    .replace(/^[ \t]*#[^\n]*/gm, ' ')
+    .replace(/^[ \t]*uniform\b[^;]*;/gm, ' ');
+
+const USAGE_IDENT_RE = /[A-Za-z_]\w*/g;
+const addIdents = (text, out) => {
+    let m;
+    USAGE_IDENT_RE.lastIndex = 0;
+    while ((m = USAGE_IDENT_RE.exec(text))) out.add(m[0]);
+};
+// Both operand sides of every comparison in a condition region.
+const addComparisonIdents = (text, out) => {
+    let m;
+    const left = /([A-Za-z_]\w*)[ \t]*(?:==|!=|<=|>=|<|>)/g;
+    while ((m = left.exec(text))) out.add(m[1]);
+    const right = /(?:==|!=|<=|>=|<|>)[ \t]*([A-Za-z_]\w*)/g;
+    while ((m = right.exec(text))) out.add(m[1]);
+};
+// Balanced span starting at the opening bracket at `open`; returns the
+// inner text, or null when the source is unbalanced.
+const balancedSpan = (src, open, openCh, closeCh) => {
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+        const c = src[i];
+        if (c === openCh) depth++;
+        else if (c === closeCh) { depth--; if (depth === 0) return src.slice(open + 1, i); }
+    }
+    return null;
+};
+// Walks left from a ternary `?` to the start of its condition, stopping at
+// the first unbalanced opener or statement separator at depth zero.
+const ternaryCondition = (src, qm) => {
+    let depth = 0;
+    let i = qm - 1;
+    for (; i >= 0; i--) {
+        const c = src[i];
+        if (c === ')' || c === ']') depth++;
+        else if (c === '(' || c === '[') { if (depth === 0) break; depth--; }
+        else if (depth === 0 && (c === ';' || c === '{' || c === '}' || c === ',' || c === ':' || c === '?')) break;
+        else if (depth === 0 && c === '=' && src[i - 1] !== '=' && src[i - 1] !== '!'
+            && src[i - 1] !== '<' && src[i - 1] !== '>' && src[i + 1] !== '=') break;
+    }
+    return src.slice(i + 1, qm);
+};
+
+// Usage rule for integer uniforms: an int whose identifier reaches an array
+// subscript, a switch operand or a comparison in an if/ternary condition is
+// what makes ANGLE emit a dyn_index_* helper or keep both arms alive, so it
+// is folded to its default. Plain arithmetic keeps it a uniform.
+const selectDynamicIndexUniforms = (vs, fs, introspected) => {
+    const picked = new Set();
+    const candidates = new Set();
+    for (const u of (introspected || [])) {
+        const name = String((u && u.name) || '');
+        if (!name || name.indexOf('u_') === 0) continue; // engine/private uniform
+        if (u.type !== 'integer' || CONST_INPUT_DENY.has(name)) continue;
+        candidates.add(name);
+    }
+    if (!candidates.size) return picked;
+    const used = new Set();
+    for (const raw of [vs, fs]) {
+        const src = stripGlslForUsage(raw);
+        for (let i = 0; i < src.length; i++) {
+            if (src[i] === '[') {
+                const inner = balancedSpan(src, i, '[', ']');
+                if (inner != null) addIdents(inner, used);
+            } else if (src[i] === '?') {
+                addComparisonIdents(ternaryCondition(src, i), used);
+            }
+        }
+        let m;
+        const switchRe = /\bswitch[ \t\n]*\(/g;
+        while ((m = switchRe.exec(src))) {
+            const inner = balancedSpan(src, switchRe.lastIndex - 1, '(', ')');
+            if (inner != null) addIdents(inner, used);
+        }
+        const ifRe = /\bif[ \t\n]*\(/g;
+        while ((m = ifRe.exec(src))) {
+            const inner = balancedSpan(src, ifRe.lastIndex - 1, '(', ')');
+            if (inner != null) addComparisonIdents(inner, used);
+        }
+    }
+    for (const name of candidates) if (used.has(name)) picked.add(name);
+    return picked;
+};
+
 // Rewrites `uniform T name;` into `const T name = <literal>;` for the
 // targeted inputs, so the driver can fold their branches away. Only a
 // scalar float/int/bool with exactly one declaration is touched; everything
 // else is left alone. Returns the rewritten sources plus the pruned
 // introspection list, so nothing tries to bind a uniform that is now gone.
-const SELECTOR_CONST_INPUTS = new Set(['mode', 'type', 'style', 'index']);
+const SELECTOR_CONST_INPUTS = new Set(['mode', 'type', 'style']);
 const constifyInputUniforms = (vs, fs, introspected, names = CONST_INPUT_NAMES) => {
     const constInputs = [];
     const kept = [];
+    const byUsage = selectDynamicIndexUniforms(vs, fs, introspected);
     let outVs = vs;
     let outFs = fs;
     for (const u of introspected) {
         const glslType = CONST_INPUT_GLSL_TYPES[u.type];
         const key = glslType ? constInputKey(u, names) : null;
+        const usageHit = glslType ? byUsage.has(String(u.name)) : false;
         // `mode`, `type` and `style` are generic names: only take them when
         // the generator typed them as an enum selector (integer), never a
         // float or boolean input.
-        if (!key || CONST_INPUT_DENY.has(String(u.name))
-            || (SELECTOR_CONST_INPUTS.has(key) && u.type !== 'integer')) { kept.push(u); continue; }
+        if ((!key && !usageHit) || CONST_INPUT_DENY.has(String(u.name))
+            || (key && !usageHit && SELECTOR_CONST_INPUTS.has(key) && u.type !== 'integer')) { kept.push(u); continue; }
         const literal = u.data == null ? null : constInputLiteral(u.type, u.data);
         if (literal == null) { kept.push(u); continue; }
         const escaped = String(u.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
