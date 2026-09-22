@@ -32,7 +32,14 @@ function hasWebGL2() {
     if (__hasWebGL2 !== null) return __hasWebGL2;
     try {
         const canvas = document.createElement('canvas');
-        __hasWebGL2 = !!(window.WebGL2RenderingContext && canvas.getContext('webgl2'));
+        const gl = window.WebGL2RenderingContext && canvas.getContext('webgl2');
+        __hasWebGL2 = !!gl;
+        // This canvas is detached and discarded right after the probe, but
+        // the context it holds counts against the browser's WebGL context
+        // limit until GC runs. Release it now instead of leaking it.
+        if (gl) {
+            try { gl.getExtension('WEBGL_lose_context').loseContext(); } catch (e2) { /* best-effort */ }
+        }
     } catch (e) {
         __hasWebGL2 = false;
     }

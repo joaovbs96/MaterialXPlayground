@@ -1309,10 +1309,12 @@ const channels=d.data.length/(d.width*d.height);const stride=d.width*channels;fo
 // MaterialX sampler, which has no RGBE decode step, reads linear values.
 const loadHdrTexture=async blob=>{if(typeof THREE.RGBELoader==='undefined'){console.warn('mtlx-engine: THREE.RGBELoader unavailable; .hdr textures keep the node default color.');return null;}try{const buf=await blob.arrayBuffer();const d=new THREE.RGBELoader().setDataType(THREE.FloatType).parse(buf);if(!d||!d.data)return null;const tex=new THREE.DataTexture(d.data,d.width,d.height,d.format,d.type);tex.minFilter=tex.magFilter=THREE.LinearFilter;return tex;}catch(e){console.warn('mtlx-engine: failed to parse dropped .hdr texture, keeping the node default color:',e);return null;}};// Shared THREE.KTX2Loader instance (one transcoder worker pool for the
 // session). detectSupport() needs a WebGLRenderer to read the GPU's
-// supported compressed formats; the caller's own view.renderer is reused
-// when available, else a hidden renderer is created once and kept alive
-// for the rest of the session (detectSupport is cheap and idempotent).
-let _ktx2Loader=null;let _ktx2HiddenRenderer=null;const getKtx2Loader=view=>{if(!_ktx2Loader){if(typeof THREE.KTX2Loader==='undefined')return null;_ktx2Loader=new THREE.KTX2Loader();_ktx2Loader.setTranscoderPath(new URL('vendor/three/basis/',document.baseURI).href);}const renderer=view&&view.renderer||(_ktx2HiddenRenderer=_ktx2HiddenRenderer||new THREE.WebGLRenderer());_ktx2Loader.detectSupport(renderer);return _ktx2Loader;};// Parses a dropped .ktx2 Blob via THREE.KTX2Loader into a CompressedTexture
+// supported compressed formats, but only writes them into workerConfig
+// (see vendor/three/KTX2Loader.js) and keeps no renderer reference, so the
+// result is cached and the probe renderer released, not kept alive.
+let _ktx2Loader=null;let _ktx2SupportDetected=false;const getKtx2Loader=view=>{if(!_ktx2Loader){if(typeof THREE.KTX2Loader==='undefined')return null;_ktx2Loader=new THREE.KTX2Loader();_ktx2Loader.setTranscoderPath(new URL('vendor/three/basis/',document.baseURI).href);}if(!_ktx2SupportDetected){const viewRenderer=view&&view.renderer;// No caller renderer yet: a throwaway hidden renderer, never
+// attached to the DOM or reused elsewhere, safe to release below.
+const renderer=viewRenderer||new THREE.WebGLRenderer();_ktx2Loader.detectSupport(renderer);_ktx2SupportDetected=true;if(!viewRenderer){try{renderer.dispose();}catch(e){/* best-effort */}try{renderer.forceContextLoss();}catch(e){/* best-effort */}}}return _ktx2Loader;};// Parses a dropped .ktx2 Blob via THREE.KTX2Loader into a CompressedTexture
 // carrying its full mip chain. flipY stays false and no flip is baked at
 // encode time (scripts/cook-textures.mjs never flips): our uncompressed
 // textures already upload with flipY=false, relying on the MaterialX
@@ -1925,7 +1927,10 @@ const raw=parseEnvBuffer(src.buf,src.ext);if(!raw||!raw.image||!raw.image.data)r
 const COLORSPACES=['srgb_texture','lin_rec709','g22_rec709','g18_rec709','acescg','lin_ap1','srgb_displayp3','lin_displayp3','adobergb','lin_adobergb','none'];// One persistent hidden WebGL2 context, created lazily and never
 // disposed, used ONLY to pre-warm driver shader compiles, a compile
 // here makes the display context's later compile a fast driver cache hit.
-let MTLX_WARM_CTX=null;const getWarmContext=()=>{if(MTLX_WARM_CTX!==null)return MTLX_WARM_CTX;try{const canvas=document.createElement('canvas');canvas.width=1;canvas.height=1;const gl=canvas.getContext('webgl2');const ext=gl&&gl.getExtension('KHR_parallel_shader_compile');MTLX_WARM_CTX=gl&&ext?{gl,ext}:false;}catch(e){MTLX_WARM_CTX=false;}return MTLX_WARM_CTX;};// Shader sources already pre-warmed this session, repeating would only
+let MTLX_WARM_CTX=null;const getWarmContext=()=>{if(MTLX_WARM_CTX!==null)return MTLX_WARM_CTX;try{const canvas=document.createElement('canvas');canvas.width=1;canvas.height=1;const gl=canvas.getContext('webgl2');const ext=gl&&gl.getExtension('KHR_parallel_shader_compile');MTLX_WARM_CTX=gl&&ext?{gl,ext}:false;// A lost warm context stays unusable forever unless we notice: drop
+// the cache and the warmed-sources record so the next prewarm call
+// recreates a fresh hidden context instead of silently no-op'ing.
+if(gl){canvas.addEventListener('webglcontextlost',()=>{MTLX_WARM_CTX=null;MTLX_WARMED_SOURCES.clear();});}}catch(e){MTLX_WARM_CTX=false;}return MTLX_WARM_CTX;};// Shader sources already pre-warmed this session, repeating would only
 // add pointless background wait. Keyed by a fast djb2 hash; collisions
 // are harmless (worst case, one un-warmed sync compile).
 const MTLX_WARMED_SOURCES=new Set();// Deliberately no size gate: standard_surface/OpenPBR previews run
@@ -2814,7 +2819,14 @@ try{if(pmremRT)pmremRT.dispose();}catch(e){/* already disposed/invalid */}// set
 try{if(fetchedEnvMap)disposeFetchedEnv(fetchedEnvMap);}catch(e){/* already disposed/invalid */}// Depth-peel render targets/quad materials, owned by the
 // createPeelPipeline instance, this view's OWN GPU resources,
 // same disposal rationale as pmremRT immediately above.
-try{if(peelPipeline)peelPipeline.dispose();}catch(e){/* already disposed/invalid */}if(canvas){canvas.removeEventListener('webglcontextlost',onGlLost);canvas.removeEventListener('webglcontextrestored',onGlRestored);}if(renderer)renderer.dispose();};// [mtlx-perf] whole-function total, from shader generation through
+try{if(peelPipeline)peelPipeline.dispose();}catch(e){/* already disposed/invalid */}if(canvas){canvas.removeEventListener('webglcontextlost',onGlLost);canvas.removeEventListener('webglcontextrestored',onGlRestored);}// No forceContextLoss() here: this same disposePartial() backs both
+// the superseded-rebuild bail AND the public handle.dispose(), and
+// every call site (viewer-app.jsx, node-preview.jsx, graph/preview.jsx)
+// disposes the old view then immediately builds a new one on the
+// SAME canvas ref. Forcing context loss would leave that reused
+// canvas's context stuck lost until an async restore, breaking the
+// very next build; the canvas is never actually discarded here.
+if(renderer)renderer.dispose();};// [mtlx-perf] whole-function total, from shader generation through
 // the GL compile. See the finer-grained timers further down for a
 // breakdown (gen.generate / WebGLRenderer init / GL compile).
 const __totalPerfStart=window.MTLX_PERF_LOG?performance.now():0;try{// Generates the shader from the renderable surface node.
@@ -2835,7 +2847,12 @@ prewarmDisplacementSources(__srcs,isMounted,label);const warmResult=await prewar
 const cw=canvas.clientWidth||canvas.parentElement&&canvas.parentElement.clientWidth||400;const ch=canvas.clientHeight||256;// Bail before allocating the WebGL context if this build
 // was superseded during shader generation above,
 // disposePartial() is still a safe no-op here.
-if(!isMounted()){disposePartial();return null;}const __rendererPerfStart=window.MTLX_PERF_LOG?performance.now():0;renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true});// A reused canvas still carries GL state left by the prior
+if(!isMounted()){disposePartial();return null;}const __rendererPerfStart=window.MTLX_PERF_LOG?performance.now():0;renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true});// three tries 'webgl2' then silently falls back to 'webgl'. Our
+// RawShaderMaterial always requests glslVersion THREE.GLSL3
+// (#version 300 es), which a WebGL1 context cannot compile;
+// left alone that reads only as an opaque ANGLE/driver error
+// ("unsupported shader version 300"), so fail clearly here.
+if(!renderer.capabilities.isWebGL2){try{renderer.dispose();}catch(e){/* best-effort */}try{renderer.forceContextLoss();}catch(e){/* best-effort */}renderer=null;throw new Error('WebGL2 is unavailable in this tab (the browser fell back to WebGL1), so MaterialX previews cannot compile. Reload the tab or check the browser GPU settings.');}// A reused canvas still carries GL state left by the prior
 // renderer, but fresh r128 state caches assume defaults, so
 // leaked blending corrupts the PMREM bake below; resync both.
 renderer.resetState();// restored re-inits three's GL state but not render-target

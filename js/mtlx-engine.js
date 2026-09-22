@@ -4144,19 +4144,29 @@ const loadHdrTexture = async (blob) => {
 
 // Shared THREE.KTX2Loader instance (one transcoder worker pool for the
 // session). detectSupport() needs a WebGLRenderer to read the GPU's
-// supported compressed formats; the caller's own view.renderer is reused
-// when available, else a hidden renderer is created once and kept alive
-// for the rest of the session (detectSupport is cheap and idempotent).
+// supported compressed formats, but only writes them into workerConfig
+// (see vendor/three/KTX2Loader.js) and keeps no renderer reference, so the
+// result is cached and the probe renderer released, not kept alive.
 let _ktx2Loader = null;
-let _ktx2HiddenRenderer = null;
+let _ktx2SupportDetected = false;
 const getKtx2Loader = (view) => {
     if (!_ktx2Loader) {
         if (typeof THREE.KTX2Loader === 'undefined') return null;
         _ktx2Loader = new THREE.KTX2Loader();
         _ktx2Loader.setTranscoderPath(new URL('vendor/three/basis/', document.baseURI).href);
     }
-    const renderer = (view && view.renderer) || (_ktx2HiddenRenderer = _ktx2HiddenRenderer || new THREE.WebGLRenderer());
-    _ktx2Loader.detectSupport(renderer);
+    if (!_ktx2SupportDetected) {
+        const viewRenderer = view && view.renderer;
+        // No caller renderer yet: a throwaway hidden renderer, never
+        // attached to the DOM or reused elsewhere, safe to release below.
+        const renderer = viewRenderer || new THREE.WebGLRenderer();
+        _ktx2Loader.detectSupport(renderer);
+        _ktx2SupportDetected = true;
+        if (!viewRenderer) {
+            try { renderer.dispose(); } catch (e) { /* best-effort */ }
+            try { renderer.forceContextLoss(); } catch (e) { /* best-effort */ }
+        }
+    }
     return _ktx2Loader;
 };
 
@@ -7186,6 +7196,15 @@ const getWarmContext = () => {
         const gl = canvas.getContext('webgl2');
         const ext = gl && gl.getExtension('KHR_parallel_shader_compile');
         MTLX_WARM_CTX = (gl && ext) ? { gl, ext } : false;
+        // A lost warm context stays unusable forever unless we notice: drop
+        // the cache and the warmed-sources record so the next prewarm call
+        // recreates a fresh hidden context instead of silently no-op'ing.
+        if (gl) {
+            canvas.addEventListener('webglcontextlost', () => {
+                MTLX_WARM_CTX = null;
+                MTLX_WARMED_SOURCES.clear();
+            });
+        }
     } catch (e) {
         MTLX_WARM_CTX = false;
     }
@@ -10499,6 +10518,13 @@ const createMtlxRenderView = async ({
             canvas.removeEventListener('webglcontextlost', onGlLost);
             canvas.removeEventListener('webglcontextrestored', onGlRestored);
         }
+        // No forceContextLoss() here: this same disposePartial() backs both
+        // the superseded-rebuild bail AND the public handle.dispose(), and
+        // every call site (viewer-app.jsx, node-preview.jsx, graph/preview.jsx)
+        // disposes the old view then immediately builds a new one on the
+        // SAME canvas ref. Forcing context loss would leave that reused
+        // canvas's context stuck lost until an async restore, breaking the
+        // very next build; the canvas is never actually discarded here.
         if (renderer) renderer.dispose();
     };
     // [mtlx-perf] whole-function total, from shader generation through
@@ -10538,6 +10564,17 @@ const createMtlxRenderView = async ({
                 if (!isMounted()) { disposePartial(); return null; }
                 const __rendererPerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
                 renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+                // three tries 'webgl2' then silently falls back to 'webgl'. Our
+                // RawShaderMaterial always requests glslVersion THREE.GLSL3
+                // (#version 300 es), which a WebGL1 context cannot compile;
+                // left alone that reads only as an opaque ANGLE/driver error
+                // ("unsupported shader version 300"), so fail clearly here.
+                if (!renderer.capabilities.isWebGL2) {
+                    try { renderer.dispose(); } catch (e) { /* best-effort */ }
+                    try { renderer.forceContextLoss(); } catch (e) { /* best-effort */ }
+                    renderer = null;
+                    throw new Error('WebGL2 is unavailable in this tab (the browser fell back to WebGL1), so MaterialX previews cannot compile. Reload the tab or check the browser GPU settings.');
+                }
                 // A reused canvas still carries GL state left by the prior
                 // renderer, but fresh r128 state caches assume defaults, so
                 // leaked blending corrupts the PMREM bake below; resync both.

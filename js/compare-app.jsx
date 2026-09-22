@@ -455,6 +455,10 @@ const createGpuDiffView = (canvas) => {
                 if (texB) texB.dispose();
                 material.dispose();
                 mesh.geometry.dispose();
+                // No forceContextLoss() here: gpuDiffCanvasRef is a stable
+                // React ref, disposed then immediately rebuilt on the SAME
+                // canvas on the next effect run, so losing the context here
+                // would strand that reused canvas until an async restore.
                 renderer.dispose();
             },
         };
