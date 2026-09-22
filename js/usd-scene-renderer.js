@@ -1798,18 +1798,38 @@ const createMtlxSceneView = async ({
     let active = true;
     let raf = 0;
     let studioPolarApplied = false;
-    let studioDistanceApplied = false;
     let lastFrameDistance = 0;
+    // Radius of the stage's world bounding sphere, refreshed by frameAll()
+    // and applyCamera(); the dolly bounds below are derived from it.
+    let stageBoundsRadius = 0;
+    let floorLiftNoticed = false;
     // null = the Default (auto framing) entry; otherwise a stage.cameras
     // primPath. resetCamera() re-applies whichever of these is selected.
     let selectedCameraPath = null;
-    const clearAppliedStudioCameraLimits = (cameraControls, polarApplied, distanceApplied, authoredSelected) => {
-        if (!cameraControls || !authoredSelected) return { polarApplied, distanceApplied };
-        if (polarApplied) cameraControls.maxPolarAngle = Math.PI;
-        if (distanceApplied) cameraControls.maxDistance = Infinity;
-        return { polarApplied: false, distanceApplied: false };
+    // Dolly bounds from the stage's world bounding-sphere radius, applied to
+    // every camera source. In studio mode the far bound also stays inside the
+    // closed cyclorama so its rim never comes into view. Pure: see
+    // tests/unit/usd-scene-camera-limits.test.mjs.
+    const sceneOrbitDollyLimits = (radius, frameDistance, studioScale, studioMaxOrbitDistance, isStudio) => {
+        const r = Number(radius) > 0 ? Number(radius) : 0;
+        if (!(r > 0)) return { minDistance: 0, maxDistance: Infinity };
+        const frame = Number(frameDistance) > 0 ? Number(frameDistance) : 0;
+        let minDistance = r * 0.05;
+        if (frame > 0) minDistance = Math.min(minDistance, frame * 0.5);
+        let maxDistance = r * 12;
+        const scale = Number(studioScale) > 0 ? Number(studioScale) : 0;
+        const orbit = Number(studioMaxOrbitDistance) > 0 ? Number(studioMaxOrbitDistance) : 9;
+        if (isStudio && scale > 0) maxDistance = Math.min(maxDistance, orbit * scale * 0.9);
+        maxDistance = Math.max(maxDistance, frame * 1.05, minDistance * 2);
+        return { minDistance, maxDistance };
     };
-    const shouldClampStudioCamera = (cameraPath) => !cameraPath;
+    // The eye height an authored camera has to be lifted to when it sits under
+    // the studio floor, or null when it is already clear of it. Pure.
+    const studioFloorLiftY = (eyeY, floorY, clearance) => {
+        if (!Number.isFinite(eyeY) || !Number.isFinite(floorY)) return null;
+        const minY = floorY + (Number(clearance) || 0);
+        return eyeY < minY ? minY : null;
+    };
     // Polar angle (radians from +Y) at which the eye touches the floor
     // plane, given the orbit target's height above it. Pure: see
     // tests/unit/usd-scene-floor-clamp.test.mjs.
@@ -1819,6 +1839,55 @@ const createMtlxSceneView = async ({
         const rel = (floorY + (Number(clearance) || 0)) - targetY;
         return Math.min(maxPolar, Math.acos(Math.max(-1, Math.min(1, rel / distance))));
     };
+    // Mirrors the material viewer's applyStudioPolarClamp (js/mtlx-
+    // engine.js:4804-4819): the orbit target sits above the floor, so a
+    // fixed dip below the horizon drops the eye through the floor once the
+    // distance grows. Re-derived per frame from that distance, for every
+    // camera source: an authored camera gets no exception.
+    const applyStudioPolarClamp = () => {
+        if (!controls) return;
+        const studio = window.MtlxStudio;
+        const maxPolar = (studio && Number(studio.studioMaxPolar)) || Math.PI * 0.54;
+        if (!environmentBridge || !environmentBridge.isStudio || !environmentBridge.isStudio()) {
+            if (studioPolarApplied) { controls.maxPolarAngle = Math.PI; studioPolarApplied = false; }
+            return;
+        }
+        const floorY = environmentBridge.getFloorY ? environmentBridge.getFloorY() : null;
+        if (floorY == null) return;
+        const clearance = environmentBridge.getFloorClearance ? environmentBridge.getFloorClearance() : 0;
+        const dist = camera.position.distanceTo(controls.target);
+        controls.maxPolarAngle = studioFloorPolarLimit(maxPolar, floorY, clearance, controls.target.y, dist);
+        studioPolarApplied = true;
+    };
+    // Wheel/pinch dolly bounds. In studio mode the far bound keeps the eye
+    // inside the closed cyclorama (wall at STUDIO_WALL_R * studioScale), so
+    // the floor never shows a rim against the page.
+    const applyOrbitDistanceLimits = () => {
+        if (!controls) return;
+        const studio = window.MtlxStudio;
+        const isStudio = !!(environmentBridge && environmentBridge.isStudio && environmentBridge.isStudio());
+        const studioScale = environmentBridge && environmentBridge.getStudioScale
+            ? environmentBridge.getStudioScale() : 0;
+        const limits = sceneOrbitDollyLimits(stageBoundsRadius, lastFrameDistance, studioScale,
+            studio && Number(studio.studioMaxOrbitDistance), isStudio);
+        controls.minDistance = limits.minDistance;
+        controls.maxDistance = limits.maxDistance;
+    };
+    // An authored camera under the studio floor is lifted onto it, keeping
+    // its target, so the floor clamp applies to it like any other view.
+    const liftCameraAboveStudioFloor = () => {
+        if (!environmentBridge || !environmentBridge.isStudio || !environmentBridge.isStudio()) return;
+        const floorY = environmentBridge.getFloorY ? environmentBridge.getFloorY() : null;
+        if (floorY == null) return;
+        const clearance = environmentBridge.getFloorClearance ? environmentBridge.getFloorClearance() : 0;
+        const lifted = studioFloorLiftY(camera.position.y, floorY, clearance);
+        if (lifted == null) return;
+        camera.position.y = lifted;
+        if (floorLiftNoticed) return;
+        floorLiftNoticed = true;
+        warnings.push('[info] Scene camera: an authored camera sat below the studio floor and was lifted onto it.');
+    };
+    const applyOrbitLimits = () => { applyStudioPolarClamp(); applyOrbitDistanceLimits(); };
     // Turntable/GIF capture state: while true, resize() is a no-op so the
     // fixed capture resolution set by beginCapture() sticks between frames.
     let resizeSuspended = false;
@@ -6852,6 +6921,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             const halfX = Math.atan(Math.tan(halfY) * Math.max(camera.aspect, 0.01));
             const distance = Math.max(radius / Math.tan(halfY), radius / Math.tan(halfX)) * 1.25;
             lastFrameDistance = distance;
+            stageBoundsRadius = radius;
             camera.position.copy(center).add(new THREE.Vector3(0, 0.25, 1).normalize().multiplyScalar(distance));
             camera.near = Math.max(radius / 1000, 0.001);
             // Studio wall sits at STUDIO_WALL_R + STUDIO_MAX_ORBIT_DISTANCE (world
@@ -6860,7 +6930,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             const studioScale = environmentBridge && environmentBridge.getStudioScale ? environmentBridge.getStudioScale() : 0;
             camera.far = Math.max(distance + radius * 4, 100, studioScale * 36);
             camera.updateProjectionMatrix();
-            if (controls) { controls.target.copy(center); controls.update(); }
+            if (controls) { controls.target.copy(center); applyOrbitLimits(); controls.update(); }
         };
         const getCameras = () => sceneArray(stage.cameras).map((record) => ({
             primPath: String(record.primPath || ''),
@@ -6918,20 +6988,30 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             const focalLength = Number(record.focalLength) || 50;
             camera.fov = 2 * Math.atan(verticalAperture / (2 * focalLength)) * 180 / Math.PI;
             const clip = Array.isArray(record.clippingRange) ? record.clippingRange : [0.1, 100000];
-            camera.near = Math.max(Number(clip[0]) * meters, boxRadius / 1000, 0.001);
-            camera.far = Math.max(Number(clip[1]) * meters, camera.near + 1);
+            if (boxRadius > 0) stageBoundsRadius = boxRadius;
+            const authoredStudioScale = environmentBridge && environmentBridge.getStudioScale
+                ? environmentBridge.getStudioScale() : 0;
+            // An authored near plane can sit past the whole stage (glTF often
+            // exports znear 1 for a metre-scale model), which cuts a hard hole
+            // in the floor at a grazing angle; hold it under the near dolly bound.
+            camera.near = Math.max(Math.min(Number(clip[0]) * meters, boxRadius * 0.025),
+                boxRadius / 1000, 0.001);
+            // The authored far plane may stop short of the studio room, which
+            // the bounded dolly can now pull fully into frame.
+            camera.far = Math.max(Number(clip[1]) * meters, camera.near + 1,
+                distance + boxRadius * 4, authoredStudioScale * 36);
             camera.position.copy(position);
             camera.quaternion.copy(quaternion);
             camera.updateProjectionMatrix();
             if (controls) {
-                const limits = clearAppliedStudioCameraLimits(
-                    controls, studioPolarApplied, studioDistanceApplied, !!selectedCameraPath);
-                studioPolarApplied = limits.polarApplied;
-                studioDistanceApplied = limits.distanceApplied;
                 controls.target.copy(target);
+                liftCameraAboveStudioFloor();
+                lastFrameDistance = camera.position.distanceTo(controls.target);
+                applyOrbitLimits();
                 controls.update();
+            } else {
+                lastFrameDistance = distance;
             }
-            lastFrameDistance = distance;
             return true;
         };
         const resetCamera = () => { applyCamera(selectedCameraPath); };
@@ -7198,59 +7278,6 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             console.log('[mtlx-perf] scene materials: ' + JSON.stringify(scenePerf));
         }
         report({ phase: 'renderer', status: 'ready', warnings: warnings.slice() });
-        // Mirrors the material viewer's applyStudioPolarClamp (js/mtlx-
-        // engine.js:4804-4819): the orbit target sits above the floor, so a
-        // fixed dip below the horizon drops the eye through the floor once
-        // the distance grows. Re-derived per frame from that distance.
-        const applyStudioPolarClamp = () => {
-            if (!controls) return;
-            const studio = window.MtlxStudio;
-            const maxPolar = (studio && Number(studio.studioMaxPolar)) || Math.PI * 0.54;
-            if (!environmentBridge || !environmentBridge.isStudio || !environmentBridge.isStudio()) {
-                if (studioPolarApplied) { controls.maxPolarAngle = Math.PI; studioPolarApplied = false; }
-                return;
-            }
-            const floorY = environmentBridge.getFloorY ? environmentBridge.getFloorY() : null;
-            if (floorY == null) return;
-            const clearance = environmentBridge.getFloorClearance ? environmentBridge.getFloorClearance() : 0;
-            const offset = camera.position.clone().sub(controls.target);
-            const dist = offset.length();
-            const limit = studioFloorPolarLimit(maxPolar, floorY, clearance, controls.target.y, dist);
-            // An authored camera may legitimately sit under the floor; that
-            // view is left alone until it comes back above the limit, but a
-            // free orbit is always kept out of the void below the stage.
-            if (!shouldClampStudioCamera(selectedCameraPath) && dist > 1e-3
-                && Math.acos(Math.max(-1, Math.min(1, offset.y / dist))) > limit + 1e-3) {
-                if (studioPolarApplied) { controls.maxPolarAngle = Math.PI; studioPolarApplied = false; }
-                return;
-            }
-            controls.maxPolarAngle = limit;
-            studioPolarApplied = true;
-        };
-        // Keeps the orbit from zooming out past the studio backdrop: the wall
-        // sits at studioMaxOrbitDistance * studioScale (matching the Viewer's
-        // own maxDistance-vs-STUDIO_WALL_R relationship), scaled down 10% so
-        // the top-down clamp still stays under the studio ceiling.
-        const applyStudioDistanceClamp = () => {
-            if (!controls) return;
-            if (!shouldClampStudioCamera(selectedCameraPath)) {
-                // Only the distance limit is dropped for an authored camera;
-                // the floor clamp above owns the polar limit now.
-                const limits = clearAppliedStudioCameraLimits(
-                    controls, false, studioDistanceApplied, true);
-                studioDistanceApplied = limits.distanceApplied;
-                return;
-            }
-            if (!environmentBridge || !environmentBridge.isStudio || !environmentBridge.isStudio()) {
-                if (studioDistanceApplied) { controls.maxDistance = Infinity; studioDistanceApplied = false; }
-                return;
-            }
-            const studio = window.MtlxStudio;
-            const maxOrbitDistance = (studio && Number(studio.studioMaxOrbitDistance)) || 9;
-            const studioScale = environmentBridge.getStudioScale ? environmentBridge.getStudioScale() : 1;
-            controls.maxDistance = Math.max(lastFrameDistance, maxOrbitDistance * studioScale * 0.9);
-            studioDistanceApplied = true;
-        };
         // renderFrame(): the one chokepoint for every display render (loop,
         // captureFrame, renderNow, snapshot). Routes through the peel
         // pipeline only when Force Transparency is on and at least one
@@ -7459,8 +7486,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             }
             if (window.MTLX_CLOCK && typeof window.clockTick === 'function') window.clockTick(performance.now());
             if (environmentBridge && environmentBridge.update) environmentBridge.update();
-            applyStudioPolarClamp();
-            applyStudioDistanceClamp();
+            applyOrbitLimits();
             if (controls) controls.update();
             renderFrame();
             raf = requestAnimationFrame(render);
@@ -7990,8 +8016,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             },
             setBackdrop: (mode) => {
                 const result = environmentBridge && environmentBridge.setBackdrop ? environmentBridge.setBackdrop(mode) : mode;
-                applyStudioPolarClamp();
-                applyStudioDistanceClamp();
+                applyOrbitLimits();
                 return result;
             },
             getBackdrop: () => environmentBridge && environmentBridge.getBackdrop ? environmentBridge.getBackdrop() : 'studio',
