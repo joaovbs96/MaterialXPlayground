@@ -2497,7 +2497,7 @@ const createMtlxSceneView = async ({
     // worker's collectMaterialOverrides, not an input of the surface node.
     const isSynthesizedUsdShadeMaterial = (record) => {
         const candidates = [record && record.sourceAsset, record && record.materialX && record.materialX.path];
-        return candidates.some((path) => /^__(?:inline|usdshade)_/.test(String(path || '').split('/').pop() || ''));
+        return candidates.some((path) => /^__(?:inline|usdshade|usdpreview|gltf|obj)_/.test(String(path || '').split('/').pop() || ''));
     };
     const findOrAddInput = (node, inputName) => {
         let input = window.mxSafe(() => node.getInput(inputName), null);
@@ -3542,13 +3542,9 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
         const materialHasSource = (record) => !!(record && (record.renderable || record.node || record.sourceAsset
             || (record.materialX && record.materialX.path)));
         const noSourceWarned = new Set();
-        // A record with no MaterialX network at all (a flattened
-        // UsdPreviewSurface, or a network the worker could not read) can
-        // never compile; skip it instead of failing loadRenderable every
-        // time. An unbound record like that (no mesh uses it) needs neither
-        // a neutral material nor a warning. A record WITH a source keeps
-        // compiling even when unbound, since the material panel and picker
-        // still expect its document.
+        // A record with no MaterialX network at all (one the worker could
+        // neither read nor convert) can never compile; skip it, and skip the
+        // warning too when no mesh binds it. A record WITH a source compiles.
         const skipMaterialCompile = (record) => {
             if (materialHasSource(record)) return false;
             const path = String((record && record.path) || '');
@@ -3557,9 +3553,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
             if (path && !noSourceWarned.has(path)) {
                 noSourceWarned.add(path);
-                warnings.push(record && record.shaderId === 'UsdPreviewSurface'
-                    ? path + ' is a UsdPreviewSurface material, which the Scene cannot render yet; it shows neutral grey'
-                    : path + ' has no MaterialX network the Scene can read; it shows neutral grey');
+                warnings.push(path + ' has no MaterialX network the Scene can read; it shows neutral grey');
             }
             byPath.set(path, { material: sceneNeutralMaterial(label), compiled: null });
             materialRecords.set(path, record);
