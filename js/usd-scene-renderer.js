@@ -1810,6 +1810,15 @@ const createMtlxSceneView = async ({
         return { polarApplied: false, distanceApplied: false };
     };
     const shouldClampStudioCamera = (cameraPath) => !cameraPath;
+    // Polar angle (radians from +Y) at which the eye touches the floor
+    // plane, given the orbit target's height above it. Pure: see
+    // tests/unit/usd-scene-floor-clamp.test.mjs.
+    const studioFloorPolarLimit = (maxPolar, floorY, clearance, targetY, distance) => {
+        if (!Number.isFinite(floorY) || !Number.isFinite(targetY)) return maxPolar;
+        if (!Number.isFinite(distance) || distance <= 1e-3) return maxPolar;
+        const rel = (floorY + (Number(clearance) || 0)) - targetY;
+        return Math.min(maxPolar, Math.acos(Math.max(-1, Math.min(1, rel / distance))));
+    };
     // Turntable/GIF capture state: while true, resize() is a no-op so the
     // fixed capture resolution set by beginCapture() sticks between frames.
     let resizeSuspended = false;
@@ -5473,7 +5482,10 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 ssrHistoryTarget = null;
             }
             if (!ssrHistoryTarget) {
-                const halfLinearOk = !!renderer.extensions.get('OES_texture_half_float_linear');
+                // WebGL2 has half-float linear filtering in core and never
+                // exposes the extension, so querying it only logs a warning.
+                const halfLinearOk = !!(renderer.capabilities && renderer.capabilities.isWebGL2)
+                    || !!renderer.extensions.get('OES_texture_half_float_linear');
                 ssrHistoryTarget = new THREE.WebGLRenderTarget(w, h, {
                     minFilter: halfLinearOk ? THREE.LinearMipmapLinearFilter : THREE.NearestMipmapNearestFilter,
                     magFilter: THREE.LinearFilter,
@@ -7192,13 +7204,6 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
         // the distance grows. Re-derived per frame from that distance.
         const applyStudioPolarClamp = () => {
             if (!controls) return;
-            if (!shouldClampStudioCamera(selectedCameraPath)) {
-                const limits = clearAppliedStudioCameraLimits(
-                    controls, studioPolarApplied, studioDistanceApplied, true);
-                studioPolarApplied = limits.polarApplied;
-                studioDistanceApplied = limits.distanceApplied;
-                return;
-            }
             const studio = window.MtlxStudio;
             const maxPolar = (studio && Number(studio.studioMaxPolar)) || Math.PI * 0.54;
             if (!environmentBridge || !environmentBridge.isStudio || !environmentBridge.isStudio()) {
@@ -7208,12 +7213,18 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             const floorY = environmentBridge.getFloorY ? environmentBridge.getFloorY() : null;
             if (floorY == null) return;
             const clearance = environmentBridge.getFloorClearance ? environmentBridge.getFloorClearance() : 0;
-            const dist = camera.position.distanceTo(controls.target);
-            const rel = (floorY + clearance) - controls.target.y;
-            const limit = dist > 1e-3
-                ? Math.acos(Math.max(-1, Math.min(1, rel / dist)))
-                : maxPolar;
-            controls.maxPolarAngle = Math.min(maxPolar, limit);
+            const offset = camera.position.clone().sub(controls.target);
+            const dist = offset.length();
+            const limit = studioFloorPolarLimit(maxPolar, floorY, clearance, controls.target.y, dist);
+            // An authored camera may legitimately sit under the floor; that
+            // view is left alone until it comes back above the limit, but a
+            // free orbit is always kept out of the void below the stage.
+            if (!shouldClampStudioCamera(selectedCameraPath) && dist > 1e-3
+                && Math.acos(Math.max(-1, Math.min(1, offset.y / dist))) > limit + 1e-3) {
+                if (studioPolarApplied) { controls.maxPolarAngle = Math.PI; studioPolarApplied = false; }
+                return;
+            }
+            controls.maxPolarAngle = limit;
             studioPolarApplied = true;
         };
         // Keeps the orbit from zooming out past the studio backdrop: the wall
@@ -7223,9 +7234,10 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
         const applyStudioDistanceClamp = () => {
             if (!controls) return;
             if (!shouldClampStudioCamera(selectedCameraPath)) {
+                // Only the distance limit is dropped for an authored camera;
+                // the floor clamp above owns the polar limit now.
                 const limits = clearAppliedStudioCameraLimits(
-                    controls, studioPolarApplied, studioDistanceApplied, true);
-                studioPolarApplied = limits.polarApplied;
+                    controls, false, studioDistanceApplied, true);
                 studioDistanceApplied = limits.distanceApplied;
                 return;
             }

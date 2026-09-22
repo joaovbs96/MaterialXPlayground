@@ -9517,7 +9517,10 @@ const createRgbtPeelPipeline = (renderer, {
         // Opaque colour mips for mx_scene_refraction. No half-float-linear
         // means nearest-across-levels instead (still real LOD blur, just
         // blockier); refractionLod in debug() reports which one.
-        const halfLinearOk = !!renderer.extensions.get('OES_texture_half_float_linear');
+        // WebGL2 has half-float linear filtering in core and never exposes
+        // the extension, so querying it only logs a three warning.
+        const halfLinearOk = !!(renderer.capabilities && renderer.capabilities.isWebGL2)
+            || !!renderer.extensions.get('OES_texture_half_float_linear');
         const opaqueMips = new THREE.WebGLRenderTarget(w, h, {
             minFilter: halfLinearOk ? THREE.LinearMipmapLinearFilter : THREE.NearestMipmapNearestFilter,
             magFilter: THREE.LinearFilter,

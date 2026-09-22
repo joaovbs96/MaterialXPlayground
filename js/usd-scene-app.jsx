@@ -54,6 +54,49 @@
         });
         return out.join('/');
     };
+    // Source containers (the dropped .glb/.usdz/.obj and friends) are never
+    // textures: handing one to the material preview ships megabytes through
+    // the embed for nothing.
+    const CONTAINER_EXTENSIONS = ['.glb', '.gltf', '.obj', '.fbx', '.zip', '.usd', '.usda', '.usdc', '.usdz'];
+    // Files the floating material preview and the graph hand-off get: the
+    // renderer's own per-material map, plus any scene file whose name
+    // matches a file="..." reference the renderer did not resolve. Pure so
+    // tests/unit/usd-scene-preview-files.test.mjs can exercise it.
+    const materialPreviewFiles = (documentFiles, documentXml, sceneFiles) => {
+        const out = {};
+        const isContainer = (path) => {
+            const lower = String(path).toLowerCase();
+            return CONTAINER_EXTENSIONS.some((e) => lower.endsWith(e));
+        };
+        Object.keys(documentFiles || {}).forEach((key) => {
+            if (!isContainer(key)) out[key] = documentFiles[key];
+        });
+        const scene = sceneFiles || {};
+        const sceneKeys = Object.keys(scene).filter((key) => !isContainer(key));
+        if (!sceneKeys.length) return out;
+        const refs = new Set();
+        String(documentXml || '').replace(/(?:file|value)\s*=\s*"([^"]+)"/g, (all, ref) => {
+            const trimmed = ref.trim();
+            if (trimmed) refs.add(trimmed);
+            return all;
+        });
+        const baseName = (path) => String(path).split('/').pop().toLowerCase();
+        const wanted = new Set();
+        refs.forEach((ref) => {
+            const normalized = ref.split('\\').join('/');
+            wanted.add(normalized.toLowerCase());
+            wanted.add(baseName(normalized));
+        });
+        sceneKeys.forEach((key) => {
+            if (out[key] !== undefined) return;
+            const normalized = key.split('\\').join('/').toLowerCase();
+            if (wanted.has(normalized) || wanted.has(baseName(normalized))
+                || Array.from(wanted).some((ref) => ref.length > 3 && normalized.endsWith('/' + ref))) {
+                out[key] = scene[key];
+            }
+        });
+        return out;
+    };
     const rootNamePattern = /(^|\/)root\.(usd|usda|usdc|usdz)$/i;
     const oldDefaultRoot = (candidates) => {
         const preferred = candidates.find((f) => rootNamePattern.test(f.path));
@@ -470,13 +513,16 @@
             setRect(next);
         };
 
+        // Only what this material's document references: the scene's whole
+        // loose map would push the source .glb/.usdz through the embed's
+        // postMessage and into the viewer's file map for nothing. Memoized
+        // because a new identity reloads GraphPreviewViewer's document.
+        const handoffFiles = React.useMemo(
+            () => materialPreviewFiles(shown && shown.files, shown && shown.xml, sceneFiles),
+            [shown, sceneFiles]);
+
         if (!shown) return null; // never opened yet this session
 
-        // The full scene's loose files (every dropped/loaded non-.mtlx
-        // entry), not just getMaterialDocument's own filename-ref-scoped
-        // map: the exporter's own matcher can resolve a texture under a
-        // relative form the renderer's narrower scan did not try.
-        const handoffFiles = (sceneFiles && Object.keys(sceneFiles).length) ? sceneFiles : shown.files;
         const openInEditor = () => {
             window.openInGraphEditor({ xml: shown.xml, name: shown.name, files: handoffFiles, select: shown.materialName });
         };
