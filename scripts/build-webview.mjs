@@ -72,7 +72,7 @@ const BANNER = `    <!-- =======================================================
          focus-outline CSS near the bottom) are fragments defined in
          scripts/build-webview.mjs — edit them there instead. Loaders:
          RGBELoader, GLTFLoader, DRACOLoader, OBJLoader, OrbitControls.
-         Contains five \${...} placeholders substituted at runtime by
+         Contains seven \${...} placeholders substituted at runtime by
          vscode_extension/src/editorProvider.js's buildHtml().
          ================================================================ -->`;
 
@@ -161,8 +161,10 @@ const BOOTSTRAP_BLOCK = `    <!-- Bootstrap: MUST be the first script to run, be
          js/site-header.js to hide the file-bound Viewer/Graph tabs in the
          standalone docs panel), installs the in-page link interceptor,
          and wires up the extension <-> webview postMessage contract. See
-         vscode_extension/media/bootstrap.js. -->
-    <script src="\${bootstrapUri}" data-initial-hash="\${initialHash}" data-docs-only="\${docsOnly}"></script>`;
+         vscode_extension/media/bootstrap.js.
+         data-extension-version/data-vscode-version feed window.__MTLX_VSCODE_VERSIONS__,
+         read by js/shell.jsx's AboutDialog. -->
+    <script src="\${bootstrapUri}" data-initial-hash="\${initialHash}" data-docs-only="\${docsOnly}" data-extension-version="\${extensionVersion}" data-vscode-version="\${vscodeVersion}"></script>`;
 
 // Webview-only :focus{outline:none}: VS Code's Chromium shows a native
 // focus outline that a regular browser's :focus-visible heuristics
@@ -178,7 +180,7 @@ const FOCUS_CSS_BLOCK = `
             outline: none;
         }`;
 
-const PLACEHOLDERS = ["${cspSource}", "${baseUri}", "${bootstrapUri}", "${initialHash}", "${docsOnly}"];
+const PLACEHOLDERS = ["${cspSource}", "${baseUri}", "${bootstrapUri}", "${initialHash}", "${docsOnly}", "${extensionVersion}", "${vscodeVersion}"];
 
 /** Count non-overlapping occurrences of `needle` in `haystack`. */
 function countOccurrences(haystack, needle) {

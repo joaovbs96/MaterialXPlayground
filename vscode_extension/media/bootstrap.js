@@ -271,6 +271,14 @@
     // no .mtlx document behind it for those views to show.
     window.__MTLX_DOCS_ONLY__ = (document.currentScript && document.currentScript.getAttribute('data-docs-only')) === '1';
 
+    // Extension + VS Code versions, read the same synchronous-currentScript
+    // way as the two flags above. Consumed by js/shell.jsx's AboutDialog
+    // for its VS Code version block (Extension X / VS Code Y).
+    window.__MTLX_VSCODE_VERSIONS__ = {
+        extension: (document.currentScript && document.currentScript.getAttribute('data-extension-version')) || '',
+        vscode: (document.currentScript && document.currentScript.getAttribute('data-vscode-version')) || '',
+    };
+
     // ------------------------------------------------------------------
     // Link interception: <base href="${baseUri}"> (webview.html) makes
     // every relative href in the site resolve to a webview-resource URL,
