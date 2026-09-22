@@ -179,7 +179,9 @@ test('@scene stages popover changes until Apply, and Cancel discards them', asyn
   // pill anymore).
   await shadows.click();
   await expect(shadows).toHaveAttribute('aria-checked', 'true');
-  await expect(popover.getByText(/change/)).toBeVisible();
+  // Anchored on the count: the Shadows row's own description also says
+  // "changes", and it is on screen whenever the Lighting tab is open.
+  await expect(popover.getByText(/^\d+ changes?\./)).toBeVisible();
   await expect(applyButton(popover)).toBeEnabled();
 
   // Cancel restores the row and closes the popover; nothing was ever sent
@@ -228,7 +230,9 @@ test('@scene shows an unapplied-changes marker while a draft differs from curren
   // Closing any other way (not Cancel) keeps the draft.
   await page.getByTestId('usd-scene-render-settings').click();
   await expect(popover).toBeHidden();
-  await expect(page.getByTitle('Unapplied changes')).toBeVisible();
+  // The badge span, not the button: the button's own title is
+  // "Render settings (unapplied changes)" and getByTitle matches substrings.
+  await expect(page.getByTestId('usd-scene-render-settings').locator('[title="Unapplied changes"]')).toBeVisible();
 });
 
 test('@scene moving a live slider away from the level applies immediately, and Reset moves it back', async ({ page, embedURL }) => {
@@ -239,16 +243,18 @@ test('@scene moving a live slider away from the level applies immediately, and R
   await waitForReload(page);
 
   const popover = await openPopover(page);
-  await openTab(popover, 'Effects');
-  const aoSlider = popover.getByText('Ambient occlusion strength', { exact: true }).locator('../..').getByRole('slider');
-  const defaultValue = await aoSlider.inputValue();
-  await aoSlider.fill('0.1');
+  // Camera exposure rather than AO strength: the AO strength row only
+  // renders while AO is on, and AO starts off on every level below Quality.
+  await openTab(popover, 'Display');
+  const exposure = popover.getByText('Camera exposure', { exact: true }).locator('../..').getByRole('slider');
+  const defaultValue = await exposure.inputValue();
+  await exposure.fill('2');
   // A live key, so it applies immediately (no Apply needed).
-  await expect(aoSlider).toHaveValue('0.1');
+  await expect(exposure).toHaveValue('2');
   await expect(resetButton(popover)).toBeEnabled();
 
   await resetButton(popover).click();
-  await expect(aoSlider).toHaveValue(defaultValue);
+  await expect(exposure).toHaveValue(defaultValue);
 });
 
 test('@scene keeps the same draft and dots across a plain close and reopen, and Cancel still reverts to session start', async ({ page, embedURL }) => {
