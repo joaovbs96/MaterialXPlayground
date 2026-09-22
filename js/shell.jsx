@@ -89,6 +89,15 @@ async function loadJsxApp(src) {
             presets: [['react', { runtime: 'classic' }]],
             sourceType: 'script',
             filename: src,
+            // Precomputes exactly what compact: "auto" (the default) would
+            // itself compute — true once source.length exceeds 500K chars,
+            // e.g. js/graph-app.jsx — and passes it explicitly. Output is
+            // identical either way for every file; "auto" additionally
+            // prints a "[BABEL] Note: ... deoptimised the styling of
+            // <file>" console.error the moment it flips to true, which
+            // this skips. Small files (most of babelScripts) stay
+            // non-compact and readable in devtools, same as before.
+            compact: source.length > 500000,
         });
         // A module-flavored output cannot run as a classic script; fail loudly
         // with the filename instead of letting the browser throw an opaque
@@ -983,8 +992,12 @@ function AboutDialog() {
 
     if (!open) return null;
 
-    const verEl = document.querySelector('#mtlx-header-version [data-role="ver"]');
-    const mtlxVersion = verEl ? verEl.textContent : null;
+    // window.MTLX_HEADER_VERSION (js/site-header.js's setVer) holds the
+    // 'v1.39.5'-style tag, no visible header pill left to read it from.
+    const mtlxVersion = window.MTLX_HEADER_VERSION || null;
+    const mtlxReleaseUrl = mtlxVersion
+        ? 'https://github.com/AcademySoftwareFoundation/MaterialX/releases/tag/' + mtlxVersion
+        : null;
     const buildId = window.__MTLX_BUILD;
     const links = window.SITE_LINKS || {};
     const disclaimerParts = window.SITE_DISCLAIMER_PARTS || {};
@@ -1036,7 +1049,13 @@ function AboutDialog() {
                     ) : (
                         <div>Release {webRelease === undefined ? '…' : (webRelease || 'development build')}</div>
                     )}
-                    {mtlxVersion ? <div>MaterialX {mtlxVersion}</div> : null}
+                    {mtlxVersion ? (
+                        <div>
+                            MaterialX{' '}
+                            <a href={mtlxReleaseUrl} target="_blank" rel="noopener noreferrer"
+                                className="hover:text-blue-300 hover:underline">{mtlxVersion}</a>
+                        </div>
+                    ) : null}
                     {libVersions && libVersions.three ? <div>three.js {libVersions.three}</div> : null}
                     {libVersions && libVersions.react ? <div>React {libVersions.react}</div> : null}
                     {buildId ? <div>Build {buildId}</div> : null}

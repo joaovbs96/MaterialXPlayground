@@ -136,7 +136,7 @@
             }
         })();
     </script>
-    <script>window.__MTLX_BUILD = '5aead59a3e25a735';</script>
+    <script>window.__MTLX_BUILD = '8fed89e83bb680f9';</script>
     <!-- Build-id probe. Lives here, beside the stamp, deliberately: every
          other script (shell.jsx, mtlx-assets.js) is separately cached and
          may itself be the stale file this is meant to detect. -->
@@ -309,14 +309,22 @@
          node-preview.jsx, docs-app.jsx/viewer-app.jsx/graph-app.jsx) are
          lazy-loaded by shell.jsx on first activation of each view.
 
-         data-presets="react": babel-standalone's default presets for a
-         bare text/babel tag are ["react","env"] — preset-env lowers
-         js/mtlx-engine.js's WASM loader (a dynamic import()) to CommonJS
-         require(), which doesn't exist in the browser and throws
-         "require is not defined" the first time getMxEnv() runs. An
-         explicit react-only preset matches loadJsxApp's own Babel config
-         in js/shell.jsx (presets [['react', {runtime: 'classic'}]]) and
-         leaves import() native. -->
+         These three use type="text/mtlx-babel", NOT text/babel: babel-
+         standalone's own script-tag runner (Bbe/Ube in
+         vendor/babel/babel.min.js) only recognizes text/babel and
+         text/jsx, has no data attribute that can pass a `compact`
+         option, and js/mtlx-engine.js (>500KB) would otherwise print
+         "[BABEL] Note: ... deoptimised the styling" to the console on
+         every load. The custom type opts them out of that automatic
+         processing; the bootstrap script right below transforms and runs
+         them instead, in source order, with the exact preset/plugin
+         config that runner used for a data-presets="react" tag with no
+         data-plugins attribute (kept for output parity, see the
+         bootstrap's own comment) — react only, never preset-env:
+         preset-env lowers js/mtlx-engine.js's WASM loader, a dynamic
+         import(), to CommonJS require(), which doesn't exist in the
+         browser and throws "require is not defined" the first time
+         getMxEnv() runs. -->
     <!-- Shared UI commons (icon registry) — must precede the engine and every view script. -->
     <script src="js/shared/ui-commons.js"></script>
     <script src="js/shared/mesh-subdivision.js"></script>
@@ -329,11 +337,55 @@
          crashes and tab closes lose no work, not just app-driven
          reloads. Eager and plain JS, alongside the handoff module. -->
     <script src="js/shared/mtlx-autosave.js"></script>
-    <script type="text/babel" data-presets="react" src="js/mtlx-engine.js"></script>
-    <script type="text/babel" data-presets="react" src="js/shell.jsx"></script>
-    <script type="text/babel" data-presets="react">
+    <script type="text/mtlx-babel" src="js/mtlx-engine.js"></script>
+    <script type="text/mtlx-babel" src="js/shell.jsx"></script>
+    <script type="text/mtlx-babel">
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<Shell />);
+    </script>
+    <!-- Bootstrap for the three text/mtlx-babel tags above: fetches each
+         src (or reads the inline one's textContent), Babel-transforms it
+         with compact set explicitly rather than left "auto" (see the
+         comment above — this is the only way to silence that note for
+         these two eager tags; babel-standalone's own script-tag runner
+         has no hook for it), and injects the result as a plain classic
+         <script>. Runs them strictly in document order (sequential
+         await), same as babel-standalone's own runner does for src
+         tags — js/shell.jsx (globalName Shell) must exist before the
+         third, inline tag's root.render(<Shell />) runs. -->
+    <script>
+        (async function () {
+            var nodes = document.querySelectorAll('script[type="text/mtlx-babel"]');
+            for (var i = 0; i < nodes.length; i++) {
+                var node = nodes[i];
+                var src = node.getAttribute('src');
+                var filename = src || 'index.html (inline script)';
+                var source = src
+                    ? await (await fetch(src, { cache: 'no-cache' })).text()
+                    : node.textContent;
+                var code = Babel.transform(source, {
+                    // Matches what babel-standalone's own script-tag runner
+                    // (vendor/babel/babel.min.js, Fbe/Ube) used for these
+                    // tags: presets from data-presets="react" (here just
+                    // ["react"], runtime defaults to classic), and — since
+                    // there was never a data-plugins attribute — its
+                    // fallback plugin trio. Kept for output parity; drop
+                    // together if ever intentionally changing this output.
+                    presets: ['react'],
+                    plugins: ['transform-class-properties', 'transform-object-rest-spread', 'transform-flow-strip-types'],
+                    filename: filename,
+                    sourceMaps: 'inline',
+                    sourceFileName: filename,
+                    // Same "auto" precomputed explicitly as js/shell.jsx's
+                    // loadJsxApp and scripts/build-embed.mjs's transform() —
+                    // identical output, no console note.
+                    compact: source.length > 500000,
+                }).code;
+                var el = document.createElement('script');
+                el.textContent = code;
+                document.head.appendChild(el);
+            }
+        })();
     </script>
 
     <style>

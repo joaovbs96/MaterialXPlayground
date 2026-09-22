@@ -447,19 +447,13 @@
                 // hamburger + mobile panel below covers mobile).
                 '<nav id="mtlx-nav-desktop" class="mtlx-nav-desktop" aria-label="Site">' + tabs + '</nav>' +
 
-                // Right: version badge + GitHub repo widget, desktop only.
-                // CSS white-space:nowrap (container + children) forces
+                // Right: About + GitHub repo widget, desktop only. CSS
+                // white-space:nowrap (container + children) forces
                 // overflow horizontal, which measure() below relies on.
+                // The version pill that used to live here is gone; the
+                // version itself is still tracked (window.MTLX_HEADER_VERSION,
+                // filled in by setVer() below) for js/shell.jsx's AboutDialog.
                 '<div id="mtlx-nav-right" class="mtlx-nav-right">' +
-                    '<a id="mtlx-header-version" href="' + LINKS.spec + '" target="_blank" rel="noopener noreferrer"' +
-                        ' title="MaterialX specification &amp; documentation (version reported by the MaterialX JS API)"' +
-                        ' class="mtlx-badge">' +
-                        '<img class="mtlx-badge-logo" src="images/materialx-logo.svg" alt="">' +
-                        // Label + version wrapped in ONE flex item so the
-                        // pill's column-gap (between flex items) doesn't
-                        // double up with the space already between them.
-                        '<span><span class="mtlx-badge-word">MaterialX </span><span data-role="ver">\u2026</span></span>' +
-                    '</a>' +
                     // About button, immediately left of the GitHub widget.
                     // Dispatches an event for js/shell.jsx's AboutDialog to
                     // pick up (same "just a CustomEvent" contract as the
@@ -525,14 +519,6 @@
                     // .mtlx-mobile-link-brand adds a flex row (icon + text)
                     // over .mtlx-mobile-link's flat styling, kept separate
                     // from .mtlx-source-mobile (its gap suits a square glyph).
-                    '<a id="mtlx-header-version-mobile" href="' + LINKS.spec + '" target="_blank" rel="noopener noreferrer"' +
-                        ' class="mtlx-mobile-link mtlx-mobile-link-brand">' +
-                        '<img class="mtlx-badge-logo-mobile" src="images/materialx-logo.svg" alt="">' +
-                        // Same "MaterialX" label as the desktop pill,
-                        // wrapped in ONE flex item so this row's gap:10px
-                        // doesn't double up with the space already there.
-                        '<span><span class="mtlx-badge-word">MaterialX </span><span data-role="ver">\u2026</span></span>' +
-                    '</a>' +
                     // Mobile copy of the About button (desktop-only cluster
                     // is hidden on narrow widths): opens js/shell.jsx's
                     // AboutDialog, same event as the header button above.
@@ -826,10 +812,6 @@
         // Web font metrics can still be settling after first paint —
         // re-measure once everything (including fonts) has fully loaded.
         window.addEventListener('load', measure);
-        // The version badge widens the right-side cluster once the WASM
-        // reports itself; that alone can push the bar from fitting to
-        // overflowing.
-        window.addEventListener('mtlx-version', measure);
         // The overlay rect can change without a window resize (e.g. still
         // settling right after launch); re-measure whenever it does.
         if (navigator.windowControlsOverlay) {
@@ -1181,14 +1163,16 @@
         });
     }
 
-    // Version badge: mtlx-engine.js sets window.__mtlxVersion and fires
-    // 'mtlx-version' once WASM loads, but the home view never triggers
-    // that, so fall back to MTLX_TAG (update it when re-vendoring).
+    // Version tracking: no visible pill anymore, but js/shell.jsx's
+    // AboutDialog still needs the version. mtlx-engine.js sets
+    // window.__mtlxVersion and fires 'mtlx-version' once WASM loads, but
+    // the home view never triggers that, so fall back to MTLX_TAG (update
+    // it when re-vendoring). window.MTLX_HEADER_VERSION holds the 'v...'
+    // tag string, same shape as MTLX_TAG.
     var MTLX_VERSION_FALLBACK = MTLX_TAG.replace(/^v/, '');
     var setVer = function (v) {
         if (!v) return;
-        var els = document.querySelectorAll('#mtlx-header-version [data-role="ver"], #mtlx-header-version-mobile [data-role="ver"]');
-        for (var i = 0; i < els.length; i++) { els[i].textContent = 'v' + v; }
+        window.MTLX_HEADER_VERSION = 'v' + v;
     };
     setVer(window.__mtlxVersion || MTLX_VERSION_FALLBACK);
     window.addEventListener('mtlx-version', function (e) { setVer(e.detail || window.__mtlxVersion); });
