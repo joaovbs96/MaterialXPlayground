@@ -411,6 +411,76 @@
             // (site panel-collapse policy).
             const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
             const [searchQuery, setSearchQuery] = React.useState('');
+            // Pulls out:<type>/in:<type> tokens (case-insensitive) from the
+            // search box; whatever's left is the plain name substring.
+            const searchTokens = React.useMemo(() => {
+                let outType = null, inType = null;
+                const nameParts = [];
+                String(searchQuery || '').split(/\s+/).forEach((tok) => {
+                    if (!tok) return;
+                    const m = /^(out|in):(.+)$/i.exec(tok);
+                    if (!m) { nameParts.push(tok); return; }
+                    if (/^out$/i.test(m[1])) outType = m[2]; else inType = m[2];
+                });
+                return { name: nameParts.join(' ').trim().toLowerCase(), outType, inType };
+            }, [searchQuery]);
+            // Removes any existing out:/in: token and, if value is truthy,
+            // appends the new one; shared by both port-type dropdowns.
+            const setSearchTypeToken = (prefix, value) => {
+                setSearchQuery((prev) => {
+                    const stripped = String(prev || '')
+                        .replace(new RegExp('\\b' + prefix + ':\\S+', 'gi'), '')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    return value ? (stripped ? stripped + ' ' : '') + prefix + ':' + value : stripped;
+                });
+            };
+            const setSearchOutType = (v) => setSearchTypeToken('out', v);
+            const setSearchInType = (v) => setSearchTypeToken('in', v);
+            // Distinct port types across the whole pregenerated index, for
+            // the two dropdowns. Outputs: sigGroup.type plus any version's
+            // outputTypes values. Takes: union of input and output types.
+            const outputTypeOptions = React.useMemo(() => {
+                if (!genData) return [];
+                const s = new Set();
+                Object.values(genData.nodes).forEach((entry) => (entry.sigGroups || []).forEach((sg) => {
+                    if (sg.type) s.add(sg.type);
+                    (sg.versions || []).forEach((v) => v.outputTypes && Object.values(v.outputTypes).forEach((t) => t && s.add(t)));
+                }));
+                return Array.from(s).sort();
+            }, [genData]);
+            const takesTypeOptions = React.useMemo(() => {
+                if (!genData) return [];
+                const s = new Set();
+                Object.values(genData.nodes).forEach((entry) => (entry.sigGroups || []).forEach((sg) => (sg.versions || []).forEach((v) => {
+                    if (v.inputTypes) Object.values(v.inputTypes).forEach((t) => t && s.add(t));
+                    if (v.outputTypes) Object.values(v.outputTypes).forEach((t) => t && s.add(t));
+                })));
+                return Array.from(s).sort();
+            }, [genData]);
+            // A category (node name) matches active out:/in: filters when
+            // SOME signature group in genData satisfies both.
+            const categoryMatchesTypeFilters = React.useCallback((name) => {
+                const { outType, inType } = searchTokens;
+                if (!outType && !inType) return true;
+                const entry = genData && genData.nodes[name];
+                const sigGroups = entry && entry.sigGroups;
+                if (!sigGroups || !sigGroups.length) return false;
+                return sigGroups.some((sg) => {
+                    if (outType) {
+                        const outOk = (sg.type && sg.type.toLowerCase() === outType.toLowerCase())
+                            || (sg.versions || []).some((v) => v.outputTypes
+                                && Object.values(v.outputTypes).some((t) => t && t.toLowerCase() === outType.toLowerCase()));
+                        if (!outOk) return false;
+                    }
+                    if (inType) {
+                        const inOk = (sg.versions || []).some((v) => v.inputTypes
+                            && Object.values(v.inputTypes).some((t) => t && t.toLowerCase() === inType.toLowerCase()));
+                        if (!inOk) return false;
+                    }
+                    return true;
+                });
+            }, [genData, searchTokens]);
             // Global 3D-preview switch, persisted across sessions so slow
             // machines stay preview-free. localStorage is best-effort
             // (private mode etc. throws) — default is ON.
@@ -454,8 +524,8 @@
             // groups/libs pruned.
             const treeData = React.useMemo(() => {
                 if (!jsonData) return jsonData;
-                const query = searchQuery.trim().toLowerCase();
-                if (docFilter === 'all' && !query) return jsonData;
+                const { name: query, outType, inType } = searchTokens;
+                if (docFilter === 'all' && !query && !outType && !inType) return jsonData;
                 const filtered = {};
                 Object.entries(jsonData).forEach(([lib, groups]) => {
                     Object.entries(groups).forEach(([group, nodes]) => {
@@ -464,6 +534,7 @@
                             if (docFilter === 'undocumented' && !isUndocumented(info)) return;
                             if (docFilter === 'documented' && isUndocumented(info)) return;
                             if (query && !name.toLowerCase().includes(query)) return;
+                            if ((outType || inType) && !categoryMatchesTypeFilters(name)) return;
                             kept[name] = info;
                         });
                         if (Object.keys(kept).length > 0) {
@@ -473,7 +544,7 @@
                     });
                 });
                 return filtered;
-            }, [jsonData, docFilter, searchQuery]);
+            }, [jsonData, docFilter, searchTokens, categoryMatchesTypeFilters]);
 
             // While searching, show all matches regardless of stored
             // expansion state; clearing the query restores the prior state.
@@ -607,6 +678,29 @@
             // types are known, and passed down — see resolvePreviewDisabled
             // above for the type-gating rules.
             const previewDisabled = resolvePreviewDisabled(selectedGroup, selectedVersion, selectedNode);
+            // "View implementation" button: only when the selected
+            // signature's impl row (matched by .key, same shape
+            // ImplTargetMatrix reads) says a library nodegraph implements it.
+            const implRowForSig = React.useMemo(() => {
+                if (!genData || !selectedNode || !selectedGroup) return null;
+                const rows = (genData.nodes[selectedNode.name] && genData.nodes[selectedNode.name].impl) || [];
+                return rows.find((r) => r.key === selectedGroup.key) || null;
+            }, [genData, selectedNode, selectedGroup]);
+            const canViewImpl = !IN_VSCODE && !!implRowForSig && !!implRowForSig.graph
+                && !!selectedVersion && !!selectedNode;
+            // Builds a minimal one-node document and hands it to the graph
+            // editor, which resolves implOf to the library implementation
+            // nodegraph and opens it directly (pendingImplRef).
+            const viewImplementation = () => {
+                if (!canViewImpl) return;
+                const category = selectedNode.name;
+                const ndName = selectedVersion.name;
+                const outType = selectedGroup.type;
+                const xml = '<?xml version="1.0"?>\n<materialx version="1.39">\n'
+                    + '  <' + category + ' name="' + category + '1" type="' + outType + '" nodedef="' + ndName + '" />\n'
+                    + '</materialx>';
+                openInGraphEditor({ xml, name: category, select: category + '1', implOf: ndName });
+            };
             // Column set for the displayed table(s).
             const columns = React.useMemo(
                 () => displayTables.length > 0 ? unionColumns(displayTables) : EMPTY_COLUMNS,
@@ -704,6 +798,12 @@
                                     forceOpen={forceOpen}
                                     searchQuery={searchQuery}
                                     setSearchQuery={setSearchQuery}
+                                    searchOutType={searchTokens.outType || ''}
+                                    searchInType={searchTokens.inType || ''}
+                                    setSearchOutType={setSearchOutType}
+                                    setSearchInType={setSearchInType}
+                                    outputTypeOptions={outputTypeOptions}
+                                    takesTypeOptions={takesTypeOptions}
                                     matchCount={matchCount}
                                     expandAll={expandAll}
                                     collapseAll={collapseAll}
@@ -805,6 +905,16 @@
                                                             Copy link
                                                         </React.Fragment>
                                                     )}
+                                                </button>
+                                                )}
+                                                {canViewImpl && (
+                                                <button
+                                                    onClick={viewImplementation}
+                                                    title="Open this node's library implementation graph in the Node Graph Editor"
+                                                    className="inline-flex items-center gap-1 h-6 px-2 rounded-md border border-gray-600/50 bg-gray-900/70 text-[11px] font-medium text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 transition-colors"
+                                                >
+                                                    <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
+                                                    View implementation
                                                 </button>
                                                 )}
                                                 {/* Signature + Version pickers live up here in

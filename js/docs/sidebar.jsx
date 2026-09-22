@@ -17,6 +17,8 @@
         // data and passes it down as props.
         function DocsSidebar({
             treeData, docFilter, forceOpen, searchQuery, setSearchQuery, matchCount,
+            searchOutType, searchInType, setSearchOutType, setSearchInType,
+            outputTypeOptions, takesTypeOptions,
             expandAll, collapseAll, expandedLibs, toggleLib, expandedGroups, toggleGroup,
             selectedNode, setSelectedNode,
             stats, applyDocFilter, showPreviews, togglePreviews, onShowHelp, collapsed, onCollapse,
@@ -166,6 +168,36 @@
                                 </svg>
                             </button>
                         </div>
+                        <div className="flex items-center gap-1.5 pb-2">
+                            <MtlxSelect
+                                value={searchOutType || ''}
+                                options={outputTypeOptions || []}
+                                onChange={(v) => setSearchOutType(v || null)}
+                                emptyOption="any"
+                                placeholder="Outputs: any"
+                                defValue={null}
+                                title="Only show nodes with a signature outputting this type (out: in the search box)"
+                                ariaLabel="Filter by output type"
+                                font="mono"
+                                size="sm"
+                                variant="field"
+                                className="flex-1 min-w-0"
+                            />
+                            <MtlxSelect
+                                value={searchInType || ''}
+                                options={takesTypeOptions || []}
+                                onChange={(v) => setSearchInType(v || null)}
+                                emptyOption="any"
+                                placeholder="Takes: any"
+                                defValue={null}
+                                title="Only show nodes with a signature taking this type as input (in: in the search box)"
+                                ariaLabel="Filter by input type"
+                                font="mono"
+                                size="sm"
+                                variant="field"
+                                className="flex-1 min-w-0"
+                            />
+                        </div>
                         {matchCount !== null && (
                             <div className="text-xs text-gray-500 pb-1">
                                 {matchCount} {matchCount === 1 ? 'match' : 'matches'}
@@ -291,7 +323,13 @@
                                 search box to filter by name, the arrows next to the search box to expand
                                 or collapse everything, and the three filter icons above the search box to
                                 show all nodes, only documented, or only undocumented ones. The counters at
-                                the top of the panel show how many nodes have documentation.
+                                the top of the panel show how many nodes have documentation. The two
+                                dropdowns below the search box filter by port type: "Outputs" keeps nodes
+                                with a signature that outputs the chosen type, "Takes" keeps nodes with a
+                                signature that takes it as an input. Typing <code>out:&lt;type&gt;</code> or{' '}
+                                <code>in:&lt;type&gt;</code> directly into the search box (e.g.{' '}
+                                <code>out:color3</code>) does the same thing and can be combined with a
+                                name and with each other.
                             </p>
                             <p>
                                 <span className="font-semibold text-gray-100">Documentation.</span>{' '}

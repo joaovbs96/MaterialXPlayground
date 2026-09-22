@@ -676,6 +676,10 @@
             // just a selection) should be framed once the rebuilt flow has
             // measured it, the library-implementation-graph return path.
             const pendingFrameRef = React.useRef(null);
+            // Set by handleImport for a docs-page implOf handoff: { nodedef,
+            // fromId }. Consumed once parsed settles, right after the
+            // imported node itself is selected in root scope.
+            const pendingImplRef = React.useRef(null);
             // { id, scope } of the node whose "Explore Node Graph" pill/menu
             // opened the CURRENT scope, so leaving a library implementation
             // graph returns to (and frames) that node instead of scope root.
@@ -1609,6 +1613,11 @@
                     // A hint naming a node the document lacks is harmless —
                     // selectedNode resolves to null and displayNode falls back.
                     pendingScopeSelectRef.current = payload.select ? 'n:' + payload.select : null;
+                    // Docs "View implementation" handoff: resolved once
+                    // parsed settles, by the flow-rebuild effect below.
+                    pendingImplRef.current = (payload.implOf && payload.select)
+                        ? { nodedef: payload.implOf, fromId: 'n:' + payload.select }
+                        : null;
                     const safeName = (payload.name || 'material').replace(/[^a-z0-9_\-]+/gi, '_') || 'material';
                     const map = Object.assign({}, payload.files || {}, {
                         [safeName + '.mtlx']: new Blob([payload.xml], { type: 'application/xml' }),
@@ -1863,6 +1872,17 @@
                         scheduleViewSettle(() => fitViewSoon({ nodes: [{ id: frameId }], duration: 400, padding: 0.4, maxZoom: 1.2 }));
                     } else if (switchedScope) {
                         scheduleViewSettle(() => fitViewSoon({ padding: 0.15, duration: 350 }));
+                    }
+                    // Docs "View implementation" handoff: jump into the
+                    // imported node's implementation nodegraph, same path
+                    // "Explore Node Graph" uses from inside the editor.
+                    const pendingImpl = pendingImplRef.current;
+                    if (pendingImpl) {
+                        pendingImplRef.current = null;
+                        const graphName = parsed.implGraphByNodedef && parsed.implGraphByNodedef.get(pendingImpl.nodedef);
+                        if (graphName && built.nodes.some((n) => n.id === pendingImpl.fromId)) {
+                            openImplGraph(graphName, pendingImpl.fromId);
+                        }
                     }
                 } catch (e) {
                     setFlow({ nodes: [], edges: [] });

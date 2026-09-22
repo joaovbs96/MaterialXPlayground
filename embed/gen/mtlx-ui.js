@@ -1354,7 +1354,8 @@ const openInGraphEditor = ({
   xml,
   name,
   files,
-  select
+  select,
+  implOf
 }) => {
   // Drop out of any active fullscreen (native or the CSS-maximize
   // fallback) before leaving this view — the shell keeps the old view
@@ -1363,11 +1364,14 @@ const openInGraphEditor = ({
   // `select`: optional node NAME to land on once the document settles,
   // for handoffs where the editor's own default would pick a different
   // node than the one the sender was showing.
+  // `implOf`: optional nodedef name whose library implementation
+  // nodegraph to jump into (docs page's "View implementation" button).
   window.__mtlxPendingImport = {
     xml,
     name,
     files: files || null,
-    select: select || null
+    select: select || null,
+    implOf: implOf || null
   };
   window.dispatchEvent(new CustomEvent('mtlx-load-document', {
     detail: window.__mtlxPendingImport

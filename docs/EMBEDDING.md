@@ -15,6 +15,10 @@ Tailwind, no in-browser Babel, no hash router, just the 3D viewport and (optiona
 
 ## Quick start (no JavaScript)
 
+The hosted viewer URL below is a convenience, not a requirement: the embed is a static page
+and its assets can be deployed on any static host or your own site. See
+[Self-hosting](#self-hosting) for what to copy.
+
 ```html
 <iframe
   src="https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?src=https://raw.githubusercontent.com/AcademySoftwareFoundation/MaterialX/v1.39.5/resources/Materials/Examples/StandardSurface/standard_surface_greysphere_calibration.mtlx&geometry=sphere&controls=geometry,env,fullscreen"
