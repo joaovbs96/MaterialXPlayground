@@ -30,8 +30,8 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 ## Scene Viewer
 
 - [done] **USD Scene Viewer**: load USD stages with MaterialX materials rendered through the MaterialX shader generator, with per phase load progress and a render settings popover.
-- [planned] **UsdPreviewSurface materials**: convert UsdPreviewSurface materials to MaterialX so they render through the same pipeline as MaterialX materials.
-- [idea] **glTF scenes**: load glTF and GLB files, converting their PBR materials to MaterialX and sharing the renderer with USD.
+- [done] **UsdPreviewSurface materials**: UsdPreviewSurface shader networks are converted to MaterialX UsdPreviewSurface documents, so they render through the same pipeline as MaterialX materials.
+- [done] **glTF scenes**: glTF and GLB files load with their PBR materials converted to MaterialX glTF PBR shaders, and OBJ files with MTL materials converted to OpenPBR.
 - [planned] **Survive broken stages**: a malformed prim currently takes down the whole USD runtime. Recover and skip the offending prim instead.
 - [idea] **Geometry budgets and instancing**: stages already stop subdividing at a triangle budget; bound the geometry a stage can load overall and draw repeated meshes with GPU instancing.
 - [idea] **Variants and purposes**: let the user pick variant selections and render purposes; the runtime already supports both.
