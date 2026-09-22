@@ -605,11 +605,17 @@
                 const type = mxElType(o);
                 if (!type) return fail('No preview for "' + name + '" — its type is unknown.');
                 if (containerName) {
-                    if (COMPOUND_TAP_TYPES.indexOf(type) !== -1) {
+                    // Same rule as previewNode: a shared library graph is
+                    // functional, its interface lives on the nodedef, so a
+                    // raw nodegraph= tap loses every input type.
+                    const containerDef = mxSafe(() => container.getNodeDef(), null);
+                    const needsCompoundTap = COMPOUND_TAP_TYPES.indexOf(type) !== -1
+                        || (containerDef && !isDocLocal(container));
+                    if (needsCompoundTap) {
                         const nodeName = mxElAttr(o, 'nodename');
                         const output = mxElAttr(o, 'output');
                         if (nodeName) {
-                            const defEl = mxSafe(() => container.getNodeDef(), null);
+                            const defEl = containerDef;
                             return materializeTap(defEl ? {
                                 sourceGraph: container, defEl,
                                 nodeName, outName: output || null, outType: type, label: name,
