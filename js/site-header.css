@@ -97,13 +97,6 @@
     }
 }
 
-/* Compact stage (js/site-header.js's measure()): hides the abbreviatable
-   half of the version pill before falling back to the hamburger, see
-   .mtlx-badge-word further down. */
-.mtlx-header-bar.is-compact .mtlx-badge-word {
-    display: none;
-}
-
 /* Window Controls Overlay (Electron shell, marker class in site-header.js):
    drag region for the title bar, put on the full-width outer strip and
    the inner bar (also full width below), so it drags edge to edge. */
@@ -146,7 +139,7 @@
 }
 /* Every interactive descendant opts out of the drag region: nav links,
    group triggers plus their popover panels (.mtlx-menu, incl. disabled
-   rows), the version/source pills, and the mobile hamburger toggle. */
+   rows), the source pill, and the mobile hamburger toggle. */
 .mtlx-header.mtlx-desktop-titlebar a,
 .mtlx-header.mtlx-desktop-titlebar button,
 .mtlx-header.mtlx-desktop-titlebar select,
@@ -155,14 +148,6 @@
 .mtlx-header.mtlx-desktop-titlebar .mtlx-menu {
     -webkit-app-region: no-drag;
     app-region: no-drag;
-}
-
-/* Electron's right cluster is icon-only (GitHub + settings cog), no reason
-   to also show the MaterialX version pill; the id selector's extra
-   specificity here beats the plain #mtlx-header-version media-query rule
-   below regardless of source order. */
-.mtlx-header-bar.mtlx-desktop-titlebar #mtlx-header-version {
-    display: none;
 }
 
 /* Brand: logo mark + site title. Color lives on the outer element
@@ -370,15 +355,15 @@
     height: 14px;
 }
 
-/* align-items: stretch (not center) so the version pill below always
-   stretches to match the GitHub widget's height — 30px before its facts
-   row loads, 42px after — with no hardcoded height on either side.
-   align-self: center is required alongside it: .mtlx-header-bar is itself
-   `align-items: stretch`, so without this the whole cluster would stretch
-   to fill the 56px bar and its children would fill it edge-to-edge with
-   no gap. align-self makes .mtlx-nav-right hug its tallest child (the
+/* align-items: stretch (not center) so the About button and settings cog
+   below always stretch to match the GitHub widget's height — 30px before
+   its facts row loads, 42px after — with no hardcoded height on either
+   side. align-self: center is required alongside it: .mtlx-header-bar is
+   itself `align-items: stretch`, so without this the whole cluster would
+   stretch to fill the 56px bar and its children would fill it edge-to-edge
+   with no gap. align-self makes .mtlx-nav-right hug its tallest child (the
    GitHub widget) and center that within the bar, while align-items:
-   stretch still grows the version pill to match. */
+   stretch still grows the other items to match. */
 .mtlx-nav-right {
     display: none;
     margin-left: auto;
@@ -398,67 +383,6 @@
     }
 }
 
-/* Pills: version / source / feedback links in the right-side cluster
-   (and their identical mobile-panel counterparts use .mtlx-mobile-link
-   instead, see below). inline-flex + align-items:center (not
-   inline-block) so the text stays vertically centered once
-   .mtlx-nav-right's align-items:stretch above grows this pill taller
-   than its own content. */
-.mtlx-badge {
-    display: inline-flex;
-    align-items: center;
-    /* .mtlx-nav-right children default to flex-shrink: 1 — without this,
-       under width pressure the pill compresses below its nowrap content
-       width and clips its text, and because the bar then doesn't overflow,
-       the measured hamburger collapse in js/site-header.js's measure()
-       (which checks scrollWidth > clientWidth) never fires to rescue it. */
-    flex-shrink: 0;
-    font-size: 12px;
-    line-height: 16px;
-    padding: 6px 10px;
-    border-radius: 8px;
-    border: 1px solid var(--site-gray-600);
-    background-color: var(--site-gray-800);
-    color: var(--site-gray-200);
-    white-space: nowrap;
-    transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
-        background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
-        border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.mtlx-badge:hover {
-    background-color: var(--site-gray-700);
-}
-/* Version pill: text-gray-300 (not the badge default gray-200) and
-   hidden below 640px. Targeted by id (already unique — js/site-header.js
-   uses it as a version-badge mount point) rather than a one-off class. */
-#mtlx-header-version {
-    display: none;
-    color: var(--site-gray-300);
-    /* The logo and the "MaterialX <ver>" text are separate flex items in
-       this inline-flex row (below); column-gap spaces the logo from the
-       text. The text itself is a single flex item (js/site-header.js
-       wraps "MaterialX " + the version <span> in one <span>), so its own
-       natural trailing space renders normally instead of being collapsed
-       and double-spaced by this gap. 4px ≈ a space at this 12px font. */
-    column-gap: 4px;
-}
-@media (min-width: 640px) {
-    #mtlx-header-version {
-        display: inline-flex;
-    }
-}
-/* Official MaterialX wordmark, matched to the GitHub octocat's 20px width
-   (.mtlx-source-icon) so the two pills' icons read as the same size —
-   the source SVG is wider than tall (~1.72:1), so height auto renders it
-   at roughly 12px tall. It's just another flex item in
-   #mtlx-header-version's inline-flex row, so the pill's own
-   column-gap: 4px above already spaces it from the "MaterialX" text —
-   no extra margin needed. */
-.mtlx-badge-logo {
-    width: 20px;
-    height: auto;
-}
-
 /* Same wordmark, used as the "What is MaterialX?" nav leaf's icon. Wider
    than the 18px width-driven letterbox (~10px tall, reads too light next
    to the line icons), so it's sized up a bit to match their visual weight. */
@@ -475,16 +399,15 @@
     mask: url("../images/materialx-logo.svg") no-repeat center / contain;
 }
 
-/* GitHub repo widget: a flat icon + text link (no pill chrome, unlike the
-   version badge beside it), octocat + short repo name, with an async facts
-   row (latest release / stars / forks) filled in by js/site-header.js's
-   initSourceFacts(). Hover only recolors the icon/text (below), it never
-   gets a background or border. */
+/* GitHub repo widget: a flat icon + text link (no pill chrome), octocat +
+   short repo name, with an async facts row (latest release / stars /
+   forks) filled in by js/site-header.js's initSourceFacts(). Hover only
+   recolors the icon/text (below), it never gets a background or border. */
 .mtlx-source {
     display: inline-flex;
     align-items: center;
-    /* Same reasoning as .mtlx-badge above: shrinking would clip its nowrap
-       content AND hide the overflow from measure()'s collapse check. */
+    /* Shrinking would clip its nowrap content AND hide the overflow from
+       measure()'s collapse check below. */
     flex-shrink: 0;
     gap: 8px;
     padding: 4px 2px;
@@ -751,27 +674,15 @@
 .mtlx-mobile-link:hover {
     background-color: rgba(31, 41, 55, 0.4); /* gray-800/40 */
 }
-/* Mobile version link: text-gray-300 (not the default gray-200), same
-   reasoning as #mtlx-header-version above. */
-#mtlx-header-version-mobile {
-    color: var(--site-gray-300);
-}
-/* Turns the version row from a plain block link into an icon+text row,
+/* Turns the About row from a plain block button into an icon+text row,
    aligned the same way as .mtlx-source-mobile below (left-aligned icon
    column, vertically centered) — kept as its own class rather than
    reusing .mtlx-source-mobile since that one's gap is tuned for a square
-   octocat glyph, not this wider-than-tall wordmark. */
+   octocat glyph, not the About icon. */
 .mtlx-mobile-link-brand {
     display: flex;
     align-items: center;
     gap: 10px;
-}
-/* Matched to the GitHub octocat's 20px width (.mtlx-source-icon) so the two
-   mobile rows' icon columns line up. The source SVG is wider than tall
-   (~1.72:1), so height auto renders it at roughly 12px tall. */
-.mtlx-badge-logo-mobile {
-    width: 20px;
-    height: auto;
 }
 
 /* Mobile GitHub row: a flat copy of the desktop .mtlx-source widget
