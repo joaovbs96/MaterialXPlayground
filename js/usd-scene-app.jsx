@@ -403,12 +403,28 @@
         return null;
     };
 
+    // Trivial document the panel loads while still hidden, so the embed
+    // iframe boots its MaterialX runtime, environment and render view
+    // before the first double-click instead of during it.
+    const MATERIAL_PREVIEW_WARM_XML = [
+        '<?xml version="1.0"?>',
+        '<materialx version="1.38">',
+        '  <standard_surface name="warm_surface" type="surfaceshader" />',
+        '  <surfacematerial name="warm_material" type="material">',
+        '    <input name="surfaceshader" type="surfaceshader" nodename="warm_surface" />',
+        '  </surfacematerial>',
+        '</materialx>',
+    ].join('\n');
+    const MATERIAL_PREVIEW_WARM_PAYLOAD = { xml: MATERIAL_PREVIEW_WARM_XML, name: 'preview-warmup', materialName: '', primPath: '', files: null, warm: true };
+
     // Floating graph + shaderball preview for the material under a
     // double-click in the viewport. Stays mounted (CSS-hidden) after first
     // open so the graph-preview/materialx-viewer instances survive reopens.
-    function MaterialPreviewPanel({ open, payload, anchor, onClose, containerRef, panelRef, sceneFiles }) {
+    // `warm` mounts it hidden with the warm-up document ahead of any open.
+    function MaterialPreviewPanel({ open, payload, anchor, onClose, containerRef, panelRef, sceneFiles, warm }) {
         const shownRef = React.useRef(null);
         if (payload) shownRef.current = payload;
+        if (!shownRef.current && warm) shownRef.current = MATERIAL_PREVIEW_WARM_PAYLOAD;
         const shown = shownRef.current;
         const [rect, setRect] = React.useState(() => readStoredMaterialPreviewRect());
         const rectRef = React.useRef(rect);
@@ -454,13 +470,13 @@
         }, [rect]);
 
         React.useEffect(() => {
-            if (!window.MtlxGraphPreview && open) {
+            if (!window.MtlxGraphPreview && (open || warm)) {
                 let cancelled = false;
                 window.mtlxLoadViewDeps('galleryDetail').then(() => { if (!cancelled) setDepsReady(true); });
                 return () => { cancelled = true; };
             }
             return undefined;
-        }, [open]);
+        }, [open, warm]);
 
         // Deps on !!shown, not []: the body div does not exist in the DOM
         // until the panel opens for the first time (shown is still null on
@@ -874,6 +890,7 @@
             'no-document': 'Double-click: no MaterialX document for this material',
         };
         const [previewPayload, setPreviewPayload] = React.useState(null);
+        const [previewWarm, setPreviewWarm] = React.useState(false);
         const [previewAnchor, setPreviewAnchor] = React.useState(null);
         const previewPanelRef = React.useRef(null);
         const [dragOver, setDragOver] = React.useState(false);
@@ -1086,8 +1103,24 @@
             if (active) return;
             setPreviewOpen(false);
             setPreviewPayload(null);
+            setPreviewWarm(false);
             setPreviewEpoch((epoch) => epoch + 1);
         }, [active]);
+        // Warm the preview once the stage is on screen and the main thread
+        // is idle: the panel mounts hidden and boots the embed's runtime, so
+        // a double-click only pays this material's own shader generation.
+        React.useEffect(() => {
+            if (!active || status !== 'rendered' || previewWarm) return undefined;
+            let timer = 0;
+            let idle = 0;
+            const arm = () => setPreviewWarm(true);
+            if (typeof requestIdleCallback === 'function') idle = requestIdleCallback(arm, { timeout: 1500 });
+            else timer = setTimeout(arm, 500);
+            return () => {
+                if (idle && typeof cancelIdleCallback === 'function') cancelIdleCallback(idle);
+                if (timer) clearTimeout(timer);
+            };
+        }, [active, status, previewWarm]);
         const abortRef = React.useRef(null);
         const mountedRef = React.useRef(true);
         const filesRef = React.useRef(files);
@@ -2735,6 +2768,7 @@
                         containerRef={containerRef}
                         panelRef={previewPanelRef}
                         sceneFiles={sceneLooseFiles}
+                        warm={previewWarm}
                     />
                 </div>
             </div>
