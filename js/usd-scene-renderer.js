@@ -86,15 +86,14 @@ const storedSceneSpecularAA = () => {
 };
 
 // Baked sky visibility: the room-scale half of the same missing visibility
-// term. Screen space AO handles contacts, this handles walls. Default on,
-// because an interior lit by a dome is wrong without it and the bake is a
-// one-off cost per stage.
+// term. Screen space AO handles contacts, this handles walls. Off by
+// default (2026-09-22): the Default quality level starts with it off.
 const SCENE_SKYVIS_KEY = 'mtlx_scene_skyvis';
 const SCENE_SKYVIS_STRENGTH_KEY = 'mtlx_scene_skyvis_strength';
 const SCENE_SKYVIS_STRENGTH_DEFAULT = 1;
 const storedSceneSkyVis = () => {
     if (window.top !== window) return false;
-    try { return localStorage.getItem(SCENE_SKYVIS_KEY) !== '0'; } catch (e) { return true; }
+    try { return localStorage.getItem(SCENE_SKYVIS_KEY) === '1'; } catch (e) { return false; }
 };
 const storedSceneSkyVisStrength = () => {
     if (window.top !== window) return 1;
@@ -111,12 +110,11 @@ const SCENE_AO_KEY = 'mtlx_scene_ao';
 const SCENE_AO_STRENGTH_KEY = 'mtlx_scene_ao_strength';
 const SCENE_AO_STRENGTH_DEFAULT = 0.85;
 
-// Default on. The environment is most of the light in an interior and it has
-// no visibility term of its own, so without this every object sits on its
-// surroundings with no contact shading at all.
+// Off by default (2026-09-22): the Default quality level starts with it
+// off, same as shadows and sky visibility.
 const storedSceneAo = () => {
     if (window.top !== window) return false;
-    try { return localStorage.getItem(SCENE_AO_KEY) !== '0'; } catch (e) { return true; }
+    try { return localStorage.getItem(SCENE_AO_KEY) === '1'; } catch (e) { return false; }
 };
 // Default 0.7 rather than full strength: the term multiplies the WHOLE
 // environment contribution in one flat multiply (MaterialX has no per-lobe
@@ -232,12 +230,11 @@ const storedSceneLocalReflectionStrength = () => {
     } catch (e) { return 1; }
 };
 
-// Default on. Shadows are what makes objects sit in a scene rather than float
-// in it, and the cost is bounded: the atlas is redrawn only when the camera
-// actually moves, and the caster count drops on very large stages.
+// Off by default (2026-09-22): the Default quality level starts with it
+// off, same as AO and sky visibility.
 const storedSceneShadows = () => {
     if (window.top !== window) return false;
-    try { return localStorage.getItem(SCENE_SHADOWS_KEY) !== '0'; } catch (e) { return true; }
+    try { return localStorage.getItem(SCENE_SHADOWS_KEY) === '1'; } catch (e) { return false; }
 };
 
 // Scene transparency is independent from the shared Material Viewer Force

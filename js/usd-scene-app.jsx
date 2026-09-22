@@ -629,7 +629,9 @@
             title: 'Balanced quality and speed',
             values: {
                 textureMaxSize: QUALITY_TEXTURE_MAX_SIZE_DEFAULT, textureBudgetGib: QUALITY_TEXTURE_BUDGET_DEFAULT_GIB, subdivision: QUALITY_SUBDIVISION_DEFAULT,
-                shadows: true, ao: true, skyVis: true, transparency: true,
+                // Sky visibility, AO and shadows off by default (2026-09-22):
+                // matches storedSceneShadows/Ao/SkyVis in usd-scene-renderer.js.
+                shadows: false, ao: false, skyVis: false, transparency: true,
                 displacement: true, displacementSubdivision: QUALITY_DISPLACEMENT_SUBDIVISION_DEFAULT,
                 triangleLimits: QUALITY_TRIANGLE_LIMITS_DEFAULT, bounce: true, localReflections: false, specularAA: true,
                 ...LIVE_QUALITY_VALUES,
@@ -894,8 +896,12 @@
         const [stageLightsOn, setStageLightsOn] = React.useState(true);
         const [stageLightsEv, setStageLightsEv] = React.useState(0);
         const [presentation, setPresentation] = React.useState(SCENE_PRESENTATION_DEFAULT);
-        const [shadowsOn, setShadowsOn] = React.useState(true);
-        const [aoOn, setAoOn] = React.useState(true);
+        // Off by default (2026-09-22): matches storedSceneShadows and the
+        // "default" quality level's shadows value below.
+        const [shadowsOn, setShadowsOn] = React.useState(false);
+        // Off by default (2026-09-22): matches storedSceneAo and the
+        // "default" quality level's ao value below.
+        const [aoOn, setAoOn] = React.useState(false);
         const [aoStrength, setAoStrength] = React.useState(0.85);
         // Default on (v3, 2026-09-20): see storedSceneBounce in
         // js/usd-scene-renderer.js. Strength default must track
@@ -908,7 +914,9 @@
         const [ssrOn, setSsrOn] = React.useState(false);
         const [ssrStrength, setSsrStrength] = React.useState(1);
         const [ssrMaxRoughness, setSsrMaxRoughness] = React.useState(0.5);
-        const [skyVisOn, setSkyVisOn] = React.useState(true);
+        // Off by default (2026-09-22): matches storedSceneSkyVis and the
+        // "default" quality level's skyVis value below.
+        const [skyVisOn, setSkyVisOn] = React.useState(false);
         const [skyVisStrength, setSkyVisStrength] = React.useState(1);
         // Local reflections: off by default (storedSceneLocalReflections in
         // js/usd-scene-renderer.js), never on in an embed.
