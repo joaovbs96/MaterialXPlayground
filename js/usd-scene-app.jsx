@@ -784,25 +784,30 @@
         const sidebarOpenRef = React.useRef(sidebarOpen);
         sidebarOpenRef.current = sidebarOpen;
         const [files, setFiles] = React.useState([]);
-        // Full loose (non-.mtlx) file map of the loaded scene, for the
-        // material preview panel's editor hand-off: the renderer's own
-        // getMaterialDocument().files is scoped to what its own filename-ref
-        // scan matched, which can miss a texture the export scanner later
-        // wants under a different relative form.
-        const sceneLooseFiles = React.useMemo(() => {
-            const map = {};
-            files.forEach(({ path, data }) => {
-                if (!path || /\.mtlx$/i.test(path)) return;
-                if (window.isHiddenSideFile && window.isHiddenSideFile(path)) return;
-                map[path] = (data instanceof ArrayBuffer) ? new Blob([data]) : data;
-            });
-            return map;
-        }, [files]);
         const [rootPath, setRootPath] = React.useState('');
         const [status, setStatus] = React.useState('idle');
         const [progress, setProgress] = React.useState({ phase: '', done: 0, total: 0, message: '' });
         const [stage, setStage] = React.useState(null);
         const [handle, setHandle] = React.useState(null);
+        // Full loose (non-.mtlx) file map of the loaded scene, for the
+        // material preview panel's editor hand-off: the renderer's own
+        // getMaterialDocument().files is scoped to what its own filename-ref
+        // scan matched, which can miss a texture the export scanner later
+        // wants under a different relative form. Also merges stage.assets so
+        // synthetic entries (glTF-embedded textures/materials, USDZ-internal
+        // textures) the loader already decoded into memory are included,
+        // not just the user's originally-dropped files.
+        const sceneLooseFiles = React.useMemo(() => {
+            const map = {};
+            const add = ({ path, data }) => {
+                if (!path || /\.mtlx$/i.test(path)) return;
+                if (window.isHiddenSideFile && window.isHiddenSideFile(path)) return;
+                map[path] = (data instanceof ArrayBuffer) ? new Blob([data]) : data;
+            };
+            files.forEach(add);
+            (stage && Array.isArray(stage.assets) ? stage.assets : []).forEach(add);
+            return map;
+        }, [files, stage]);
         const [error, setError] = React.useState('');
         const [previewOpen, setPreviewOpen] = React.useState(false);
         // Short viewport note explaining why a double-click opened nothing.
