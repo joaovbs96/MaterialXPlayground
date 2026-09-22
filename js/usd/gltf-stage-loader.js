@@ -173,6 +173,90 @@ function buildGlb(json, binBytes) {
   return out;
 }
 
+// glTF normalized integer accessors: the divisor per component type, with
+// signed types clamped to -1 as the spec requires.
+const NORMALIZE_DIVISOR = new Map([
+  ["Int8Array", 127], ["Uint8Array", 255],
+  ["Int16Array", 32767], ["Uint16Array", 65535],
+  ["Int32Array", 2147483647], ["Uint32Array", 4294967295],
+]);
+
+function normalizeDivisorOf(array) {
+  const name = array && array.constructor ? array.constructor.name : "";
+  return NORMALIZE_DIVISOR.get(name) || 0;
+}
+
+// Copies a three BufferAttribute into a plain Float32Array, undoing
+// normalized integer encodings (KHR_mesh_quantization, packed colours) and
+// interleaving. Reading `.array` directly leaves raw integers such as 65535.
+export function attributeToFloat32(attribute, itemSizeOverride) {
+  if (!attribute || !attribute.array) return null;
+  const itemSize = itemSizeOverride || attribute.itemSize || 1;
+  const sourceItemSize = attribute.itemSize || itemSize;
+  const count = attribute.count !== undefined
+    ? attribute.count
+    : Math.floor(attribute.array.length / sourceItemSize);
+  const divisor = attribute.normalized ? normalizeDivisorOf(attribute.array) : 0;
+  const signed = !!divisor && /^Int/.test(attribute.array.constructor.name);
+  const interleaved = !!(attribute.data && Number.isFinite(attribute.data.stride));
+  const stride = interleaved ? attribute.data.stride : sourceItemSize;
+  const base = interleaved ? (attribute.offset || 0) : 0;
+  const out = new Float32Array(count * itemSize);
+  for (let i = 0; i < count; i++) {
+    for (let c = 0; c < itemSize; c++) {
+      let value = c < sourceItemSize ? Number(attribute.array[base + i * stride + c]) : 0;
+      if (divisor) value = signed ? Math.max(value / divisor, -1) : value / divisor;
+      out[i * itemSize + c] = value;
+    }
+  }
+  return out;
+}
+
+// glTF puts texcoord (0,0) at the TOP-left of the image, MaterialX and USD
+// put it at the bottom-left, and the generated shaders sample file textures
+// for the MaterialX convention. Flipping V here is what makes a glTF and a
+// USD stage land the same way on screen.
+export function flipUvV(uvs) {
+  if (!uvs) return uvs;
+  for (let i = 1; i < uvs.length; i += 2) uvs[i] = 1 - uvs[i];
+  return uvs;
+}
+
+// Finds the source glTF node and primitive index for a mesh GLTFLoader
+// emitted: a single-primitive mesh IS the node object, a multi-primitive
+// one is a child of the node group, in primitive order.
+export function gltfPrimitiveLocation(object, associations) {
+  const assocOf = (node) => (associations && node ? associations.get(node) : null);
+  let current = object;
+  let primitiveIndex = 0;
+  while (current) {
+    const assoc = assocOf(current);
+    if (assoc && assoc.type === "nodes" && Number.isInteger(assoc.index)) {
+      return { nodeIndex: assoc.index, primitiveIndex };
+    }
+    const parent = current.parent;
+    if (!parent) return null;
+    const siblings = (parent.children || []).filter((child) => child && !assocOf(child));
+    const idx = siblings.indexOf(current);
+    primitiveIndex = idx >= 0 ? idx : 0;
+    current = parent;
+  }
+  return null;
+}
+
+// The authoritative material binding: the primitive's own `material` index
+// in the source JSON, which survives every material clone and cache hit
+// GLTFLoader makes. Returns -1 only when the primitive truly has none.
+export function gltfMaterialIndexForNode(json, nodeIndex, primitiveIndex) {
+  const nodeDef = json && Array.isArray(json.nodes) ? json.nodes[nodeIndex] : null;
+  if (!nodeDef || !Number.isInteger(nodeDef.mesh)) return -1;
+  const meshDef = Array.isArray(json.meshes) ? json.meshes[nodeDef.mesh] : null;
+  const primitives = meshDef && Array.isArray(meshDef.primitives) ? meshDef.primitives : [];
+  const primitive = primitives[primitiveIndex] || (primitives.length === 1 ? primitives[0] : null);
+  if (!primitive || !Number.isInteger(primitive.material)) return -1;
+  return primitive.material;
+}
+
 function bufferHasExternalUri(bufferDef) {
   return !!bufferDef && typeof bufferDef.uri === "string" && !/^data:/i.test(bufferDef.uri);
 }
@@ -412,7 +496,8 @@ export async function loadGltfStage({ files, rootPath, signal, onProgress } = {}
       const key = materialIndex + ":" + (hasVertexColor ? 1 : 0);
       if (materialPathCache.has(key)) return materialPathCache.get(key);
       const gltfMat = materialIndex >= 0 && Array.isArray(rawJson.materials) ? rawJson.materials[materialIndex] : null;
-      if (materialIndex < 0) warnings.push("A mesh has no material binding, the default glTF material is used");
+      // Only reached when the source primitives really bind no material.
+      if (materialIndex < 0) warnings.push("[info] The file binds no material to some meshes, the default glTF material (white, fully rough metal) is used");
       let baseName = (gltfMat && gltfMat.name) || (materialIndex >= 0 ? ("material_" + materialIndex) : "default");
       if (hasVertexColor && materialPathCache.has(materialIndex + ":0")) baseName += "_vc";
       const sanitizedBase = sanitizeMtlxName(baseName, usedMaterialNames);
@@ -453,30 +538,19 @@ export async function loadGltfStage({ files, rootPath, signal, onProgress } = {}
         return;
       }
       const vertexCount = posAttr.count;
-      const positions = Float32Array.from(posAttr.array);
-      const normals = geometry.attributes.normal ? Float32Array.from(geometry.attributes.normal.array) : undefined;
-      const uvs = geometry.attributes.uv ? Float32Array.from(geometry.attributes.uv.array) : undefined;
+      const positions = attributeToFloat32(posAttr, 3);
+      const normals = geometry.attributes.normal ? attributeToFloat32(geometry.attributes.normal, 3) : undefined;
+      const uvs = geometry.attributes.uv ? flipUvV(attributeToFloat32(geometry.attributes.uv, 2)) : undefined;
 
       const geomprops = [];
       if (geometry.attributes.uv2) {
-        geomprops.push({ name: "UV1", itemSize: 2, interpolation: "vertex", data: Float32Array.from(geometry.attributes.uv2.array) });
+        const uv1 = flipUvV(attributeToFloat32(geometry.attributes.uv2, 2));
+        geomprops.push({ name: "UV1", itemSize: 2, interpolation: "vertex", data: uv1 });
       }
       let hasVertexColor = false;
       if (geometry.attributes.color) {
         hasVertexColor = true;
-        const colorAttr = geometry.attributes.color;
-        const itemSize = colorAttr.itemSize;
-        let colorData;
-        if (itemSize === 3) {
-          colorData = Float32Array.from(colorAttr.array);
-        } else {
-          colorData = new Float32Array(vertexCount * 3);
-          for (let i = 0; i < vertexCount; i++) {
-            colorData[i * 3] = colorAttr.array[i * itemSize];
-            colorData[i * 3 + 1] = colorAttr.array[i * itemSize + 1];
-            colorData[i * 3 + 2] = colorAttr.array[i * itemSize + 2];
-          }
-        }
+        const colorData = attributeToFloat32(geometry.attributes.color, 3);
         geomprops.push({ name: "color", itemSize: 3, interpolation: "vertex", data: colorData });
       }
 
@@ -484,8 +558,14 @@ export async function loadGltfStage({ files, rootPath, signal, onProgress } = {}
         ? Uint32Array.from(geometry.index.array)
         : Uint32Array.from({ length: vertexCount }, (_, i) => i);
 
-      const assoc = parser.associations.get(object.material);
-      let materialIndex = assoc && assoc.type === "materials" && Number.isInteger(assoc.index) ? assoc.index : -1;
+      // Source JSON first: a primitive's own material index is immune to
+      // every clone, cache hit and default-material substitution three makes.
+      const location = gltfPrimitiveLocation(object, parser.associations);
+      let materialIndex = location ? gltfMaterialIndexForNode(rawJson, location.nodeIndex, location.primitiveIndex) : -1;
+      if (materialIndex < 0) {
+        const assoc = parser.associations.get(object.material);
+        if (assoc && assoc.type === "materials" && Number.isInteger(assoc.index)) materialIndex = assoc.index;
+      }
       if (materialIndex < 0 && object.material && object.material.name && Array.isArray(rawJson.materials)) {
         const idx = rawJson.materials.findIndex((m) => m && m.name === object.material.name);
         if (idx >= 0) materialIndex = idx;
