@@ -3197,8 +3197,9 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             if (compiled.samplerBudget && compiled.samplerBudget.dropped.length) {
                 const effects = compiled.samplerBudget.droppedLabels || compiled.samplerBudget.dropped;
                 const list = effects.length <= 1 ? effects.join('') : effects.slice(0, -1).join(', ') + ' and ' + effects[effects.length - 1];
-                warnings.push('Texture slots: ' + label + ' uses more textures than this GPU allows (' + compiled.samplerBudget.limit
-                    + '), so ' + list + (effects.length > 1 ? ' are' : ' is') + ' turned off for this material');
+                warnings.push('Texture slots: ' + label + ' ' + (compiled.samplerBudget.notice
+                    || ('uses more textures than this GPU allows (' + compiled.samplerBudget.limit
+                        + '), so ' + list + (effects.length > 1 ? ' are' : ' is') + ' turned off for this material')));
             }
             if (compiled.samplerOverBudget) {
                 warnings.push('Texture slots: ' + label + ' needs ' + compiled.samplerBudget.count + ' textures but this GPU allows '

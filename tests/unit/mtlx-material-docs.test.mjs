@@ -515,3 +515,75 @@ test('helpers: escaping and number formatting', () => {
   });
   assert.match(xml, /value="a&amp;b\.png"/);
 });
+
+// One sampler per distinct image read: slots pointing at the same texture
+// with the same settings must share one image node.
+test('gltf: metallic-roughness and occlusion share one image node', () => {
+  const sameImage = () => ({ file: 'textures/orm.png' });
+  const { xml } = gltfPbrDocument({
+    name: 'orm',
+    material: {
+      pbrMetallicRoughness: { metallicRoughnessTexture: { index: 0 } },
+      occlusionTexture: { index: 0 },
+    },
+    textureRefs: sameImage,
+  });
+  const images = xml.match(/<gltf_image /g) || [];
+  assert.equal(images.length, 1);
+  assert.equal(nodeLine(xml, 'occlusion_image'), null);
+  assert.match(inputLine(xml, 'occlusion_channel', 'in'), /nodename="metallic_roughness_image"/);
+  assert.match(inputLine(xml, 'roughness_channel', 'in'), /nodename="metallic_roughness_image"/);
+});
+
+test('gltf: normal and clearcoat normal share one gltf_normalmap', () => {
+  const { xml } = gltfPbrDocument({
+    name: 'cc',
+    material: {
+      normalTexture: { index: 0 },
+      extensions: { KHR_materials_clearcoat: { clearcoatFactor: 1, clearcoatNormalTexture: { index: 0 } } },
+    },
+    textureRefs: () => ({ file: 'textures/n.png' }),
+  });
+  assert.equal((xml.match(/<gltf_normalmap /g) || []).length, 1);
+  assert.match(inputLine(xml, 'SR_cc', 'clearcoat_normal'), /nodename="normal_image"/);
+});
+
+test('gltf: the same image in an sRGB and a raw slot stays two reads, with a note', () => {
+  const { xml, notes } = gltfPbrDocument({
+    name: 'mixed',
+    material: {
+      pbrMetallicRoughness: { baseColorTexture: { index: 0 } },
+      occlusionTexture: { index: 0 },
+    },
+    textureRefs: () => ({ file: 'textures/shared.png' }),
+  });
+  assert.equal((xml.match(/<gltf_colorimage /g) || []).length, 1);
+  assert.equal((xml.match(/<gltf_image /g) || []).length, 1);
+  assert.ok(notes.some(note => note.includes('is read 2 times') && note.includes('sRGB')));
+});
+
+test('gltf: two float slots on one image share it and scale separately', () => {
+  const { xml } = gltfPbrDocument({
+    name: 'floats',
+    material: {
+      extensions: {
+        KHR_materials_clearcoat: { clearcoatFactor: 0.5, clearcoatTexture: { index: 0 } },
+        KHR_materials_transmission: { transmissionFactor: 0.25, transmissionTexture: { index: 0 } },
+      },
+    },
+    textureRefs: () => ({ file: 'textures/mask.png' }),
+  });
+  assert.equal((xml.match(/<gltf_image /g) || []).length, 1);
+  assert.match(inputLine(xml, 'clearcoat_image_scaled', 'in1'), /nodename="clearcoat_image"/);
+  assert.match(inputLine(xml, 'transmission_image_scaled', 'in1'), /nodename="clearcoat_image"/);
+});
+
+test('usd: two float slots reading the same file share one image node', () => {
+  const { xml } = usdPreviewSurfaceDocument({
+    name: 'usd',
+    record: { roughnessTexture: 'r', metallicTexture: 'm' },
+    textureRefs: () => 'textures/shared.png',
+  });
+  assert.equal((xml.match(/<image /g) || []).length, 1);
+  assert.match(inputLine(xml, 'SR_usd', 'metallic'), /nodename="roughness_image"/);
+});

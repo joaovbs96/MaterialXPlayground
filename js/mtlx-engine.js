@@ -746,13 +746,17 @@ const countFragmentSamplers = (fs) => {
     const re = /uniform\s+(?:(?:low|medium|high)p\s+)?(sampler2D|sampler3D|samplerCube)\s+(\w+)\s*(?:\[\s*(\d+)\s*\])?\s*;/g;
     const names = [];
     let count = 0;
+    // Scene/engine samplers are all u_-prefixed; a material's own texture
+    // reads are named after their image node (<node>_file).
+    let scene = 0;
     let m;
     while ((m = re.exec(fs)) !== null) {
         const size = m[3] ? parseInt(m[3], 10) : 1;
         count += size;
+        if (/^u_/.test(m[2])) scene += size;
         names.push(m[3] ? m[2] + '[' + m[3] + ']' : m[2]);
     }
-    return { count, names };
+    return { count, names, scene, material: count - scene };
 };
 
 // Estimates fragment uniform vector cost against MAX_FRAGMENT_UNIFORM_VECTORS.
@@ -7536,6 +7540,76 @@ const unresolvedNodesText = (found) => found.map((u) => (u.known
     : `Node "${u.name}" (type "${u.category}") has no definition in this MaterialX build.`
 )).join(' ');
 
+// Image-family nodes that cost one sampler2D each in the generated ESSL.
+const MERGEABLE_IMAGE_CATEGORIES = new Set([
+    'image', 'tiledimage', 'gltf_image', 'gltf_colorimage', 'gltf_normalmap',
+    'gltf_anisotropy_image', 'gltf_iridescence_thickness',
+]);
+// Editor-only attributes, never part of what a node reads.
+const MERGE_IGNORED_ATTRIBUTES = new Set(['name', 'xpos', 'ypos', 'doc']);
+
+// Identity of one node: category, type, its own attributes and every input's
+// attributes, so two nodes match only when they read the same file the same
+// way (file, colorspace, address/filter modes, texcoord, frame range, ...).
+const mxNodeSignature = (node) => {
+    const parts = [mxElCat(node), mxElType(node)];
+    for (const attr of vecToArray(mxSafe(() => node.getAttributeNames(), [])).slice().sort()) {
+        if (MERGE_IGNORED_ATTRIBUTES.has(attr)) continue;
+        parts.push('@' + attr + '=' + mxElAttr(node, attr));
+    }
+    const inputs = vecToArray(mxSafe(() => node.getInputs(), [])).map((input) => {
+        const attrs = vecToArray(mxSafe(() => input.getAttributeNames(), [])).slice().sort();
+        return mxElName(input) + '{' + attrs.map((a) => a + '=' + mxElAttr(input, a)).join(',') + '}';
+    }).sort();
+    return parts.join('|') + '|' + inputs.join('|');
+};
+
+// Two image nodes that read the same file the same way cost two texture
+// units for one texture, which is how a four-texture glTF material ran out
+// of sampler slots. Rewires every downstream reference in the same scope
+// onto the first of each group; the duplicates stay in the document but
+// become unreachable, so codegen never emits them. Runs on the LIVE
+// document, so the caller MUST call restore() in a finally.
+const mergeDuplicateImageNodes = (doc) => {
+    const restores = [];
+    const groups = [];
+    let merged = 0;
+    if (!doc) return { restore: () => {}, merged, groups };
+    mxWarnIfLocked('mergeDuplicateImageNodes'); // exported doc-mutating helper, see mxWarnIfLocked's header comment
+    const scopes = [doc].concat(vecToArray(mxSafe(() => doc.getNodeGraphs ? doc.getNodeGraphs() : null, [])));
+    for (const scope of scopes) {
+        const children = vecToArray(mxSafe(() => scope.getChildren(), []));
+        const bySignature = new Map();
+        const renames = new Map(); // duplicate name -> canonical name
+        for (const node of children) {
+            if (!MERGEABLE_IMAGE_CATEGORIES.has(mxElCat(node))) continue;
+            // An interface-bound input can be rebound per instance; leave those alone.
+            const bound = vecToArray(mxSafe(() => node.getInputs(), []))
+                .some((input) => mxElHasAttr(input, 'interfacename'));
+            if (bound) continue;
+            const signature = mxNodeSignature(node);
+            const first = bySignature.get(signature);
+            if (!first) { bySignature.set(signature, node); continue; }
+            renames.set(mxElName(node), mxElName(first));
+        }
+        if (!renames.size) continue;
+        for (const child of children) {
+            const ports = [child].concat(vecToArray(mxSafe(() => child.getChildren(), [])));
+            for (const port of ports) {
+                if (!mxElHasAttr(port, 'nodename')) continue;
+                const from = mxElAttr(port, 'nodename');
+                const to = renames.get(from);
+                if (!to || to === from) continue;
+                if (mxSetAttr(port, 'nodename', to)) restores.push(() => mxSetAttr(port, 'nodename', from));
+            }
+        }
+        for (const [from, to] of renames) groups.push({ kept: to, merged: from });
+        merged += renames.size;
+    }
+    const restore = () => { for (let i = restores.length - 1; i >= 0; i--) restores[i](); };
+    return { restore, merged, groups };
+};
+
 // ------------------------------------------------------------------
 // generatePreviewSources: shader-generation slice of createMtlxRenderView,
 // letting tryRefreshRenderView diff sources without a full rebuild.
@@ -7621,8 +7695,16 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     let colorspaceAliasResult = null;
     let colorspaceTransformResult = null;
     let materialWorkspaceResult = null;
+    let imageMergeResult = null;
     if (colorspaceDoc) {
         colorspaceAliasResult = applyColorspaceAliases(colorspaceDoc);
+        // After the aliases (so two spellings of one colorspace still match)
+        // and before the transforms, which would otherwise insert one
+        // conversion chain per duplicate image.
+        imageMergeResult = mergeDuplicateImageNodes(colorspaceDoc);
+        if (DEBUG_SHADERS && imageMergeResult.merged) {
+            console.log('[mtlx] merged ' + imageMergeResult.merged + ' duplicate image node(s) for "' + label + '":', imageMergeResult.groups);
+        }
         // Must follow the aliases: an authored "srgb_tx" only becomes a
         // name cmlib knows once applyColorspaceAliases has normalized it.
         colorspaceTransformResult = applyColorspaceTransforms(colorspaceDoc);
@@ -7667,6 +7749,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
         // Reverse order: the transforms were layered on top of the aliases.
         if (materialWorkspaceResult) materialWorkspaceResult.restore();
         if (colorspaceTransformResult) colorspaceTransformResult.restore();
+        if (imageMergeResult) imageMergeResult.restore();
         if (colorspaceAliasResult) colorspaceAliasResult.restore();
     }
     if (window.MTLX_PERF_LOG) {
@@ -8051,6 +8134,13 @@ const SAMPLER_BUDGET_DROP_ORDER = [
     { key: 'skipRefraction', label: 'refraction colour (u_opaqueColor)', userLabel: 'refraction' },
 ];
 
+// One accurate sentence for a material that ran out of texture units:
+// what it needed, where those samplers came from, and what was turned off.
+const samplerBudgetNotice = ({ needed, limit, effects, plural }) => 'needs ' + needed.count
+    + ' texture samplers (' + needed.material + ' from the material, ' + needed.scene
+    + ' from the scene) but this GPU allows ' + limit + ', so ' + effects
+    + (plural ? ' are' : ' is') + ' turned off for it';
+
 // Viewer-path generation with the same sampler budget as the Scene: drops
 // optional samplers in SAMPLER_BUDGET_DROP_ORDER until the fragment fits
 // the texture unit limit, and notes every drop on srcs.notices.
@@ -8059,22 +8149,27 @@ const generatePreviewSourcesWithinBudget = async (args) => {
     const budget = Number.isFinite(overrideBudget) ? overrideBudget : DEFAULT_SAMPLER_BUDGET;
     const dropped = [];
     let srcs = null;
+    let neededInfo = null; // the full-feature count, what the notice reports
     for (let attempt = 0; ; attempt++) {
         // The caller's feature gating is the base; budget drops add to it.
         const sceneFeatureOptions = Object.assign({}, args.sceneFeatureOptions || null);
         for (const d of dropped) sceneFeatureOptions[d.key] = true;
         srcs = await generatePreviewSources(Object.assign({}, args, { sceneFeatureOptions }));
         if (!srcs) return null;
-        if (countFragmentSamplers(srcs.fs).count <= budget) break;
+        const info = countFragmentSamplers(srcs.fs);
+        if (!neededInfo) neededInfo = info;
+        if (info.count <= budget) break;
         if (attempt >= SAMPLER_BUDGET_DROP_ORDER.length) break;
         dropped.push(SAMPLER_BUDGET_DROP_ORDER[attempt]);
     }
     if (dropped.length) {
-        const count = countFragmentSamplers(srcs.fs).count;
+        const info = countFragmentSamplers(srcs.fs);
         const effects = joinWithAnd(dropped.map((d) => d.userLabel));
-        srcs.notices = (srcs.notices || []).concat(['Texture slots: this material uses more textures than this GPU allows ('
-            + budget + '), so ' + effects + (dropped.length > 1 ? ' are' : ' is') + ' turned off for it']);
-        srcs.samplerBudget = { limit: budget, count, dropped: dropped.map((d) => d.label), droppedLabels: dropped.map((d) => d.userLabel) };
+        const needed = samplerBudgetNotice({ needed: neededInfo || info, limit: budget, effects, plural: dropped.length > 1 });
+        srcs.notices = (srcs.notices || []).concat(['Texture slots: this material ' + needed]);
+        srcs.samplerBudget = { limit: budget, count: info.count, material: info.material, scene: info.scene,
+            needed: (neededInfo || info).count, notice: needed,
+            dropped: dropped.map((d) => d.label), droppedLabels: dropped.map((d) => d.userLabel) };
     }
     return srcs;
 };
@@ -8097,6 +8192,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
     const dropped = [];
     let srcs = null;
     let samplerInfo = null;
+    let neededInfo = null; // the full-feature count, what the notice reports
     let budgetAttempts = 0;
     for (let attempt = 0; ; attempt++) {
         budgetAttempts = attempt + 1;
@@ -8106,6 +8202,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
         srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, materialName, isMounted, document: documentArg, sceneRgbt, lightTransport, sceneFeatureOptions, stageLightCount });
         if (!srcs) return null;
         samplerInfo = countFragmentSamplers(srcs.fs);
+        if (!neededInfo) neededInfo = samplerInfo;
         if (samplerInfo.count <= budget) break;
         if (attempt >= SAMPLER_BUDGET_DROP_ORDER.length) break; // hooks exhausted, still over
         dropped.push(SAMPLER_BUDGET_DROP_ORDER[attempt]);
@@ -8128,7 +8225,17 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
         label,
         samplerCount: samplerInfo.count,
         samplerNames: samplerInfo.names,
-        samplerBudget: { limit: budget, count: samplerInfo.count, dropped: dropped.map((d) => d.label) },
+        samplerBudget: {
+            limit: budget, count: samplerInfo.count, material: samplerInfo.material, scene: samplerInfo.scene,
+            needed: (neededInfo || samplerInfo).count,
+            dropped: dropped.map((d) => d.label), droppedLabels: dropped.map((d) => d.userLabel),
+            // Ready-made sentence for the scene's warnings list, so the
+            // count and its material/scene split stay together.
+            notice: dropped.length ? samplerBudgetNotice({
+                needed: neededInfo || samplerInfo, limit: budget,
+                effects: joinWithAnd(dropped.map((d) => d.userLabel)), plural: dropped.length > 1,
+            }) : null,
+        },
         samplerOverBudget: overBudget,
         budgetAttempts,
         fragmentUniformVectors: { estimate: uniformInfo.estimate, limit: uniformLimit, largest: uniformInfo.largest },
@@ -12635,6 +12742,7 @@ Object.assign(window, {
     PREVIEW_TRIANGLE_BUDGET, pickSubdivisionLevel,
     getHeightToNormalTexel, setHeightToNormalTexel,
     parseUniforms, parseVertexInputs, stripVersion, encodeDisplay, countFragmentSamplers,
+    mergeDuplicateImageNodes, mxNodeSignature,
     mxErr, mxWriteValue, vecToArray,
     mxSafe, mxElName, mxElCat, mxElType, mxElAttr,
     mxSetAttr, mxRemoveAttr, mxSetColorspace, nextFrame,
