@@ -12,9 +12,12 @@
 // needs window.getMxEnv (js/mtlx-engine.js) plus window.computeImplGraphByNodedef
 // and window.docChild (js/graph/model.jsx, so only callable once that
 // bundle has loaded). Everything else used here (mxSafe, mxExclusive,
-// mtlxWarn, fullscreenElement, toggleFullscreen, PreviewErrorBoundary,
-// useEscapeToClose, MtlxIcon) is already eager via docs' own VIEW_DEPS
-// (js/mtlx-engine.js, js/shared/mtlx-ui.jsx). The "View in Graph Editor"
+// mtlxWarn, fullscreenElement, toggleFullscreen, useFullscreen,
+// PreviewErrorBoundary, useEscapeToClose, MtlxIcon) is already eager via
+// docs' own VIEW_DEPS (js/mtlx-engine.js, js/shared/mtlx-ui.jsx). The
+// panel's own fullscreen (its own container, via useFullscreen) toggles
+// native fullscreen or the CSS-maximize fallback; MtlxGraphPreview refits
+// on its own ResizeObserver once that container resizes. "View in Graph Editor"
 // button builds its window.__mtlxPendingImport handoff directly (not via
 // js/shared/mtlx-ui.jsx's openInGraphEditor) so it can carry `returnHash`,
 // a field that helper doesn't know about — see openInEditor below.
@@ -60,8 +63,25 @@
         function DocsImplPreviewPanel({ open, lib, group, nodeName, ndName, outType, returnHash, onClose, inVSCode }) {
             const [depsReady, setDepsReady] = React.useState(!!window.MtlxGraphPreview);
             const [state, setState] = React.useState({ status: 'loading', xml: null, graphName: null });
+            const panelRef = React.useRef(null);
+            const [isFullscreen, toggleFsPanel] = useFullscreen(panelRef);
 
-            useEscapeToClose(onClose, open);
+            // First Escape exits fullscreen only (native/CSS-fallback already
+            // do this on their own); a second Escape, no longer fullscreen,
+            // closes the panel via the normal useEscapeToClose path below.
+            const handleEscape = React.useCallback(() => {
+                if (fullscreenElement()) { toggleFsPanel(); return; }
+                onClose();
+            }, [onClose, toggleFsPanel]);
+            useEscapeToClose(handleEscape, open);
+
+            // The x button always closes the panel; if it's currently
+            // fullscreen, drop out of that first so nothing is left maximized
+            // behind the now-unmounted panel.
+            const closePanel = () => {
+                if (fullscreenElement()) toggleFsPanel();
+                onClose();
+            };
 
             React.useEffect(() => {
                 if (!open || window.MtlxGraphPreview) return undefined;
@@ -111,8 +131,12 @@
             };
 
             return (
-                <div className="docs-impl-preview bg-gray-800 border border-gray-700 rounded-xl overflow-hidden">
-                    <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-gray-700 bg-gray-900/70">
+                <div
+                    ref={panelRef}
+                    className={'docs-impl-preview bg-gray-800 border border-gray-700 overflow-hidden flex flex-col'
+                        + (isFullscreen ? ' fixed inset-0 z-50 h-screen w-screen rounded-none' : ' rounded-xl')}
+                >
+                    <div className="flex-none flex items-center justify-between gap-2 px-3 py-2 border-b border-gray-700 bg-gray-900/70">
                         <div className="min-w-0 flex flex-col">
                             <span className="text-[11px] text-gray-400 truncate">{lib}<span className="text-gray-600"> / </span>{group}</span>
                             <span className="text-sm font-semibold text-gray-100 truncate">{nodeName} implementation</span>
@@ -132,7 +156,16 @@
                             )}
                             <button
                                 type="button"
-                                onClick={onClose}
+                                onClick={toggleFsPanel}
+                                title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
+                                aria-label={isFullscreen ? 'Exit full screen' : 'View full screen'}
+                                className="inline-flex items-center justify-center w-6 h-6 rounded-md border border-gray-600/50 bg-gray-900/70 text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 transition-colors"
+                            >
+                                <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                                type="button"
+                                onClick={closePanel}
                                 aria-label="Close implementation preview"
                                 title="Close"
                                 className="inline-flex items-center justify-center w-6 h-6 rounded-md border border-gray-600/50 bg-gray-900/70 text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 transition-colors"
@@ -141,7 +174,7 @@
                             </button>
                         </div>
                     </div>
-                    <div className="docs-impl-preview-body relative">
+                    <div className="docs-impl-preview-body relative flex-1 min-h-0">
                         {(state.status === 'loading' || !depsReady) && (
                             <div className="h-[22rem] flex items-center justify-center text-gray-400 text-sm animate-pulse">
                                 Loading preview
@@ -160,8 +193,8 @@
                                     scope={state.graphName}
                                     controls={['zoom']}
                                     autoFocus="fit"
-                                    chrome="none"
-                                    height={352}
+                                    chrome="card"
+                                    height={isFullscreen ? '100%' : 352}
                                 />
                             </PreviewErrorBoundary>
                         )}
