@@ -9,7 +9,9 @@
     // tests/unit/usd-scene-studio-catcher.test.mjs.
     const studioCatcherVisible = (studio, hasShadowMap) => !!(studio && hasShadowMap);
 
-    const createUsdSceneEnvironment = ({ scene, renderer, camera, contentRoot, THREE = window.THREE } = {}) => {
+    // getDisplayTransform (optional): the Scene's own () => mode getter for the
+    // studio inverse; unset, the engine's global transform is used as before.
+    const createUsdSceneEnvironment = ({ scene, renderer, camera, contentRoot, THREE = window.THREE, getDisplayTransform } = {}) => {
         if (!scene || !renderer || !THREE) throw new Error('USD scene environment requires a Three.js scene and renderer.');
         const studio = window.MtlxStudio;
         if (!studio || typeof studio.createUsdSceneStudioMaterial !== 'function'
@@ -25,9 +27,11 @@
         root.userData.usdSceneEnvironment = true;
         root.userData.excludeFromFrame = true;
         const geometry = typeof studio.getUsdSceneStudioGeometry === 'function' ? studio.getUsdSceneStudioGeometry() : null;
-        const studioMesh = geometry ? new THREE.Mesh(geometry, studio.createUsdSceneStudioMaterial(false)) : null;
+        const studioMesh = geometry
+            ? new THREE.Mesh(geometry, studio.createUsdSceneStudioMaterial(false, typeof getDisplayTransform === 'function' ? getDisplayTransform() : undefined))
+            : null;
         const catcherGeometry = typeof studio.getUsdSceneStudioCatcherGeometry === 'function' ? studio.getUsdSceneStudioCatcherGeometry() : null;
-        const catcherMaterial = catcherGeometry && THREE.ShadowMaterial ? new THREE.ShadowMaterial({ opacity: 0.28, side: THREE.BackSide }) : null;
+        const catcherMaterial = catcherGeometry && THREE.ShadowMaterial ? new THREE.ShadowMaterial({ opacity: studio.STUDIO_SHADOW_OPACITY, side: THREE.BackSide }) : null;
         const studioCatcher = catcherGeometry && catcherMaterial ? new THREE.Mesh(catcherGeometry, catcherMaterial) : null;
         if (studioMesh) {
             studioMesh.name = '__usd-scene-studio-cyclorama';
@@ -119,7 +123,7 @@
             if (studioMesh) {
                 if (typeof studio.applyUsdSceneStudioVariant === 'function') studio.applyUsdSceneStudioVariant(studioMesh.material, mode === 'studio-dark');
             }
-            if (studioCatcher) studioCatcher.material.opacity = mode === 'studio-dark' ? 0.4 : 0.28;
+            if (studioCatcher) studioCatcher.material.opacity = mode === 'studio-dark' ? studio.STUDIO_SHADOW_OPACITY_DARK : studio.STUDIO_SHADOW_OPACITY;
             applyVisibility();
             return mode;
         };
@@ -145,16 +149,14 @@
         };
         const setExposure = (value) => {
             exposure = Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 1;
-            // Exposure is applied exactly once, through u_envLightIntensity
-            // (usd-scene-renderer.js's applyMaterialEnvironment reads
-            // getEnvExposure() below), matching the Viewer, which pins this
-            // same property to 1.0 (js/mtlx-engine.js).
-            if ('toneMappingExposure' in renderer) renderer.toneMappingExposure = 1;
+            // Applied once, through u_envLightIntensity (getEnvExposure below).
+            // toneMappingExposure belongs to the renderer's camera exposure.
             return exposure;
         };
         const refreshDisplayTransform = () => {
             if (studioMesh && studio && typeof studio.refreshUsdSceneStudioMaterial === 'function') {
-                studio.refreshUsdSceneStudioMaterial(studioMesh.material, mode === 'studio-dark');
+                studio.refreshUsdSceneStudioMaterial(studioMesh.material, mode === 'studio-dark',
+                    typeof getDisplayTransform === 'function' ? getDisplayTransform() : undefined);
             }
         };
         const updateBounds = (box) => {

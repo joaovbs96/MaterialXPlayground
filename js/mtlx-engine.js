@@ -9211,6 +9211,33 @@ void main() {
 const studioInverseAcesSrgbGlsl = (mode) => {
     if (mode === 'lin_rec709') return 'vec3 inverseAcesSrgb(vec3 col) { return col; }\n';
     if (mode === 'srgb') return 'vec3 inverseAcesSrgb(vec3 col) { return srgbToLinear(col); }\n';
+    if (mode === 'neutral') {
+        // Closed-form inverse of the PBR Neutral curve after the sRGB decode; the
+        // peak is clamped below 1 (the curve never reaches it) with hue kept.
+        // Round-tripped in tests/unit/mtlx-engine-studio-neutral-inverse.test.mjs.
+        return 'vec3 inverseAcesSrgb(vec3 col) {\n' +
+        '    const float nsc = 0.76;\n' +
+        '    const float nds = 0.15;\n' +
+        '    const float nd = 1.0 - nsc;\n' +
+        '    vec3 y = srgbToLinear(col);\n' +
+        '    float peak = max(y.r, max(y.g, y.b));\n' +
+        '    vec3 c1;\n' +
+        '    if (peak < nsc) {\n' +
+        '        c1 = y;\n' +
+        '    } else {\n' +
+        '        float nnp = min(peak, 0.9999);\n' +
+        '        y *= (nnp / peak);\n' +
+        '        float npk = nd * nd / (1.0 - nnp) - nd + nsc;\n' +
+        '        float ng = 1.0 - 1.0 / (nds * (npk - nnp) + 1.0);\n' +
+        '        vec3 c2 = (y - vec3(nnp * ng)) / (1.0 - ng);\n' +
+        '        c1 = c2 * (npk / nnp);\n' +
+        '    }\n' +
+        '    float m = min(c1.r, min(c1.g, c1.b));\n' +
+        '    float nx = m < 0.04 ? sqrt(max(m, 0.0)) / 2.5 : m + 0.04;\n' +
+        '    float noff = nx < 0.08 ? nx - 6.25 * nx * nx : 0.04;\n' +
+        '    return c1 + vec3(noff);\n' +
+        '}\n';
+    }
     return 'vec3 inverseAcesSrgb(vec3 col) {\n' +
     '    const mat3 acesInInv = mat3(\n' +
     '        vec3(1.76474097, -0.14702785, -0.03633683), vec3(-0.67577768, 1.16025151, -0.16243644),\n' +
@@ -9386,7 +9413,7 @@ const getStudioBackdropGeometry = () => {
 // material viewer, but it owns a clone of the cached geometry and its
 // material lifetime. Kept beside the source helpers so the two views cannot
 // drift into subtly different studio backgrounds.
-const createUsdSceneStudioMaterial = (dark = false) => {
+const createUsdSceneStudioMaterial = (dark = false, mode = getDisplayTransform()) => {
     const material = new THREE.ShaderMaterial({
         uniforms: {
             uStop0: { value: new THREE.Vector3() },
@@ -9398,7 +9425,7 @@ const createUsdSceneStudioMaterial = (dark = false) => {
             uLinearOut: { value: 0 },
         },
         vertexShader: STUDIO_GRADIENT_VERTEX_SHADER,
-        fragmentShader: STUDIO_GRADIENT_FRAGMENT_SHADER(getDisplayTransform()),
+        fragmentShader: STUDIO_GRADIENT_FRAGMENT_SHADER(mode),
         side: THREE.BackSide,
         fog: false,
     });
@@ -9408,9 +9435,9 @@ const createUsdSceneStudioMaterial = (dark = false) => {
 // Refresh the display-baked fragment stage on an existing USD backdrop. The
 // scene owns the material, so this only replaces its shader source and keeps
 // the shared studio geometry and variant uniforms alive.
-const refreshUsdSceneStudioMaterial = (material, dark = false) => {
+const refreshUsdSceneStudioMaterial = (material, dark = false, mode = getDisplayTransform()) => {
     if (!material) return false;
-    material.fragmentShader = STUDIO_GRADIENT_FRAGMENT_SHADER(getDisplayTransform());
+    material.fragmentShader = STUDIO_GRADIENT_FRAGMENT_SHADER(mode);
     applyStudioVariantUniforms(material, !!dark);
     material.needsUpdate = true;
     return true;
@@ -9480,6 +9507,8 @@ window.MtlxStudio = Object.assign(window.MtlxStudio || {}, {
     studioMaxPolar: STUDIO_MAX_POLAR,
     studioMaxOrbitDistance: STUDIO_MAX_ORBIT_DISTANCE,
     studioFloorClearance: STUDIO_FLOOR_CLEARANCE,
+    STUDIO_SHADOW_OPACITY,
+    STUDIO_SHADOW_OPACITY_DARK,
 });
 
 // applyPeelMaterialMode(material, active): blend/depth flags for one
@@ -10588,6 +10617,10 @@ const createMtlxRenderView = async ({
     // intensity spotlight), null for flat2d/full-scene, where the
     // studio mode is never built (see its construction further down).
     let studioGroup = null, studioMesh = null, studioCatcher = null, studioLight = null;
+    // Display transform the studio backdrop's fragment shader was last built
+    // with (see STUDIO_GRADIENT_FRAGMENT_SHADER below), so refreshDisplaySettings
+    // can tell when its baked inverseAcesSrgb has gone stale.
+    let studioMaterialMode = null;
     // Shell-level env (IBL) state, fetched ONCE (not per material
     // apply) since env textures never change across a document edit.
     // bindMaterialUniforms() reads these on every apply.
@@ -11217,6 +11250,7 @@ const createMtlxRenderView = async ({
                                     fog: false,
                                 })
                             );
+                            studioMaterialMode = getDisplayTransform();
                             applyStudioVariantUniforms(studioMesh.material, backdropMode === 'studio-dark');
                             studioMesh.renderOrder = -900;
                             // BackSide like studioMesh: a FrontSide catcher
@@ -12277,7 +12311,8 @@ const createMtlxRenderView = async ({
             // is what keeps the docs node previews in sync too.
             refreshDisplaySettings: () => {
                 const scale = displayExposureScale();
-                const id = displayTransformId(getDisplayTransform());
+                const mode = getDisplayTransform();
+                const id = displayTransformId(mode);
                 const push = (u) => {
                     if (!u) return;
                     if (u.u_displayExposure) u.u_displayExposure.value = scale;
@@ -12286,7 +12321,15 @@ const createMtlxRenderView = async ({
                 push(uniforms);
                 sceneOwnedMaterials.forEach((m) => push(m.uniforms));
                 if ('toneMappingExposure' in renderer) renderer.toneMappingExposure = scale;
-                applyThreeToneMappingChunk(getDisplayTransform());
+                applyThreeToneMappingChunk(mode);
+                // The studio backdrop's inverseAcesSrgb is baked into its
+                // fragment shader at build time, not driven by a uniform, so
+                // a transform switch leaves it stale (:11244) until rebuilt here.
+                if (studioMesh && mode !== studioMaterialMode) {
+                    studioMesh.material.fragmentShader = STUDIO_GRADIENT_FRAGMENT_SHADER(mode);
+                    studioMesh.material.needsUpdate = true;
+                    studioMaterialMode = mode;
+                }
                 scene.traverse((obj) => {
                     if (obj.material && obj.material.toneMapped) obj.material.needsUpdate = true;
                 });

@@ -30,6 +30,7 @@
     "build:buildid": "node scripts/build.mjs buildid",
     "build:webview": "node scripts/build.mjs webview",
     "check": "node scripts/build.mjs --check",
+    "test:unit": "node scripts/run-unit-tests.mjs",
     "test:embed": "playwright test",
     "test:embed:smoke": "playwright test --grep @smoke",
     "test:vscode": "playwright test --config=playwright.vscode.config.mjs",
