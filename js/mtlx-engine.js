@@ -396,14 +396,12 @@ const mtlxWarn = (...args) => { if (DEBUG_SHADERS) console.warn(...args); };
 // tab only, for a host-driven embed that should not touch the shared
 // per-origin preference (see embed-boot.js's two call sites).
 let FORCE_TRANSPARENCY = (() => {
-    try { return localStorage.getItem('mtlxForceTransparency') === '1'; } catch (e) { return false; }
+    try { return !!window.MtlxRenderSettings.get('transparency', { surface: 'viewer' }); } catch (e) { return false; }
 })();
 const getForceTransparency = () => FORCE_TRANSPARENCY;
 const setForceTransparency = (v, { persist = true } = {}) => {
     FORCE_TRANSPARENCY = !!v;
-    if (persist) {
-        try { localStorage.setItem('mtlxForceTransparency', FORCE_TRANSPARENCY ? '1' : '0'); } catch (e) { /* best-effort */ }
-    }
+    try { window.MtlxRenderSettings.set('transparency', FORCE_TRANSPARENCY, { surface: 'viewer', persist }); } catch (e) { /* best-effort */ }
     // Settings-dialog/Scene-card callers persist (default); embed-boot.js's
     // query-param and postMessage paths pass persist:false. Mutates each
     // live view's flags in place regardless, see refreshRenderMode.
@@ -431,21 +429,12 @@ const parseBoolFlag = (raw) => {
 // mesh displacement pass (js/shared/mesh-displacement.js) and previews
 // the undisplaced mesh. Same persist/{persist:false} contract as above.
 let DISPLACEMENT_ENABLED = (() => {
-    try {
-        const qs = new URLSearchParams(window.location.search);
-        if (qs.has('displacement')) {
-            const parsed = parseBoolFlag(qs.get('displacement'));
-            if (parsed !== null) return parsed;
-        }
-        return localStorage.getItem('mtlxDisplacement') !== '0';
-    } catch (e) { return true; }
+    try { return !!window.MtlxRenderSettings.get('displacement', { surface: 'viewer' }); } catch (e) { return true; }
 })();
 const getDisplacementEnabled = () => DISPLACEMENT_ENABLED;
 const setDisplacementEnabled = (v, { persist = true } = {}) => {
     DISPLACEMENT_ENABLED = !!v;
-    if (persist && window.self === window.top) {
-        try { localStorage.setItem('mtlxDisplacement', DISPLACEMENT_ENABLED ? '1' : '0'); } catch (e) { /* best-effort */ }
-    }
+    try { window.MtlxRenderSettings.set('displacement', DISPLACEMENT_ENABLED, { surface: 'viewer', persist }); } catch (e) { /* best-effort */ }
     LIVE_VIEWS.forEach((view) => { try { view.refreshDisplacement && view.refreshDisplacement(); } catch (e) { /* view mid-teardown */ } });
     try { window.dispatchEvent(new CustomEvent('mtlx-settings-changed', { detail: { key: 'displacement', value: DISPLACEMENT_ENABLED } })); } catch (e) { /* best-effort */ }
 };
@@ -455,27 +444,16 @@ const setDisplacementEnabled = (v, { persist = true } = {}) => {
 // network per vertex (crisp creases, matches the analytic surface); 'mesh'
 // keeps the older angle-weighted recompute over the displaced triangles.
 let DISPLACEMENT_NORMALS_MODE = (() => {
-    try {
-        const qs = new URLSearchParams(window.location.search);
-        if (qs.has('displacementnormals')) {
-            const v = qs.get('displacementnormals');
-            if (v === 'analytic' || v === 'mesh') return v;
-        }
-        const raw = localStorage.getItem('mtlxDisplacementNormals');
-        if (raw === 'analytic' || raw === 'mesh') return raw;
-        // Default to 'mesh' until the analytic path is verified free of the
-        // terracing seen on egg_normals (readback precision fix pending
-        // verification); 'analytic' stays selectable via query/localStorage.
-        return 'mesh';
-    } catch (e) { return 'mesh'; }
+    // Default to 'mesh' until the analytic path is verified free of the
+    // terracing seen on egg_normals (readback precision fix pending
+    // verification); 'analytic' stays selectable via query/localStorage.
+    try { return window.MtlxRenderSettings.get('displacementNormals', { surface: 'viewer' }) || 'mesh'; } catch (e) { return 'mesh'; }
 })();
 const getDisplacementNormalsMode = () => DISPLACEMENT_NORMALS_MODE;
 const setDisplacementNormalsMode = (v, { persist = true } = {}) => {
     if (v !== 'analytic' && v !== 'mesh') return;
     DISPLACEMENT_NORMALS_MODE = v;
-    if (persist && window.self === window.top) {
-        try { localStorage.setItem('mtlxDisplacementNormals', DISPLACEMENT_NORMALS_MODE); } catch (e) { /* best-effort */ }
-    }
+    try { window.MtlxRenderSettings.set('displacementNormals', DISPLACEMENT_NORMALS_MODE, { surface: 'viewer', persist }); } catch (e) { /* best-effort */ }
     LIVE_VIEWS.forEach((view) => { try { view.refreshDisplacement && view.refreshDisplacement(); } catch (e) { /* view mid-teardown */ } });
     try { window.dispatchEvent(new CustomEvent('mtlx-settings-changed', { detail: { key: 'displacementNormals', value: DISPLACEMENT_NORMALS_MODE } })); } catch (e) { /* best-effort */ }
 };
@@ -485,17 +463,8 @@ const setDisplacementNormalsMode = (v, { persist = true } = {}) => {
 // pickSubdivisionLevel below caps it per-mesh against a triangle budget.
 let PREVIEW_SUBDIVISION_LEVEL = (() => {
     try {
-        const qs = new URLSearchParams(window.location.search);
-        if (qs.has('previewsubdivision')) {
-            const n = Number(qs.get('previewsubdivision'));
-            if (Number.isInteger(n) && n >= 0 && n <= 3) return n;
-        }
-        const raw = localStorage.getItem('mtlxPreviewSubdivision');
-        if (raw !== null) {
-            const stored = Number(raw);
-            if (Number.isInteger(stored) && stored >= 0 && stored <= 3) return stored;
-        }
-        return 2;
+        const v = window.MtlxRenderSettings.get('previewSubdivision', { surface: 'viewer' });
+        return Number.isInteger(v) ? v : 2;
     } catch (e) { return 2; }
 })();
 const getPreviewSubdivisionLevel = () => PREVIEW_SUBDIVISION_LEVEL;
@@ -504,9 +473,7 @@ const setPreviewSubdivisionLevel = (level, { persist = true } = {}) => {
     if (!Number.isFinite(n)) return; // non-numeric input is ignored
     const clamped = Math.min(3, Math.max(0, Math.round(n)));
     PREVIEW_SUBDIVISION_LEVEL = clamped;
-    if (persist && window.self === window.top) {
-        try { localStorage.setItem('mtlxPreviewSubdivision', String(PREVIEW_SUBDIVISION_LEVEL)); } catch (e) { /* best-effort */ }
-    }
+    try { window.MtlxRenderSettings.set('previewSubdivision', PREVIEW_SUBDIVISION_LEVEL, { surface: 'viewer', persist }); } catch (e) { /* best-effort */ }
     LIVE_VIEWS.forEach((view) => { try { view.refreshDisplacement && view.refreshDisplacement(); } catch (e) { /* view mid-teardown */ } });
     try { window.dispatchEvent(new CustomEvent('mtlx-settings-changed', { detail: { key: 'previewSubdivision', value: PREVIEW_SUBDIVISION_LEVEL } })); } catch (e) { /* best-effort */ }
 };
@@ -568,11 +535,7 @@ const baseGeomCacheSet = (key, geometry) => {
 // unverified, this is for side-by-side comparison only. A `?heightToNormalTexel=1`
 // URL param seeds the flag for a page load without touching localStorage.
 let HEIGHT_TO_NORMAL_TEXEL = (() => {
-    try {
-        const qs = new URLSearchParams(window.location.search);
-        if (qs.has('heightToNormalTexel')) return qs.get('heightToNormalTexel') === '1';
-        return localStorage.getItem('mtlxHeightToNormalTexel') === '1';
-    } catch (e) { return false; }
+    try { return !!window.MtlxRenderSettings.get('heightToNormalTexel', { surface: 'viewer' }); } catch (e) { return false; }
 })();
 // Specular environment method. 'prefilter' is MaterialXView's path: the
 // radiance map carries a GGX-prefiltered mip chain and the shader does one
@@ -600,17 +563,13 @@ const getSpecularEnvMethod = () => SPECULAR_ENV_METHOD;
 let DIFFUSE_ENV_METHOD = (() => {
     try {
         if (window.MTLX_DIFFUSE_ENV === 'sh' || window.MTLX_DIFFUSE_ENV === 'convolve') return window.MTLX_DIFFUSE_ENV;
-        const qs = new URLSearchParams(window.location.search);
-        if (qs.has('diffuseEnv')) return qs.get('diffuseEnv') === 'sh' ? 'sh' : 'convolve';
-        return localStorage.getItem('mtlx_diffuse_env') === 'sh' ? 'sh' : 'convolve';
+        return window.MtlxRenderSettings.get('diffuseEnv', { surface: 'viewer' }) || 'convolve';
     } catch (e) { return 'convolve'; }
 })();
 const getDiffuseEnvMethod = () => DIFFUSE_ENV_METHOD;
 const setDiffuseEnvMethod = (v, { persist = true } = {}) => {
     DIFFUSE_ENV_METHOD = (v === 'sh') ? 'sh' : 'convolve';
-    if (persist) {
-        try { localStorage.setItem('mtlx_diffuse_env', DIFFUSE_ENV_METHOD); } catch (e) { /* best-effort */ }
-    }
+    try { window.MtlxRenderSettings.set('diffuseEnv', DIFFUSE_ENV_METHOD, { surface: 'viewer', persist }); } catch (e) { /* best-effort */ }
     // Not generation-affecting: same lookup, same uniform, just a rebind,
     // so listeners re-run their environment effect, not a recompile.
     try { window.dispatchEvent(new CustomEvent('mtlx-settings-changed', { detail: { key: 'diffuseEnvMethod', value: DIFFUSE_ENV_METHOD } })); } catch (e) { /* best-effort */ }
@@ -619,9 +578,7 @@ const setDiffuseEnvMethod = (v, { persist = true } = {}) => {
 const getHeightToNormalTexel = () => HEIGHT_TO_NORMAL_TEXEL;
 const setHeightToNormalTexel = (v, { persist = true } = {}) => {
     HEIGHT_TO_NORMAL_TEXEL = !!v;
-    if (persist) {
-        try { localStorage.setItem('mtlxHeightToNormalTexel', HEIGHT_TO_NORMAL_TEXEL ? '1' : '0'); } catch (e) { /* best-effort */ }
-    }
+    try { window.MtlxRenderSettings.set('heightToNormalTexel', HEIGHT_TO_NORMAL_TEXEL, { surface: 'viewer', persist }); } catch (e) { /* best-effort */ }
     // Generation-affecting: existing compiled sources bake in the old
     // rewrite decision, so every live view must recompile its materials,
     // mirroring how forceTransparency's setter above nudges live views.
@@ -5279,33 +5236,19 @@ let customGeomLoadSeq = 0;
 const getCustomPreviewGeom = () => (CUSTOM_GEOM.geometry ? CUSTOM_GEOM : null);
 
 // ---- Global geometry selection (shared across every tool) ----
-const GLOBAL_GEOM_KEY = 'mtlx_geom_global';
 const GLOBAL_GEOM_VALUES = ['shaderball-scene', 'shaderball', 'shaderball-mtlx', 'sphere', 'cube', 'cloth', 'buffer2d', 'custom'];
-// Old per-tool keys, read once as a seed when the global key has never been written.
-const LEGACY_GEOM_KEYS = ['mtlx_preview_geom_choice', 'mtlx_graph_preview_geom'];
-const LEGACY_GEOM_SKIP = ['custom', 'default', 'pernode'];
 
 let MTLX_GLOBAL_GEOM = null;
 
 // Runs once, on first getGlobalGeom/setGlobalGeom call.
 const initGlobalGeom = () => {
-    let stored = null;
-    try { stored = localStorage.getItem(GLOBAL_GEOM_KEY); } catch (e) { /* privacy mode */ }
-    if (stored && GLOBAL_GEOM_VALUES.includes(stored) && stored !== 'custom') {
-        MTLX_GLOBAL_GEOM = stored;
-        return;
-    }
-    if (!stored) {
-        for (const key of LEGACY_GEOM_KEYS) {
-            let legacy = null;
-            try { legacy = localStorage.getItem(key); } catch (e) { /* privacy mode */ }
-            if (legacy && GLOBAL_GEOM_VALUES.includes(legacy) && !LEGACY_GEOM_SKIP.includes(legacy)) {
-                MTLX_GLOBAL_GEOM = legacy;
-                return;
-            }
-        }
-    }
-    MTLX_GLOBAL_GEOM = 'shaderball-scene';
+    try {
+        const stored = window.MtlxRenderSettings.get('geometry', { surface: 'viewer' });
+        // Belt-and-suspenders: the store's rejectStored already filters a
+        // stored/legacy 'custom' out, but 'custom' is session-only, so this
+        // stays defensive against a future override path returning it anyway.
+        MTLX_GLOBAL_GEOM = (GLOBAL_GEOM_VALUES.includes(stored) && stored !== 'custom') ? stored : 'shaderball-scene';
+    } catch (e) { MTLX_GLOBAL_GEOM = 'shaderball-scene'; }
 };
 
 const getGlobalGeom = () => {
@@ -5319,9 +5262,7 @@ const setGlobalGeom = (value) => {
     if (MTLX_GLOBAL_GEOM === null) initGlobalGeom();
     if (!GLOBAL_GEOM_VALUES.includes(value) || value === MTLX_GLOBAL_GEOM) return;
     MTLX_GLOBAL_GEOM = value;
-    if (window.self === window.top && value !== 'custom') {
-        try { localStorage.setItem(GLOBAL_GEOM_KEY, value); } catch (e) { /* privacy mode */ }
-    }
+    try { window.MtlxRenderSettings.set('geometry', value, { surface: 'viewer', persist: value !== 'custom' }); } catch (e) { /* privacy mode */ }
     window.dispatchEvent(new CustomEvent('mtlx-global-geom', { detail: { value } }));
 };
 
@@ -5330,7 +5271,6 @@ const setGlobalGeom = (value) => {
 // adds ACES filmic before that curve (this app's original look). 'neutral' is
 // Khronos PBR Neutral, which keeps hue and saturation where ACES skews them.
 // 'lin_rec709' is raw linear: no OETF, no tone map, no clamp. See ACES_SRGB_GLSL.
-const DISPLAY_TRANSFORM_KEY = 'mtlx_display_transform';
 const DISPLAY_TRANSFORM_VALUES = ['srgb', 'aces', 'neutral', 'lin_rec709'];
 
 // Camera exposure in stops, shared by every view. Unlike the transform this is
@@ -5346,15 +5286,13 @@ const broadcastDisplaySettings = () => {
     });
 };
 
-const DISPLAY_EXPOSURE_KEY = 'mtlx_display_exposure';
 let MTLX_DISPLAY_EXPOSURE = null;
 
 const initDisplayExposure = () => {
-    let stored = null;
-    try { stored = localStorage.getItem(DISPLAY_EXPOSURE_KEY); } catch (e) { /* privacy mode */ }
-    const ev = Number(stored);
-    MTLX_DISPLAY_EXPOSURE = (stored != null && stored !== '' && Number.isFinite(ev))
-        ? Math.max(-8, Math.min(8, ev)) : 0;
+    try {
+        const v = window.MtlxRenderSettings.get('displayExposure', { surface: 'viewer' });
+        MTLX_DISPLAY_EXPOSURE = Number.isFinite(v) ? v : 0;
+    } catch (e) { MTLX_DISPLAY_EXPOSURE = 0; }
 };
 
 const getDisplayExposure = () => {
@@ -5371,9 +5309,7 @@ const setDisplayExposure = (ev) => {
     const next = Math.max(-8, Math.min(8, Number(ev) || 0));
     if (next === MTLX_DISPLAY_EXPOSURE) return;
     MTLX_DISPLAY_EXPOSURE = next;
-    if (window.self === window.top) {
-        try { localStorage.setItem(DISPLAY_EXPOSURE_KEY, String(next)); } catch (e) { /* privacy mode */ }
-    }
+    try { window.MtlxRenderSettings.set('displayExposure', next, { surface: 'viewer' }); } catch (e) { /* privacy mode */ }
     // Broadcast rather than rely on per-app listeners: every render view is a
     // LIVE_VIEWS member, including the docs node previews, which have no
     // display listener of their own and would otherwise drift out of sync.
@@ -5385,9 +5321,10 @@ let MTLX_DISPLAY_TRANSFORM = null;
 
 // Runs once, on first getDisplayTransform/setDisplayTransform call.
 const initDisplayTransform = () => {
-    let stored = null;
-    try { stored = localStorage.getItem(DISPLAY_TRANSFORM_KEY); } catch (e) { /* privacy mode */ }
-    MTLX_DISPLAY_TRANSFORM = DISPLAY_TRANSFORM_VALUES.includes(stored) ? stored : 'srgb';
+    try {
+        const stored = window.MtlxRenderSettings.get('displayTransform', { surface: 'viewer' });
+        MTLX_DISPLAY_TRANSFORM = DISPLAY_TRANSFORM_VALUES.includes(stored) ? stored : 'srgb';
+    } catch (e) { MTLX_DISPLAY_TRANSFORM = 'srgb'; }
 };
 
 // Exposed so a view that keeps its own transform (the Scene) can validate a
@@ -5406,9 +5343,7 @@ const setDisplayTransform = (value) => {
     if (MTLX_DISPLAY_TRANSFORM === null) initDisplayTransform();
     if (!DISPLAY_TRANSFORM_VALUES.includes(value) || value === MTLX_DISPLAY_TRANSFORM) return;
     MTLX_DISPLAY_TRANSFORM = value;
-    if (window.self === window.top) {
-        try { localStorage.setItem(DISPLAY_TRANSFORM_KEY, value); } catch (e) { /* privacy mode */ }
-    }
+    try { window.MtlxRenderSettings.set('displayTransform', value, { surface: 'viewer' }); } catch (e) { /* privacy mode */ }
     broadcastDisplaySettings();
     window.dispatchEvent(new CustomEvent('mtlx-display-transform', { detail: { value } }));
 };
@@ -6218,12 +6153,8 @@ let envPromise = null;
 // null = no override; getEnvironment() itself stays the Reset target.
 let envOverride = null;
 // Auto key-light extraction toggle (env dialog UI). Persisted; default on.
-const KEYLIGHT_STORAGE_KEY = 'mtlx_env_keylight';
 let keyLightEnabled = true;
-try {
-    const saved = localStorage.getItem(KEYLIGHT_STORAGE_KEY);
-    if (saved !== null) keyLightEnabled = saved !== '0';
-} catch (e) { /* localStorage unavailable, default stays on */ }
+try { keyLightEnabled = !!window.MtlxRenderSettings.get('keyLight', { surface: 'viewer' }); } catch (e) { /* localStorage unavailable, default stays on */ }
 // Pristine (pre-extraction) bytes behind the default/override env, so
 // the toggle can re-parse + rebuild without a re-fetch/re-drop.
 let defaultEnvSource = null, overrideEnvSource = null;
@@ -7261,7 +7192,7 @@ const getEnvOverride = () => envOverride;
 const getKeyLightEnabled = () => keyLightEnabled;
 const setKeyLightEnabled = (on) => {
     keyLightEnabled = !!on;
-    try { localStorage.setItem(KEYLIGHT_STORAGE_KEY, keyLightEnabled ? '1' : '0'); } catch (e) { /* unavailable */ }
+    try { window.MtlxRenderSettings.set('keyLight', keyLightEnabled, { surface: 'viewer' }); } catch (e) { /* unavailable */ }
     const src = envOverride ? overrideEnvSource : defaultEnvSource;
     if (!src) return; // nothing loaded yet; the next load already honors the flag
     const raw = parseEnvBuffer(src.buf, src.ext);

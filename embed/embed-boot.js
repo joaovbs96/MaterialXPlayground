@@ -19,6 +19,10 @@
 // Outbound (iframe -> host): ready, renderables, error, snapshot, camera, displacement.
 (function () {
     'use strict';
+    // Marks this page for MtlxRenderSettings.canPersist(): the embed
+    // viewer iframe never persists the shared per-origin preferences,
+    // same guard shape as window.__MTLX_EMBED for the docs iframe.
+    window.__MTLX_EMBED_PAGE__ = true;
 
     var qs = new URLSearchParams(window.location.search);
 

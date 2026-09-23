@@ -118,7 +118,9 @@ const EmbedControls = ({
   const toggleForceTransparency = () => {
     const next = !forceT;
     setForceT(next);
-    if (window.setForceTransparency) window.setForceTransparency(next);
+    if (window.setForceTransparency) window.setForceTransparency(next, {
+      persist: false
+    });
   };
   const pickDisplayTransform = mode => {
     setDisplayTransformState(mode);

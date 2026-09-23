@@ -3,13 +3,16 @@
 // derived/committed artifact in this repo and verifies none drifted.
 //
 // Usage: node scripts/build.mjs [step] [--check] [--with-materialx]
-//   step: all | version | versions | stamp | vendor | nodelib | embed | embeddocs | tutorials | buildid | webview
+//   step: all | version | versions | stamp | vendor | nodelib | embed | embeddocs | tutorials | render | buildid | webview
 //
-// Order for `all`: version -> versions -> vendor -> nodelib -> embed -> embeddocs -> tutorials -> buildid -> webview.
+// Order for `all`: version -> versions -> vendor -> nodelib -> embed -> embeddocs -> tutorials -> render -> buildid -> webview.
 // version runs first: vendor/nodelib read js/gen/mtlx-version.json. embed runs after
 // nodelib (both are source-derived generators); it depends only on the js/ sources.
-// embeddocs runs right after embed, depending only on docs/EMBEDDING.md. buildid runs
-// after version/nodelib (its hash inputs) and before webview (which splices index.html).
+// embeddocs runs right after embed, depending only on docs/EMBEDDING.md. render runs
+// after embed/embeddocs (it checks embed/gen output and docs/EMBEDDING.md) and before
+// buildid, so a stale docs/RENDER-FEATURES.md never rides along inside a stamped
+// build. buildid runs after version/nodelib (its hash inputs) and before webview
+// (which splices index.html).
 //
 // `versions` is the non-default MaterialX WASM builds (js/materialx/<v>/
 // for every entry in scripts/lib/mtlx-versions.mjs other than the
@@ -33,7 +36,7 @@ const CHECK_MODE = argv.includes("--check");
 const WITH_MATERIALX = argv.includes("--with-materialx");
 const STEP = argv.find((a) => !a.startsWith("--")) || "all";
 
-const VALID_STEPS = ["all", "version", "versions", "stamp", "vendor", "nodelib", "embed", "embeddocs", "tutorials", "buildid", "webview"];
+const VALID_STEPS = ["all", "version", "versions", "stamp", "vendor", "nodelib", "embed", "embeddocs", "tutorials", "render", "buildid", "webview"];
 if (!VALID_STEPS.includes(STEP)) {
   console.error(`error: unknown step "${STEP}" — expected one of: ${VALID_STEPS.join(", ")}`);
   process.exit(1);
@@ -165,6 +168,15 @@ async function runTutorialsStep() {
   runNodeScript("tutorials", BUILD_TUTORIALS_PATH, CHECK_MODE ? ["--check"] : []);
 }
 
+async function runRenderStep() {
+  log(`render: ${CHECK_MODE ? "verifying" : "generating"} docs/RENDER-FEATURES.md and checking the settings manifest ...`);
+  runNodeScript(
+    "render",
+    path.join(REPO_ROOT, "scripts", "check-render-parity.mjs"),
+    CHECK_MODE ? ["--check"] : []
+  );
+}
+
 async function runBuildIdStep() {
   log(`buildid: ${CHECK_MODE ? "verifying" : "computing"} deterministic build id ...`);
   if (CHECK_MODE) {
@@ -208,6 +220,7 @@ async function main() {
     await runEmbedStep();
     await runEmbedDocsStep();
     await runTutorialsStep();
+    await runRenderStep();
     // Must run after version/nodelib (both write files it hashes) and
     // before webview (which splices index.html, including this step's stamp).
     await runBuildIdStep();
@@ -228,6 +241,8 @@ async function main() {
     await runEmbedDocsStep();
   } else if (STEP === "tutorials") {
     await runTutorialsStep();
+  } else if (STEP === "render") {
+    await runRenderStep();
   } else if (STEP === "buildid") {
     await runBuildIdStep();
   } else if (STEP === "webview") {

@@ -129,6 +129,10 @@
     <script src="js/shared/mesh-displacement.js"></script>
     <script src="js/shared/mtlx-turntable.js"></script>
 
+    <!-- Settings store: plain JS, no transform needed. Must precede
+         embed/gen/mtlx-engine.js, whose setters route through it. -->
+    <script src="js/shared/render-settings.js"></script>
+
     <script>
         // Loads the remaining precompiled scripts (scripts/build-embed.mjs)
         // and embed-boot.js, in order, working around two load-order

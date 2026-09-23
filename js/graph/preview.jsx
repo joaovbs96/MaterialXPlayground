@@ -194,9 +194,8 @@
         // Experimental: wraps the previewed root-level shading network in a
         // transient nodedef so it compiles as one compound function instead
         // of an inlined chain (see wrapRootNetwork below).
-        const GRAPH_COMPOUND_KEY = 'mtlx_graph_preview_compound';
         const readGraphCompoundRoot = () => {
-            try { return localStorage.getItem(GRAPH_COMPOUND_KEY) === '1'; } catch (e) { return false; }
+            try { return !!window.MtlxRenderSettings.get('graphCompoundCompile', { surface: 'graph' }); } catch (e) { return false; }
         };
         // Row layout for the docked/fullscreen viewport strip: docked splits
         // send/colorspace/collapse from the geometry/screenshot/env/settings
@@ -1047,10 +1046,7 @@
             const [compoundRoot, setCompoundRootState] = React.useState(readGraphCompoundRoot);
             const setCompoundRoot = (on) => {
                 setCompoundRootState(on);
-                try {
-                    if (on) localStorage.setItem(GRAPH_COMPOUND_KEY, '1');
-                    else localStorage.removeItem(GRAPH_COMPOUND_KEY);
-                } catch (e) { /* best-effort */ }
+                try { window.MtlxRenderSettings.set('graphCompoundCompile', !!on, { surface: 'graph' }); } catch (e) { /* best-effort */ }
             };
             // Ref mirror so the registry subscription below (mount-once)
             // always reads the CURRENT mode without re-subscribing.

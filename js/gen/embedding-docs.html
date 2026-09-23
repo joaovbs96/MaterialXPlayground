@@ -141,6 +141,18 @@ in-page, for reference while you work.</p>
 <td>Renders materials that have opacity or transmission with real alpha blending instead of the default opaque preview. Not the same feature as <code>transparent</code> above. See <a href="#force-transparency">Force transparency</a>.</td>
 </tr>
 <tr>
+<td><code>displacement</code></td>
+<td>boolean</td>
+<td>on</td>
+<td>Enables the CPU-side mesh displacement pass; off previews the undisplaced mesh. This tab-only setting never touches the visitor&#39;s shared site preference.</td>
+</tr>
+<tr>
+<td><code>previewsubdivision</code></td>
+<td>integer <code>0</code>-<code>3</code></td>
+<td><code>2</code></td>
+<td>Loop subdivision level applied ahead of displacement, capped per-mesh against a triangle budget. This tab-only setting never touches the visitor&#39;s shared site preference.</td>
+</tr>
+<tr>
 <td><code>accent</code></td>
 <td>CSS color</td>
 <td><code>#3b82f6</code></td>
