@@ -112,9 +112,9 @@ in-page, for reference while you work.</p>
 </tr>
 <tr>
 <td><code>backdrop</code></td>
-<td><code>studio</code>, <code>environment</code>, <code>none</code></td>
+<td><code>studio</code>, <code>studio-dark</code>, <code>environment</code>, <code>none</code></td>
 <td><code>studio</code></td>
-<td>What surrounds the preview geometry. <code>studio</code> is a plain white photo-studio room, the new default look for every geometry except <code>shaderball-scene</code> (which has its own authored room and ignores this param entirely, see the <code>geometry</code> row above). <code>environment</code> shows the HDRI environment map itself as the visible backdrop, identical to the legacy <code>background=1</code>. <code>none</code> is a plain dark void, identical to the legacy <code>background=0</code>. The environment&#39;s own lighting is always on regardless of which mode is showing; only its visibility as a backdrop changes. <code>transparent</code> below overrides <code>backdrop</code> entirely, forcing it off so the host page shows through instead of any of the three. An unrecognized value falls back to <code>studio</code> and is reported through <code>mtlx-error</code>.</td>
+<td>What surrounds the preview geometry. <code>studio</code> is a plain white photo-studio room, the new default look for every geometry except <code>shaderball-scene</code> (which has its own authored room and ignores this param entirely, see the <code>geometry</code> row above). <code>studio-dark</code> is the same room in a dark finish. <code>environment</code> shows the HDRI environment map itself as the visible backdrop, identical to the legacy <code>background=1</code>. <code>none</code> is a plain dark void, identical to the legacy <code>background=0</code>. The environment&#39;s own lighting is always on regardless of which mode is showing; only its visibility as a backdrop changes. <code>transparent</code> below overrides <code>backdrop</code> entirely, forcing it off so the host page shows through instead of any of these. An unrecognized value falls back to <code>studio</code> and is reported through <code>mtlx-error</code>.</td>
 </tr>
 <tr>
 <td><code>background</code></td>
@@ -246,7 +246,7 @@ not just a literal <code>1</code>). Anything else falls back to the default show
 </tr>
 <tr>
 <td><code>env</code></td>
-<td>The environment popover (rotation, exposure, backdrop picker, HDR import, key-light toggle).</td>
+<td>The environment popover (rotation, exposure, backdrop picker, key-light toggle). No HDR import here; use <code>envmap</code> to set a custom environment.</td>
 </tr>
 <tr>
 <td><code>screenshot</code></td>
@@ -258,7 +258,7 @@ not just a literal <code>1</code>). Anything else falls back to the default show
 </tr>
 <tr>
 <td><code>settings</code></td>
-<td>The settings popover (force-transparency, etc.).</td>
+<td>The settings popover (view transform, camera exposure, force-transparency, displacement, subdivision, diffuse environment method). None of these picks persist for this embed.</td>
 </tr>
 <tr>
 <td><code>fullscreen</code></td>
@@ -439,7 +439,7 @@ reloads the iframe (a real navigation, with a fresh <code>ready</code> handshake
 <tr>
 <td><code>backdrop</code></td>
 <td><code>.backdrop</code></td>
-<td><code>studio</code>, <code>environment</code>, <code>none</code></td>
+<td><code>studio</code>, <code>studio-dark</code>, <code>environment</code>, <code>none</code></td>
 <td><code>studio</code></td>
 <td>Yes</td>
 </tr>

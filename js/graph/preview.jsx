@@ -1567,6 +1567,7 @@
                         (send/colorspace/collapse, then geometry/screenshot/
                         env/settings), one row in fullscreen; see clusters. */}
                     <ViewportControls
+                        surface="graph"
                         backdrop={backdrop}
                         onBackdropChange={setBackdrop}
                         envAvail={envAvail}
@@ -1578,10 +1579,16 @@
                         viewEpoch={viewEpoch}
                         onScreenshot={takeScreenshot}
                         settingsChildren={
+                            // compoundRoot is real state driving the compile
+                            // path directly (see the effect deps above), with
+                            // no engine-global setter, so it stays caller-
+                            // driven; only the label/hint text come from the
+                            // manifest (js/shared/render-settings.js), via
+                            // rowMeta, so this can't drift from it.
                             <div>
                                 <div className="flex items-center justify-between gap-2">
                                     <span className="inline-flex items-center gap-1.5 text-gray-200">
-                                        Compound compile
+                                        {(rowMeta('graphCompoundCompile', 'graph') || {}).label || 'Compound compile'}
                                         <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
                                     </span>
                                     <button
@@ -1595,8 +1602,7 @@
                                     </button>
                                 </div>
                                 <div className="mt-1 text-[11px] text-gray-400">
-                                    Wraps the document's root-level shading network in a temporary node definition so the GPU driver compiles it as one function.
-                                    Measured 6x faster compiles on large closure networks; parameter edits stay live. Connections and node edits still recompile as before.
+                                    {(rowMeta('graphCompoundCompile', 'graph') || {}).hint}
                                 </div>
                             </div>
                         }

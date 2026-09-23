@@ -1889,9 +1889,9 @@
                     onScreenshot={takeScreenshot}
                     isFullscreen={isFullscreen}
                     onToggleFullscreen={toggleFullscreenView}
-                    // Docs node previews render a single node's output, not
-                    // a full material, so mesh displacement never applies.
-                    hideDisplacementSettings
+                    // Manifest marks displacement/subdivision 'na' for docs
+                    // surface, so RenderSettingsSection renders no rows for them.
+                    surface="docs"
                     containerClassName={compact ? 'absolute top-2 right-2 z-20 flex items-center gap-1.5' : undefined}
                     buttonClassName={compact ? ((active) => 'w-7 h-7 flex-none flex items-center justify-center rounded transition-colors ' + (active ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-gray-700 hover:bg-gray-600 text-gray-200')) : undefined}
                 />

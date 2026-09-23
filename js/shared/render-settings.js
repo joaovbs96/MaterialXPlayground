@@ -9,6 +9,16 @@
     const PROFILE_OF = { viewer: 'preview', compare: 'preview', docs: 'preview', graph: 'preview', embed: 'preview', scene: 'stage' };
     const LEVELS = ['performance', 'default', 'quality'];
 
+    // Mirrors the Scene's Render settings tabs (js/usd-scene-app.jsx
+    // RENDER_TABS): every surface lists rows in this group order, and
+    // each row carries its own `order` within the group.
+    const GROUPS = {
+        display: { label: 'Display', order: 0 },
+        lighting: { label: 'Lighting', order: 1 },
+        effects: { label: 'Effects', order: 2 },
+        geometry: { label: 'Geometry and Textures', order: 3 },
+    };
+
     const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 
     // Loose boolean spellings accepted by the URL query params that predate
@@ -125,79 +135,89 @@
 
     const ROWS = [
         {
-            key: 'transparency', label: 'Force Transparency', group: 'shading', type: 'bool', apply: 'renderMode', ui: true,
+            key: 'transparency', label: 'Force Transparency', group: 'effects', order: 9, type: 'bool', apply: 'renderMode', ui: true, experimental: true,
+            hint: 'Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.',
             profiles: {
-                preview: { storage: 'mtlxForceTransparency', codec: 'bool01', levels: { performance: false, default: false, quality: false } },
+                preview: { storage: 'mtlxForceTransparency', codec: 'bool01', setter: 'setForceTransparency', levels: { performance: false, default: false, quality: false } },
                 stage: { storage: 'mtlxUsdSceneTransparency', codec: 'bool01', legacy: ['mtlxForceTransparency'], levels: { performance: false, default: true, quality: true } },
             },
             surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
             embed: { attr: 'forcetransparency', live: true },
         },
         {
-            key: 'displacement', label: 'Displacement', group: 'geometry', type: 'bool', apply: 'geometry', ui: true,
+            key: 'displacement', label: 'Displacement', group: 'geometry', order: 3, type: 'bool', apply: 'geometry', ui: true,
+            hint: "Moves the mesh by the material's displacement; the material itself is unchanged.",
             profiles: {
-                preview: { storage: 'mtlxDisplacement', codec: 'boolOn', query: 'displacement', queryDecode: parseBoolFlag, levels: { performance: true, default: true, quality: true } },
+                preview: { storage: 'mtlxDisplacement', codec: 'boolOn', query: 'displacement', queryDecode: parseBoolFlag, setter: 'setDisplacementEnabled', levels: { performance: true, default: true, quality: true } },
                 stage: { storage: 'mtlxDisplacement', codec: 'boolOn', levels: { performance: false, default: true, quality: true } },
             },
-            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: NA("docs previews render a single node's output, so no displacement shader is ever bound"), graph: 'yes', embed: 'yes', scene: 'yes' },
             embed: { attr: 'displacement', live: true },
         },
         {
-            key: 'displacementNormals', label: 'Displacement Normals', group: 'geometry', type: 'enum', options: ['mesh', 'analytic'], apply: 'geometry', ui: false,
+            key: 'displacementNormals', label: 'Displacement Normals', group: 'geometry', order: 10, type: 'enum', options: ['mesh', 'analytic'], apply: 'geometry', ui: false,
             profiles: {
-                preview: { storage: 'mtlxDisplacementNormals', codec: 'enum', options: ['mesh', 'analytic'], query: 'displacementnormals', levels: { performance: 'mesh', default: 'mesh', quality: 'mesh' } },
+                preview: { storage: 'mtlxDisplacementNormals', codec: 'enum', options: ['mesh', 'analytic'], query: 'displacementnormals', setter: 'setDisplacementNormalsMode', levels: { performance: 'mesh', default: 'mesh', quality: 'mesh' } },
             },
-            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: NA('the Scene has no displacement-normals mode') },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: NA("docs previews render a single node's output, so no displacement shader is ever bound"), graph: 'yes', embed: 'yes', scene: PLANNED('P6') },
         },
         {
-            key: 'previewSubdivision', label: 'Preview Subdivision', group: 'geometry', type: 'number', min: 0, max: 3, apply: 'geometry', ui: true,
+            key: 'previewSubdivision', label: 'Subdivision', group: 'geometry', order: 11, type: 'number', min: 0, max: 3, step: 1, apply: 'geometry', ui: true,
+            optionLabels: { 0: 'Off', 1: '1', 2: '2', 3: '3' },
+            hint: 'Applied to preview geometry when the material has displacement; each level is 4x triangles, capped at 1.5M.',
             profiles: {
-                preview: { storage: 'mtlxPreviewSubdivision', codec: 'int', min: 0, max: 3, query: 'previewsubdivision', levels: { performance: 2, default: 2, quality: 2 } },
+                preview: { storage: 'mtlxPreviewSubdivision', codec: 'int', min: 0, max: 3, query: 'previewsubdivision', setter: 'setPreviewSubdivisionLevel', levels: { performance: 2, default: 2, quality: 2 } },
             },
-            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: NA('the Scene uses displacementSubdivision') },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: NA("docs previews render a single node's output, so no displacement shader is ever bound"), graph: 'yes', embed: 'yes', scene: NA('the Scene uses displacementSubdivision') },
             embed: { attr: 'previewsubdivision', live: true },
         },
         {
-            key: 'heightToNormalTexel', label: 'Height-to-Normal Texel Space', group: 'shading', type: 'bool', apply: 'regenerate', ui: false, experimental: true,
+            key: 'heightToNormalTexel', label: 'Height-to-Normal Texel Space', group: 'effects', order: 20, type: 'bool', apply: 'regenerate', ui: false, experimental: true,
             profiles: {
-                preview: { storage: 'mtlxHeightToNormalTexel', codec: 'bool01', query: 'heightToNormalTexel', queryDecode: (raw) => raw === '1', levels: { performance: false, default: false, quality: false } },
+                preview: { storage: 'mtlxHeightToNormalTexel', codec: 'bool01', query: 'heightToNormalTexel', queryDecode: (raw) => raw === '1', setter: 'setHeightToNormalTexel', levels: { performance: false, default: false, quality: false } },
                 stage: { storage: 'mtlxHeightToNormalTexel', codec: 'bool01', levels: { performance: false, default: false, quality: false } },
             },
             surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
         {
-            key: 'diffuseEnv', label: 'Diffuse Environment Method', group: 'environment', type: 'enum', options: ['convolve', 'sh'], apply: 'environment', ui: true,
+            key: 'diffuseEnv', label: 'Diffuse Environment Method', group: 'effects', order: 10, type: 'enum', options: ['convolve', 'sh'], apply: 'environment', ui: true,
+            optionLabels: { convolve: 'Convolve', sh: 'Spherical Harmonics' },
+            hint: 'Cosine-convolves the environment instead of a 9 term spherical harmonic fit. More accurate diffuse under small bright lights.',
             profiles: {
-                preview: { storage: 'mtlx_diffuse_env', codec: 'enum', options: ['convolve', 'sh'], query: 'diffuseEnv', queryDecode: (raw) => (raw === 'sh' ? 'sh' : 'convolve'), levels: { performance: 'convolve', default: 'convolve', quality: 'convolve' } },
+                preview: { storage: 'mtlx_diffuse_env', codec: 'enum', options: ['convolve', 'sh'], query: 'diffuseEnv', queryDecode: (raw) => (raw === 'sh' ? 'sh' : 'convolve'), setter: 'setDiffuseEnvMethod', levels: { performance: 'convolve', default: 'convolve', quality: 'convolve' } },
                 stage: { storage: 'mtlx_diffuse_env', codec: 'enum', options: ['convolve', 'sh'], levels: { performance: 'convolve', default: 'convolve', quality: 'convolve' } },
             },
-            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
+            surfaces: { viewer: PLANNED('P3'), compare: PLANNED('P3'), docs: PLANNED('P3'), graph: PLANNED('P3'), embed: PLANNED('P3'), scene: 'yes' },
         },
         {
-            key: 'displayTransform', label: 'Display Transform', group: 'display', type: 'enum', options: ['srgb', 'aces', 'neutral', 'lin_rec709'], apply: 'uniform', ui: true,
+            key: 'displayTransform', label: 'View Transform', group: 'display', order: 0, type: 'enum', options: ['srgb', 'aces', 'neutral', 'lin_rec709'], apply: 'uniform', ui: true,
+            optionLabels: { srgb: 'sRGB', aces: 'ACES', neutral: 'Neutral', lin_rec709: 'lin_rec709' },
+            hint: 'How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping).',
             profiles: {
-                preview: { storage: 'mtlx_display_transform', codec: 'enum', options: ['srgb', 'aces', 'neutral', 'lin_rec709'], levels: { performance: 'srgb', default: 'srgb', quality: 'srgb' } },
+                preview: { storage: 'mtlx_display_transform', codec: 'enum', options: ['srgb', 'aces', 'neutral', 'lin_rec709'], setter: 'setDisplayTransform', levels: { performance: 'srgb', default: 'srgb', quality: 'srgb' } },
                 stage: { storage: 'mtlx_scene_display_transform', codec: 'enum', options: ['srgb', 'aces', 'neutral', 'lin_rec709'], levels: { performance: 'neutral', default: 'neutral', quality: 'neutral' } },
             },
             surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
         {
-            key: 'displayExposure', label: 'Display Exposure', group: 'display', type: 'number', min: -8, max: 8, apply: 'uniform', ui: true,
+            key: 'displayExposure', label: 'Camera Exposure', group: 'display', order: 3, type: 'number', min: -8, max: 8, step: 0.25, unit: 'EV', apply: 'uniform', ui: true,
+            hint: 'Scales the whole image before the display transform, the way a camera would.',
             profiles: {
-                preview: { storage: 'mtlx_display_exposure', codec: 'number', min: -8, max: 8, levels: { performance: 0, default: 0, quality: 0 } },
+                preview: { storage: 'mtlx_display_exposure', codec: 'number', min: -8, max: 8, setter: 'setDisplayExposure', levels: { performance: 0, default: 0, quality: 0 } },
                 stage: { storage: 'mtlx_display_exposure', codec: 'number', min: -8, max: 8, levels: { performance: 0, default: 0, quality: 0 } },
             },
             surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
         {
-            key: 'keyLight', label: 'Auto Key Light', group: 'environment', type: 'bool', apply: 'environment', ui: true,
+            key: 'keyLight', label: 'Extract key light', group: 'lighting', order: 10, type: 'bool', apply: 'environment', ui: true,
+            hint: 'Automatically extract a strong sun into a directional light so sharp highlights stay crisp (rebuilds the environment).',
             profiles: {
-                preview: { storage: 'mtlx_env_keylight', codec: 'boolOn', levels: { performance: true, default: true, quality: true } },
+                preview: { storage: 'mtlx_env_keylight', codec: 'boolOn', setter: 'setKeyLightEnabled', levels: { performance: true, default: true, quality: true } },
             },
             surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: PLANNED('P5') },
         },
         {
-            key: 'geometry', label: 'Preview Geometry', group: 'geometry', type: 'enum',
+            key: 'geometry', label: 'Preview Geometry', group: 'geometry', order: 12, type: 'enum',
             options: ['shaderball-scene', 'shaderball', 'shaderball-mtlx', 'sphere', 'cube', 'cloth', 'buffer2d', 'custom'],
             apply: 'geometry', ui: true,
             profiles: {
@@ -209,13 +229,15 @@
                     // legacy value that decodes into it counts as undefined,
                     // same as the old initGlobalGeom/legacy-seed skip.
                     rejectStored: ['custom'],
+                    setter: 'setGlobalGeom',
                     levels: { performance: 'shaderball-scene', default: 'shaderball-scene', quality: 'shaderball-scene' },
                 },
             },
             surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: NA('stage geometry is authored') },
         },
         {
-            key: 'graphCompoundCompile', label: 'Compile Preview as Compound', group: 'shading', type: 'bool', apply: 'regenerate', ui: true, experimental: true,
+            key: 'graphCompoundCompile', label: 'Compound compile', group: 'effects', order: 21, type: 'bool', apply: 'regenerate', ui: true, experimental: true,
+            hint: "Wraps the document's root-level shading network in a temporary node definition so the GPU driver compiles it as one function. Measured 6x faster compiles on large closure networks; parameter edits stay live. Connections and node edits still recompile as before.",
             profiles: {
                 preview: { storage: 'mtlx_graph_preview_compound', codec: 'boolOnlyOne', levels: { performance: false, default: false, quality: false } },
             },
@@ -226,153 +248,188 @@
             },
         },
 
+        // ---- View-scoped rows (persist: 'view'): per render-view state,
+        // never localStorage, applied by the caller's own env import/reset
+        // logic rather than a single engine setter. ----
+        {
+            key: 'backdrop', label: 'Backdrop', group: 'display', order: 13, type: 'enum',
+            options: ['studio', 'studio-dark', 'environment', 'none'], apply: 'renderMode', ui: true, persist: 'view',
+            optionLabels: { studio: 'Studio', 'studio-dark': 'Studio (Dark)', environment: 'Environment', none: 'None' },
+            hint: 'Studio: a white room. Environment: the HDRI as background. None: a dark void.',
+            profiles: {
+                preview: { codec: 'enum', options: ['studio', 'studio-dark', 'environment', 'none'], levels: { performance: 'studio', default: 'studio', quality: 'studio' } },
+                stage: { codec: 'enum', options: ['studio', 'studio-dark', 'environment', 'none'], levels: { performance: 'studio', default: 'studio', quality: 'studio' } },
+            },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
+            embed: { attr: 'backdrop' },
+        },
+        {
+            key: 'envRotation', label: 'Environment rotation', group: 'lighting', order: 11, type: 'number',
+            min: 0, max: 360, step: 1, unit: 'deg', apply: 'environment', ui: true, persist: 'view',
+            profiles: {
+                preview: { codec: 'number', min: 0, max: 360, levels: { performance: 0, default: 0, quality: 0 } },
+                stage: { codec: 'number', min: 0, max: 360, levels: { performance: 0, default: 0, quality: 0 } },
+            },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
+        },
+        {
+            key: 'envExposure', label: 'Environment exposure', group: 'lighting', order: 12, type: 'number',
+            min: -3, max: 3, step: 0.1, unit: 'EV', apply: 'environment', ui: true, persist: 'view',
+            profiles: {
+                preview: { codec: 'number', min: -3, max: 3, levels: { performance: 0, default: 0, quality: 0 } },
+                stage: { codec: 'number', min: -3, max: 3, levels: { performance: 0, default: 0, quality: 0 } },
+            },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
+            embed: { attr: 'exposure' },
+        },
+
         // ---- Stage-profile rows (js/usd-scene-renderer.js / js/usd-scene-app.jsx) ----
         {
-            key: 'textureMaxSize', label: 'Texture Max Size', group: 'textures', type: 'enum', options: [512, 1024, 2048, 4096, Infinity], apply: 'reload', ui: true,
+            key: 'textureMaxSize', label: 'Texture Max Size', group: 'geometry', order: 0, type: 'enum', options: [512, 1024, 2048, 4096, Infinity], apply: 'reload', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_texture_size', codec: 'sizeOrOriginal', options: [512, 1024, 2048, 4096, Infinity], levels: { performance: 512, default: 2048, quality: 4096 } } },
             surfaces: { viewer: NA('the Material Viewer has no scene texture budget'), compare: NA('the Material Viewer has no scene texture budget'), docs: NA('the Material Viewer has no scene texture budget'), graph: NA('the Material Viewer has no scene texture budget'), embed: NA('the Material Viewer has no scene texture budget'), scene: 'yes' },
         },
         {
-            key: 'textureBudgetGib', label: 'Texture Budget (GiB)', group: 'textures', type: 'enum', options: [1, 2, 4], apply: 'reload', ui: true,
+            key: 'textureBudgetGib', label: 'Texture Budget (GiB)', group: 'geometry', order: 1, type: 'enum', options: [1, 2, 4], apply: 'reload', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_texture_budget', codec: 'gib', options: [1, 2, 4], levels: { performance: 1, default: 1, quality: 4 } } },
             surfaces: { viewer: NA('the Material Viewer has no scene texture budget'), compare: NA('the Material Viewer has no scene texture budget'), docs: NA('the Material Viewer has no scene texture budget'), graph: NA('the Material Viewer has no scene texture budget'), embed: NA('the Material Viewer has no scene texture budget'), scene: 'yes' },
         },
         {
-            key: 'subdivision', label: 'Subdivision', group: 'geometry', type: 'number', min: 0, max: 2, apply: 'reload', ui: true,
+            key: 'subdivision', label: 'Subdivision', group: 'geometry', order: 2, type: 'number', min: 0, max: 2, apply: 'reload', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_subdivision', codec: 'int', min: 0, max: 2, levels: { performance: 0, default: 0, quality: 2 } } },
             surfaces: { viewer: NA('the Material Viewer has no stage subdivision'), compare: NA('the Material Viewer has no stage subdivision'), docs: NA('the Material Viewer has no stage subdivision'), graph: NA('the Material Viewer has no stage subdivision'), embed: NA('the Material Viewer has no stage subdivision'), scene: 'yes' },
         },
         {
-            key: 'shadows', label: 'Shadows', group: 'shading', type: 'bool', apply: 'renderMode', ui: true,
+            key: 'shadows', label: 'Shadows', group: 'lighting', order: 2, type: 'bool', apply: 'renderMode', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_shadows', codec: 'boolOnlyOne', levels: { performance: false, default: false, quality: true } } },
             surfaces: { viewer: PLANNED('P9'), compare: PLANNED('P9'), docs: PLANNED('P9'), graph: PLANNED('P9'), embed: PLANNED('P9'), scene: 'yes' },
         },
         {
-            key: 'ao', label: 'Ambient Occlusion', group: 'shading', type: 'bool', apply: 'renderMode', ui: true,
+            key: 'ao', label: 'Ambient Occlusion', group: 'effects', order: 0, type: 'bool', apply: 'renderMode', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_ao', codec: 'boolOnlyOne', levels: { performance: false, default: false, quality: true } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
         {
-            key: 'skyVis', label: 'Sky Visibility', group: 'shading', type: 'bool', apply: 'renderMode', ui: true,
+            key: 'skyVis', label: 'Sky Visibility', group: 'lighting', order: 3, type: 'bool', apply: 'renderMode', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_skyvis', codec: 'boolOnlyOne', levels: { performance: false, default: false, quality: true } } },
             surfaces: { viewer: NA('the Material Viewer has no room-scale visibility bake'), compare: NA('the Material Viewer has no room-scale visibility bake'), docs: NA('the Material Viewer has no room-scale visibility bake'), graph: NA('the Material Viewer has no room-scale visibility bake'), embed: NA('the Material Viewer has no room-scale visibility bake'), scene: 'yes' },
         },
         {
-            key: 'displacementSubdivision', label: 'Displacement Subdivision', group: 'geometry', type: 'enum', options: ['follow', 0, 1, 2, 3], apply: 'reload', ui: true,
+            key: 'displacementSubdivision', label: 'Displacement Subdivision', group: 'geometry', order: 4, type: 'enum', options: ['follow', 0, 1, 2, 3], apply: 'reload', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_displacement_subdivision', codec: 'enum', options: ['follow', 0, 1, 2, 3], levels: { performance: 'follow', default: 'follow', quality: 3 } } },
             surfaces: { viewer: NA('the Material Viewer uses previewSubdivision'), compare: NA('the Material Viewer uses previewSubdivision'), docs: NA('the Material Viewer uses previewSubdivision'), graph: NA('the Material Viewer uses previewSubdivision'), embed: NA('the Material Viewer uses previewSubdivision'), scene: 'yes' },
         },
         {
-            key: 'triangleLimits', label: 'Triangle Limits', group: 'geometry', type: 'bool', apply: 'reload', ui: true,
+            key: 'triangleLimits', label: 'Triangle Limits', group: 'geometry', order: 5, type: 'bool', apply: 'reload', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_triangle_limits', codec: 'boolTrueFalse', levels: { performance: true, default: true, quality: false } } },
             surfaces: { viewer: NA('the Material Viewer has no stage triangle budget'), compare: NA('the Material Viewer has no stage triangle budget'), docs: NA('the Material Viewer has no stage triangle budget'), graph: NA('the Material Viewer has no stage triangle budget'), embed: NA('the Material Viewer has no stage triangle budget'), scene: 'yes' },
         },
         {
-            key: 'bounce', label: 'One-Bounce Diffuse', group: 'shading', type: 'bool', apply: 'renderMode', ui: true,
+            key: 'bounce', label: 'One-Bounce Diffuse', group: 'effects', order: 2, type: 'bool', apply: 'renderMode', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_bounce', codec: 'boolOn', levels: { performance: false, default: true, quality: true } } },
             surfaces: { viewer: NA('the Material Viewer has no room-scale bounce bake'), compare: NA('the Material Viewer has no room-scale bounce bake'), docs: NA('the Material Viewer has no room-scale bounce bake'), graph: NA('the Material Viewer has no room-scale bounce bake'), embed: NA('the Material Viewer has no room-scale bounce bake'), scene: 'yes' },
         },
         {
-            key: 'localReflections', label: 'Local Reflections', group: 'shading', type: 'bool', apply: 'renderMode', ui: true,
+            key: 'localReflections', label: 'Local Reflections', group: 'effects', order: 4, type: 'bool', apply: 'renderMode', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_local_reflections', codec: 'boolOnlyOne', levels: { performance: false, default: false, quality: true } } },
             surfaces: { viewer: NA('the Material Viewer has no per-stage local environment capture'), compare: NA('the Material Viewer has no per-stage local environment capture'), docs: NA('the Material Viewer has no per-stage local environment capture'), graph: NA('the Material Viewer has no per-stage local environment capture'), embed: NA('the Material Viewer has no per-stage local environment capture'), scene: 'yes' },
         },
         {
-            key: 'specularAA', label: 'Specular Anti-Aliasing', group: 'shading', type: 'bool', apply: 'regenerate', ui: true,
+            key: 'specularAA', label: 'Specular Anti-Aliasing', group: 'display', order: 2, type: 'bool', apply: 'regenerate', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_specular_aa', codec: 'boolOn', levels: { performance: false, default: true, quality: true } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
 
         // ---- Stage-profile "live" rows (same value at every level) ----
         {
-            key: 'materialWorkspace', label: 'Material Working Space', group: 'shading', type: 'enum', options: ['rec709', 'acescg'], apply: 'regenerate', ui: true,
+            key: 'materialWorkspace', label: 'Material Working Space', group: 'display', order: 1, type: 'enum', options: ['rec709', 'acescg'], apply: 'regenerate', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_material_workspace', codec: 'enum', options: ['rec709', 'acescg'], levels: { performance: 'rec709', default: 'rec709', quality: 'rec709' } } },
             surfaces: { viewer: NA('untagged-colour convention is Scene-only'), compare: NA('untagged-colour convention is Scene-only'), docs: NA('untagged-colour convention is Scene-only'), graph: NA('untagged-colour convention is Scene-only'), embed: NA('untagged-colour convention is Scene-only'), scene: 'yes' },
         },
         {
-            key: 'stageLightsOn', label: 'Stage Lights', group: 'environment', type: 'bool', apply: 'environment', ui: true,
+            key: 'stageLightsOn', label: 'Stage Lights', group: 'lighting', order: 0, type: 'bool', apply: 'environment', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_stage_lights', codec: 'boolOn', levels: { performance: true, default: true, quality: true } } },
             surfaces: { viewer: NA('the Material Viewer has no analytic stage lights'), compare: NA('the Material Viewer has no analytic stage lights'), docs: NA('the Material Viewer has no analytic stage lights'), graph: NA('the Material Viewer has no analytic stage lights'), embed: NA('the Material Viewer has no analytic stage lights'), scene: 'yes' },
         },
         {
-            key: 'stageLightsEv', label: 'Stage Lights EV', group: 'environment', type: 'number', min: -8, max: 8, apply: 'environment', ui: true,
+            key: 'stageLightsEv', label: 'Stage Lights EV', group: 'lighting', order: 1, type: 'number', min: -8, max: 8, apply: 'environment', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_stage_lights_ev', codec: 'number', min: -8, max: 8, levels: { performance: 0, default: 0, quality: 0 } } },
             surfaces: { viewer: NA('the Material Viewer has no analytic stage lights'), compare: NA('the Material Viewer has no analytic stage lights'), docs: NA('the Material Viewer has no analytic stage lights'), graph: NA('the Material Viewer has no analytic stage lights'), embed: NA('the Material Viewer has no analytic stage lights'), scene: 'yes' },
         },
         {
-            key: 'aoStrength', label: 'AO Strength', group: 'shading', type: 'number', min: 0, max: 1, apply: 'uniform', ui: true,
+            key: 'aoStrength', label: 'AO Strength', group: 'effects', order: 1, type: 'number', min: 0, max: 1, apply: 'uniform', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_ao_strength', codec: 'number', min: 0, max: 1, levels: { performance: 0.85, default: 0.85, quality: 0.85 } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
         {
-            key: 'bounceStrength', label: 'Bounce Strength', group: 'shading', type: 'number', min: 0, max: 1, apply: 'uniform', ui: true,
+            key: 'bounceStrength', label: 'Bounce Strength', group: 'effects', order: 3, type: 'number', min: 0, max: 1, apply: 'uniform', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_bounce_strength', codec: 'number', min: 0, max: 1, levels: { performance: 1, default: 1, quality: 1 } } },
             surfaces: { viewer: NA('the Material Viewer has no room-scale bounce bake'), compare: NA('the Material Viewer has no room-scale bounce bake'), docs: NA('the Material Viewer has no room-scale bounce bake'), graph: NA('the Material Viewer has no room-scale bounce bake'), embed: NA('the Material Viewer has no room-scale bounce bake'), scene: 'yes' },
         },
         {
-            key: 'skyVisStrength', label: 'Sky Visibility Strength', group: 'shading', type: 'number', min: 0, max: 1, apply: 'uniform', ui: true,
+            key: 'skyVisStrength', label: 'Sky Visibility Strength', group: 'lighting', order: 4, type: 'number', min: 0, max: 1, apply: 'uniform', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_skyvis_strength', codec: 'number', min: 0, max: 1, levels: { performance: 1, default: 1, quality: 1 } } },
             surfaces: { viewer: NA('the Material Viewer has no room-scale visibility bake'), compare: NA('the Material Viewer has no room-scale visibility bake'), docs: NA('the Material Viewer has no room-scale visibility bake'), graph: NA('the Material Viewer has no room-scale visibility bake'), embed: NA('the Material Viewer has no room-scale visibility bake'), scene: 'yes' },
         },
         {
-            key: 'localEnvStrength', label: 'Local Reflections Strength', group: 'shading', type: 'number', min: 0, max: 1, apply: 'uniform', ui: true,
+            key: 'localEnvStrength', label: 'Local Reflections Strength', group: 'effects', order: 5, type: 'number', min: 0, max: 1, apply: 'uniform', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_local_reflections_strength', codec: 'number', min: 0, max: 1, levels: { performance: 1, default: 1, quality: 1 } } },
             surfaces: { viewer: NA('the Material Viewer has no per-stage local environment capture'), compare: NA('the Material Viewer has no per-stage local environment capture'), docs: NA('the Material Viewer has no per-stage local environment capture'), graph: NA('the Material Viewer has no per-stage local environment capture'), embed: NA('the Material Viewer has no per-stage local environment capture'), scene: 'yes' },
         },
         {
-            key: 'ssrOn', label: 'Screen-Space Reflections', group: 'shading', type: 'bool', apply: 'renderMode', ui: true, experimental: true,
+            key: 'ssrOn', label: 'Screen-Space Reflections', group: 'effects', order: 6, type: 'bool', apply: 'renderMode', ui: true, experimental: true,
             profiles: { stage: { storage: 'mtlx_scene_ssr', codec: 'boolOn', levels: { performance: false, default: false, quality: false } } },
             surfaces: { viewer: NA('SSR is Scene-only and parked'), compare: NA('SSR is Scene-only and parked'), docs: NA('SSR is Scene-only and parked'), graph: NA('SSR is Scene-only and parked'), embed: NA('SSR is Scene-only and parked'), scene: 'yes' },
         },
         {
-            key: 'ssrStrength', label: 'SSR Strength', group: 'shading', type: 'number', min: 0, max: 1, apply: 'uniform', ui: true, experimental: true,
+            key: 'ssrStrength', label: 'SSR Strength', group: 'effects', order: 7, type: 'number', min: 0, max: 1, apply: 'uniform', ui: true, experimental: true,
             profiles: { stage: { storage: 'mtlx_scene_ssr_strength', codec: 'number', min: 0, max: 1, levels: { performance: 1, default: 1, quality: 1 } } },
             surfaces: { viewer: NA('SSR is Scene-only and parked'), compare: NA('SSR is Scene-only and parked'), docs: NA('SSR is Scene-only and parked'), graph: NA('SSR is Scene-only and parked'), embed: NA('SSR is Scene-only and parked'), scene: 'yes' },
         },
         {
-            key: 'ssrMaxRoughness', label: 'SSR Max Roughness', group: 'shading', type: 'number', min: 0.05, max: 1, apply: 'uniform', ui: true, experimental: true,
+            key: 'ssrMaxRoughness', label: 'SSR Max Roughness', group: 'effects', order: 8, type: 'number', min: 0.05, max: 1, apply: 'uniform', ui: true, experimental: true,
             profiles: { stage: { storage: 'mtlx_scene_ssr_max_roughness', codec: 'number', min: 0.05, max: 1, levels: { performance: 0.5, default: 0.5, quality: 0.5 } } },
             surfaces: { viewer: NA('SSR is Scene-only and parked'), compare: NA('SSR is Scene-only and parked'), docs: NA('SSR is Scene-only and parked'), graph: NA('SSR is Scene-only and parked'), embed: NA('SSR is Scene-only and parked'), scene: 'yes' },
         },
 
         // ---- Presentation jsonField rows (mtlx_scene_presentation) ----
         {
-            key: 'hdrPresentation', label: 'HDR Presentation', group: 'display', type: 'bool', apply: 'post', ui: true,
+            key: 'hdrPresentation', label: 'HDR Presentation', group: 'display', order: 4, type: 'bool', apply: 'post', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'enabled', codec: 'jsonField', levels: { performance: true, default: true, quality: true } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
         {
-            key: 'bloom', label: 'Bloom', group: 'display', type: 'bool', apply: 'post', ui: true,
+            key: 'bloom', label: 'Bloom', group: 'display', order: 5, type: 'bool', apply: 'post', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'bloom', codec: 'jsonField', levels: { performance: false, default: false, quality: false } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
         {
-            key: 'bloomStrength', label: 'Bloom Strength', group: 'display', type: 'number', min: 0, max: 1, apply: 'post', ui: true,
+            key: 'bloomStrength', label: 'Bloom Strength', group: 'display', order: 6, type: 'number', min: 0, max: 1, apply: 'post', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'strength', codec: 'jsonField', min: 0, max: 1, levels: { performance: 0.25, default: 0.25, quality: 0.25 } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
         {
-            key: 'bloomThreshold', label: 'Bloom Threshold', group: 'display', type: 'number', min: 0.01, max: 1000, apply: 'post', ui: true,
+            key: 'bloomThreshold', label: 'Bloom Threshold', group: 'display', order: 7, type: 'number', min: 0.01, max: 1000, apply: 'post', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'threshold', codec: 'jsonField', min: 0.01, max: 1000, levels: { performance: 1, default: 1, quality: 1 } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
         {
-            key: 'bloomKnee', label: 'Bloom Knee', group: 'display', type: 'number', min: 0, max: 1, apply: 'post', ui: true,
+            key: 'bloomKnee', label: 'Bloom Knee', group: 'display', order: 8, type: 'number', min: 0, max: 1, apply: 'post', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'knee', codec: 'jsonField', min: 0, max: 1, levels: { performance: 0.5, default: 0.5, quality: 0.5 } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
         {
-            key: 'bloomRadius', label: 'Bloom Radius', group: 'display', type: 'number', min: 0, max: 1, apply: 'post', ui: true,
+            key: 'bloomRadius', label: 'Bloom Radius', group: 'display', order: 9, type: 'number', min: 0, max: 1, apply: 'post', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'radius', codec: 'jsonField', min: 0, max: 1, levels: { performance: 0.65, default: 0.65, quality: 0.65 } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
         {
-            key: 'postAntialias', label: 'Post Antialias', group: 'display', type: 'bool', apply: 'post', ui: true,
+            key: 'postAntialias', label: 'Post Antialias', group: 'display', order: 20, type: 'bool', apply: 'post', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'antialias', codec: 'jsonField', levels: { performance: true, default: true, quality: true } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
         {
-            key: 'msaaSamples', label: 'MSAA Samples', group: 'display', type: 'number', min: 0, max: 4, apply: 'post', ui: true,
+            key: 'msaaSamples', label: 'MSAA Samples', group: 'display', order: 21, type: 'number', min: 0, max: 4, apply: 'post', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'samples', codec: 'jsonField', min: 0, max: 4, levels: { performance: 4, default: 4, quality: 4 } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
@@ -537,6 +594,35 @@
         try { window.dispatchEvent(new CustomEvent('mtlx-render-level', { detail: { surface, level } })); } catch (e) { /* best-effort */ }
     };
 
+    // The write path a settings UI should use: calls the row's setter if
+    // declared, else falls back to plain set() which skips storage for rows
+    // with no P.storage or persist: 'view' rows.
+    const apply = (key, value, opts) => {
+        const row = ROW_BY_KEY[key];
+        if (!row) return undefined;
+        const options = opts || {};
+        const profile = resolveProfile(options);
+        const P = profile && row.profiles[profile];
+        const setterName = P && P.setter;
+        const setterFn = setterName && typeof window[setterName] === 'function' ? window[setterName] : null;
+        if (setterFn) {
+            const validated = validate(P, value);
+            try {
+                if (options.persist === false) setterFn(validated, { persist: false });
+                else setterFn(validated);
+            } catch (e) { /* best-effort */ }
+            return validated;
+        }
+        return set(key, value, options);
+    };
+
+    // Group-then-row order, matching the Scene's Render settings tabs.
+    const rowSortKey = (row) => {
+        const groupOrder = (GROUPS[row.group] && GROUPS[row.group].order) || 0;
+        const order = row.order || 0;
+        return groupOrder * 1000 + order;
+    };
+
     const rowsFor = (surface, opts) => {
         const uiOnly = opts && opts.ui;
         return ROWS.filter((row) => {
@@ -544,7 +630,7 @@
             if (s !== 'yes') return false;
             if (uiOnly && row.ui !== true) return false;
             return true;
-        });
+        }).sort((a, b) => rowSortKey(a) - rowSortKey(b));
     };
 
     const storageKeys = () => {
@@ -561,8 +647,8 @@
     };
 
     window.MtlxRenderSettings = {
-        SURFACES, PROFILE_OF, LEVELS, ROWS,
-        get, set, getLevel, setLevel, canPersist,
+        SURFACES, PROFILE_OF, LEVELS, ROWS, GROUPS,
+        get, set, apply, getLevel, setLevel, canPersist,
         rowsFor, subscribe, storageKeys,
     };
 })();

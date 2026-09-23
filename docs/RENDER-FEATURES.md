@@ -7,8 +7,11 @@ One row per setting in `js/shared/render-settings.js`, one table per group. `yes
 
 | Setting | viewer | compare | docs | graph | embed | scene | Storage keys |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Display Transform | yes | yes | yes | yes | yes | yes | preview: `mtlx_display_transform`<br>stage: `mtlx_scene_display_transform` |
-| Display Exposure | yes | yes | yes | yes | yes | yes | preview: `mtlx_display_exposure`<br>stage: `mtlx_display_exposure` |
+| View Transform | yes | yes | yes | yes | yes | yes | preview: `mtlx_display_transform`<br>stage: `mtlx_scene_display_transform` |
+| Camera Exposure | yes | yes | yes | yes | yes | yes | preview: `mtlx_display_exposure`<br>stage: `mtlx_display_exposure` |
+| Backdrop | yes | yes | yes | yes | yes | yes | preview: per view, not saved<br>stage: per view, not saved |
+| Specular Anti-Aliasing | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_specular_aa` |
+| Material Working Space | na (untagged-colour convention is Scene-only) | na (untagged-colour convention is Scene-only) | na (untagged-colour convention is Scene-only) | na (untagged-colour convention is Scene-only) | na (untagged-colour convention is Scene-only) | yes | stage: `mtlx_scene_material_workspace` |
 | HDR Presentation | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_presentation` (field `enabled`) |
 | Bloom | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_presentation` (field `bloom`) |
 | Bloom Strength | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_presentation` (field `strength`) |
@@ -18,53 +21,48 @@ One row per setting in `js/shared/render-settings.js`, one table per group. `yes
 | Post Antialias | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_presentation` (field `antialias`) |
 | MSAA Samples | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_presentation` (field `samples`) |
 
-## environment
-
-| Setting | viewer | compare | docs | graph | embed | scene | Storage keys |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Diffuse Environment Method | yes | yes | yes | yes | yes | yes | preview: `mtlx_diffuse_env`<br>stage: `mtlx_diffuse_env` |
-| Auto Key Light | yes | yes | yes | yes | yes | planned (P5) | preview: `mtlx_env_keylight` |
-| Stage Lights | na (the Material Viewer has no analytic stage lights) | na (the Material Viewer has no analytic stage lights) | na (the Material Viewer has no analytic stage lights) | na (the Material Viewer has no analytic stage lights) | na (the Material Viewer has no analytic stage lights) | yes | stage: `mtlx_scene_stage_lights` |
-| Stage Lights EV | na (the Material Viewer has no analytic stage lights) | na (the Material Viewer has no analytic stage lights) | na (the Material Viewer has no analytic stage lights) | na (the Material Viewer has no analytic stage lights) | na (the Material Viewer has no analytic stage lights) | yes | stage: `mtlx_scene_stage_lights_ev` |
-
-## geometry
-
-| Setting | viewer | compare | docs | graph | embed | scene | Storage keys |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Displacement | yes | yes | yes | yes | yes | yes | preview: `mtlxDisplacement`<br>stage: `mtlxDisplacement` |
-| Displacement Normals | yes | yes | yes | yes | yes | na (the Scene has no displacement-normals mode) | preview: `mtlxDisplacementNormals` |
-| Preview Subdivision | yes | yes | yes | yes | yes | na (the Scene uses displacementSubdivision) | preview: `mtlxPreviewSubdivision` |
-| Preview Geometry | yes | yes | yes | yes | yes | na (stage geometry is authored) | preview: `mtlx_geom_global` (legacy: `mtlx_preview_geom_choice`, `mtlx_graph_preview_geom`) |
-| Subdivision | na (the Material Viewer has no stage subdivision) | na (the Material Viewer has no stage subdivision) | na (the Material Viewer has no stage subdivision) | na (the Material Viewer has no stage subdivision) | na (the Material Viewer has no stage subdivision) | yes | stage: `mtlx_scene_subdivision` |
-| Displacement Subdivision | na (the Material Viewer uses previewSubdivision) | na (the Material Viewer uses previewSubdivision) | na (the Material Viewer uses previewSubdivision) | na (the Material Viewer uses previewSubdivision) | na (the Material Viewer uses previewSubdivision) | yes | stage: `mtlx_scene_displacement_subdivision` |
-| Triangle Limits | na (the Material Viewer has no stage triangle budget) | na (the Material Viewer has no stage triangle budget) | na (the Material Viewer has no stage triangle budget) | na (the Material Viewer has no stage triangle budget) | na (the Material Viewer has no stage triangle budget) | yes | stage: `mtlx_scene_triangle_limits` |
-
-## shading
+## effects
 
 | Setting | viewer | compare | docs | graph | embed | scene | Storage keys |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Force Transparency | yes | yes | yes | yes | yes | yes | preview: `mtlxForceTransparency`<br>stage: `mtlxUsdSceneTransparency` (legacy: `mtlxForceTransparency`) |
 | Height-to-Normal Texel Space | yes | yes | yes | yes | yes | yes | preview: `mtlxHeightToNormalTexel`<br>stage: `mtlxHeightToNormalTexel` |
-| Compile Preview as Compound | na (only the Graph Editor compiles compound taps) | na (only the Graph Editor compiles compound taps) | na (only the Graph Editor compiles compound taps) | yes | na (only the Graph Editor compiles compound taps) | na (only the Graph Editor compiles compound taps) | preview: `mtlx_graph_preview_compound` |
-| Shadows | planned (P9) | planned (P9) | planned (P9) | planned (P9) | planned (P9) | yes | stage: `mtlx_scene_shadows` |
+| Diffuse Environment Method | planned (P3) | planned (P3) | planned (P3) | planned (P3) | planned (P3) | yes | preview: `mtlx_diffuse_env`<br>stage: `mtlx_diffuse_env` |
+| Compound compile | na (only the Graph Editor compiles compound taps) | na (only the Graph Editor compiles compound taps) | na (only the Graph Editor compiles compound taps) | yes | na (only the Graph Editor compiles compound taps) | na (only the Graph Editor compiles compound taps) | preview: `mtlx_graph_preview_compound` |
 | Ambient Occlusion | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_ao` |
-| Sky Visibility | na (the Material Viewer has no room-scale visibility bake) | na (the Material Viewer has no room-scale visibility bake) | na (the Material Viewer has no room-scale visibility bake) | na (the Material Viewer has no room-scale visibility bake) | na (the Material Viewer has no room-scale visibility bake) | yes | stage: `mtlx_scene_skyvis` |
 | One-Bounce Diffuse | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | yes | stage: `mtlx_scene_bounce` |
 | Local Reflections | na (the Material Viewer has no per-stage local environment capture) | na (the Material Viewer has no per-stage local environment capture) | na (the Material Viewer has no per-stage local environment capture) | na (the Material Viewer has no per-stage local environment capture) | na (the Material Viewer has no per-stage local environment capture) | yes | stage: `mtlx_scene_local_reflections` |
-| Specular Anti-Aliasing | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_specular_aa` |
-| Material Working Space | na (untagged-colour convention is Scene-only) | na (untagged-colour convention is Scene-only) | na (untagged-colour convention is Scene-only) | na (untagged-colour convention is Scene-only) | na (untagged-colour convention is Scene-only) | yes | stage: `mtlx_scene_material_workspace` |
 | AO Strength | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_ao_strength` |
 | Bounce Strength | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | yes | stage: `mtlx_scene_bounce_strength` |
-| Sky Visibility Strength | na (the Material Viewer has no room-scale visibility bake) | na (the Material Viewer has no room-scale visibility bake) | na (the Material Viewer has no room-scale visibility bake) | na (the Material Viewer has no room-scale visibility bake) | na (the Material Viewer has no room-scale visibility bake) | yes | stage: `mtlx_scene_skyvis_strength` |
 | Local Reflections Strength | na (the Material Viewer has no per-stage local environment capture) | na (the Material Viewer has no per-stage local environment capture) | na (the Material Viewer has no per-stage local environment capture) | na (the Material Viewer has no per-stage local environment capture) | na (the Material Viewer has no per-stage local environment capture) | yes | stage: `mtlx_scene_local_reflections_strength` |
 | Screen-Space Reflections | na (SSR is Scene-only and parked) | na (SSR is Scene-only and parked) | na (SSR is Scene-only and parked) | na (SSR is Scene-only and parked) | na (SSR is Scene-only and parked) | yes | stage: `mtlx_scene_ssr` |
 | SSR Strength | na (SSR is Scene-only and parked) | na (SSR is Scene-only and parked) | na (SSR is Scene-only and parked) | na (SSR is Scene-only and parked) | na (SSR is Scene-only and parked) | yes | stage: `mtlx_scene_ssr_strength` |
 | SSR Max Roughness | na (SSR is Scene-only and parked) | na (SSR is Scene-only and parked) | na (SSR is Scene-only and parked) | na (SSR is Scene-only and parked) | na (SSR is Scene-only and parked) | yes | stage: `mtlx_scene_ssr_max_roughness` |
 
-## textures
+## geometry
 
 | Setting | viewer | compare | docs | graph | embed | scene | Storage keys |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| Displacement | yes | yes | na (docs previews render a single node's output, so no displacement shader is ever bound) | yes | yes | yes | preview: `mtlxDisplacement`<br>stage: `mtlxDisplacement` |
+| Displacement Normals | yes | yes | na (docs previews render a single node's output, so no displacement shader is ever bound) | yes | yes | planned (P6) | preview: `mtlxDisplacementNormals` |
+| Subdivision | yes | yes | na (docs previews render a single node's output, so no displacement shader is ever bound) | yes | yes | na (the Scene uses displacementSubdivision) | preview: `mtlxPreviewSubdivision` |
+| Preview Geometry | yes | yes | yes | yes | yes | na (stage geometry is authored) | preview: `mtlx_geom_global` (legacy: `mtlx_preview_geom_choice`, `mtlx_graph_preview_geom`) |
 | Texture Max Size | na (the Material Viewer has no scene texture budget) | na (the Material Viewer has no scene texture budget) | na (the Material Viewer has no scene texture budget) | na (the Material Viewer has no scene texture budget) | na (the Material Viewer has no scene texture budget) | yes | stage: `mtlx_scene_texture_size` |
 | Texture Budget (GiB) | na (the Material Viewer has no scene texture budget) | na (the Material Viewer has no scene texture budget) | na (the Material Viewer has no scene texture budget) | na (the Material Viewer has no scene texture budget) | na (the Material Viewer has no scene texture budget) | yes | stage: `mtlx_scene_texture_budget` |
+| Subdivision | na (the Material Viewer has no stage subdivision) | na (the Material Viewer has no stage subdivision) | na (the Material Viewer has no stage subdivision) | na (the Material Viewer has no stage subdivision) | na (the Material Viewer has no stage subdivision) | yes | stage: `mtlx_scene_subdivision` |
+| Displacement Subdivision | na (the Material Viewer uses previewSubdivision) | na (the Material Viewer uses previewSubdivision) | na (the Material Viewer uses previewSubdivision) | na (the Material Viewer uses previewSubdivision) | na (the Material Viewer uses previewSubdivision) | yes | stage: `mtlx_scene_displacement_subdivision` |
+| Triangle Limits | na (the Material Viewer has no stage triangle budget) | na (the Material Viewer has no stage triangle budget) | na (the Material Viewer has no stage triangle budget) | na (the Material Viewer has no stage triangle budget) | na (the Material Viewer has no stage triangle budget) | yes | stage: `mtlx_scene_triangle_limits` |
+
+## lighting
+
+| Setting | viewer | compare | docs | graph | embed | scene | Storage keys |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Extract key light | yes | yes | yes | yes | yes | planned (P5) | preview: `mtlx_env_keylight` |
+| Environment rotation | yes | yes | yes | yes | yes | yes | preview: per view, not saved<br>stage: per view, not saved |
+| Environment exposure | yes | yes | yes | yes | yes | yes | preview: per view, not saved<br>stage: per view, not saved |
+| Shadows | planned (P9) | planned (P9) | planned (P9) | planned (P9) | planned (P9) | yes | stage: `mtlx_scene_shadows` |
+| Sky Visibility | na (the Material Viewer has no room-scale visibility bake) | na (the Material Viewer has no room-scale visibility bake) | na (the Material Viewer has no room-scale visibility bake) | na (the Material Viewer has no room-scale visibility bake) | na (the Material Viewer has no room-scale visibility bake) | yes | stage: `mtlx_scene_skyvis` |
+| Stage Lights | na (the Material Viewer has no analytic stage lights) | na (the Material Viewer has no analytic stage lights) | na (the Material Viewer has no analytic stage lights) | na (the Material Viewer has no analytic stage lights) | na (the Material Viewer has no analytic stage lights) | yes | stage: `mtlx_scene_stage_lights` |
+| Stage Lights EV | na (the Material Viewer has no analytic stage lights) | na (the Material Viewer has no analytic stage lights) | na (the Material Viewer has no analytic stage lights) | na (the Material Viewer has no analytic stage lights) | na (the Material Viewer has no analytic stage lights) | yes | stage: `mtlx_scene_stage_lights_ev` |
+| Sky Visibility Strength | na (the Material Viewer has no room-scale visibility bake) | na (the Material Viewer has no room-scale visibility bake) | na (the Material Viewer has no room-scale visibility bake) | na (the Material Viewer has no room-scale visibility bake) | na (the Material Viewer has no room-scale visibility bake) | yes | stage: `mtlx_scene_skyvis_strength` |
 

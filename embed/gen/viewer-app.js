@@ -1138,10 +1138,19 @@ function MaterialViewerApp({
     return () => window.removeEventListener('mtlx-displacement-status', onDisplacementStatus);
   }, []);
 
-  // Backs the Scene card's transparency-forcing toggle (browser
-  // only): local mirror of the engine's persisted value, replacing
-  // the old HUD settings popover's only built-in block.
+  // Backs the Rendering card's summary text only now; the toggle
+  // itself is RenderSettingsSection, which writes straight through
+  // window.setForceTransparency; this stays synced by listening
+  // for the manifest's broadcast instead of owning the write.
   const [forceTransparency, setForceTransparency] = React.useState(() => !!(window.getForceTransparency && window.getForceTransparency()));
+  React.useEffect(() => {
+    const onRenderSetting = e => {
+      if (!e.detail || e.detail.key !== 'transparency') return;
+      setForceTransparency(!!e.detail.value);
+    };
+    window.addEventListener('mtlx-render-setting', onRenderSetting);
+    return () => window.removeEventListener('mtlx-render-setting', onRenderSetting);
+  }, []);
 
   // Scene card's custom-model import row (browser only) plus the
   // hidden HUD input below (VS Code, no sidebar). Mirrors the
@@ -1171,12 +1180,6 @@ function MaterialViewerApp({
     setGeom(g);
     if (!chromeless) window.setGlobalGeom(g);
   };
-  // Same global pick pattern as pickGeom, no chromeless guard: the
-  // control never renders there (no sidebar), so it's unreachable.
-  const pickDisplayTransform = mode => {
-    setDisplayTransformState(mode);
-    if (window.setDisplayTransform) window.setDisplayTransform(mode);
-  };
   // Shared by the sidebar's CustomModelTile and the VS Code HUD's
   // geometry dropdown footer, one integrated model-picker now.
   const geomModelFooter = {
@@ -1200,22 +1203,10 @@ function MaterialViewerApp({
   const [envImportError, setEnvImportError] = React.useState(null);
   const [envFileName, setEnvFileName] = React.useState('');
 
-  // Extract key light toggle: local mirror of the engine-wide
-  // window.getKeyLightEnabled/setKeyLightEnabled (js/mtlx-engine.js),
-  // same degrade-to-disabled contract as EnvDialog's own copy
-  // (js/shared/mtlx-ui.jsx).
+  // The toggle itself is now RenderSettingsSection (key light is a
+  // true engine-wide global, safe to route through the shared
+  // store); this flag is kept only for the Reset button's guard.
   const keyLightAvail = typeof window.getKeyLightEnabled === 'function' && typeof window.setKeyLightEnabled === 'function';
-  const [keyLightOn, setKeyLightOn] = React.useState(() => keyLightAvail ? window.getKeyLightEnabled() : true);
-  // Re-read the global whenever the view is rebuilt, mirroring
-  // EnvDialog's re-read on open since this row has no open event.
-  React.useEffect(() => {
-    setKeyLightOn(keyLightAvail ? window.getKeyLightEnabled() : true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewEpoch]);
-  const handleToggleKeyLight = next => {
-    setKeyLightOn(next);
-    if (keyLightAvail) window.setKeyLightEnabled(next);
-  };
   const setEnvRotationDeg = v => {
     setEnvUI(s => ({
       ...s,
@@ -1490,8 +1481,8 @@ function MaterialViewerApp({
   }), envImportError && /*#__PURE__*/React.createElement("div", {
     className: "text-xs text-red-400"
   }, envImportError), /*#__PURE__*/React.createElement(SliderField, {
-    label: "Environment rotation",
-    unit: "deg",
+    label: (rowMeta('envRotation', 'viewer') || {}).label || 'Environment rotation',
+    unit: (rowMeta('envRotation', 'viewer') || {}).unit || 'deg',
     value: envUI.rotation,
     min: 0,
     max: 360,
@@ -1500,8 +1491,8 @@ function MaterialViewerApp({
     onSlider: v => setEnvRotationDeg(Number(v)),
     onNumber: v => setEnvRotationDeg(Number(v))
   }), /*#__PURE__*/React.createElement(SliderField, {
-    label: "Exposure",
-    unit: "EV",
+    label: (rowMeta('envExposure', 'viewer') || {}).label || 'Environment exposure',
+    unit: (rowMeta('envExposure', 'viewer') || {}).unit || 'EV',
     value: linearToEv(envUI.exposure),
     min: EV_MIN,
     max: EV_MAX,
@@ -1513,32 +1504,21 @@ function MaterialViewerApp({
     className: "flex items-center justify-between gap-2"
   }, /*#__PURE__*/React.createElement("span", {
     className: "text-xs font-medium text-gray-400"
-  }, "Backdrop"), /*#__PURE__*/React.createElement(MtlxSelect, {
+  }, (rowMeta('backdrop', 'viewer') || {}).label || 'Backdrop'), /*#__PURE__*/React.createElement(MtlxSelect, {
     value: backdropMode,
-    options: ['studio', 'studio-dark', 'environment', 'none'],
-    labels: {
-      studio: 'Studio',
-      'studio-dark': 'Studio (Dark)',
-      environment: 'Environment',
-      none: 'None'
-    },
+    options: rowMeta('backdrop', 'viewer').options,
+    labels: (rowMeta('backdrop', 'viewer') || {}).optionLabels || {},
     onChange: setBackdropMode,
     defValue: "studio",
     disabled: roomGeomActive,
-    title: roomGeomActive ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : undefined,
+    title: roomGeomActive ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : (rowMeta('backdrop', 'viewer') || {}).hint,
     size: "sm"
-  })), /*#__PURE__*/React.createElement("label", {
-    className: "flex items-center justify-between cursor-pointer",
-    title: keyLightOn ? 'Disable key light extraction' : 'Enable key light extraction'
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "text-xs font-medium text-gray-400"
-  }, "Extract key light"), /*#__PURE__*/React.createElement(Toggle, {
-    checked: keyLightOn,
-    onChange: handleToggleKeyLight,
-    disabled: !keyLightAvail
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "mt-1 text-[11px] text-gray-400"
-  }, "Pull a sun-like light out of the HDRI for crisp highlights."), /*#__PURE__*/React.createElement("button", {
+  })), /*#__PURE__*/React.createElement(RenderSettingsSection, {
+    surface: "viewer",
+    keys: ['keyLight', 'diffuseEnv'],
+    variant: "sidebar",
+    labelClassName: "text-xs font-medium text-gray-400"
+  }), /*#__PURE__*/React.createElement("button", {
     onClick: resetEnv,
     title: "Also clears an imported .hdr/.exr and restores the default environment",
     className: BTN_SECONDARY + ' w-full'
@@ -1547,38 +1527,10 @@ function MaterialViewerApp({
     title: "Rendering",
     summary: forceTransparency ? 'Transparency forced' : 'Default',
     defaultOpen: true
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center justify-between gap-2"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "text-xs font-medium text-gray-400"
-  }, "View Transform"), /*#__PURE__*/React.createElement(MtlxSelect, {
-    value: displayTransform,
-    options: ['srgb', 'aces', 'lin_rec709'],
-    labels: {
-      srgb: 'sRGB',
-      aces: 'ACES',
-      lin_rec709: 'lin_rec709'
-    },
-    onChange: pickDisplayTransform,
-    defValue: "srgb",
-    title: "How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping).",
-    size: "sm"
-  })), /*#__PURE__*/React.createElement("label", {
-    className: "flex items-center justify-between cursor-pointer",
-    title: forceTransparency ? 'Disable forced transparency' : 'Enable forced transparency'
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "inline-flex items-center gap-1.5 text-xs font-medium text-gray-400"
-  }, "Force Transparency", /*#__PURE__*/React.createElement("span", {
-    className: "text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300"
-  }, "Experimental")), /*#__PURE__*/React.createElement(Toggle, {
-    checked: forceTransparency,
-    onChange: next => {
-      setForceTransparency(next);
-      window.setForceTransparency && window.setForceTransparency(next);
-    }
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "mt-1 text-[11px] text-gray-400"
-  }, "Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews."), /*#__PURE__*/React.createElement(DisplacementSettingsRows, {
+  }, /*#__PURE__*/React.createElement(RenderSettingsSection, {
+    surface: "viewer",
+    keys: ['displayTransform', 'displayExposure', 'transparency', 'displacement', 'previewSubdivision'],
+    variant: "sidebar",
     labelClassName: "text-xs font-medium text-gray-400"
   })), texReport && texReport.missing.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
     icon: "alert-triangle",
@@ -1689,6 +1641,7 @@ function MaterialViewerApp({
     onToggleFullscreen: onToggleFullscreen,
     showFullscreen: ctlFlags.fullscreen
   }) : /*#__PURE__*/React.createElement(ViewportControls, {
+    surface: "viewer",
     containerClassName: IN_VSCODE ? 'absolute top-2 right-2 z-10 flex items-center gap-2.5' : 'absolute top-2 right-2 z-10 flex items-center gap-2.5 flex-wrap justify-end max-w-[calc(100%-5rem)]',
     clusterClassName: "flex items-center gap-1",
     selectSize: "md",

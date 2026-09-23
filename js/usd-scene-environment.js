@@ -1,7 +1,9 @@
 // USD scene environment bridge. The studio geometry/material is exported by
 // mtlx-engine.js so this view shares the material viewer's exact appearance.
 (() => {
-    const modes = new Set(['studio', 'studio-dark', 'environment', 'none']);
+    // Backdrop modes come from the 'backdrop' row in js/shared/render-settings.js.
+    const backdropRow = window.MtlxRenderSettings.ROWS.find((r) => r.key === 'backdrop');
+    const modes = new Set(backdropRow.options);
 
     // The ShadowMaterial catcher reads as fully shadowed wherever the spot's
     // shadow map is missing, painting its frustum as a grey quad, so it only

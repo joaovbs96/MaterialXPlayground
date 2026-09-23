@@ -8,6 +8,10 @@
 // (b) every storage/legacy key literal appears only in render-settings.js,
 //     except PENDING files and ALLOW entries; no other 'mtlx*' localStorage
 //     key literal goes undeclared.
+// (c) option-list ratchet: display-transform/backdrop option arrays stay
+//     out of every file except render-settings.js (PENDING/ALLOW excepted).
+// (d) UI-coverage: every surface file that hosts render settings uses a
+//     shared component, and no manifest row label is hard-coded loose.
 // (e) writes/checks docs/RENDER-FEATURES.md.
 // (f) embed build/runtime consistency: build-embed TARGETS vs viewer.html
 //     REMAINING, embed.attr coverage, eager embed payload budget.
@@ -107,6 +111,10 @@ function checkManifestShape() {
       if (!surfaceKeys.includes(s)) { problems.push(`row "${row.key}" is missing surface "${s}"`); continue; }
       if (!isSurfaceValueValid(row.surfaces[s])) {
         problems.push(`row "${row.key}" surface "${s}" has an invalid value: ${JSON.stringify(row.surfaces[s])}`);
+      }
+      // A surface that says 'yes' must have a profile to read and write through.
+      if (row.surfaces[s] === "yes" && !(row.profiles && row.profiles[M.PROFILE_OF[s]])) {
+        problems.push(`row "${row.key}" is 'yes' for "${s}" but has no ${M.PROFILE_OF[s]} profile`);
       }
     }
     if (surfaceKeys.some((s) => !SURFACES.includes(s))) {
@@ -232,6 +240,113 @@ function checkStorageKeyScan() {
 }
 
 // ---------------------------------------------------------------------
+// (c) option-list ratchet: literal display-transform or backdrop option
+// arrays only in js/shared/render-settings.js; elsewhere use row.options.
+// ---------------------------------------------------------------------
+const OPTION_LIST_PENDING_FILES = ["js/usd-scene-app.jsx", "js/usd-scene-renderer.js"];
+
+// Known second copies not yet folded into the manifest: real gaps, kept
+// visible here (not silently ignored) rather than allowed forever.
+const OPTION_LIST_ALLOW = [
+  {
+    file: "js/mtlx-engine.js",
+    reason: "DISPLAY_TRANSFORM_VALUES is the engine's own validation copy; " +
+      "mtlx-engine.js has no load-time dependency on render-settings.js's ROWS shape today, only get/set. Follow-up.",
+  },
+];
+
+function checkOptionListRatchet() {
+  const problems = [];
+  const files = listSourceFiles();
+  const displayTransformRow = M.ROWS.find((r) => r.key === "displayTransform");
+  const backdropRow = M.ROWS.find((r) => r.key === "backdrop");
+  const patterns = [
+    { name: "display transform", options: displayTransformRow.options },
+    { name: "backdrop", options: backdropRow.options },
+  ];
+  const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  for (const file of files) {
+    if (file === "js/shared/render-settings.js") continue;
+    const text = readFileSync(path.join(REPO_ROOT, file), "utf8");
+    for (const { name, options } of patterns) {
+      const re = new RegExp(options.map((v) => `['"]${escapeRe(v)}['"]`).join("\\s*,\\s*"));
+      if (!re.test(text)) continue;
+      if (OPTION_LIST_PENDING_FILES.includes(file)) continue;
+      if (OPTION_LIST_ALLOW.some((e) => e.file === file)) continue;
+      problems.push(`literal ${name} option list found in ${file}, outside js/shared/render-settings.js (not PENDING, not ALLOW-listed)`);
+    }
+  }
+
+  if (problems.length) {
+    fail(["option-list ratchet (c) failed:", ...problems.map((p) => `  - ${p}`)].join("\n"));
+  }
+  log(`(c) option-list ratchet OK, ${files.length} files scanned.`);
+}
+
+// ---------------------------------------------------------------------
+// (d) UI-coverage: every settings surface references a shared component,
+// and no row's label is hard-coded without rowMeta(...) call nearby.
+// ---------------------------------------------------------------------
+const UI_COVERAGE_FILES = [
+  "js/viewer-app.jsx",
+  "js/compare-app.jsx",
+  "js/node-preview.jsx",
+  "js/graph/preview.jsx",
+  "js/embed-controls.jsx",
+];
+const UI_COVERAGE_TOKENS = ["RenderSettingsSection", "SettingsDialog", "ViewportControls", "EmbedRenderSettings"];
+const UI_COVERAGE_SAFE_NEARBY = ["rowMeta(", "RenderSettingsSection", "EmbedRenderSettings"];
+
+// (file, label) pairs where the label text is a pre-existing, unrelated
+// string (a tooltip/title on a different control) that happens to match a
+// manifest row's label, not a duplicated settings row.
+const UI_COVERAGE_ALLOW = [
+  { file: "js/graph/preview.jsx", label: "Preview Geometry", reason: "title on the geometry-picker trigger button, not the settings row" },
+];
+
+function checkUiCoverage() {
+  const problems = [];
+  for (const file of UI_COVERAGE_FILES) {
+    const abs = path.join(REPO_ROOT, file);
+    const text = readFileSync(abs, "utf8");
+    if (!UI_COVERAGE_TOKENS.some((tok) => text.includes(tok))) {
+      problems.push(`${file} hosts render settings but references none of: ${UI_COVERAGE_TOKENS.join(", ")}`);
+      continue;
+    }
+    for (const row of M.ROWS) {
+      if (row.ui !== true) continue;
+      const label = row.label;
+      if (UI_COVERAGE_ALLOW.some((e) => e.file === file && e.label === label)) continue;
+      const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      // Only JSX text child (>Label<) or quoted string literal counts as
+      // hard-coded; bare identifier substring (resolveViewerBackdrop) is not.
+      const re = new RegExp(`>\\s*${escaped}\\s*<|['"]${escaped}['"]`, "g");
+      let m;
+      while ((m = re.exec(text))) {
+        const idx = m.index;
+        // A fallback idiom (`x.label || 'Label'`, `(x && x.label) || 'Label'`)
+        // is always safe regardless of how far back its rowMeta(...) call
+        // sits: the `||` right before the literal IS the tell.
+        const before = text.slice(Math.max(0, idx - 6), idx);
+        if (/\|\|\s*$/.test(before)) continue;
+        const windowStart = Math.max(0, idx - 300);
+        const windowEnd = Math.min(text.length, idx + m[0].length + 300);
+        const context = text.slice(windowStart, windowEnd);
+        if (!UI_COVERAGE_SAFE_NEARBY.some((tok) => context.includes(tok))) {
+          problems.push(`literal label "${label}" found in ${file} with no rowMeta(...)/RenderSettingsSection/EmbedRenderSettings nearby - looks like a reintroduced hand-built row`);
+        }
+      }
+    }
+  }
+
+  if (problems.length) {
+    fail(["UI-coverage check (d) failed:", ...problems.map((p) => `  - ${p}`)].join("\n"));
+  }
+  log(`(d) UI-coverage OK, ${UI_COVERAGE_FILES.length} files scanned.`);
+}
+
+// ---------------------------------------------------------------------
 // (e) docs/RENDER-FEATURES.md
 // ---------------------------------------------------------------------
 function surfaceCell(v) {
@@ -245,7 +360,7 @@ function renderStorageKeysCell(row) {
   const parts = [];
   for (const profile of Object.keys(row.profiles)) {
     const P = row.profiles[profile];
-    let s = `${profile}: \`${P.storage}\``;
+    let s = P.storage ? `${profile}: \`${P.storage}\`` : `${profile}: per view, not saved`;
     if (P.field) s += ` (field \`${P.field}\`)`;
     if (P.legacy && P.legacy.length) s += ` (legacy: ${P.legacy.map((k) => `\`${k}\``).join(", ")})`;
     parts.push(s);
@@ -387,6 +502,8 @@ function checkEmbedConsistency() {
 
 checkManifestShape();
 checkStorageKeyScan();
+checkOptionListRatchet();
+checkUiCoverage();
 checkRenderFeaturesDoc();
 checkEmbedConsistency();
 log(`OK${CHECK_MODE ? " --check" : ""}`);
