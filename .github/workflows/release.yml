@@ -335,20 +335,32 @@ jobs:
           path: ${{ runner.temp }}/${{ steps.pkg.outputs.name }}.zip
           if-no-files-found: error
 
-      # vsce writes into cwd by default, which would dirty the tree the
-      # stale-artifact gate just certified — always --out into RUNNER_TEMP.
-      # vendor/materialx/ is present (vendored above) and NOT in
-      # .vscodeignore, so this is the OFFLINE flavor (zero runtime network).
-      # Lean variant, if ever wanted: `rm -rf vendor/materialx` first and
-      # drop the manifest.json assertion below.
-      # NOTE: never add a "vscode:prepublish" script to package.json — vsce
-      # would execute it here, inside the certified tree.
-      - name: Package VS Code extension (.vsix)
+      # Installed from the lockfile into RUNNER_TEMP, not the certified tree,
+      # with install scripts off, the same locked tool the publish workflow uses.
+      - name: Copy the locked vsce manifest
         run: |
-          npx --yes @vscode/vsce@3.9.2 package --no-dependencies \
-            --out "$RUNNER_TEMP/${{ steps.pkg.outputs.vsix_name }}.vsix"
+          mkdir -p "$RUNNER_TEMP/vsce"
+          cp .github/vsce/package.json .github/vsce/package-lock.json "$RUNNER_TEMP/vsce/"
+
+      - name: Install vsce (locked)
+        working-directory: ${{ runner.temp }}/vsce
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      # --out keeps the certified tree clean, and the allowlisted vendor/materialx makes this the offline flavor. Never add a
+      # "vscode:prepublish" script: vsce would run it here. This .vsix is what the Marketplace publishes, its channel set by
+      # the release's pre-release flag, so never re-run the upload job's --clobber for a version already published.
+      - name: Package VS Code extension (.vsix)
+        env:
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          VSIX="$RUNNER_TEMP/${{ steps.pkg.outputs.vsix_name }}.vsix"
+          ARGS=(package --no-dependencies --readme-path vscode_extension/MARKETPLACE.md --changelog-path CHANGELOG.md --out "$VSIX")
+          if [ "$PRERELEASE" = "true" ]; then ARGS+=(--pre-release); fi
+          "$RUNNER_TEMP/vsce/node_modules/.bin/vsce" "${ARGS[@]}"
 
       - name: Sanity-check vsix contents
+        env:
+          PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
           VSIX="$RUNNER_TEMP/${{ steps.pkg.outputs.vsix_name }}.vsix"
           L="$(unzip -l "$VSIX")"
@@ -356,7 +368,24 @@ jobs:
           echo "$L" | grep -q 'extension/js/gen/mtlx-version.json' || { echo "::error::js/gen missing (specDocs.js requires it)"; exit 1; }
           echo "$L" | grep -q 'extension/environment_map.mtlx' || { echo "::error::environment_map.mtlx missing (light-rig fetch)"; exit 1; }
           echo "$L" | grep -q 'extension/vscode_extension/src/extension.js' || { echo "::error::extension sources missing"; exit 1; }
-          if echo "$L" | grep -qE 'extension/(node_modules|scripts|\.github|embed)/'; then echo "::error::ignored dirs leaked into the vsix"; exit 1; fi
+          echo "$L" | grep -q 'extension/readme.md' || { echo "::error::readme missing, --readme-path did not apply"; exit 1; }
+          echo "$L" | grep -q 'extension/changelog.md' || { echo "::error::changelog missing, --changelog-path did not apply"; exit 1; }
+          echo "$L" | grep -q 'extension/LICENSE.txt' || { echo "::error::LICENSE missing"; exit 1; }
+          echo "$L" | grep -q 'extension/vendor/vendor-manifest.json' || { echo "::error::vendor/vendor-manifest.json missing"; exit 1; }
+          if echo "$L" | grep -qE 'extension/(node_modules|scripts|tests|electron|docs|embed|gallery|\.github|js/usd|vendor/usd-webview-bindings|vendor/basis-encoder)/'; then echo "::error::ignored dirs leaked into the vsix"; exit 1; fi
+
+          PKG="$(unzip -p "$VSIX" extension/package.json)"
+          PUB="$(jq -r .publisher <<<"$PKG")"
+          [ -n "$PUB" ] && [ "$PUB" != "local" ] || { echo "::error::publisher is empty or still \"local\""; exit 1; }
+
+          README="$(unzip -p "$VSIX" extension/readme.md)"
+          [ "$(sed -n 1p <<<"$README")" = "$(sed -n 1p vscode_extension/MARKETPLACE.md)" ] || { echo "::error::the listing page is not vscode_extension/MARKETPLACE.md"; exit 1; }
+
+          MANIFEST="$(unzip -p "$VSIX" extension.vsixmanifest)"
+          if grep -q 'Id="Microsoft.VisualStudio.Code.PreRelease" Value="true"' <<<"$MANIFEST"; then PRE=true; else PRE=false; fi
+          WANT_PRE=$([ "$PRERELEASE" = "true" ] && echo true || echo false)
+          [ "$PRE" = "$WANT_PRE" ] || { echo "::error::.vsix pre-release=$PRE but the release's prerelease flag is $PRERELEASE"; exit 1; }
+          echo "channel: $([ "$PRE" = true ] && echo pre-release || echo release)" | tee -a "$GITHUB_STEP_SUMMARY"
 
           # Positive: the default version's WASM path just moved under
           # js/materialx/<version>/ — a silent miss here would ship a
@@ -367,9 +396,8 @@ jobs:
             echo "$L" | grep -q "$DEFAULT_DIR/$F" || { echo "::error::$DEFAULT_DIR/$F missing — vsix would not load MaterialX"; exit 1; }
           done
 
-          # Negative: only the default version should ship — .vscodeignore
-          # excludes the rest (Compare, the only feature that needs extra
-          # versions, isn't in the webview nav; see js/site-header.js:157-159).
+          # Negative: only the default version ships, since the .vscodeignore allowlist names only its files (Compare,
+          # the one view that needs other versions, is not in the webview nav; see js/site-header.js:276-282).
           for V in ${{ steps.pkg.outputs.mtlx_versions }}; do
             if [ "$V" != "${{ steps.pkg.outputs.mtlx_default_version }}" ]; then
               if echo "$L" | grep -q "extension/js/materialx/$V/"; then echo "::error::non-default MaterialX version $V leaked into the vsix"; exit 1; fi

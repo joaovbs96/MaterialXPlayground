@@ -16,6 +16,9 @@ on:
       - 'vendor/**'
       - 'scripts/build-webview.mjs'
       - 'scripts/check-vsix-files.mjs'
+      - '.github/vsce/**'
+      - 'scripts/lib/vsce.mjs'
+      - 'tests/unit/vscode-*.test.mjs'
       - 'tests/vscode/**'
       - 'package.json'
       - 'package-lock.json'
@@ -30,6 +33,9 @@ on:
       - 'vendor/**'
       - 'scripts/build-webview.mjs'
       - 'scripts/check-vsix-files.mjs'
+      - '.github/vsce/**'
+      - 'scripts/lib/vsce.mjs'
+      - 'tests/unit/vscode-*.test.mjs'
       - 'tests/vscode/**'
       - 'package.json'
       - 'package-lock.json'
@@ -69,6 +75,9 @@ jobs:
 
       - name: Check every runtime-loaded file is packaged in the vsix
         run: node scripts/check-vsix-files.mjs
+
+      - name: Run the VS Code extension unit tests
+        run: node --test tests/unit/vscode-*.test.mjs
 
       - name: Run the VS Code webview simulation suite
         run: npm run test:vscode

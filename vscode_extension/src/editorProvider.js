@@ -92,6 +92,16 @@ function getSharedOutputChannel() {
     return sharedOutputChannel;
 }
 
+// Disposes the lazily-created channel above, if one was ever created.
+// Registered as a Disposable in extension.js's activate() so it's torn
+// down on deactivate instead of leaking for the life of the host window.
+function disposeSharedOutputChannel() {
+    if (sharedOutputChannel) {
+        sharedOutputChannel.dispose();
+        sharedOutputChannel = null;
+    }
+}
+
 // Shared by every timestamped OutputChannel line this extension writes
 // (the 'mtlx-error' forward below, sendUpdate's per-warning log further
 // down, and extension.js's tier-2-unavailable log, which imports this) —
@@ -311,6 +321,16 @@ class MaterialXEditorProvider {
                 }
             });
 
+            // Per-panel scan sequence: sendUpdate can overlap itself (a
+            // fast edit debounces into a new scan before an older
+            // docScanner.scan() call resolves), so a superseded scan's
+            // result or error is dropped instead of posting stale data.
+            let scanSeq = 0;
+            // Last warning list (joined) actually logged for THIS panel,
+            // so the same unresolved include/texture is only re-logged
+            // when the warning set actually changes.
+            let lastLoggedWarnings = null;
+
             // The document is sent to BOTH views (mode: 'both' below) —
             // initialHash (fixed above, for the lifetime of this panel)
             // only controls which one is visible first. Switching
@@ -318,11 +338,15 @@ class MaterialXEditorProvider {
             // already-open tab from one view to the other on the next
             // live-reload tick; it only affects panels opened afterward.
             const sendUpdate = async () => {
+                const mySeq = ++scanSeq;
                 try {
                     const xml = document.getText();
                     const name = path.basename(document.uri.fsPath, path.extname(document.uri.fsPath));
                     const { files, warnings } = await docScanner.scan(document.uri, xml);
-                    if (warnings.length) {
+                    if (mySeq !== scanSeq) return; // superseded by a newer scan while this one was in flight
+
+                    const joined = warnings.join('\n');
+                    if (warnings.length && joined !== lastLoggedWarnings) {
                         // Non-fatal (missing texture, unresolved include,
                         // etc.) — logged, not surfaced as an error dialog
                         // per file, or every dangling texture ref in a
@@ -336,6 +360,8 @@ class MaterialXEditorProvider {
                             logLine(channel, document.fileName + ': ' + warning);
                         }
                     }
+                    lastLoggedWarnings = joined;
+
                     webviewPanel.webview.postMessage({
                         type: 'mtlx-open',
                         mode: 'both',
@@ -344,6 +370,7 @@ class MaterialXEditorProvider {
                         filesB64: toMessageFilesB64(files),
                     });
                 } catch (err) {
+                    if (mySeq !== scanSeq) return; // superseded, don't surface a stale scan's error
                     vscode.window.showErrorMessage(
                         'MaterialX Playground: failed to load "' + path.basename(document.fileName) + '" — '
                         + errMsg(err)
@@ -571,4 +598,4 @@ class MaterialXEditorProvider {
 // as a module-scope function (rather than folded into either call site) so
 // both webview-creation paths share the exact same fetch-bridge/error-
 // forwarding wiring; nothing outside this file needs to call it directly.
-module.exports = { MaterialXEditorProvider, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel, getSharedOutputChannel, logLine };
+module.exports = { MaterialXEditorProvider, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel, getSharedOutputChannel, logLine, disposeSharedOutputChannel };

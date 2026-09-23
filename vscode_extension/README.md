@@ -1,5 +1,7 @@
 # MaterialX Playground (VS Code extension, v1)
 
+See [MARKETPLACE.md](MARKETPLACE.md) for the user-facing Marketplace listing; this file is developer documentation.
+
 Opens `.mtlx` files in this repo's MaterialX Playground web app (Material
 Viewer or Node Graph Editor) inside a VS Code webview: sibling textures
 and `xi:include` docs are resolved automatically, and the view live-
@@ -300,10 +302,12 @@ editor.
   instance, own WebGL context) — memory and GPU context usage multiply
   per open tab. `retainContextWhenHidden` is enabled so backgrounded tabs
   don't lose their state, at the cost of keeping that memory around.
-- **Only the default MaterialX version ships in the `.vsix`**
-  (`.vscodeignore` drops the others), so the Material Comparison view,
-  the one feature that needs several versions side by side, stays
-  web-only; the webview nav has just Viewer and Graph.
+- **The `.vsix` ships only what the webview and extension actually load.**
+  `.vscodeignore` is an allowlist, not a blocklist: the Material Gallery,
+  the USD Scene Viewer runtime, and every MaterialX version except the
+  default one are left out entirely. The Material Comparison view, the
+  one feature that needs several versions side by side, stays web-only;
+  the webview nav has just Viewer and Graph.
 - The repo root is the extension's `package.json`/install root, so a
   packaged `.vsix` (`vsce package`) bundles the site's files alongside
   `vscode_extension/` automatically — no separate copy step needed.

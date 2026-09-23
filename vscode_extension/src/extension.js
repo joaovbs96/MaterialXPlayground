@@ -9,9 +9,11 @@
 // (hoverProvider.js) for node categories.
 'use strict';
 
+const path = require('path');
 const vscode = require('vscode');
-const { MaterialXEditorProvider, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel, getSharedOutputChannel, logLine } = require('./editorProvider');
+const { MaterialXEditorProvider, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel, getSharedOutputChannel, logLine, disposeSharedOutputChannel } = require('./editorProvider');
 const validator = require('./validator');
+const { ValidationClient } = require('./validationClient');
 const hoverProvider = require('./hoverProvider');
 const { errMsg } = require('./util');
 
@@ -21,6 +23,7 @@ const { errMsg } = require('./util');
 // rather than as activate()-local consts.
 let diagnosticCollection = null;
 let statusBarItem = null;
+let validationClient = null;
 
 // materialx.autoOpenPlayground bookkeeping (see maybeAutoOpen() in
 // activate()): which .mtlx files have already had the playground
@@ -66,22 +69,43 @@ function updateStatusBar() {
     statusBarItem.show();
 }
 
-// Runs tier 1 + (when clean) tier 2 validation on `document` and updates
-// its diagnostics/the status bar. Never throws — a validator bug must
-// not break the editor.
+// Set once the first validationClient 'failed' result is logged, so a
+// dead/degraded worker doesn't spam the output channel on every
+// keystroke, mirrors mtlxNode.js's own one-shot init-error reporting.
+let loggedClientFailure = false;
+
+// Runs tier 1 + (when clean) tier 2 validation off-thread via
+// validationClient, never throws. Captures the document's version so a
+// superseded, closed, or edited-meanwhile result gets dropped instead.
 async function runValidation(document) {
     if (document.languageId !== 'mtlx') return;
+    const version = document.version;
+    const text = document.getText();
+
     let items = [];
     try {
-        items = await validator.validateDocument(document.getText());
+        const result = await validationClient.validate(document.uri.toString(), text);
+        if (result.status === 'superseded') return;
+        if (document.isClosed || document.version !== version) return;
+
+        if (result.status === 'ok') {
+            items = result.items || [];
+            if (result.tier2Warning) {
+                logLine(getSharedOutputChannel(), 'MaterialX semantic validation (tier 2) is unavailable: ' + result.tier2Warning);
+            }
+        } else {
+            if (!loggedClientFailure) {
+                loggedClientFailure = true;
+                logLine(getSharedOutputChannel(), 'MaterialX validation worker unavailable (' + result.reason + '); falling back to tier 1 only.');
+            }
+            // A 4 MB+ tier-1 scan on the host thread defeats the point
+            // of the worker existing at all, so skip it too.
+            items = text.length > 4 * 1024 * 1024 ? [] : validator.scanXml(text);
+        }
     } catch (e) {
         items = []; // never let a validator bug break the editor
     }
     diagnosticCollection.set(document.uri, toVsDiagnostics(items));
-    const warning = validator.consumeTier2Warning();
-    if (warning) {
-        logLine(getSharedOutputChannel(), 'MaterialX semantic validation (tier 2) is unavailable: ' + warning);
-    }
     updateStatusBar();
 }
 
@@ -110,8 +134,14 @@ const SIG_TOKEN_RE = /^[\w.\-:]+(\([\w.\-:]+:[\w.\-:]+(,[\w.\-:]+:[\w.\-:]+)*\))
 
 function activate(context) {
     // Before anything else, so semantic (tier 2) validation is ready as
-    // soon as the first .mtlx document is opened.
-    validator.init(context.extensionUri.fsPath);
+    // soon as the first .mtlx document is opened. Runs in its own
+    // worker_threads Worker (validationWorker.js), never on this thread.
+    validationClient = new ValidationClient({
+        repoRoot: context.extensionUri.fsPath,
+        workerPath: path.join(__dirname, 'validationWorker.js'),
+    });
+    context.subscriptions.push({ dispose: () => validationClient.dispose() });
+    context.subscriptions.push(new vscode.Disposable(disposeSharedOutputChannel));
 
     diagnosticCollection = vscode.languages.createDiagnosticCollection('materialx');
     context.subscriptions.push(diagnosticCollection);
@@ -290,6 +320,10 @@ function activate(context) {
     // the whole point is a side panel that appears without stealing
     // keystrokes out from under whatever the user is actively typing.
     const maybeAutoOpen = (editor) => {
+        // Restricted Mode keeps the extension enabled, but must not
+        // auto-open a webview that runs scripts against an untrusted
+        // folder's files.
+        if (!vscode.workspace.isTrusted) return;
         if (!editor || !editor.document || editor.document.uri.scheme !== 'file' || editor.document.languageId !== 'mtlx') return;
         if (!vscode.workspace.getConfiguration('materialx').get('autoOpenPlayground', true)) return;
         const key = editor.document.uri.toString();
@@ -380,7 +414,11 @@ function activate(context) {
     // auto-open is genuinely a per-"open" thing, not a per-"focus" thing.
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor(maybeAutoOpen),
-        vscode.workspace.onDidCloseTextDocument((doc) => autoOpenedUris.delete(doc.uri.toString()))
+        vscode.workspace.onDidCloseTextDocument((doc) => autoOpenedUris.delete(doc.uri.toString())),
+        // Trusting the folder mid-session should auto-open immediately
+        // for whatever .mtlx is already active, same as a fresh trusted
+        // window, not wait for the next editor-focus change.
+        vscode.workspace.onDidGrantWorkspaceTrust(() => maybeAutoOpen(vscode.window.activeTextEditor))
     );
 
     // Live .mtlx diagnostics: validate anything already open, then keep
@@ -415,16 +453,17 @@ function activate(context) {
         vscode.window.onDidChangeActiveTextEditor(() => updateStatusBar())
     );
 
-    // activate() itself is triggered by the onLanguage:mtlx activation
-    // event (package.json activationEvents), which means a .mtlx file can
-    // already be the active editor by the time this function runs — i.e.
-    // BEFORE the onDidChangeActiveTextEditor listener registered above
-    // ever gets a chance to fire for it. Run the same auto-open check once
-    // more, by hand, against whatever's active right now, so that first
-    // file isn't skipped.
+    // activate() is triggered by the implicit onLanguage:mtlx activation
+    // event (from contributes.languages, VS Code >=1.74), so a .mtlx
+    // file can already be active before onDidChangeActiveTextEditor fires.
     maybeAutoOpen(vscode.window.activeTextEditor);
 }
 
-function deactivate() {}
+function deactivate() {
+    for (const timer of debounceTimers.values()) clearTimeout(timer);
+    debounceTimers.clear();
+    autoOpenedUris.clear();
+    return validationClient ? validationClient.dispose() : undefined;
+}
 
 module.exports = { activate, deactivate };

@@ -20,6 +20,8 @@ on:
       - 'package-lock.json'
       - 'electron/package.json'
       - 'electron/package-lock.json'
+      - '.github/vsce/package.json'
+      - '.github/vsce/package-lock.json'
       - '.github/workflows/dependency-audit.yml'
   pull_request:
     paths:
@@ -27,6 +29,8 @@ on:
       - 'package-lock.json'
       - 'electron/package.json'
       - 'electron/package-lock.json'
+      - '.github/vsce/package.json'
+      - '.github/vsce/package-lock.json'
       - '.github/workflows/dependency-audit.yml'
   schedule:
     - cron: '17 6 * * 1'
@@ -61,3 +65,7 @@ jobs:
       - name: Audit desktop dependencies
         run: npm audit --package-lock-only --audit-level=high
         working-directory: electron
+
+      - name: Audit vsce dependencies
+        run: npm audit --package-lock-only --audit-level=high
+        working-directory: .github/vsce

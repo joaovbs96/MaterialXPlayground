@@ -484,10 +484,16 @@ function init(root) {
     repoRoot = root;
 }
 
+// Tier 2 skip thresholds, after a clean tier 1: an xi:include anywhere
+// (mtlxNode.js strips these, so it would only ever report a false "file
+// not found"), or a document too big for a debounce-timer wasm parse.
+const TIER2_MAX_CHARS = 8 * 1024 * 1024;
+
 async function validateDocument(text) {
     const tier1 = scanXml(text);
     if (tier1.length) return tier1; // tier 2 only runs when tier 1 is clean
     if (!repoRoot) return tier1; // not initialized yet — stay silent
+    if (text.indexOf('<xi:include') !== -1 || text.length > TIER2_MAX_CHARS) return tier1;
 
     let tier2;
     try {
@@ -508,4 +514,4 @@ function consumeTier2Warning() {
     return mtlxNode.consumeInitError();
 }
 
-module.exports = { scanXml, init, validateDocument, consumeTier2Warning };
+module.exports = { scanXml, init, validateDocument, consumeTier2Warning, TIER2_MAX_CHARS };

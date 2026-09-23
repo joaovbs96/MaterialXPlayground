@@ -1,0 +1,217 @@
+# Manual Marketplace publish of the .vsix attached to a GitHub release, byte for byte.
+# Run it with "Use workflow from" set to the release tag. Setup and failure modes: docs/BUILDING.md.
+# Only the publish job can reach the Azure identity, and it runs no project code.
+
+name: Publish to VS Code Marketplace
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: marketplace-publish
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      vsix_name: ${{ steps.release.outputs.vsix_name }}
+      sha256: ${{ steps.inspect.outputs.sha256 }}
+      prerelease: ${{ steps.inspect.outputs.prerelease }}
+    steps:
+      - name: Check the ref is a release tag
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          [ "$REF_TYPE" = "tag" ] || { echo "::error::Run this from a release tag (Use workflow from: Tags), not a branch."; exit 1; }
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::Tag $TAG is not v<major>.<minor>.<patch>."; exit 1; }
+
+      - name: Checkout (sparse)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /package.json
+            /js/gen/build-id.json
+            /js/gen/mtlx-version.json
+            /vscode_extension/src/
+            /vscode_extension/MARKETPLACE.md
+            /.github/vsce/
+
+      - name: Audit the pinned vsce
+        working-directory: .github/vsce
+        run: npm audit --package-lock-only --audit-level=high
+
+      - name: Check the GitHub release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          INFO="$(gh release view "$TAG" --json isDraft,isPrerelease,assets)" || { echo "::error::No published GitHub release for $TAG."; exit 1; }
+          [ "$(jq -r .isDraft <<<"$INFO")" = "false" ] || { echo "::error::Release $TAG is a draft."; exit 1; }
+          NAME="materialx-playground-vscode-$TAG.vsix"
+          [ "$(jq --arg n "$NAME" '[.assets[] | select(.name == $n)] | length' <<<"$INFO")" = "1" ] || { echo "::error::Release $TAG has no $NAME yet. Wait for release.yml's upload job."; exit 1; }
+          echo "vsix_name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$(jq -r .isPrerelease <<<"$INFO")" >> "$GITHUB_OUTPUT"
+
+      - name: Download the release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          NAME: ${{ steps.release.outputs.vsix_name }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/vsix"
+          gh release download "$TAG" --pattern "$NAME" --dir "$RUNNER_TEMP/vsix"
+          test -s "$RUNNER_TEMP/vsix/$NAME"
+
+      # Capture unzip output into variables first: under pipefail, `unzip -p | grep -q` can SIGPIPE into a false result.
+      - name: Inspect the .vsix
+        id: inspect
+        env:
+          TAG: ${{ github.ref_name }}
+          NAME: ${{ steps.release.outputs.vsix_name }}
+          RELEASE_PRERELEASE: ${{ steps.release.outputs.is_prerelease }}
+        run: |
+          VSIX="$RUNNER_TEMP/vsix/$NAME"
+          FILES="$(unzip -Z1 "$VSIX")"
+          MTLX="$(jq -r .version js/gen/mtlx-version.json)"
+          for F in extension.vsixmanifest extension/package.json extension/readme.md extension/changelog.md extension/LICENSE.txt \
+                   extension/vscode_extension/src/extension.js extension/vscode_extension/media/webview.html \
+                   extension/vscode_extension/media/bootstrap.js extension/vendor/materialx/manifest.json extension/js/gen/build-id.json \
+                   "extension/js/materialx/$MTLX/JsMaterialXGenShader.js" "extension/js/materialx/$MTLX/JsMaterialXGenShader.wasm" \
+                   "extension/js/materialx/$MTLX/JsMaterialXGenShader.data"; do
+            grep -qxF "$F" <<<"$FILES" || { echo "::error::$F is missing from $NAME"; exit 1; }
+          done
+          if grep -qE '^extension/(node_modules|scripts|tests|electron|docs|embed|gallery|\.github|js/usd|vendor/usd-webview-bindings|vendor/basis-encoder)/' <<<"$FILES"; then
+            echo "::error::$NAME ships directories that must never ship"; exit 1
+          fi
+
+          PKG="$(unzip -p "$VSIX" extension/package.json)"
+          PUB="$(jq -r .publisher <<<"$PKG")"; EXT="$(jq -r .name <<<"$PKG")"; VERSION="$(jq -r .version <<<"$PKG")"
+          [ "$PUB" != "local" ] && [ "$PUB" = "$(jq -r .publisher package.json)" ] || { echo "::error::publisher $PUB does not match package.json at $TAG"; exit 1; }
+          [ "$EXT" = "$(jq -r .name package.json)" ] || { echo "::error::name $EXT does not match package.json at $TAG"; exit 1; }
+          [ "$VERSION" = "${TAG#v}" ] || { echo "::error::.vsix version $VERSION does not match tag $TAG"; exit 1; }
+
+          # Built from this tag: same build id, byte-identical extension host sources, listing page from MARKETPLACE.md.
+          BUILD_ID="$(unzip -p "$VSIX" extension/js/gen/build-id.json)"
+          [ "$(jq -r .id <<<"$BUILD_ID")" = "$(jq -r .id js/gen/build-id.json)" ] || { echo "::error::build id differs from $TAG"; exit 1; }
+          for F in vscode_extension/src/*.js; do
+            [ "$(unzip -p "$VSIX" "extension/$F" | sha256sum)" = "$(sha256sum < "$F")" ] || { echo "::error::$F differs between $NAME and $TAG"; exit 1; }
+          done
+          README="$(unzip -p "$VSIX" extension/readme.md)"
+          [ "$(sed -n 1p <<<"$README")" = "$(sed -n 1p vscode_extension/MARKETPLACE.md)" ] || { echo "::error::the listing page is not vscode_extension/MARKETPLACE.md"; exit 1; }
+
+          MANIFEST="$(unzip -p "$VSIX" extension.vsixmanifest)"
+          if grep -q 'Id="Microsoft.VisualStudio.Code.PreRelease" Value="true"' <<<"$MANIFEST"; then PRE=true; else PRE=false; fi
+          [ "$PRE" = "$RELEASE_PRERELEASE" ] || { echo "::error::.vsix pre-release=$PRE but the GitHub release says $RELEASE_PRERELEASE. Cut a new tag."; exit 1; }
+
+          SHA="$(sha256sum "$VSIX" | cut -d' ' -f1)"
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRE" >> "$GITHUB_OUTPUT"
+          {
+            echo "### $NAME"
+            echo "| | |"; echo "|---|---|"
+            echo "| Extension | \`$PUB.$EXT\` $VERSION |"
+            echo "| Channel | $([ "$PRE" = true ] && echo pre-release || echo release) |"
+            echo "| Size | $(stat -c%s "$VSIX") bytes |"
+            echo "| SHA-256 | \`$SHA\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Hand the .vsix to the publish job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: marketplace-vsix
+          path: ${{ runner.temp }}/vsix/${{ steps.release.outputs.vsix_name }}
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-marketplace
+      url: https://marketplace.visualstudio.com/items?itemName=MaterialXPlayground.materialx-playground
+    permissions:
+      contents: read # sparse checkout of .github/vsce/ only
+      id-token: write # GitHub OIDC token for the Entra ID federated login
+    steps:
+      - name: Checkout the vsce lockfile only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/vsce/
+
+      # No npm cache on purpose: nothing restored from a cache that other jobs can write.
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Download the verified .vsix
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: marketplace-vsix
+          path: ${{ runner.temp }}/vsix
+
+      - name: Re-check SHA-256
+        env:
+          NAME: ${{ needs.verify.outputs.vsix_name }}
+          EXPECTED: ${{ needs.verify.outputs.sha256 }}
+        run: |
+          ACTUAL="$(sha256sum "$RUNNER_TEMP/vsix/$NAME" | cut -d' ' -f1)"
+          [ -n "$EXPECTED" ] && [ "$ACTUAL" = "$EXPECTED" ] || { echo "::error::SHA-256 mismatch: verify saw '$EXPECTED', publish got '$ACTUAL'"; exit 1; }
+
+      # Installed before the login, from the lockfile, with install scripts off.
+      - name: Install vsce from the lockfile
+        working-directory: .github/vsce
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          ./node_modules/.bin/vsce --version
+
+      - name: Azure login (OIDC, no third-party action)
+        env:
+          CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          for V in CLIENT_ID TENANT_ID SUBSCRIPTION_ID; do
+            [ -n "${!V}" ] || { echo "::error::AZURE_$V is empty. Add it as a secret of the github-marketplace environment."; exit 1; }
+          done
+          TOKEN="$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=api://AzureADTokenExchange" | jq -r .value)"
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then echo "::error::GitHub did not issue an OIDC token."; exit 1; fi
+          echo "::add-mask::$TOKEN"
+          az login --service-principal -u "$CLIENT_ID" -t "$TENANT_ID" --federated-token "$TOKEN" --allow-no-subscriptions > /dev/null
+          az account set -s "$SUBSCRIPTION_ID"
+
+      # No AZURE_* env here: vsce's credential chain would try them before the az CLI session. No --skip-duplicate.
+      - name: Publish
+        env:
+          NAME: ${{ needs.verify.outputs.vsix_name }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+        run: |
+          ARGS=(publish --packagePath "$RUNNER_TEMP/vsix/$NAME" --azure-credential)
+          if [ "$PRERELEASE" = "true" ]; then ARGS+=(--pre-release); fi
+          .github/vsce/node_modules/.bin/vsce "${ARGS[@]}"
+          echo "Published \`$NAME\` to the $([ "$PRERELEASE" = true ] && echo pre-release || echo release) channel." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Azure logout
+        if: always()
+        run: az logout || true

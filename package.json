@@ -3,18 +3,33 @@
   "displayName": "MaterialX Playground",
   "description": "View .mtlx files in the MaterialX Playground web app: view MaterialX documents in a 3D viewer, or edit node graphs in a graph editor.",
   "version": "2026.8.11",
-  "publisher": "local",
+  "publisher": "MaterialXPlayground",
+  "preview": true,
   "license": "Apache-2.0",
   "private": true,
   "icon": "images/icon.png",
+  "homepage": "https://joaovbs96.github.io/MaterialXPlayground/#!vscode",
+  "bugs": {
+    "url": "https://github.com/joaovbs96/MaterialXPlayground/issues"
+  },
   "engines": {
-    "vscode": "^1.85.0",
+    "vscode": "^1.100.0",
     "node": ">=22.12"
   },
   "main": "vscode_extension/src/extension.js",
   "repository": {
     "type": "git",
     "url": "https://github.com/joaovbs96/MaterialXPlayground"
+  },
+  "galleryBanner": {
+    "color": "#111827",
+    "theme": "dark"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "In Restricted Mode the playground does not open automatically; open it with the MaterialX Playground: Open MaterialX Document command; validation, hovers and the node library work normally."
+    }
   },
   "scripts": {
     "setup:ktx": "node scripts/setup-ktx.mjs",
@@ -55,7 +70,9 @@
     "utif": "3.1.0"
   },
   "categories": [
-    "Visualization"
+    "Visualization",
+    "Programming Languages",
+    "Linters"
   ],
   "keywords": [
     "materialx",
@@ -74,10 +91,6 @@
     "materialx playground",
     "materialx viewer",
     "materialx editor"
-  ],
-  "activationEvents": [
-    "onCustomEditor:materialxPlayground.editor",
-    "onLanguage:mtlx"
   ],
   "contributes": {
     "languages": [

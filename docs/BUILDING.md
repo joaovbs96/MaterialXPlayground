@@ -68,7 +68,7 @@ Only that default version is committed to git. Every other entry in `scripts/lib
 
 ## Adding or promoting a MaterialX version
 
-`scripts/lib/mtlx-versions.mjs` is hand-maintained (see its header comment). Every entry needs three coordinated manual edits, and missing either ignore line fails silently rather than loudly: it either commits several MB of WASM straight into git, or bloats the packaged `.vsix` with a version the extension never loads.
+`scripts/lib/mtlx-versions.mjs` is hand-maintained (see its header comment). `.vscodeignore` is an allowlist (everything is excluded unless a `!` line names it), so a non-default version needs only two coordinated edits: the registry entry and a `.gitignore` line. Missing the `.gitignore` line fails silently rather than loudly, committing several MB of WASM straight into git. Promoting a new default additionally means editing `.vscodeignore`'s allowlist, which names only the current default's three exact file paths.
 
 ### Adding a non-default version
 
@@ -86,7 +86,7 @@ Only that default version is committed to git. Every other entry in `scripts/lib
    (`sha256sum mtlx.zip` and `unzip -l mtlx.zip` do the same job on macOS/Linux.) The three `Select-Object` rows are the `files` byte sizes for the GenShader `.js`/`.wasm`/`.data` trio.
 2. **Add the entry** to `MTLX_VERSIONS` in `scripts/lib/mtlx-versions.mjs`: `version`, `tag`, `zipSha256`, `zipBytes`, `files`.
 3. **Add a line to `.gitignore`**: `js/materialx/<version>/`. Skip this and the fetched build looks like an ordinary new directory to git — a broad `git add` silently stages several MB of WASM.
-4. **Add a line to `.vscodeignore`**: `js/materialx/<version>/**`. Skip this and the version ships inside the packaged `.vsix` even though the webview's nav has no Compare view to use it — a silent multi-MB size regression on every release.
+4. **No `.vscodeignore` edit needed.** Its allowlist names only the default version's three exact paths, so an unlisted version's directory is excluded automatically: nothing to add or forget here.
 5. Run `npm run vendor:versions` to fetch it locally, then `npm run build && npm run check` to confirm everything — including `js/gen/mtlx-versions.json`, the browser-facing mirror of the registry — is clean.
 
 ### Promoting a new default
@@ -94,6 +94,28 @@ Only that default version is committed to git. Every other entry in `scripts/lib
 `DEFAULT_MTLX_VERSION` (also in `scripts/lib/mtlx-versions.mjs`) is **computed** as the numeric max across `MTLX_VERSIONS`, never hand-picked. The moment a newer entry is added, it becomes the default, and the `version` build step (`scripts/lib/version.mjs`) immediately tries to load that version's WASM from `js/materialx/<newVersion>/` — so that directory has to actually contain the build in the *same* change, or the build breaks (see the pre-check in Item 2b below for the friendlier error this now gives when it doesn't).
 
 1. Follow steps 1-2 above to add the new version's registry entry (this alone makes it the default).
-2. Commit the new default's actual GenShader `.js`/`.wasm`/`.data` files under `js/materialx/<newVersion>/` — fetch them the same way as step 1, or via `npm run vendor:versions` before it becomes the default — then `git add` the directory. If it already had `.gitignore`/`.vscodeignore` lines from being a non-default version, remove those lines now; the new default must be committed.
-3. The version that was previously default is no longer committed — add its `js/materialx/<oldVersion>/` line to both `.gitignore` and `.vscodeignore` (step 3/4 above), then untrack the directory that's still sitting in the working tree: `git rm -r --cached js/materialx/<oldVersion>/`.
+2. Commit the new default's actual GenShader `.js`/`.wasm`/`.data` files under `js/materialx/<newVersion>/` (fetch them the same way as step 1, or via `npm run vendor:versions` before it becomes the default), then `git add` the directory. If it already had a `.gitignore` line from being a non-default version, remove it now; the new default must be committed. Add its three `!js/materialx/<newVersion>/JsMaterialXGenShader.{js,wasm,data}` lines to `.vscodeignore`'s allowlist so it actually ships in the `.vsix`.
+3. The version that was previously default is no longer committed, so add its `js/materialx/<oldVersion>/` line to `.gitignore` (step 3 above) and remove its three `!js/materialx/<oldVersion>/JsMaterialXGenShader.*` lines from `.vscodeignore`'s allowlist, then untrack the directory that's still sitting in the working tree: `git rm -r --cached js/materialx/<oldVersion>/`.
 4. Run `npm run build` — this re-extracts the version from the new default's WASM and re-stamps every literal copy (the header badge, `js/mtlx-assets.js`, `js/site-header.js`, `js/mtlx-engine.js`, and the WASM modules note above) — then `npm run check` to confirm the tree is clean.
+
+## Publishing to the VS Code Marketplace
+
+`.github/workflows/publish-marketplace.yml` is a manual `workflow_dispatch` that publishes the exact `.vsix` GitHub already attached to a release. It never rebuilds anything. Run it with **"Use workflow from"** set to the release's tag (not a branch), and only after `release.yml`'s `upload` job has attached that tag's `.vsix` to the release.
+
+**One-time setup** (done once for the whole repo, outside this codebase, in Entra ID and the Marketplace publisher portal):
+
+- Create a federated credential on an Entra ID app registration with issuer `https://token.actions.githubusercontent.com`, subject `repo:joaovbs96/MaterialXPlayground:environment:github-marketplace`, and audience `api://AzureADTokenExchange`. This is what lets the `publish` job log in without a stored secret.
+- Add `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` as **environment secrets** of the `github-marketplace` environment, not repository secrets. The environment's tag policy is what keeps this identity scoped to a real release.
+- Add that app registration's identity as a **Contributor member of the MaterialXPlayground publisher** in the Marketplace publisher management page, and confirm `az account set -s <subscription>` actually resolves for it. The identity also needs a role on the subscription itself, not just publisher membership.
+- Consider a **required reviewer** on the `github-marketplace` environment so the run pauses after `verify` and before the Azure login, giving a human a chance to read the verify job's step summary first.
+
+**Channel rules**: the Marketplace channel (release vs. pre-release) is fixed at packaging time by the GitHub release's pre-release checkbox. `release.yml` reads `github.event.release.prerelease` when it packages the `.vsix`, and `publish-marketplace.yml` re-derives the same flag from the packaged `.vsix` itself rather than re-reading the release. A given version string can be published to only one channel; publishing it to the other channel later is a Marketplace-side conflict, not something either workflow resolves. Never re-run `release.yml`'s `upload` job for a version already on the Marketplace. The attached `.vsix` is exactly what a later publish run ships, so replacing it after the fact would silently change what that version means.
+
+**Failure modes**:
+
+- Missing or draft release, or its `.vsix` asset not uploaded yet: the `verify` job's "Check the GitHub release" step fails before touching Azure.
+- The tag isn't `v<major>.<minor>.<patch>`, or the workflow was dispatched from a branch instead of a tag: fails immediately in "Check the ref is a release tag".
+- The `.vsix` publisher is still `local`, or its build id or extension sources differ from the tag's commit: the `inspect` step fails, usually because the tag was cut before the publisher change landed, or the release was built from a different commit than the tag points at.
+- Empty `AZURE_*` secrets: the `publish` job's Azure login step fails with a named error instead of a generic Azure CLI stack trace.
+- `az account set` fails: the identity has the federated credential but no role assignment on the subscription. Grant it one and re-dispatch.
+- `vsce publish` itself fails (for example the version is already published): read the Marketplace error directly. This workflow does not retry or pass `--skip-duplicate`.

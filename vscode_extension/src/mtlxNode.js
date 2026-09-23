@@ -97,6 +97,14 @@ let loadPromise = null;
 let failed = false;
 let pendingError = null;
 
+// Count of readFromXmlString calls that threw. A failed parse leaks a
+// small emscripten-FS temp folder that never gets cleaned up, so
+// validationClient.js uses this count to recycle the worker.
+let parseFailureCount = 0;
+function getParseFailureCount() {
+    return parseFailureCount;
+}
+
 // Loads the bundled MaterialX wasm build the same way js/mtlx-engine.js's
 // getMxEnv() does in the browser: EsslShaderGenerator -> GenContext ->
 // loadStandardLibraries. This is safe to do headless (no rendering, no
@@ -200,6 +208,41 @@ function getMxEnv(repoRoot) {
 }
 
 // ---------------------------------------------------------------------
+// Frees an embind object exactly once. Embind objects are not garbage
+// collected: every Document/XmlReadOptions this module creates must be
+// freed through this, in a finally block, on every path.
+function safeDelete(o) {
+    if (!o) return;
+    try {
+        if (typeof o.delete !== 'function') return;
+        if (typeof o.isDeleted === 'function' && o.isDeleted()) return;
+        o.delete();
+    } catch (e) { /* already deleted, or delete unsupported, ignore */ }
+}
+
+// Best-effort readXIncludes=false, or null if XmlReadOptions is unbound.
+// The shipped 1.39.5 build's readXIncludes property is INVERTED (false
+// reads back true); stripXiIncludes below is the real enforcement.
+function createReadOptions(mx) {
+    try {
+        if (typeof mx.XmlReadOptions !== 'function') return null;
+        const opts = new mx.XmlReadOptions();
+        opts.readXIncludes = false;
+        return opts;
+    } catch (e) {
+        return null;
+    }
+}
+
+// Real enforcement: a document must never make this process read files
+// it names. Removes every self-closing xi:include element so nothing
+// is left for the glue's own getIncludes() scan to follow.
+const XI_INCLUDE_ELEMENT_RE = /<xi:include\b[^>]*\/>/g;
+function stripXiIncludes(text) {
+    return text.replace(XI_INCLUDE_ELEMENT_RE, '');
+}
+
+// ---------------------------------------------------------------------
 // Semantic validation — mirrors js/viewer-app.jsx's loadMtlxDocument
 // (~lines 31-50) for the parse step, and js/graph-app.jsx's "Validate"
 // dialog (~lines 2062-2101) for the validate step, including its use of
@@ -224,13 +267,21 @@ const ELEMENT_ATTR_RE = /([\w:.\-]+)\s*=\s*"([^"]*)"/g;
 //   { available: true, messages: [] }                      — parsed + validated clean
 //   { available: true, messages: [{ text, tag, attrs, elementName }] } — parse error OR validate() issues
 async function validateSemantic(repoRoot, xmlText) {
-    try {
-        const env = await getMxEnv(repoRoot);
-        if (!env) return { available: false };
-        const { mx, stdlib } = env;
+    const env = await getMxEnv(repoRoot);
+    if (!env) return { available: false };
+    return validateWithEnv(env, xmlText);
+}
 
+// Same contract as validateSemantic, but takes an already-loaded
+// { mx, stdlib } env directly (used by tests with a fake env). Creates
+// one Document and one XmlReadOptions per call, freed in finally.
+async function validateWithEnv(env, xmlText) {
+    const { mx, stdlib } = env;
+    let doc = null;
+    let opts = null;
+    try {
         if (typeof mx.createDocument !== 'function') return { available: false };
-        const doc = mx.createDocument();
+        doc = mx.createDocument();
 
         if (typeof mx.readFromXmlString !== 'function') {
             // Mirrors js/viewer-app.jsx's defensive check (~line 36) —
@@ -238,12 +289,19 @@ async function validateSemantic(repoRoot, xmlText) {
             // error out of this function.
             return { available: false };
         }
+
+        opts = createReadOptions(mx);
+        // Stripped unconditionally, whether or not opts exists, per the
+        // createReadOptions comment above.
+        const textToParse = stripXiIncludes(xmlText);
         try {
             // ASYNC — mirrors js/viewer-app.jsx loadMtlxDocument
             // (~line 45): without the await, everything downstream runs
             // against a still-empty document.
-            await mx.readFromXmlString(doc, xmlText);
+            if (opts) await mx.readFromXmlString(doc, textToParse, '', opts);
+            else await mx.readFromXmlString(doc, textToParse);
         } catch (e) {
+            parseFailureCount++;
             return {
                 available: true,
                 messages: [{ text: 'MaterialX could not parse the document: ' + mxErr(mx, e), tag: null, attrs: null, elementName: null }],
@@ -323,6 +381,9 @@ async function validateSemantic(repoRoot, xmlText) {
         // unexpected exception anywhere above becomes { available:
         // false }, never a thrown error out of this function.
         return { available: false };
+    } finally {
+        safeDelete(doc);
+        safeDelete(opts);
     }
 }
 
@@ -339,5 +400,7 @@ function consumeInitError() {
 
 module.exports = {
     validateSemantic,
+    validateWithEnv,
     consumeInitError,
+    getParseFailureCount,
 };

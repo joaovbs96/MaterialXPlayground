@@ -103,11 +103,10 @@ const CSP_BLOCK = `    <!-- Content-Security-Policy: webviews block everything b
                          throughout.
            font-src    \${cspSource}  — KaTeX web fonts (lazy-loaded by the
                        docs view), served from vendor/katex/fonts/.
-           img-src     \${cspSource} https: blob: data:
-                       — blob: for object-URL textures/snapshots the app
-                         creates itself, data: for small inline assets,
-                         https: kept for any remote-fetched preset/texture
-                         images (web-parity fallback — see connect-src).
+           img-src     \${cspSource} blob: data:
+                       blob: is for object-URL textures/snapshots the app
+                       creates itself, data: for small inline assets. No
+                       https:, since the webview never renders a remote image.
            connect-src \${cspSource} https://raw.githubusercontent.com
                        blob: data:
                        — fetch() for local resources (vendored libs,
@@ -136,7 +135,7 @@ const CSP_BLOCK = `    <!-- Content-Security-Policy: webviews block everything b
         script-src \${cspSource} 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval';
         style-src \${cspSource} 'unsafe-inline';
         font-src \${cspSource};
-        img-src \${cspSource} https: blob: data:;
+        img-src \${cspSource} blob: data:;
         connect-src \${cspSource} https://raw.githubusercontent.com blob: data:;
         worker-src blob:;
     ">`;

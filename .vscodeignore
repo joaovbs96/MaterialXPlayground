@@ -1,32 +1,28 @@
-.git/**
-.claude/**
-.vscode/**
-.github/**
-.gitignore
-.gitattributes
-node_modules/**
-scripts/**
-docs/**
-tutorials-src/**
-electron/**
-package-lock.json
-sitemap.xml
-404.html
-tutorial-ideas.md
-images/og_image.png
-images/preview-*.jpg
+# Allowlist: everything is excluded by `**` below except the `!` lines that
+# follow. vsce excludes a file iff it matches an ignore pattern and no `!`
+# pattern also matches it; `**` matches dotfiles too, so nothing needs listing.
+**
 
-# Only the default MaterialX version ships in the .vsix — the Compare
-# view (the only feature that needs extra versions) isn't in the
-# webview nav. The default is computed in scripts/lib/mtlx-versions.mjs
-# (DEFAULT_MTLX_VERSION); update this line if that ever changes.
-js/materialx/1.39.4/**
-
-# embed/ (the <materialx-viewer> web-embed bundle) is web-only: the
-# webview skips it (js/shell.jsx VIEW_DEPS.graph.webviewSkip) since the
-# Graph Editor's session preview never runs in VS Code.
-embed/**
-
-# Test suites and their configs never run inside the extension.
-tests/**
-playwright*.config.mjs
+!LICENSE
+!CHANGELOG.md
+!vscode_extension/MARKETPLACE.md
+!vscode_extension/{src,media,language}/**
+!favicon.ico
+!apple-touch-icon.png
+!environment_map.mtlx
+!examples/**
+!materials/**
+!models/**
+!env_maps/**
+!libraries/**
+!images/icon.png
+!images/materialx-logo.svg
+!images/tabler-icons/**
+!js/*
+!js/{docs,gen,graph,shared,vendor}/**
+!js/materialx/LICENSE.txt
+!js/materialx/1.39.5/JsMaterialXGenShader.js
+!js/materialx/1.39.5/JsMaterialXGenShader.wasm
+!js/materialx/1.39.5/JsMaterialXGenShader.data
+!vendor/vendor-manifest.json
+!vendor/{babel,dagre,highlightjs,jszip,katex,materialx,pako,react,reactflow,tailwind,three,utif}/**

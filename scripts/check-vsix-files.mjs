@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-// Fails when a file the VS Code webview loads at runtime (index.html, VIEW_DEPS
-// minus each view's webviewSkip, the default MaterialX build, media/) is missing
-// from `vsce ls`. MTLX_VSIX_FILE_LIST=path/to/list.txt reuses a captured listing.
+// Two-way guard on the packaged .vsix (vsce ls source paths, not the renamed
+// in-vsix paths): required runtime files must be present, FORBIDDEN paths
+// must be absent. MTLX_VSIX_FILE_LIST=path/to/list.txt reuses a captured listing.
 
 import { spawnSync } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_MTLX_VERSION } from "./lib/mtlx-versions.mjs";
+import { DEFAULT_MTLX_VERSION, MTLX_VERSIONS } from "./lib/mtlx-versions.mjs";
+import { VSCE_VERSION } from "./lib/vsce.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -56,10 +57,83 @@ function extractSkippedPaths(text) {
   return out;
 }
 
+// Data files fetched by literal path, missed by the index.html/VIEW_DEPS
+// scan above; each was confirmed with a grep before being added. MARKETPLACE.md
+// is required now on purpose: this check fails on just that file until Stream D lands.
+const RUNTIME_ASSETS = [
+  "LICENSE",
+  "vendor/vendor-manifest.json",
+  "environment_map.mtlx",
+  "materials/open_pbr_default.mtlx",
+  "models/shaderball.glb",
+  "models/shaderball_simple.glb",
+  "models/shaderball_mtlx.glb",
+  "models/cloth_base_mesh.glb",
+  "env_maps/standard_shader_ball_env_512.exr",
+  "vendor/three/draco/draco_decoder.wasm",
+  "vendor/three/draco/draco_wasm_wrapper.js",
+  "vendor/three/basis/basis_transcoder.js",
+  "vendor/three/basis/basis_transcoder.wasm",
+  "images/materialx-logo.svg",
+  "js/gen/nodelib.json",
+  "js/gen/nodelib-index.json",
+  "js/gen/mtlx-versions.json",
+  "vscode_extension/MARKETPLACE.md",
+];
+
+// Prefixes (directory, trailing slash) and exact files that must NEVER
+// appear in the vsix - dev tooling, other build targets, or repo-only docs
+// that .vscodeignore's allowlist is supposed to keep out.
+const FORBIDDEN_PREFIXES = [
+  "node_modules/",
+  "scripts/",
+  "tests/",
+  "electron/",
+  "docs/",
+  "embed/",
+  "gallery/",
+  ".github/",
+  ".claude/",
+  "js/usd/",
+  "vendor/usd-webview-bindings/",
+  "vendor/basis-encoder/",
+  ...MTLX_VERSIONS.map((v) => v.version)
+    .filter((v) => v !== DEFAULT_MTLX_VERSION)
+    .map((v) => `js/materialx/${v}/`),
+];
+const FORBIDDEN_FILES = ["CLAUDE.md"];
+
+/** Every file package.json's manifest points at: the extension host entry
+ * point, the icon, the language configuration/grammar, and every source
+ * file under vscode_extension/src/ (globbed, so new files need no edit here). */
+function collectManifestFiles() {
+  const required = new Set();
+  const pkg = JSON.parse(readRepoFile("package.json"));
+
+  if (pkg.main) required.add(pkg.main);
+  if (pkg.icon) required.add(pkg.icon);
+  for (const lang of pkg.contributes?.languages || []) {
+    if (lang.configuration) required.add(lang.configuration.replace(/^\.\//, ""));
+  }
+  for (const grammar of pkg.contributes?.grammars || []) {
+    if (grammar.path) required.add(grammar.path.replace(/^\.\//, ""));
+  }
+
+  const srcDir = path.join(REPO_ROOT, "vscode_extension", "src");
+  for (const entry of readdirSync(srcDir)) {
+    if (entry.endsWith(".js")) required.add(`vscode_extension/src/${entry}`);
+  }
+
+  return required;
+}
+
 /** Collects the runtime-loadable file set this vsix must ship, as
  * paths relative to the repo root (no leading "extension/"). */
 function collectRequiredFiles() {
   const required = new Set();
+
+  for (const p of RUNTIME_ASSETS) required.add(p);
+  for (const p of collectManifestFiles()) required.add(p);
 
   // index.html's own script/link tags (loaded eagerly by webview.html,
   // spliced 1:1 from index.html by scripts/build-webview.mjs).
@@ -103,10 +177,10 @@ function getPackagedFiles() {
     log(`using pre-captured file list: ${listFile}`);
     raw = readFileSync(listFile, "utf8");
   } else {
-    log("running `npx --yes @vscode/vsce@3.9.2 ls --no-dependencies`...");
+    log(`running \`npx --yes @vscode/vsce@${VSCE_VERSION} ls --no-dependencies\`...`);
     const result = spawnSync(
       "npx",
-      ["--yes", "@vscode/vsce@3.9.2", "ls", "--no-dependencies"],
+      ["--yes", `@vscode/vsce@${VSCE_VERSION}`, "ls", "--no-dependencies"],
       { cwd: REPO_ROOT, encoding: "utf8", shell: true }
     );
     if (result.error) fail(`failed to run vsce: ${result.error.message}`);
@@ -134,15 +208,22 @@ function main() {
   if (packaged.size === 0) fail("packaged file list is empty - vsce ls produced no output");
 
   const missing = [...required].filter((p) => !packaged.has(p)).sort();
-  log(`checked ${required.size} runtime-loadable file(s) against ${packaged.size} packaged file(s).`);
+  const forbidden = [...packaged]
+    .filter((p) => FORBIDDEN_FILES.includes(p) || FORBIDDEN_PREFIXES.some((prefix) => p.startsWith(prefix)))
+    .sort();
+  log(`checked ${required.size} required file(s) and ${FORBIDDEN_PREFIXES.length + FORBIDDEN_FILES.length} forbidden rule(s) against ${packaged.size} packaged file(s).`);
 
   if (missing.length > 0) {
     console.error("[check-vsix-files] MISSING from the vsix (loaded at runtime but not packaged):");
     for (const p of missing) console.error(`  - ${p}`);
-    process.exit(1);
   }
+  if (forbidden.length > 0) {
+    console.error("[check-vsix-files] FORBIDDEN paths leaked into the vsix:");
+    for (const p of forbidden) console.error(`  - ${p}`);
+  }
+  if (missing.length > 0 || forbidden.length > 0) process.exit(1);
 
-  log("OK - every runtime-loadable file is present in the vsix.");
+  log("OK - every runtime-loadable file is present and no forbidden path leaked in.");
 }
 
 main();
