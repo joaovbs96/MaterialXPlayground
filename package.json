@@ -1,7 +1,7 @@
 {
   "name": "materialx-playground",
   "displayName": "MaterialX Playground",
-  "description": "View .mtlx files in the MaterialX Playground web app: view MaterialX documents in a 3D viewer, or edit node graphs in a graph editor.",
+  "description": "View .mtlx files in the MaterialX Playground web app: view MaterialX documents in a 3D viewer, or edit node graphs in a graph editor. Open USD stages in the USD Scene Viewer.",
   "version": "2026.8.11",
   "publisher": "MaterialXPlayground",
   "preview": true,
@@ -52,7 +52,9 @@
     "gallery:thumbs": "node scripts/gallery-shots.mjs",
     "gallery:data": "npm run gallery:manifest && npm run gallery:thumbs",
     "electron:dev": "node electron/scripts/dev.mjs",
-    "electron:pack": "node electron/scripts/pack.mjs"
+    "electron:pack": "node electron/scripts/pack.mjs",
+    "test:vscode-host": "node tests/vscode-host/run.mjs",
+    "test:vscode-smoke": "node tests/vscode-host/smoke.mjs"
   },
   "devDependencies": {
     "@babel/standalone": "7.26.10",
@@ -103,7 +105,11 @@
           "MaterialX",
           "mtlx"
         ],
-        "configuration": "./vscode_extension/language/mtlx.language-configuration.json"
+        "configuration": "./vscode_extension/language/mtlx.language-configuration.json",
+        "icon": {
+          "light": "./vscode_extension/media/mtlx-file-light.svg",
+          "dark": "./vscode_extension/media/mtlx-file-dark.svg"
+        }
       }
     ],
     "grammars": [
@@ -111,6 +117,12 @@
         "language": "mtlx",
         "scopeName": "text.mtlx",
         "path": "./vscode_extension/language/mtlx.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "mtlx",
+        "path": "./vscode_extension/language/mtlx.snippets.json"
       }
     ],
     "customEditors": [
@@ -123,12 +135,38 @@
           }
         ],
         "priority": "option"
+      },
+      {
+        "viewType": "materialxPlayground.sceneViewer",
+        "displayName": "MaterialX Playground: USD Scene Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.usd"
+          },
+          {
+            "filenamePattern": "*.usda"
+          },
+          {
+            "filenamePattern": "*.usdc"
+          },
+          {
+            "filenamePattern": "*.usdz"
+          }
+        ],
+        "priority": "option"
       }
     ],
     "commands": [
       {
+        "command": "materialxPlayground.openScene",
+        "title": "MaterialX Playground: Open in USD Scene Viewer",
+        "icon": "$(open-preview)",
+        "enablement": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz)$/i"
+      },
+      {
         "command": "materialxPlayground.open",
         "title": "MaterialX Playground: Open MaterialX Document",
+        "icon": "$(open-preview)",
         "enablement": "resourceExtname == .mtlx"
       },
       {
@@ -146,6 +184,10 @@
       {
         "command": "materialxPlayground.redoGraph",
         "title": "MaterialX Playground: Redo Node Graph Edit"
+      },
+      {
+        "command": "materialxPlayground.newFromExample",
+        "title": "MaterialX Playground: New Material from Example"
       }
     ],
     "keybindings": [
@@ -174,13 +216,32 @@
       }
     ],
     "menus": {
+      "editor/title": [
+        {
+          "command": "materialxPlayground.open",
+          "when": "resourceExtname == .mtlx && activeCustomEditorId != 'materialxPlayground.editor'",
+          "group": "navigation"
+        },
+        {
+          "command": "materialxPlayground.openScene",
+          "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz)$/i && activeCustomEditorId != 'materialxPlayground.sceneViewer'",
+          "group": "navigation"
+        }
+      ],
       "commandPalette": [
         {
           "command": "materialxPlayground.open",
           "when": "resourceExtname == .mtlx"
         },
         {
+          "command": "materialxPlayground.openScene",
+          "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz)$/i"
+        },
+        {
           "command": "materialxPlayground.openDocs"
+        },
+        {
+          "command": "materialxPlayground.newFromExample"
         }
       ],
       "explorer/context": [
@@ -193,9 +254,24 @@
           "command": "materialxPlayground.openDocs",
           "when": "resourceExtname == .mtlx",
           "group": "materialxPlayground"
+        },
+        {
+          "command": "materialxPlayground.newFromExample",
+          "when": "explorerResourceIsFolder",
+          "group": "materialxPlayground"
+        },
+        {
+          "command": "materialxPlayground.openScene",
+          "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz)$/i",
+          "group": "materialxPlayground"
         }
       ],
       "editor/title/context": [
+        {
+          "command": "materialxPlayground.openScene",
+          "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz)$/i",
+          "group": "materialxPlayground"
+        },
         {
           "command": "materialxPlayground.open",
           "when": "resourceExtname == .mtlx",
@@ -211,16 +287,16 @@
     "configuration": {
       "title": "MaterialX Playground",
       "properties": {
-        "materialx.defaultView": {
+        "materialxPlayground.defaultView": {
           "type": "string",
           "enum": [
             "viewer",
             "graph"
           ],
           "default": "graph",
-          "description": "Which MaterialX Playground view (the Material Viewer or the Node Graph Editor) is shown first when a .mtlx file is opened with the MaterialX Playground custom editor. The document is loaded into both views either way; this setting only picks which one is initially visible — use the header nav to switch to the other."
+          "description": "Which MaterialX Playground view (the Material Viewer or the Node Graph Editor) is shown first when a .mtlx file is opened with the MaterialX Playground custom editor. The document is loaded into both views either way; this setting only picks which one is initially visible. Use the header nav to switch to the other."
         },
-        "materialx.openBehavior": {
+        "materialxPlayground.openBehavior": {
           "type": "string",
           "enum": [
             "splitRight",
@@ -231,12 +307,46 @@
             "Open the playground beside the text editor for the same file, reusing an existing right-hand editor group on repeat opens instead of splitting again every time.",
             "Open the playground in the active editor group (the previous behavior)."
           ],
-          "description": "Where the MaterialX Playground opens when a text editor for the same .mtlx file is visible: \"splitRight\" opens it beside that editor, reusing an existing right-hand group rather than creating a new split each time; \"sameGroup\" opens it in the active editor group, replacing (or reusing) whatever tab is already there — the previous behavior."
+          "description": "Where the MaterialX Playground opens when a text editor for the same .mtlx file is visible: \"splitRight\" opens it beside that editor, reusing an existing right-hand group rather than creating a new split each time; \"sameGroup\" opens it in the active editor group, replacing (or reusing) whatever tab is already there. This is the previous behavior."
+        },
+        "materialxPlayground.autoOpenPlayground": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically open the MaterialX Playground beside the text editor whenever a .mtlx file is opened. Triggers once per file open; closing the playground won't re-trigger it until the file itself is closed and reopened."
+        },
+        "materialxPlayground.autoOpenSceneViewer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically open the USD Scene Viewer for a USD scene file (.usd, .usda, .usdc, .usdz). A text-editable file (.usda, or .usd that opens as text) opens the viewer beside the text editor; a binary file (.usdc, .usdz, or .usd that VS Code cannot show as text) has its editor tab replaced by the viewer. Triggers once per file open; closing the viewer won't re-trigger it until the file itself is closed and reopened."
+        },
+        "materialx.defaultView": {
+          "type": "string",
+          "enum": [
+            "viewer",
+            "graph"
+          ],
+          "default": "graph",
+          "description": "Deprecated: renamed to materialxPlayground.defaultView.",
+          "deprecationMessage": "Renamed to materialxPlayground.defaultView. This setting still works, but will be removed in a future release.",
+          "markdownDeprecationMessage": "Renamed to `materialxPlayground.defaultView`. This setting still works, but will be removed in a future release."
+        },
+        "materialx.openBehavior": {
+          "type": "string",
+          "enum": [
+            "splitRight",
+            "sameGroup"
+          ],
+          "default": "splitRight",
+          "description": "Deprecated: renamed to materialxPlayground.openBehavior.",
+          "deprecationMessage": "Renamed to materialxPlayground.openBehavior. This setting still works, but will be removed in a future release.",
+          "markdownDeprecationMessage": "Renamed to `materialxPlayground.openBehavior`. This setting still works, but will be removed in a future release."
         },
         "materialx.autoOpenPlayground": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically open the MaterialX Playground beside the text editor whenever a .mtlx file is opened. Triggers once per file open — closing the playground won't re-trigger it until the file itself is closed and reopened."
+          "description": "Deprecated: renamed to materialxPlayground.autoOpenPlayground.",
+          "deprecationMessage": "Renamed to materialxPlayground.autoOpenPlayground. This setting still works, but will be removed in a future release.",
+          "markdownDeprecationMessage": "Renamed to `materialxPlayground.autoOpenPlayground`. This setting still works, but will be removed in a future release."
         }
       }
     }

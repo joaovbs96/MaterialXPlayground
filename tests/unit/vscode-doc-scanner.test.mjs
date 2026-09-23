@@ -11,7 +11,13 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { _scanWith } = require('../../vscode_extension/src/docScanner.js');
+const { _scanWith, _containmentRootWith } = require('../../vscode_extension/src/docScanner.js');
+
+// Mirrors docScanner.js's MAX_TEXTURE_BYTES (a Blob/ArrayBuffer ceiling in
+// the renderer, not a network budget) and MAX_INCLUDE_BYTES (per-file cap
+// for a single xi:include'd document); not exported, so duplicated here.
+const MAX_TEXTURE_BYTES = 2 * 1024 * 1024 * 1024;
+const MAX_INCLUDE_BYTES = 8 * 1024 * 1024;
 
 // FileType bit flags, matching vscode.FileType exactly (Unknown=0, File=1,
 // Directory=2, SymbolicLink=64) so the `type & FileType.File` checks in
@@ -80,7 +86,8 @@ function makeDeps(workspaceFolderDir) {
         } else if (st.isFile()) {
           type |= FileType.File;
         }
-        return { type, size: st.isSymbolicLink() ? (await fsp.stat(uri.fsPath).catch(() => st)).size : st.size };
+        const real = st.isSymbolicLink() ? await fsp.stat(uri.fsPath).catch(() => st) : st;
+        return { type, size: real.size, mtime: real.mtimeMs };
       },
       async readFile(uri) {
         readFileCalls.push(uri.fsPath);
@@ -95,7 +102,7 @@ function mkTmpDir() {
   return fsp.mkdtemp(path.join(os.tmpdir(), 'mxpt-docscan-'));
 }
 
-test('in-workspace ../textures/ok.png loads', async () => {
+test('in-workspace ../textures/ok.png is resolved (never read) into textures', async () => {
   const ws = await mkTmpDir();
   try {
     const matDir = path.join(ws, 'mat');
@@ -107,12 +114,16 @@ test('in-workspace ../textures/ok.png loads', async () => {
     const xml = '<materialx version="1.39"><nodegraph name="ng"><input name="i" type="filename" value="../textures/ok.png" /></nodegraph></materialx>';
     await fsp.writeFile(docPath, xml);
 
-    const { deps } = makeDeps(ws);
+    const { deps, readFileCalls } = makeDeps(ws);
     const result = await _scanWith(deps, uriFromFsPath(docPath), xml);
 
     assert.deepEqual(result.warnings, []);
-    assert.ok(result.files['../textures/ok.png'], 'expected the texture to be loaded');
-    assert.equal(Buffer.from(result.files['../textures/ok.png']).length, 3);
+    assert.deepEqual(result.files, {}, 'no xi:include docs in this fixture');
+    const tex = result.textures['../textures/ok.png'];
+    assert.ok(tex, 'expected the texture to be resolved');
+    assert.equal(tex.size, 3);
+    assert.equal(typeof tex.mtime, 'number');
+    assert.equal(readFileCalls.length, 0, 'texture bytes must never be read here');
   } finally {
     await fsp.rm(ws, { recursive: true, force: true });
   }
@@ -134,6 +145,7 @@ test('an outside ref is skipped with a warning and never read', async () => {
     const result = await _scanWith(deps, uriFromFsPath(docPath), xml);
 
     assert.deepEqual(result.files, {});
+    assert.deepEqual(result.textures, {});
     assert.equal(result.warnings.length, 1);
     assert.match(result.warnings[0], /resolves outside the workspace folder/);
     assert.equal(readFileCalls.length, 0);
@@ -143,7 +155,7 @@ test('an outside ref is skipped with a warning and never read', async () => {
   }
 });
 
-test('a sparse oversize file is skipped before readFile', async () => {
+test('a >2 GiB sparse texture is skipped before any read', async () => {
   const ws = await mkTmpDir();
   try {
     const matDir = path.join(ws, 'mat');
@@ -151,7 +163,7 @@ test('a sparse oversize file is skipped before readFile', async () => {
     const bigPath = path.join(matDir, 'huge.png');
     fs.writeFileSync(bigPath, '');
     // Sparse: seeks past the per-texture cap without writing real bytes.
-    fs.truncateSync(bigPath, 64 * 1024 * 1024 + 1024);
+    fs.truncateSync(bigPath, MAX_TEXTURE_BYTES + 1024);
     const docPath = path.join(matDir, 'scene.mtlx');
     const xml = '<materialx version="1.39"><input name="i" type="filename" value="huge.png" /></materialx>';
     await fsp.writeFile(docPath, xml);
@@ -160,8 +172,42 @@ test('a sparse oversize file is skipped before readFile', async () => {
     const result = await _scanWith(deps, uriFromFsPath(docPath), xml);
 
     assert.deepEqual(result.files, {});
+    assert.deepEqual(result.textures, {});
     assert.equal(readFileCalls.length, 0);
     assert.equal(result.warnings.length, 1);
+    assert.match(result.warnings[0], /exceeds the per-file size limit/);
+  } finally {
+    await fsp.rm(ws, { recursive: true, force: true });
+  }
+});
+
+test('no total texture budget: three 30 MiB sparse textures are all resolved', async () => {
+  const ws = await mkTmpDir();
+  try {
+    const matDir = path.join(ws, 'mat');
+    await fsp.mkdir(matDir, { recursive: true });
+    const size = 30 * 1024 * 1024; // 90 MiB combined - over the old 64MB total cap
+    const names = ['a.png', 'b.png', 'c.png'];
+    for (const name of names) {
+      const p = path.join(matDir, name);
+      fs.writeFileSync(p, '');
+      fs.truncateSync(p, size);
+    }
+    const docPath = path.join(matDir, 'scene.mtlx');
+    const xml = '<materialx version="1.39">'
+      + names.map((n, i) => '<input name="i' + i + '" type="filename" value="' + n + '" />').join('')
+      + '</materialx>';
+    await fsp.writeFile(docPath, xml);
+
+    const { deps, readFileCalls } = makeDeps(ws);
+    const result = await _scanWith(deps, uriFromFsPath(docPath), xml);
+
+    assert.deepEqual(result.warnings, []);
+    for (const name of names) {
+      assert.ok(result.textures[name], 'expected ' + name + ' to be resolved');
+      assert.equal(result.textures[name].size, size);
+    }
+    assert.equal(readFileCalls.length, 0, 'texture bytes must never be read here');
   } finally {
     await fsp.rm(ws, { recursive: true, force: true });
   }
@@ -179,7 +225,7 @@ test('a directory named x.png is skipped', async () => {
     const { deps, readFileCalls } = makeDeps(ws);
     const result = await _scanWith(deps, uriFromFsPath(docPath), xml);
 
-    assert.deepEqual(result.files, {});
+    assert.deepEqual(result.textures, {});
     assert.equal(readFileCalls.length, 0);
     assert.match(result.warnings[0], /not a regular file/);
   } finally {
@@ -208,7 +254,7 @@ test('a symlink that escapes the workspace is skipped', async (t) => {
     const { deps, readFileCalls } = makeDeps(ws);
     const result = await _scanWith(deps, uriFromFsPath(docPath), xml);
 
-    assert.deepEqual(result.files, {});
+    assert.deepEqual(result.textures, {});
     assert.equal(readFileCalls.length, 0);
     assert.match(result.warnings[0], /resolves outside the workspace folder/);
   } finally {
@@ -232,7 +278,7 @@ test('loose-file mode (no workspace folder) rejects a ../ escape', async () => {
     const { deps } = makeDeps(null); // no workspace folder anywhere
     const result = await _scanWith(deps, uriFromFsPath(docPath), xml);
 
-    assert.deepEqual(result.files, {});
+    assert.deepEqual(result.textures, {});
     assert.match(result.warnings[0], /resolves outside the workspace folder/);
   } finally {
     await fsp.rm(ws, { recursive: true, force: true });
@@ -252,7 +298,7 @@ test('.txt is rejected as a texture reference', async () => {
     const { deps, readFileCalls } = makeDeps(ws);
     const result = await _scanWith(deps, uriFromFsPath(docPath), xml);
 
-    assert.deepEqual(result.files, {});
+    assert.deepEqual(result.textures, {});
     assert.equal(readFileCalls.length, 0);
   } finally {
     await fsp.rm(ws, { recursive: true, force: true });
@@ -282,7 +328,7 @@ test('a directory junction that escapes the workspace is skipped', async (t) => 
     const { deps, readFileCalls } = makeDeps(ws);
     const result = await _scanWith(deps, uriFromFsPath(docPath), xml);
 
-    assert.deepEqual(result.files, {});
+    assert.deepEqual(result.textures, {});
     assert.equal(readFileCalls.length, 0);
     assert.match(result.warnings[0], /resolves outside the workspace folder/);
   } finally {
@@ -308,7 +354,7 @@ test('a literal backslash traversal is skipped and never read', async () => {
     const { deps, readFileCalls } = makeDeps(null); // loose-file mode
     const result = await _scanWith(deps, uriFromFsPath(docPath), xml);
 
-    assert.deepEqual(result.files, {});
+    assert.deepEqual(result.textures, {});
     assert.equal(readFileCalls.length, 0);
     assert.match(result.warnings[0], /resolves outside the workspace folder|was not found/);
   } finally {
@@ -316,14 +362,14 @@ test('a literal backslash traversal is skipped and never read', async () => {
   }
 });
 
-test('budget skipping continues past a too-large file to a later smaller one', async () => {
+test('a texture over the per-file cap is skipped while a smaller sibling still resolves', async () => {
   const ws = await mkTmpDir();
   try {
     const matDir = path.join(ws, 'mat');
     await fsp.mkdir(matDir, { recursive: true });
     const bigPath = path.join(matDir, 'a_huge.png');
     fs.writeFileSync(bigPath, '');
-    fs.truncateSync(bigPath, 64 * 1024 * 1024 + 1024);
+    fs.truncateSync(bigPath, MAX_TEXTURE_BYTES + 1024);
     await fsp.writeFile(path.join(matDir, 'b_small.png'), Buffer.from([1, 2, 3, 4]));
     const docPath = path.join(matDir, 'scene.mtlx');
     const xml = '<materialx version="1.39">'
@@ -332,13 +378,108 @@ test('budget skipping continues past a too-large file to a later smaller one', a
       + '</materialx>';
     await fsp.writeFile(docPath, xml);
 
-    const { deps } = makeDeps(ws);
+    const { deps, readFileCalls } = makeDeps(ws);
     const result = await _scanWith(deps, uriFromFsPath(docPath), xml);
 
-    assert.ok(!result.files['a_huge.png']);
-    assert.ok(result.files['b_small.png']);
-    assert.equal(Buffer.from(result.files['b_small.png']).length, 4);
+    assert.ok(!result.textures['a_huge.png']);
+    assert.ok(result.textures['b_small.png']);
+    assert.equal(result.textures['b_small.png'].size, 4);
+    assert.equal(readFileCalls.length, 0, 'texture bytes must never be read here');
   } finally {
     await fsp.rm(ws, { recursive: true, force: true });
   }
+});
+
+test('an xi:include sibling document is still read into files, capped at MAX_INCLUDE_BYTES', async () => {
+  const ws = await mkTmpDir();
+  try {
+    const matDir = path.join(ws, 'mat');
+    await fsp.mkdir(matDir, { recursive: true });
+    const subXml = '<materialx version="1.39"><nodegraph name="ng2" /></materialx>';
+    await fsp.writeFile(path.join(matDir, 'sub.mtlx'), subXml);
+    const docPath = path.join(matDir, 'scene.mtlx');
+    const xml = '<materialx version="1.39"><xi:include href="sub.mtlx" /></materialx>';
+    await fsp.writeFile(docPath, xml);
+
+    const { deps, readFileCalls } = makeDeps(ws);
+    const result = await _scanWith(deps, uriFromFsPath(docPath), xml);
+
+    assert.deepEqual(result.warnings, []);
+    assert.ok(result.files['sub.mtlx'], 'expected the included document to be read');
+    assert.equal(Buffer.from(result.files['sub.mtlx']).toString('utf8'), subXml);
+    assert.equal(readFileCalls.length, 1);
+  } finally {
+    await fsp.rm(ws, { recursive: true, force: true });
+  }
+});
+
+test('an xi:include sibling over MAX_INCLUDE_BYTES is skipped before any read', async () => {
+  const ws = await mkTmpDir();
+  try {
+    const matDir = path.join(ws, 'mat');
+    await fsp.mkdir(matDir, { recursive: true });
+    const bigPath = path.join(matDir, 'huge.mtlx');
+    fs.writeFileSync(bigPath, '');
+    fs.truncateSync(bigPath, MAX_INCLUDE_BYTES + 1024);
+    const docPath = path.join(matDir, 'scene.mtlx');
+    const xml = '<materialx version="1.39"><xi:include href="huge.mtlx" /></materialx>';
+    await fsp.writeFile(docPath, xml);
+
+    const { deps, readFileCalls } = makeDeps(ws);
+    const result = await _scanWith(deps, uriFromFsPath(docPath), xml);
+
+    assert.deepEqual(result.files, {});
+    assert.equal(readFileCalls.length, 0);
+    assert.match(result.warnings[0], /exceeds the per-file size limit/);
+  } finally {
+    await fsp.rm(ws, { recursive: true, force: true });
+  }
+});
+
+test('containmentRoot: within an open workspace folder, root is the folder', async () => {
+  const ws = await mkTmpDir();
+  try {
+    const matDir = path.join(ws, 'mat');
+    await fsp.mkdir(matDir, { recursive: true });
+    const docPath = path.join(matDir, 'scene.mtlx');
+    await fsp.writeFile(docPath, '<materialx version="1.39" />');
+
+    const { deps } = makeDeps(ws);
+    const root = _containmentRootWith(deps, uriFromFsPath(docPath));
+
+    assert.equal(root.path, toPosix(ws));
+  } finally {
+    await fsp.rm(ws, { recursive: true, force: true });
+  }
+});
+
+test('containmentRoot: loose file with no workspace folder falls back to its own directory', async () => {
+  const ws = await mkTmpDir();
+  try {
+    const matDir = path.join(ws, 'mat');
+    await fsp.mkdir(matDir, { recursive: true });
+    const docPath = path.join(matDir, 'scene.mtlx');
+    await fsp.writeFile(docPath, '<materialx version="1.39" />');
+
+    const { deps } = makeDeps(null); // no workspace folder anywhere
+    const root = _containmentRootWith(deps, uriFromFsPath(docPath));
+
+    assert.equal(root.path, toPosix(matDir));
+  } finally {
+    await fsp.rm(ws, { recursive: true, force: true });
+  }
+});
+
+test('containmentRoot: non-file scheme with no workspace folder is null', () => {
+  const { deps } = makeDeps(null);
+  const untitledUri = {
+    scheme: 'untitled',
+    authority: '',
+    path: '/Untitled-1',
+    toString() { return 'untitled:/Untitled-1'; },
+  };
+
+  const root = _containmentRootWith(deps, untitledUri);
+
+  assert.equal(root, null);
 });

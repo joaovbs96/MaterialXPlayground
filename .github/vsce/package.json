@@ -3,6 +3,7 @@
   "private": true,
   "description": "Locked vsce install used by CI to package and publish the VS Code extension.",
   "dependencies": {
-    "@vscode/vsce": "3.9.2"
+    "@vscode/vsce": "3.9.2",
+    "ovsx": "1.2.0"
   }
 }

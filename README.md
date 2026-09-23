@@ -137,19 +137,19 @@ localStorage.setItem('mtlx_scene_prefilter_fix', '0');     // use the GGX-prefil
 
 ## VS Code extension (experimental)
 
-The playground also ships as a VS Code extension: opening a `.mtlx` file brings up the Node Graph Editor and Material Viewer beside the text editor, with edits synced live in both directions, plus in-editor validation diagnostics, hover documentation for node types, and the node library documentation as its own panel.
+The playground also ships as a VS Code extension: opening a `.mtlx` file brings up the Node Graph Editor and Material Viewer beside the text editor, with edits synced live in both directions, plus in-editor validation diagnostics, hover documentation, outline and go-to-definition/find-references, snippets, auto-complete, color swatches with a picker, and the node library documentation as its own panel. A read-only USD Scene Viewer handles `.usd`, `.usda`, `.usdc` and `.usdz` files, and a "New Material from Example" command drops a ready-made material into your workspace.
 
 > ⚠️ **Early, experimental release.** The extension is a work in progress and hasn't had wide testing yet — things may not be 100%, so expect rough edges and please report anything broken on the [issue tracker](https://github.com/joaovbs96/MaterialXPlayground/issues). It is currently distributed only as a `.vsix` file on the releases page (not the Visual Studio Marketplace) and does not auto-update.
 
 ### Install
 
-Requires VS Code 1.85 or newer.
+Requires VS Code 1.100 or newer.
 
 1. Download the `.vsix` asset (named like `materialx-playground-vscode-v2026.8.3.vsix`) from the [VS Code extension page](https://joaovbs96.github.io/MaterialXPlayground/#!vscode) or the [latest release](https://github.com/joaovbs96/MaterialXPlayground/releases/latest).
 2. Install it either way:
    - **VS Code UI:** Extensions view → `···` (Views and More Actions) menu → **Install from VSIX…** → pick the downloaded file. Equivalently, run **"Extensions: Install from VSIX…"** from the Command Palette, or just drag the `.vsix` file onto the Extensions view.
    - **Command line:** `code --install-extension path/to/materialx-playground-vscode-<version>.vsix`
-3. Open any `.mtlx` file — the playground opens beside the text editor automatically (configurable via the `materialx.*` settings). All commands are under "MaterialX Playground:" in the Command Palette, including the standalone node documentation browser.
+3. Open any `.mtlx` file: the playground opens beside the text editor automatically (configurable via the `materialxPlayground.*` settings; the older `materialx.*` names still work). All commands are under "MaterialX Playground:" in the Command Palette, including the standalone node documentation browser.
 
 The packaged extension is fully self-contained: it bundles the MaterialX libraries, curated examples, and spec content, and performs no network requests.
 

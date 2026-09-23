@@ -78,5 +78,5 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 
 ## VSCode Extension
 
-- [idea] **Auto-complete on VSCode**: auto-completion capabilities to assist direct text editing on VSCode.
+- [done] **Auto-complete on VSCode**: snippets for common material patterns plus auto-complete for node names, node inputs, and reference attributes (type, node name, node graph, output, interface name, color space, node definition) while editing `.mtlx` files directly.
 - [planned] **Officially Releasing extension on VSCode Extensions**: makes the extension easier to find, use and update.

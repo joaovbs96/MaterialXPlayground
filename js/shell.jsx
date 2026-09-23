@@ -267,6 +267,9 @@ const VIEW_DEPS = {
             'js/graph/node-component.jsx',
             'js/graph/graph-preview.jsx',
         ],
+        // The Scene Viewer's material panel loads this in VS Code too; the
+        // embed is not packaged there, so its preview shows the fallback.
+        webviewSkip: ['embed/mtlx-viewer.js'],
     },
     scene: {
         css: [],

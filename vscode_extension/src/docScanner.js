@@ -24,11 +24,20 @@
 //
 // Containment: every ref is resolved through refPolicy.js and confined to
 // a root (the workspace folder holding the document, or its own folder)
-// before anything is stat'd or read. See resolveContained() below.
+// before anything is stat'd (and, for includes, read). See
+// resolveContained() below.
 //
-// Returned shape: { files: { [relPath: string]: Uint8Array }, warnings:
-// string[] }. `files` never contains an entry for the root document
-// itself — callers already have that text (it's the open document).
+// Textures are never read here: editorProvider.js hands the webview a
+// resource URL for each one instead, so the webview fetches the bytes
+// itself. Every containment step still runs (unsafe ref, extension
+// allowlist, join, root containment, realpath, stat regular file); only
+// the readFile call is skipped.
+//
+// Returned shape: { files: { [relPath: string]: Uint8Array }, textures:
+// { [ref: string]: { uri, size, mtime } }, warnings: string[] }. `files`
+// holds xi:include'd documents only. Neither map contains an entry for
+// the root document itself: callers already have that text (it's the
+// open document).
 'use strict';
 
 const fs = require('fs');
@@ -36,9 +45,9 @@ const refPolicy = require('./refPolicy');
 const { errMsg } = require('./util');
 
 const MAX_DOCS = 12; // guard only, matches loadPreset's MAX_DOCS — xi:include chains in practice nest at most one deep
-const MAX_BYTES = 64 * 1024 * 1024; // total payload cap across all included docs + textures
+const MAX_BYTES = 64 * 1024 * 1024; // total payload cap across all included documents (textures are never read here, so they are not counted)
 const MAX_INCLUDE_BYTES = 8 * 1024 * 1024; // per-file cap for a single xi:include'd document
-const MAX_TEXTURE_BYTES = MAX_BYTES; // per-file cap for a single texture
+const MAX_TEXTURE_BYTES = 2 * 1024 * 1024 * 1024; // per-file cap for a single texture: a Blob/ArrayBuffer ceiling in the renderer, not a network budget
 const MAX_TEXTURE_REFS = 256; // distinct texture refs considered per scan
 const SKIP_WARNING_LIMIT = 5; // collapse long runs of skip warnings into one summary line
 
@@ -114,7 +123,9 @@ function extractFilenameRefs(xml) {
 
 // Resolves ref against baseDirUri and confines it to ctx.root (unsafe ref,
 // extension, join, containment, realpath, stat, then byte caps, in order).
-// Returns { uri, size } or { skip: reason }; see describeSkip() for text.
+// Returns { uri, size, mtime } or { skip: reason }; see describeSkip() for
+// text. The total-bytes budget only applies to 'include' refs: textures
+// are never read, so nothing accumulates a running total for them.
 async function resolveContained(deps, ctx, baseDirUri, ref, kind) {
     if (refPolicy.isUnsafeRef(ref)) return { skip: 'unsafe' };
     if (!refPolicy.isAllowedRef(ref, kind)) return { skip: 'extension' };
@@ -168,9 +179,9 @@ async function resolveContained(deps, ctx, baseDirUri, ref, kind) {
 
     const perFileCap = kind === 'include' ? MAX_INCLUDE_BYTES : MAX_TEXTURE_BYTES;
     if (stat.size > perFileCap) return { skip: 'too-large' };
-    if (ctx.totalBytes + stat.size > MAX_BYTES) return { skip: 'budget' };
+    if (kind === 'include' && ctx.totalBytes + stat.size > MAX_BYTES) return { skip: 'budget' };
 
-    return { uri, size: stat.size };
+    return { uri, size: stat.size, mtime: stat.mtime };
 }
 
 // One line per skip reason, shaped `Skipped "<ref>": <why>.` The 'outside'
@@ -193,7 +204,7 @@ function describeSkip(ref, reason, detail) {
         case 'too-large':
             return 'Skipped "' + ref + '": it exceeds the per-file size limit.';
         case 'budget':
-            return 'Skipped "' + ref + '": the total payload cap (64MB) was reached.';
+            return 'Skipped "' + ref + '": the total payload cap for included documents (64MB) was reached.';
         default:
             return 'Skipped "' + ref + '": could not resolve it' + (detail ? ' (' + detail + ')' : '') + '.';
     }
@@ -210,6 +221,20 @@ function flushSkipWarnings(warnings, skipped) {
     if (extra > 0) warnings.push(extra + ' more reference(s) skipped.');
 }
 
+// Containment root for documentUri: the workspace folder holding it, else
+// its own directory (loose file, no workspace folder). A non-file-scheme
+// document with no workspace folder has nothing safe to resolve refs
+// against, so this returns null in that case: the one situation _scanWith
+// bails out of scanning entirely. Shared with editorProvider.js (see
+// containmentRoot() below), which needs the same root to size a webview's
+// localResourceRoots.
+function _containmentRootWith(deps, documentUri) {
+    const folder = deps.getWorkspaceFolder(documentUri);
+    if (folder) return folder.uri;
+    if (documentUri.scheme !== 'file') return null;
+    return deps.Uri.joinPath(documentUri, '..');
+}
+
 // Scan a .mtlx document (already-read text) plus everything it pulls in
 // via xi:include, for xi:include siblings and filename (texture) refs.
 // documentUri: the vscode.Uri of the currently-open .mtlx file (used only
@@ -220,22 +245,16 @@ async function _scanWith(deps, documentUri, xmlText) {
     const warnings = [];
     const skipped = [];
     const files = {};
+    const textures = {};
 
     const rootDir = deps.Uri.joinPath(documentUri, '..');
-
-    // Containment root: the workspace folder holding the document, else
-    // its own directory (loose file, no workspace). A non-file-scheme
-    // document with no workspace folder has nothing safe to resolve against.
-    const folder = deps.getWorkspaceFolder(documentUri);
-    let root = folder ? folder.uri : null;
+    const root = _containmentRootWith(deps, documentUri);
     if (!root) {
-        if (documentUri.scheme !== 'file') {
-            return {
-                files: {},
-                warnings: ['Reference scanning skipped: this document is not backed by a file in an open workspace folder.']
-            };
-        }
-        root = rootDir;
+        return {
+            files: {},
+            textures: {},
+            warnings: ['Reference scanning skipped: this document is not backed by a file in an open workspace folder.']
+        };
     }
 
     const isFileScheme = root.scheme === 'file';
@@ -335,23 +354,24 @@ async function _scanWith(deps, documentUri, xmlText) {
             skipped.push(describeSkip(ref, resolved.skip, resolved.detail));
             continue;
         }
-        const bytes = await readContained(deps, resolved.uri, ref, skipped, ctx);
-        if (bytes === null) continue;
-        files[ref] = bytes;
+        // Never read here: editorProvider.js turns this into a webview
+        // resource URL and the webview fetches the bytes itself.
+        textures[ref] = { uri: resolved.uri, size: resolved.size, mtime: resolved.mtime };
     }
 
     flushSkipWarnings(warnings, skipped);
-    return { files, warnings };
+    return { files, textures, warnings };
 }
 
 // Reads an already contained/stat'd uri, then re-checks the real byte
 // count against the running total (a file can grow between stat and
 // read). Over budget here skips this one file and continues the scan.
+// Used for xi:include'd documents only: textures are never read.
 async function readContained(deps, uri, label, skipped, ctx) {
     try {
         const bytes = await deps.fs.readFile(uri);
         if (ctx.totalBytes + bytes.byteLength > MAX_BYTES) {
-            skipped.push('Skipped "' + label + '": the total payload cap (64MB) was reached after reading it.');
+            skipped.push('Skipped "' + label + '": the total payload cap for included documents (64MB) was reached after reading it.');
             return null;
         }
         ctx.totalBytes += bytes.byteLength;
@@ -366,4 +386,23 @@ async function scan(documentUri, xmlText) {
     return _scanWith(defaultDeps(), documentUri, xmlText);
 }
 
-module.exports = { scan, _scanWith, extractFilenameRefs, isUnsafeRef: refPolicy.isUnsafeRef };
+// Public containment-root helper for editorProvider.js: the same root
+// _scanWith resolves refs against, for a real vscode document. Returns
+// null exactly when _scanWith would skip scanning entirely (untitled /
+// non-file document with no open workspace folder).
+function containmentRoot(documentUri) {
+    return _containmentRootWith(defaultDeps(), documentUri);
+}
+
+module.exports = {
+    scan,
+    _scanWith,
+    extractFilenameRefs,
+    isUnsafeRef: refPolicy.isUnsafeRef,
+    containmentRoot,
+    _containmentRootWith,
+    // Shared with usdFileSet.js so USD scene files are confined identically.
+    resolveContained,
+    describeSkip,
+    defaultDeps,
+};

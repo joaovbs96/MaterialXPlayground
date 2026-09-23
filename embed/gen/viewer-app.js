@@ -856,7 +856,12 @@ function MaterialViewerApp({
     // pure waste there — and its 404 is a console error wherever
     // the gitignored build is absent, which fails the embed smoke
     // test in CI. Nothing reads versionAvailable while chromeless.
-    if (chromeless) return undefined;
+    // The VS Code webview never packages a non-default version
+    // either (only the default's WASM ships in the .vsix), and
+    // a 404 through its resource pipeline logs a host-side
+    // "Webview.loadLocalResource" error on every run, so skip
+    // the probe there too.
+    if (chromeless || window.__MTLX_VSCODE__) return undefined;
     let cancelled = false;
     mtlxVersions.filter(v => v !== mtlxDefaultVersion).forEach(v => {
       fetch('js/materialx/' + v + '/JsMaterialXGenShader.js', {

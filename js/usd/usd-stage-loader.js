@@ -1,6 +1,27 @@
 const workerUrl = new URL("./usd-stage-worker.js", import.meta.url);
 let nextRequestId = 1;
 
+// VS Code webview workers cannot reach the extension's resource origin, so
+// there the worker runs from a blob-linked copy (usd-webview-worker-shim.js).
+// Every other host keeps workerUrl as is.
+const HOSTED_IN_VSCODE = typeof window !== "undefined" && window.__MTLX_VSCODE__ === true;
+let hostWorkerUrl = null;
+let hostWorkerUrlPromise = null;
+
+function prepareHostWorkerUrl() {
+  if (hostWorkerUrl) return Promise.resolve();
+  if (!hostWorkerUrlPromise) {
+    hostWorkerUrlPromise = import("./usd-webview-worker-shim.js")
+      .then(module => module.createUsdWorkerUrl())
+      .then(url => { hostWorkerUrl = url; })
+      .catch(error => {
+        hostWorkerUrlPromise = null;
+        throw new Error(`OpenUSD worker could not be prepared in VS Code: ${error?.message ?? error}`);
+      });
+  }
+  return hostWorkerUrlPromise;
+}
+
 // The native usd-wg-webview runtime is an Emscripten wasm module that boots
 // slowly; this worker is now a persistent singleton reused across loads
 // instead of one Worker per call. It holds exactly one native stage, so
@@ -78,7 +99,7 @@ export function usdWorkerStats() {
 
 function ensureWorker() {
   if (worker) return worker;
-  worker = new Worker(workerUrl, { type: "module", name: "openusd-stage" });
+  worker = new Worker(hostWorkerUrl ?? workerUrl, { type: "module", name: "openusd-stage" });
   stats.created++;
   worker.onmessage = event => {
     const message = event.data;
@@ -181,7 +202,9 @@ export function loadUsdStage({ files, rootPath, onProgress, signal, purposePolic
 
   // Strict FIFO: the worker holds exactly one native stage, so this request
   // waits for every previously queued one to settle before it starts.
-  const runThisLoad = () => runLoad(requestFiles, rootPath, onProgress, signal, purposePolicy, subdivisionLevel, triangleLimits);
+  const runThisLoad = HOSTED_IN_VSCODE
+    ? () => prepareHostWorkerUrl().then(() => runLoad(requestFiles, rootPath, onProgress, signal, purposePolicy, subdivisionLevel, triangleLimits))
+    : () => runLoad(requestFiles, rootPath, onProgress, signal, purposePolicy, subdivisionLevel, triangleLimits);
   const result = queueTail.then(runThisLoad, runThisLoad);
   queueTail = result.then(() => {}, () => {});
   return result;

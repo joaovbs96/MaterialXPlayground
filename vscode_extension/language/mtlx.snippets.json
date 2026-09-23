@@ -1,0 +1,90 @@
+{
+  "MaterialX Document": {
+    "prefix": "mtlxdoc",
+    "body": [
+      "<?xml version=\"1.0\"?>",
+      "<materialx version=\"1.39\" colorspace=\"lin_rec709\">",
+      "\t$0",
+      "</materialx>",
+      ""
+    ],
+    "description": "A minimal MaterialX document skeleton: the XML declaration plus the <materialx> root element."
+  },
+  "Standard Surface Material": {
+    "prefix": "standard_surface",
+    "body": [
+      "<standard_surface name=\"${1:SR_surface}\" type=\"surfaceshader\">",
+      "\t<input name=\"base_color\" type=\"color3\" value=\"${2:0.8, 0.8, 0.8}\" />",
+      "\t<input name=\"specular_roughness\" type=\"float\" value=\"${3:0.2}\" />",
+      "\t<input name=\"metalness\" type=\"float\" value=\"${4:0.0}\" />",
+      "</standard_surface>",
+      "<surfacematerial name=\"${5:M_surface}\" type=\"material\">",
+      "\t<input name=\"surfaceshader\" type=\"surfaceshader\" nodename=\"${1:SR_surface}\" />",
+      "</surfacematerial>",
+      "$0"
+    ],
+    "description": "A standard_surface shader node plus the surfacematerial that wires it up into a renderable material."
+  },
+  "OpenPBR Surface Material": {
+    "prefix": "open_pbr_surface",
+    "body": [
+      "<open_pbr_surface name=\"${1:SR_openpbr}\" type=\"surfaceshader\">",
+      "\t<input name=\"base_color\" type=\"color3\" value=\"${2:0.8, 0.8, 0.8}\" />",
+      "\t<input name=\"base_weight\" type=\"float\" value=\"${3:1.0}\" />",
+      "\t<input name=\"specular_roughness\" type=\"float\" value=\"${4:0.3}\" />",
+      "</open_pbr_surface>",
+      "<surfacematerial name=\"${5:M_openpbr}\" type=\"material\">",
+      "\t<input name=\"surfaceshader\" type=\"surfaceshader\" nodename=\"${1:SR_openpbr}\" />",
+      "</surfacematerial>",
+      "$0"
+    ],
+    "description": "An open_pbr_surface shader node plus the surfacematerial that wires it up into a renderable material."
+  },
+  "Texture Chain (texcoord -> place2d -> image)": {
+    "prefix": "texturechain",
+    "body": [
+      "<texcoord name=\"${1:texcoord1}\" type=\"vector2\">",
+      "\t<input name=\"index\" type=\"integer\" value=\"0\" />",
+      "</texcoord>",
+      "<place2d name=\"${2:place2d1}\" type=\"vector2\">",
+      "\t<input name=\"texcoord\" type=\"vector2\" nodename=\"${1:texcoord1}\" />",
+      "</place2d>",
+      "<image name=\"${3:image1}\" type=\"color3\">",
+      "\t<input name=\"file\" type=\"filename\" value=\"${4:texture.png}\" colorspace=\"srgb_texture\" />",
+      "\t<input name=\"texcoord\" type=\"vector2\" nodename=\"${2:place2d1}\" />",
+      "</image>",
+      "$0"
+    ],
+    "description": "A common texturing recipe: texcoord into place2d (UV transform) into a color3 image lookup."
+  },
+  "Normal Map Chain": {
+    "prefix": "normalmapchain",
+    "body": [
+      "<image name=\"${1:normal_image}\" type=\"vector3\">",
+      "\t<input name=\"file\" type=\"filename\" value=\"${2:normal.png}\" />",
+      "\t<input name=\"default\" type=\"vector3\" value=\"0.5, 0.5, 1.0\" />",
+      "</image>",
+      "<normalmap name=\"${3:normalmap1}\" type=\"vector3\">",
+      "\t<input name=\"in\" type=\"vector3\" nodename=\"${1:normal_image}\" />",
+      "</normalmap>",
+      "$0"
+    ],
+    "description": "A tangent-space normal map recipe: a vector3 image lookup feeding a normalmap node."
+  },
+  "Nodegraph with Output": {
+    "prefix": "nodegraph",
+    "body": [
+      "<nodegraph name=\"${1:NG_graph}\">",
+      "\t$2",
+      "\t<output name=\"${3:out}\" type=\"${4:color3}\" nodename=\"${5:node1}\" />",
+      "</nodegraph>",
+      "$0"
+    ],
+    "description": "A reusable nodegraph with a typed output, ready to be referenced via nodegraph=/output= elsewhere."
+  },
+  "Typed Input": {
+    "prefix": "input",
+    "body": "<input name=\"${1:name}\" type=\"${2:float}\" value=\"${3:0}\" />$0",
+    "description": "A single typed <input> element with name, type and value attributes."
+  }
+}

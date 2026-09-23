@@ -4,7 +4,7 @@
 // must be absent. MTLX_VSIX_FILE_LIST=path/to/list.txt reuses a captured listing.
 
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_MTLX_VERSION, MTLX_VERSIONS } from "./lib/mtlx-versions.mjs";
@@ -57,6 +57,47 @@ function extractSkippedPaths(text) {
   return out;
 }
 
+/** VIEW_DEPS source split into [viewName, entrySource] pairs, one per
+ * top-level key. Per view, so one view's webviewSkip can never hide the
+ * same file listed (and requested) by another view. */
+function splitViewDeps(viewDepsSrc) {
+  const re = /^ {4}([A-Za-z0-9_]+): \{/gm;
+  const starts = [];
+  let m;
+  while ((m = re.exec(viewDepsSrc))) starts.push({ view: m[1], at: m.index });
+  if (!starts.length) fail("found no view entries inside VIEW_DEPS in js/shell.jsx - did its formatting change?");
+  return starts.map((s, i) => [s.view, viewDepsSrc.slice(s.at, i + 1 < starts.length ? starts[i + 1].at : viewDepsSrc.length)]);
+}
+
+// Views the webview can never open: js/site-header.js drops Home and the
+// Learn/Integrate groups there. Their deps need not ship; every other view,
+// including dependency-only bundles such as galleryDetail, is checked.
+const WEBVIEW_UNREACHABLE_VIEWS = ["home", "whatIsMaterialx", "gallery", "roadmap", "builder", "vscode"];
+
+// The only vendor/materialx/ paths .vscodeignore keeps: spec docs, manifest,
+// license, and the curated examples exampleCatalog.js copies from. Kept
+// equal to .vscodeignore by this check.
+export const MATERIALX_KEEP_LIST = [
+  "vendor/materialx/manifest.json",
+  "vendor/materialx/LICENSE",
+  "vendor/materialx/documents/Specification/MaterialX.StandardNodes.md",
+  "vendor/materialx/documents/Specification/MaterialX.PBRSpec.md",
+  "vendor/materialx/documents/Specification/MaterialX.NPRSpec.md",
+  "vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_default.mtlx",
+  // Curated "New Material from Example" upstream set: no texture files,
+  // no xi:include. See exampleCatalog.js's EXAMPLES_DEFS.
+  "vendor/materialx/resources/Materials/Examples/StandardSurface/standard_surface_default.mtlx",
+  "vendor/materialx/resources/Materials/Examples/StandardSurface/standard_surface_gold.mtlx",
+  "vendor/materialx/resources/Materials/Examples/StandardSurface/standard_surface_glass.mtlx",
+  "vendor/materialx/resources/Materials/Examples/StandardSurface/standard_surface_plastic.mtlx",
+  "vendor/materialx/resources/Materials/Examples/StandardSurface/standard_surface_marble_solid.mtlx",
+  "vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_aluminum_brushed.mtlx",
+  "vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_glass.mtlx",
+  "vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_carpaint.mtlx",
+  "vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_velvet.mtlx",
+  "vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_pearl.mtlx",
+];
+
 // Data files fetched by literal path, missed by the index.html/VIEW_DEPS
 // scan above; each was confirmed with a grep before being added. MARKETPLACE.md
 // is required now on purpose: this check fails on just that file until Stream D lands.
@@ -79,6 +120,15 @@ const RUNTIME_ASSETS = [
   "js/gen/nodelib-index.json",
   "js/gen/mtlx-versions.json",
   "vscode_extension/MARKETPLACE.md",
+  // USD Scene Viewer: reached only through dynamic import()/Worker URLs,
+  // which the VIEW_DEPS scan above cannot see.
+  "js/usd/usd-stage-loader.js",
+  "js/usd/usd-stage-worker.js",
+  "js/usd/usd-webview-worker-shim.js",
+  "vendor/usd-webview-bindings/LICENSE",
+  "vendor/usd-webview-bindings/usdWebViewBindings.js",
+  "vendor/usd-webview-bindings/usdWebViewBindingsModule.js",
+  "vendor/usd-webview-bindings/usdWebViewBindingsModule.wasm",
 ];
 
 // Prefixes (directory, trailing slash) and exact files that must NEVER
@@ -94,8 +144,6 @@ const FORBIDDEN_PREFIXES = [
   "gallery/",
   ".github/",
   ".claude/",
-  "js/usd/",
-  "vendor/usd-webview-bindings/",
   "vendor/basis-encoder/",
   ...MTLX_VERSIONS.map((v) => v.version)
     .filter((v) => v !== DEFAULT_MTLX_VERSION)
@@ -114,9 +162,14 @@ function collectManifestFiles() {
   if (pkg.icon) required.add(pkg.icon);
   for (const lang of pkg.contributes?.languages || []) {
     if (lang.configuration) required.add(lang.configuration.replace(/^\.\//, ""));
+    if (lang.icon?.light) required.add(lang.icon.light.replace(/^\.\//, ""));
+    if (lang.icon?.dark) required.add(lang.icon.dark.replace(/^\.\//, ""));
   }
   for (const grammar of pkg.contributes?.grammars || []) {
     if (grammar.path) required.add(grammar.path.replace(/^\.\//, ""));
+  }
+  for (const snippet of pkg.contributes?.snippets || []) {
+    if (snippet.path) required.add(snippet.path.replace(/^\.\//, ""));
   }
 
   const srcDir = path.join(REPO_ROOT, "vscode_extension", "src");
@@ -135,12 +188,19 @@ function collectRequiredFiles() {
   for (const p of RUNTIME_ASSETS) required.add(p);
   for (const p of collectManifestFiles()) required.add(p);
 
+  // Only require the trimmed MaterialX snapshot when it's actually on disk:
+  // a plain checkout with no `npm run vendor:offline` run has no vendor/materialx
+  // at all, and that's a valid (remote-mode) state, not a packaging bug.
+  if (existsSync(path.join(REPO_ROOT, "vendor", "materialx"))) {
+    for (const p of MATERIALX_KEEP_LIST) required.add(p);
+  }
+
   // index.html's own script/link tags (loaded eagerly by webview.html,
   // spliced 1:1 from index.html by scripts/build-webview.mjs).
   const indexHtml = readRepoFile("index.html");
   for (const p of extractPaths(indexHtml, [".js", ".css", ".jsx", ".ico", ".png"])) required.add(p);
 
-  // js/shell.jsx's VIEW_DEPS entries, minus each view's own webviewSkip
+  // js/shell.jsx's VIEW_DEPS entries, each minus its OWN webviewSkip
   // (loadViewDeps() never requests those inside the webview).
   const shellJsx = readRepoFile("js/shell.jsx");
   const viewDepsStart = shellJsx.indexOf("const VIEW_DEPS = {");
@@ -148,9 +208,12 @@ function collectRequiredFiles() {
   const viewDepsEnd = shellJsx.indexOf("\n};", viewDepsStart);
   if (viewDepsEnd === -1) fail("could not find the end of VIEW_DEPS in js/shell.jsx");
   const viewDepsSrc = shellJsx.slice(viewDepsStart, viewDepsEnd);
-  const skipped = extractSkippedPaths(viewDepsSrc);
-  for (const p of extractPaths(viewDepsSrc, [".js", ".css", ".jsx"])) {
-    if (!skipped.has(p)) required.add(p);
+  for (const [view, block] of splitViewDeps(viewDepsSrc)) {
+    if (WEBVIEW_UNREACHABLE_VIEWS.includes(view)) continue;
+    const skipped = extractSkippedPaths(block);
+    for (const p of extractPaths(block, [".js", ".css", ".jsx"])) {
+      if (!skipped.has(p)) required.add(p);
+    }
   }
 
   // The default MaterialX WASM build (the ONLY version .vscodeignore
@@ -202,6 +265,13 @@ function getPackagedFiles() {
   return files;
 }
 
+// Anything under vendor/materialx/ that isn't one of the six keep-list
+// files is forbidden - covers resources/Images/ and any other leftover
+// from the full upstream snapshot, without hand-listing every subpath.
+function isForbiddenMaterialxPath(p) {
+  return p.startsWith("vendor/materialx/") && !MATERIALX_KEEP_LIST.includes(p);
+}
+
 function main() {
   const required = collectRequiredFiles();
   const packaged = getPackagedFiles();
@@ -209,7 +279,12 @@ function main() {
 
   const missing = [...required].filter((p) => !packaged.has(p)).sort();
   const forbidden = [...packaged]
-    .filter((p) => FORBIDDEN_FILES.includes(p) || FORBIDDEN_PREFIXES.some((prefix) => p.startsWith(prefix)))
+    .filter(
+      (p) =>
+        FORBIDDEN_FILES.includes(p) ||
+        FORBIDDEN_PREFIXES.some((prefix) => p.startsWith(prefix)) ||
+        isForbiddenMaterialxPath(p)
+    )
     .sort();
   log(`checked ${required.size} required file(s) and ${FORBIDDEN_PREFIXES.length + FORBIDDEN_FILES.length} forbidden rule(s) against ${packaged.size} packaged file(s).`);
 

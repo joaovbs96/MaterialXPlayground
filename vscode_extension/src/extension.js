@@ -11,11 +11,16 @@
 
 const path = require('path');
 const vscode = require('vscode');
-const { MaterialXEditorProvider, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel, getSharedOutputChannel, logLine, disposeSharedOutputChannel } = require('./editorProvider');
+const { MaterialXEditorProvider, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel, getSharedOutputChannel, logLine, disposeSharedOutputChannel, testApi } = require('./editorProvider');
 const validator = require('./validator');
 const { ValidationClient } = require('./validationClient');
 const hoverProvider = require('./hoverProvider');
+const symbolProviders = require('./symbolProviders');
+const completionProvider = require('./completionProvider');
+const newFromExample = require('./newFromExample');
+const sceneProvider = require('./sceneProvider');
 const { errMsg } = require('./util');
+const { getSetting } = require('./settingsHost');
 
 // Diagnostics + status bar are created once in activate() but read/
 // written from the module-scope helpers below (toVsDiagnostics,
@@ -25,7 +30,7 @@ let diagnosticCollection = null;
 let statusBarItem = null;
 let validationClient = null;
 
-// materialx.autoOpenPlayground bookkeeping (see maybeAutoOpen() in
+// materialxPlayground.autoOpenPlayground bookkeeping (see maybeAutoOpen() in
 // activate()): which .mtlx files have already had the playground
 // auto-opened for them this extension-host session, keyed by
 // uri.toString(). Module scope (not activate()-local) because
@@ -34,6 +39,14 @@ let validationClient = null;
 // to see the same Set across the whole session, exactly like
 // diagnosticCollection/statusBarItem above.
 const autoOpenedUris = new Set();
+
+// materialxPlayground.autoOpenSceneViewer bookkeeping (see
+// maybeAutoOpenSceneText()/maybeAutoOpenSceneTab() in activate()): same
+// per-open (not per-focus) semantics as autoOpenedUris above, keyed by
+// uri.toString(), but for USD scene files. A separate Set because a scene
+// file and a .mtlx file are never the same uri, but the two features are
+// independent and shouldn't share re-arm timing.
+const autoOpenedSceneUris = new Set();
 
 // validator.js's return shape ({ message, startLine, startChar, endLine,
 // endChar, severity: 'error' }) is plain objects, not vscode.Diagnostic
@@ -154,6 +167,25 @@ function activate(context) {
     // its own disposable onto context.subscriptions.
     hoverProvider.register(context);
 
+    // Outline/breadcrumbs, go to definition, find references and color
+    // swatches (symbolProviders.js), pushes its own disposables onto
+    // context.subscriptions.
+    symbolProviders.register(context);
+
+    // Auto-complete for node categories, structural elements, node inputs
+    // and reference-attribute values (completionProvider.js), pushes its
+    // own disposable onto context.subscriptions.
+    completionProvider.register(context);
+
+    // materialxPlayground.newFromExample: copies a curated example .mtlx
+    // (plus textures) into the workspace and opens it (newFromExample.js),
+    // pushes its own disposable onto context.subscriptions.
+    newFromExample.register(context);
+
+    // USD Scene Viewer custom editor for .usd/.usda/.usdc/.usdz plus the
+    // materialxPlayground.openScene command (sceneProvider.js).
+    sceneProvider.register(context);
+
     const provider = new MaterialXEditorProvider(context);
 
     context.subscriptions.push(
@@ -177,22 +209,25 @@ function activate(context) {
         return null;
     };
 
-    // 'splitRight' placement for openInPlayground below (materialx.
+    // 'splitRight' placement for openInPlayground below (materialxPlayground.
     // openBehavior, package.json contributes.configuration) — figures out
-    // WHERE to open the playground so it lands beside a text editor
-    // already open on the same file, then issues the `vscode.openWith`
-    // call itself. Returns true if it did so (placement handled — the
-    // caller must not also do its own plain open), false if there was
-    // nothing to split against or anything about the tab-group scan
-    // failed, in which case the caller falls back to opening in the
-    // active group. Never throws.
+    // WHERE to open the given custom editor (`viewType`) so it lands
+    // beside a text editor already open on the same file, then issues the
+    // `vscode.openWith` call itself. Returns true if it did so (placement
+    // handled, the caller must not also do its own plain open), false if
+    // there was nothing to split against or anything about the tab-group
+    // scan failed, in which case the caller falls back to opening in the
+    // active group. Never throws. Shared by openInPlayground (viewType
+    // 'materialxPlayground.editor') and maybeAutoOpenSceneText below
+    // (viewType sceneProvider.VIEW_TYPE): one placement algorithm, not
+    // duplicated per editor.
     //
     // vscode.window.tabGroups.all exposes every editor group with a
     // numeric `viewColumn` and each tab's `input`, which is
     // `vscode.TabInputText` (has `.uri`) for a plain text tab, or
     // `vscode.TabInputCustom` (has both `.uri` and `.viewType`) for an
     // already-open custom editor tab like ours.
-    const openBesideTextEditor = async (uri, preserveFocus) => {
+    const openBesideTextEditor = async (uri, preserveFocus, viewType) => {
         try {
             const uriStr = uri.toString();
             let textGroupColumn = null; // viewColumn of the group holding a TEXT tab for this uri
@@ -205,7 +240,7 @@ function activate(context) {
                         textGroupColumn = group.viewColumn;
                     } else if (
                         input instanceof vscode.TabInputCustom
-                        && input.viewType === 'materialxPlayground.editor'
+                        && input.viewType === viewType
                         && input.uri.toString() === uriStr
                     ) {
                         existingPlaygroundColumn = group.viewColumn;
@@ -219,7 +254,7 @@ function activate(context) {
             // it) instead of splitting open a second copy elsewhere.
             if (existingPlaygroundColumn !== null) {
                 await vscode.commands.executeCommand(
-                    'vscode.openWith', uri, 'materialxPlayground.editor',
+                    'vscode.openWith', uri, viewType,
                     { viewColumn: existingPlaygroundColumn, preserveFocus }
                 );
                 return true;
@@ -245,7 +280,7 @@ function activate(context) {
                 // an explicit, already-known viewColumn is what makes the
                 // reuse deterministic here.
                 await vscode.commands.executeCommand(
-                    'vscode.openWith', uri, 'materialxPlayground.editor',
+                    'vscode.openWith', uri, viewType,
                     { viewColumn: targetColumn, preserveFocus }
                 );
                 return true;
@@ -263,7 +298,7 @@ function activate(context) {
                 || await vscode.workspace.openTextDocument(uri);
             await vscode.window.showTextDocument(doc, { viewColumn: textGroupColumn, preserveFocus: false });
             await vscode.commands.executeCommand(
-                'vscode.openWith', uri, 'materialxPlayground.editor',
+                'vscode.openWith', uri, viewType,
                 { viewColumn: vscode.ViewColumn.Beside, preserveFocus }
             );
             return true;
@@ -287,9 +322,9 @@ function activate(context) {
                 return;
             }
 
-            const openBehavior = vscode.workspace.getConfiguration('materialx').get('openBehavior', 'splitRight');
+            const openBehavior = getSetting('openBehavior');
             if (openBehavior === 'splitRight') {
-                const placed = await openBesideTextEditor(uri, preserveFocus);
+                const placed = await openBesideTextEditor(uri, preserveFocus, 'materialxPlayground.editor');
                 if (placed) return;
                 // Nothing to split against (or the scan itself failed) —
                 // fall through to the plain open below. Opening SOMEWHERE
@@ -312,7 +347,7 @@ function activate(context) {
         }
     };
 
-    // materialx.autoOpenPlayground companion: the first time a .mtlx file
+    // materialxPlayground.autoOpenPlayground companion: the first time a .mtlx file
     // becomes the active text editor (and on every subsequent FIRST time
     // after the file is closed and reopened — see the re-arm comment on
     // the onDidCloseTextDocument listener below), automatically open the
@@ -325,11 +360,75 @@ function activate(context) {
         // folder's files.
         if (!vscode.workspace.isTrusted) return;
         if (!editor || !editor.document || editor.document.uri.scheme !== 'file' || editor.document.languageId !== 'mtlx') return;
-        if (!vscode.workspace.getConfiguration('materialx').get('autoOpenPlayground', true)) return;
+        if (!getSetting('autoOpenPlayground')) return;
         const key = editor.document.uri.toString();
         if (autoOpenedUris.has(key)) return;
         autoOpenedUris.add(key);
         openInPlayground(editor.document.uri, { preserveFocus: true });
+    };
+
+    // materialxPlayground.autoOpenSceneViewer companion, TEXT half: a USD
+    // scene file that VS Code opens as a genuine text editor (.usda, or a
+    // .usd that happens to be ASCII) fires onDidChangeActiveTextEditor
+    // exactly like a .mtlx file does, so this mirrors maybeAutoOpen above:
+    // same guards, same 'splitRight'/'sameGroup' placement via
+    // openBesideTextEditor, same preserveFocus: true so the auto-opened
+    // viewer never steals keystrokes from the text editor. The BINARY half
+    // (a .usdc/.usdz, or a .usd VS Code can't decode as text) never
+    // produces a TextEditor at all, that path is maybeAutoOpenSceneTab
+    // below, driven by tabGroups.onDidChangeTabs instead.
+    const maybeAutoOpenSceneText = (editor) => {
+        if (!vscode.workspace.isTrusted) return;
+        if (!editor || !editor.document || editor.document.uri.scheme !== 'file') return;
+        const uri = editor.document.uri;
+        if (!sceneProvider.isSceneUri(uri)) return;
+        if (!getSetting('autoOpenSceneViewer')) return;
+        const key = uri.toString();
+        if (autoOpenedSceneUris.has(key)) return;
+        autoOpenedSceneUris.add(key);
+        openBesideTextEditor(uri, true, sceneProvider.VIEW_TYPE);
+    };
+
+    // materialxPlayground.autoOpenSceneViewer companion, BINARY half: a
+    // scene file VS Code shows as a plain editor tab that is NOT backed by
+    // a real TextDocument (checked via vscode.workspace.textDocuments,
+    // rather than assuming a specific TabInput subclass for the
+    // "binary/unsupported encoding" placeholder, that placeholder's tab
+    // input was verified empirically against real VS Code before writing
+    // this check). Such a tab gets REPLACED in place by the scene viewer,
+    // in the same tab group, rather than opened beside it: there is no
+    // usable text editor to split against, and leaving the placeholder tab
+    // open beside the viewer would just be dead weight.
+    const maybeAutoOpenSceneTab = (tab) => {
+        if (!vscode.workspace.isTrusted) return;
+        if (!getSetting('autoOpenSceneViewer')) return;
+        const input = tab && tab.input;
+        if (!input || !(input.uri instanceof vscode.Uri)) return;
+        const uri = input.uri;
+        if (uri.scheme !== 'file') return;
+        if (!sceneProvider.isSceneUri(uri)) return;
+        // Already the scene viewer, or some other custom editor entirely,
+        // either way, not ours to touch.
+        if (input instanceof vscode.TabInputCustom) return;
+        // Backed by a real TextDocument somewhere: that's the TEXT half's
+        // job (maybeAutoOpenSceneText, above), not this one.
+        const uriStr = uri.toString();
+        if (vscode.workspace.textDocuments.some((d) => d.uri.toString() === uriStr)) return;
+        if (autoOpenedSceneUris.has(uriStr)) return;
+        autoOpenedSceneUris.add(uriStr);
+        (async () => {
+            try {
+                const viewColumn = tab.group ? tab.group.viewColumn : undefined;
+                await vscode.commands.executeCommand(
+                    'vscode.openWith', uri, sceneProvider.VIEW_TYPE,
+                    viewColumn !== undefined ? { viewColumn } : undefined
+                );
+                await vscode.window.tabGroups.close(tab);
+            } catch (err) {
+                // Best effort, never let auto-open break the file actually
+                // opening in whatever editor VS Code picked for it.
+            }
+        })();
     };
 
     context.subscriptions.push(
@@ -403,7 +502,7 @@ function activate(context) {
         })
     );
 
-    // materialx.autoOpenPlayground listeners (see maybeAutoOpen() above):
+    // materialxPlayground.autoOpenPlayground listeners (see maybeAutoOpen() above):
     // trigger on every active-editor change, and re-arm per file only once
     // that FILE is actually closed — not merely defocused by switching
     // tabs. This distinction is load-bearing: without it, tabbing away
@@ -419,6 +518,33 @@ function activate(context) {
         // for whatever .mtlx is already active, same as a fresh trusted
         // window, not wait for the next editor-focus change.
         vscode.workspace.onDidGrantWorkspaceTrust(() => maybeAutoOpen(vscode.window.activeTextEditor))
+    );
+
+    // materialxPlayground.autoOpenSceneViewer listeners: the TEXT half
+    // rides onDidChangeActiveTextEditor (same event/re-arm shape as
+    // maybeAutoOpen above), the BINARY half rides tabGroups.onDidChangeTabs
+    // (newly opened tabs); see the two functions' own comments for why a
+    // single event can't cover both. Re-arm for EITHER half happens when a
+    // tab closes and no tab anywhere still references that scene file's
+    // uri, since the text case leaves two tabs open (the text editor and
+    // the auto-opened viewer beside it) while the binary case leaves only
+    // one (the viewer, after replacing the placeholder): checking "any
+    // tab left for this uri" covers both without needing to know which
+    // case produced the closed tab.
+    context.subscriptions.push(
+        vscode.window.onDidChangeActiveTextEditor(maybeAutoOpenSceneText),
+        vscode.workspace.onDidGrantWorkspaceTrust(() => maybeAutoOpenSceneText(vscode.window.activeTextEditor)),
+        vscode.window.tabGroups.onDidChangeTabs((e) => {
+            for (const tab of e.opened) maybeAutoOpenSceneTab(tab);
+            for (const tab of e.closed) {
+                const input = tab.input;
+                if (!input || !(input.uri instanceof vscode.Uri) || !sceneProvider.isSceneUri(input.uri)) continue;
+                const uriStr = input.uri.toString();
+                const stillOpen = vscode.window.tabGroups.all.some((g) =>
+                    g.tabs.some((t) => t.input && t.input.uri && t.input.uri.toString() === uriStr));
+                if (!stillOpen) autoOpenedSceneUris.delete(uriStr);
+            }
+        })
     );
 
     // Live .mtlx diagnostics: validate anything already open, then keep
@@ -457,12 +583,30 @@ function activate(context) {
     // event (from contributes.languages, VS Code >=1.74), so a .mtlx
     // file can already be active before onDidChangeActiveTextEditor fires.
     maybeAutoOpen(vscode.window.activeTextEditor);
+
+    // Same idea for materialxPlayground.autoOpenSceneViewer: the active
+    // editor covers the TEXT half (onLanguage-style activation can already
+    // have a .usda active before the change event fires), and a scan of
+    // every already-open tab covers the BINARY half, since a placeholder
+    // tab that was open before activation never fires onDidChangeTabs.
+    maybeAutoOpenSceneText(vscode.window.activeTextEditor);
+    for (const group of vscode.window.tabGroups.all) {
+        for (const tab of group.tabs) maybeAutoOpenSceneTab(tab);
+    }
+
+    // testApi is non-null only when MTLX_TEST_TRANSPORT=1 was set in the
+    // extension host's own environment before activation, never true for
+    // a real user session. Exposes the direct-texture-read transport's
+    // test hooks to the stress-test harness driving this Extension
+    // Development Host; undefined otherwise, same as before this feature.
+    return testApi ? { _test: testApi } : undefined;
 }
 
 function deactivate() {
     for (const timer of debounceTimers.values()) clearTimeout(timer);
     debounceTimers.clear();
     autoOpenedUris.clear();
+    autoOpenedSceneUris.clear();
     return validationClient ? validationClient.dispose() : undefined;
 }
 

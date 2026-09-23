@@ -28,6 +28,12 @@ const TEXTURE_EXTENSIONS = new Set([
     'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'exr', 'hdr', 'tif', 'tiff', 'ktx2'
 ]);
 
+// USD scene file sets (usdFileSet.js): layers, MaterialX documents and every
+// image type the Scene Viewer's texture loaders decode.
+const SCENE_EXTENSIONS = new Set([
+    'usd', 'usda', 'usdc', 'usdz', 'mtlx', 'tga', ...TEXTURE_EXTENSIONS
+]);
+
 function extOf(ref) {
     const clean = String(ref).split(/[?#]/)[0];
     const dot = clean.lastIndexOf('.');
@@ -38,6 +44,7 @@ function isAllowedRef(ref, kind) {
     const ext = extOf(ref);
     if (kind === 'include') return INCLUDE_EXTENSIONS.has(ext);
     if (kind === 'texture') return TEXTURE_EXTENSIONS.has(ext);
+    if (kind === 'scene') return SCENE_EXTENSIONS.has(ext);
     return false;
 }
 

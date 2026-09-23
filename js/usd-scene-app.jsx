@@ -4,6 +4,9 @@
 // statistics panel like js/compare-app.jsx) so the Scene Viewer looks and
 // behaves like the rest of the toolset.
 (() => {
+    // In the VS Code extension the host sends the stage's file set
+    // ('mtlx-load-scene'); pickers, drop and the example are hidden there.
+    const IN_VSCODE = !!window.__MTLX_VSCODE__;
     const ROOT_EXTENSIONS = ['.usd', '.usda', '.usdc', '.usdz'];
     const EXAMPLE_ROOT = 'tests/fixtures/usd-scene/root.usda';
     const EXAMPLE_FILES = [
@@ -339,6 +342,7 @@
         const resizeRef = React.useRef(null);
         const [bodyHeight, setBodyHeight] = React.useState(0);
         const [depsReady, setDepsReady] = React.useState(!!window.MtlxGraphPreview);
+        const [depsError, setDepsError] = React.useState('');
 
         useEscapeToClose(onClose, open);
 
@@ -374,14 +378,20 @@
             try { localStorage.setItem(MATERIAL_PREVIEW_RECT_KEY, JSON.stringify(rect)); } catch (e) { /* storage unavailable */ }
         }, [rect]);
 
+        // Keyed on depsReady, not window.MtlxGraphPreview: a load that finished
+        // while the panel was closed must still flip it on reopen (memoized, so
+        // cheap). A rejection shows its reason; the next open retries.
         React.useEffect(() => {
-            if (!window.MtlxGraphPreview && open) {
-                let cancelled = false;
-                window.mtlxLoadViewDeps('galleryDetail').then(() => { if (!cancelled) setDepsReady(true); });
-                return () => { cancelled = true; };
-            }
-            return undefined;
-        }, [open]);
+            if (!open || depsReady) return undefined;
+            let cancelled = false;
+            window.mtlxLoadViewDeps('galleryDetail').then(() => {
+                if (!cancelled) { setDepsError(''); setDepsReady(true); }
+            }, (e) => {
+                console.error('[usd-scene] material preview dependencies failed to load', e);
+                if (!cancelled) setDepsError(String((e && e.message) || e));
+            });
+            return () => { cancelled = true; };
+        }, [open, depsReady]);
 
         // Deps on !!shown, not []: the body div does not exist in the DOM
         // until the panel opens for the first time (shown is still null on
@@ -476,9 +486,14 @@
                     </div>
                 </div>
                 <div ref={bodyRef} className="relative flex-1 min-h-0">
-                    {!depsReady ? (
-                        <div className="absolute inset-0 flex items-center justify-center text-gray-400 text-sm animate-pulse">Loading preview</div>
+                    {!depsReady ? (depsError ? (
+                        <div role="alert" data-testid="usd-scene-material-preview-error" className="absolute inset-0 flex flex-col items-center justify-center gap-1 px-4 text-center">
+                            <span className="text-sm text-red-300">The node graph preview could not be loaded.</span>
+                            <span className="text-[11px] text-gray-400 break-all">{depsError}</span>
+                        </div>
                     ) : (
+                        <div className="absolute inset-0 flex items-center justify-center text-gray-400 text-sm animate-pulse">Loading preview</div>
+                    )) : (
                         <window.MtlxGraphPreview
                             xml={shown.xml}
                             preview="right"
@@ -1133,6 +1148,31 @@
                 setFiles(loaded); setRootPath(EXAMPLE_ROOT); setRootTouched(true); await load(loaded, EXAMPLE_ROOT);
             } catch (e) { if (mountedRef.current && generation === generationRef.current) { setError(String(e && e.message || e)); setStatus('error'); } }
         };
+        // VS Code host entry: { files: { relPath: File }, root } from the
+        // extension (media/bootstrap.js), loaded with its explicit root layer.
+        const loadFromHostRef = React.useRef(null);
+        loadFromHostRef.current = (payload) => {
+            if (!payload || !payload.files || !payload.root) return;
+            generationRef.current += 1;
+            if (abortRef.current) abortRef.current.abort();
+            if (handleRef.current && handleRef.current.dispose) handleRef.current.dispose();
+            handleRef.current = null; setHandle(null); setStage(null);
+            window.__mtlxUsdSceneHandle = null;
+            const next = filesFromMap(payload.files);
+            setFiles(next); setRootPath(payload.root); setRootTouched(true); setError('');
+            load(next, payload.root);
+        };
+        React.useEffect(() => {
+            if (!IN_VSCODE) return undefined;
+            const take = () => {
+                const payload = window.__mtlxPendingSceneImport;
+                window.__mtlxPendingSceneImport = null;
+                if (payload) loadFromHostRef.current(payload);
+            };
+            take();
+            window.addEventListener('mtlx-load-scene', take);
+            return () => window.removeEventListener('mtlx-load-scene', take);
+        }, []);
         React.useEffect(() => {
             if (!stage || !containerRef.current) return undefined;
             if (handleRef.current && handleRef.current.__sceneStage !== stage) {
@@ -1300,6 +1340,7 @@
             activeRef,
             onFiles: (map) => { chooseFilesFromMap(map); },
             onDragState: setDragOver,
+            disabled: IN_VSCODE,
         });
 
         const candidates = rootCandidates(files);
@@ -1867,6 +1908,20 @@
         const renderedPrimCount = (handle && Array.isArray(handle.prims)) ? handle.prims.length : meshes.length;
         const triangleCount = stageTriangleCount(stage);
         const hasStage = !!stage || files.length > 0;
+        // VS Code test seam: bootstrap.js defines __mtlxSceneReport only for
+        // the extension's test transport; one report per settled load.
+        React.useEffect(() => {
+            if (!IN_VSCODE || typeof window.__mtlxSceneReport !== 'function') return;
+            if (status !== 'rendered' && status !== 'error') return;
+            const errorLines = warnings.filter((label) => severityOf(label) === 'error');
+            window.__mtlxSceneReport({
+                status, root: rootPath, files: files.length, prims: renderedPrimCount, meshes: meshes.length, materials: materials.length,
+                warnings: warnings.filter((label) => severityOf(label) === 'warning').length,
+                errors: errorLines.length + (status === 'error' ? 1 : 0),
+                error: status === 'error' ? error : '',
+                sample: errorLines.concat(warnings).slice(0, 5),
+            });
+        }, [status]);
 
         const RENDER_TAB_LABELS = { display: 'Display', lighting: 'Lighting', effects: 'Effects', geometry: 'Geometry and Textures' };
         // rowDirtyFor closes over this render's draft/live state; it is a
@@ -2134,6 +2189,7 @@
         const sidebarBody = (
             <div className="flex-1 overflow-y-auto custom-scrollbar p-3.5 space-y-4">
                 <SectionCard icon="file" title="Stage" summary={rootBasename || 'No stage'} defaultOpen>
+                    {!IN_VSCODE && (<React.Fragment>
                     <div className="flex items-center gap-1">
                         <div className="flex-1 min-w-0">
                             <FilePickerField
@@ -2155,6 +2211,7 @@
                         </label>
                     </div>
                     <div className="text-xs text-gray-500">or drag-and-drop anywhere on the page</div>
+                    </React.Fragment>)}
 
                     {candidates.length > 1 && (() => {
                         const candidatePaths = candidates.map((f) => f.path);
@@ -2221,7 +2278,9 @@
                     {busy && (
                         <button type="button" data-testid="usd-scene-cancel" onClick={cancel} className={BTN_SECONDARY + ' w-full'}>Cancel</button>
                     )}
-                    <button type="button" data-testid="usd-scene-load-example" onClick={loadExample} className={BTN_SECONDARY + ' w-full'}>Load example</button>
+                    {!IN_VSCODE && (
+                        <button type="button" data-testid="usd-scene-load-example" onClick={loadExample} className={BTN_SECONDARY + ' w-full'}>Load example</button>
+                    )}
 
                     {meshes.length > 0 && (
                         <details>
@@ -2476,11 +2535,13 @@
                             />
                             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center px-6">
                                 <div className="text-gray-500 text-sm max-w-sm">
-                                    Drop a USD stage (.usd, .usda, .usdc, .usdz) and its referenced files
+                                    {IN_VSCODE ? 'Reading the USD stage and its referenced files' : 'Drop a USD stage (.usd, .usda, .usdc, .usdz) and its referenced files'}
                                 </div>
-                                <button type="button" onClick={loadExample} className={PILL_ACTION}>
-                                    <MtlxIcon name="file-upload" className="w-3.5 h-3.5" /> Load example
-                                </button>
+                                {!IN_VSCODE && (
+                                    <button type="button" onClick={loadExample} className={PILL_ACTION}>
+                                        <MtlxIcon name="file-upload" className="w-3.5 h-3.5" /> Load example
+                                    </button>
+                                )}
                             </div>
                         </React.Fragment>
                     )}

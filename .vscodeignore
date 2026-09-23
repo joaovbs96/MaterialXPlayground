@@ -20,9 +20,34 @@
 !images/tabler-icons/**
 !js/*
 !js/{docs,gen,graph,shared,vendor}/**
+# USD Scene Viewer: the stage worker, its VS Code blob-linking shim and the
+# OpenUSD runtime (js/usd/index.js is a dev-only re-export).
+!js/usd/usd-stage-loader.js
+!js/usd/usd-stage-worker.js
+!js/usd/usd-webview-worker-shim.js
 !js/materialx/LICENSE.txt
 !js/materialx/1.39.5/JsMaterialXGenShader.js
 !js/materialx/1.39.5/JsMaterialXGenShader.wasm
 !js/materialx/1.39.5/JsMaterialXGenShader.data
 !vendor/vendor-manifest.json
-!vendor/{babel,dagre,highlightjs,jszip,katex,materialx,pako,react,reactflow,tailwind,three,utif}/**
+!vendor/{babel,dagre,highlightjs,jszip,katex,pako,react,reactflow,tailwind,three,utif}/**
+!vendor/usd-webview-bindings/{LICENSE,usdWebViewBindings.js,usdWebViewBindingsModule.js,usdWebViewBindingsModule.wasm}
+# vendor/materialx/ ships only what the webview/extension host reach:
+# manifest, license, spec docs, one fallback material, plus the curated
+# "New Material from Example" set. Keep in sync with check-vsix-files.mjs's MATERIALX_KEEP_LIST.
+!vendor/materialx/manifest.json
+!vendor/materialx/LICENSE
+!vendor/materialx/documents/Specification/MaterialX.StandardNodes.md
+!vendor/materialx/documents/Specification/MaterialX.PBRSpec.md
+!vendor/materialx/documents/Specification/MaterialX.NPRSpec.md
+!vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_default.mtlx
+!vendor/materialx/resources/Materials/Examples/StandardSurface/standard_surface_default.mtlx
+!vendor/materialx/resources/Materials/Examples/StandardSurface/standard_surface_gold.mtlx
+!vendor/materialx/resources/Materials/Examples/StandardSurface/standard_surface_glass.mtlx
+!vendor/materialx/resources/Materials/Examples/StandardSurface/standard_surface_plastic.mtlx
+!vendor/materialx/resources/Materials/Examples/StandardSurface/standard_surface_marble_solid.mtlx
+!vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_aluminum_brushed.mtlx
+!vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_glass.mtlx
+!vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_carpaint.mtlx
+!vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_velvet.mtlx
+!vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_pearl.mtlx

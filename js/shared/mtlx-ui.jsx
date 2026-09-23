@@ -1061,11 +1061,19 @@ const useViewEnum = (viewRef, method, initial) => {
 // PNG snapshot of the given render view's frame, downloaded as
 // `<baseName, sanitized>.png`. Silently no-ops on a falsy dataURL;
 // view.snapshot() returns a plain data: URL, so there's no URL to revoke.
+// Inside the VS Code webview (an <a download> click there produces no
+// file -- see downloadBlob below), the data: URL is converted to a Blob
+// and handed to the host save bridge instead.
 const downloadSnapshot = (view, baseName) => {
     const url = view.snapshot();
     if (!url) return;
+    const filename = baseName.replace(/[^\w.-]+/g, '_') + '.png';
+    if (window.__MTLX_VSCODE__ && window.__mtlxHostSave) {
+        fetch(url).then((res) => res.blob()).then((blob) => window.__mtlxHostSave(blob, filename));
+        return;
+    }
     const a = document.createElement('a');
-    a.download = baseName.replace(/[^\w.-]+/g, '_') + '.png';
+    a.download = filename;
     a.href = url;
     a.click();
 };
@@ -1088,8 +1096,17 @@ const snapshotBaseName = (name, geom) => {
 
 // Download a Blob as a file: object URL -> synthetic anchor click ->
 // delayed revoke (gives the download a moment to start before the URL is
-// freed).
+// freed). Inside the VS Code webview an <a download> click produces no
+// file at all (verified: nothing lands in Downloads or the webview's own
+// storage) -- window.__mtlxHostSave (vscode_extension/media/bootstrap.js)
+// round-trips the bytes to the extension host, which writes them via a
+// native Save dialog instead. Web and Electron are untouched: neither
+// sets window.__MTLX_VSCODE__, so both keep the anchor-click path.
 const downloadBlob = (blob, filename) => {
+    if (window.__MTLX_VSCODE__ && window.__mtlxHostSave) {
+        window.__mtlxHostSave(blob, filename);
+        return;
+    }
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = filename;

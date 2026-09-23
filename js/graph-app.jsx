@@ -641,6 +641,10 @@
             // stdlib (kept separate) so snapshots stay small on big graphs.
             const parsedRef = React.useRef(null);
             parsedRef.current = parsed;
+            // True only while the current document is one the VS Code
+            // host itself sent (handleImport's IN_VSCODE branch); gates
+            // the soft externalReload path so it never targets a mismatch.
+            const hostDocRef = React.useRef(false);
             // Lets smartFitView (invoked from the F-key handler's stale
             // closure, registered once on mount) always see the current
             // sidebar state instead of the value from first render.
@@ -1357,6 +1361,7 @@
                     setMtlxPaths([]);
                     setChosenMtlx(null);
                     setSelectedId(null);
+                    hostDocRef.current = false;
                     setParsed(p);
                     setScope('');
                     setStatus(null);
@@ -1381,7 +1386,9 @@
             // `additive` (File > Import): never replaces the session, new
             // .mtlx files join the mtlxPaths candidates list instead of
             // loading; textures still merge and rebind live previews.
-            const ingest = async (map, rootKey, additive) => {
+            // `fromHost` (VS Code only): marks the resulting document as
+            // one the host itself sent, see hostDocRef above.
+            const ingest = async (map, rootKey, additive, fromHost) => {
                 setError(null);
                 try {
                     await expandZips(map);
@@ -1431,6 +1438,7 @@
                     const pick = (rootKey && mtlx.indexOf(rootKey) !== -1)
                         ? rootKey : (mtlx.length === 1 ? mtlx[0] : null);
                     setChosenMtlx(pick);
+                    hostDocRef.current = !!fromHost;
                     if (pick) loadDocument(pick, merged);
                     else setStatus('This drop contains several .mtlx files — pick one below.');
                 } else if (chosenMtlx) {
@@ -1613,10 +1621,13 @@
                     const map = Object.assign({}, payload.files || {}, {
                         [safeName + '.mtlx']: new Blob([payload.xml], { type: 'application/xml' }),
                     });
-                    // The soft (no-confirm) path is for a host-driven reload of
-                    // the SAME document already open (VS Code always; Electron
-                    // only when payload.reload flags its own file watcher).
-                    if (IN_VSCODE || (IN_ELECTRON && payload.reload)) {
+                    // Soft (no-confirm) reload of the SAME document: VS Code
+                    // requires hostDocRef to confirm it; Electron requires
+                    // payload.reload (its own file watcher).
+                    if (IN_VSCODE) {
+                        if (parsedRef.current && hostDocRef.current) externalReloadRef.current(map);
+                        else ingestRef.current(map, undefined, false, true);
+                    } else if (IN_ELECTRON && payload.reload) {
                         if (parsedRef.current) externalReloadRef.current(map);
                         else ingestRef.current(map);
                     } else {
@@ -1742,7 +1753,11 @@
             // Default document: fetched through the normal ingest() path so
             // the session behaves exactly as if the user dropped the file.
             // Skipped silently when offline or when the user was faster.
+            // Skipped entirely under VS Code: the host always sends the
+            // opened document, so an unrelated default would be misleading
+            // (and could otherwise win a race against a slow host payload).
             React.useEffect(() => {
+                if (IN_VSCODE) return;
                 setBusy(true);
                 fetch(DEFAULT_GRAPH_URL)
                     .then((r) => {

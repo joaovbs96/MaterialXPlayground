@@ -18,6 +18,20 @@
         vscodeApi = acquireVsCodeApi();
     }
 
+    // Texture fetches (handleOpen further down) use this directly.
+    // window.fetch is never wrapped here anymore -- the webview resource
+    // pipeline (asWebviewUri) has been verified safe for the large
+    // MaterialX WASM payloads too, so there is no bridge left to bypass.
+    var siteFetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
+
+    // Test seam, inert unless the extension host set MTLX_TEST_TRANSPORT=1
+    // (editorProvider.js's buildHtml() then appends ?transportTest=1 to
+    // this very script's own src). Read from document.currentScript here,
+    // synchronously at load -- the same currentScript-validity caveat as
+    // initialHash/docsOnly further down applies (see their comments).
+    var isTransportTest = !!(document.currentScript
+        && /[?&]transportTest=1(?:&|$)/.test(document.currentScript.getAttribute('src') || ''));
+
     // Flag that the site is running inside the VS Code webview. Unused by
     // the site today (index.html/js/** are read-only reference for this
     // extension), but cheap to set in case a future site change wants to
@@ -53,18 +67,15 @@
         // let this default block the rest of bootstrap from running.
     }
 
-    // Decode a base64 string into a Uint8Array. Used for every binary
+    // Decode a base64 string into a Uint8Array. Used for the filesB64
     // payload that crosses the extension<->webview postMessage boundary
-    // (see the 'mtlx-fetch-result' and 'mtlx-open' handlers below) —
-    // VS Code does NOT reliably deliver Node Buffers/typed arrays posted
-    // from the extension host as typed arrays on this side; in practice
-    // they arrive JSON-serialized into a plain object instead, which is
-    // silently wrong for a Blob and loudly wrong for
-    // WebAssembly.instantiate() (surfaced as "expected magic word
-    // 00 61 73 6d, found 5b 6f 62 6a" — "[obj", i.e. "[object Object]"
-    // stringified). Base64 text has no such ambiguity. These payloads are
-    // at most a few MB, and atob() + a byte loop over that runs in the
-    // tens of milliseconds — negligible next to correctness.
+    // (see the 'mtlx-open' handler below): VS Code does NOT reliably
+    // deliver Node Buffers/typed arrays posted from the extension host as
+    // typed arrays on this side; in practice they arrive JSON-serialized
+    // into a plain object instead, which is silently wrong for a Blob.
+    // Base64 text has no such ambiguity. These payloads are at most a few
+    // MB, and atob() + a byte loop over that runs in the tens of
+    // milliseconds, negligible next to correctness.
     function base64ToUint8(b64) {
         var binary = atob(b64);
         var out = new Uint8Array(binary.length);
@@ -72,70 +83,104 @@
         return out;
     }
 
+    // Inverse of base64ToUint8, chunked so a large export never builds one
+    // giant per-byte string: each chunk is a multiple of 3 bytes (so btoa
+    // never pads mid-stream) before being base64-encoded and joined.
+    function uint8ToBase64(bytes) {
+        var CHUNK_BYTES = 30000;
+        var parts = [];
+        for (var i = 0; i < bytes.length; i += CHUNK_BYTES) {
+            var slice = bytes.subarray(i, i + CHUNK_BYTES);
+            var binary = '';
+            for (var j = 0; j < slice.length; j++) binary += String.fromCharCode(slice[j]);
+            parts.push(btoa(binary));
+        }
+        return parts.join('');
+    }
+
     // ------------------------------------------------------------------
-    // fetch() bridge for the MaterialX Emscripten payloads.
-    //
-    // WHY: the Emscripten glue (js/materialx/<version>/JsMaterialXGenShader.js
-    // et al.) loads its packed virtual filesystem and wasm binary via plain
-    // relative fetch('./js/materialx/<version>/JsMaterialXGenShader.data' /
-    // '.wasm'). Under <base
-    // href="${baseUri}"> those resolve to webview-resource URLs — and the
-    // webview resource pipeline ALTERS these large binaries in transit:
-    // the packed-FS slice offsets shift, so a standard-library file
-    // unpacked from the .data payload fails to parse at its own EOF
-    // ("XML parse error in /libraries/bxdf/disney_principled.mtlx at
-    // character 7307" — that packed file's last byte), the stdlib ends up
-    // null, and every downstream consumer breaks ("getNodeDefs is not
-    // bound", no shader generation). Serving the bytes from the EXTENSION
-    // HOST over postMessage (vscode.workspace.fs.readFile on the real
-    // file, base64-encoded across the boundary — see base64ToUint8 above
-    // for why a raw Uint8Array/Buffer doesn't survive the trip intact)
-    // bypasses that pipeline entirely. The explicit Content-Type on the
-    // synthesized Response keeps WebAssembly.instantiateStreaming() on
-    // its fast path for the .wasm case (it requires 'application/wasm').
-    //
-    // Everything that doesn't match the payload pattern — including
-    // Request-object inputs — passes through to the native fetch
-    // untouched, and any host-side failure falls back to the native
-    // fetch too, so this is never worse than the status quo. Host side:
-    // wireCommonWebviewMessages() in vscode_extension/src/
-    // editorProvider.js (which whitelists the path before reading).
-    // 'mtlx-fetch-result' replies are settled by the window 'message'
-    // listener further down. Ids are a private incrementing counter —
-    // they cannot collide with the 'mtlx-open' flow, which has no id.
-    // Group 1 captures everything after the fixed 'js/' prefix
-    // (materialx/<version>/JsMaterialX....data|wasm) so relPath below
-    // reconstructs the exact string editorProvider.js's
-    // FETCH_WHITELIST_RE whitelists (js/materialx/\d+\.\d+\.\d+/JsMaterialX...).
-    // The \d+\.\d+\.\d+ version segment can't spell '..' — every '.' in
-    // it is digit-flanked — so widening to allow a version directory
-    // does not open a path-escape hole; see the fuller no-escape note on
-    // FETCH_WHITELIST_RE in editorProvider.js.
-    var MTLX_PAYLOAD_RE = /(?:^|\/)js\/(materialx\/\d+\.\d+\.\d+\/JsMaterialX[\w.\-]*\.(?:data|wasm))$/;
-    var pendingFetches = {}; // id -> { resolve, fallback, path }
-    var nextFetchId = 1;
-    // Not in a VS Code webview (vscodeApi unavailable): skip wrapping
-    // entirely — plain browser fetch works fine there.
-    if (vscodeApi && typeof window.fetch === 'function') {
-        var nativeFetch = window.fetch.bind(window);
-        window.fetch = function (input, init) {
-            var url = typeof input === 'string' ? input : (input && input.url) || '';
-            // Match on the URL's path only — strip any query/hash first.
-            var match = MTLX_PAYLOAD_RE.exec(url.split(/[?#]/)[0]);
-            if (!match) return nativeFetch(input, init);
-            var relPath = 'js/' + match[1];
+    // Host-side save bridge: a VS Code webview's `<a download>` click does
+    // NOT produce a downloaded file (verified empirically -- nothing lands
+    // in the OS Downloads folder or the webview's own storage within 15s,
+    // no error, no crash). js/shared/mtlx-ui.jsx's downloadBlob/
+    // downloadSnapshot call this instead of clicking a synthetic anchor
+    // whenever window.__MTLX_VSCODE__ is set and this function exists.
+    // Reads the Blob, base64-encodes it (uint8ToBase64 above -- chunked,
+    // never one giant per-byte string), and asks the extension host to
+    // write it via a native Save dialog (editorProvider.js's
+    // wireCommonWebviewMessages 'mtlx-save-file' handler). The returned
+    // promise always RESOLVES (never rejects) with { ok, path, error } --
+    // a user cancel is ok:false with no error, not a thrown rejection, so
+    // callers never need a .catch for the ordinary "user closed the
+    // dialog" case.
+    var pendingSaveFiles = {}; // id -> resolve
+    var nextSaveFileId = 1;
+    window.__mtlxHostSave = function (blob, filename) {
+        if (!vscodeApi) return Promise.resolve({ ok: false, error: 'not running inside VS Code' });
+        return blob.arrayBuffer().then(function (buf) {
+            var bytesB64 = uint8ToBase64(new Uint8Array(buf));
             return new Promise(function (resolve) {
-                var id = nextFetchId++;
-                pendingFetches[id] = {
-                    resolve: resolve,
-                    // On any host-side failure: fall back to the native
-                    // fetch rather than failing the caller outright.
-                    fallback: function () { resolve(nativeFetch(input, init)); },
-                    path: relPath,
-                };
-                vscodeApi.postMessage({ type: 'mtlx-fetch', id: id, path: relPath });
+                var id = nextSaveFileId++;
+                pendingSaveFiles[id] = resolve;
+                vscodeApi.postMessage({
+                    type: 'mtlx-save-file',
+                    id: id,
+                    name: filename,
+                    mime: blob.type || 'application/octet-stream',
+                    bytesB64: bytesB64,
+                });
             });
-        };
+        });
+    };
+
+    // 'mtlx-save-file-result': the extension host's reply to the above.
+    // Settles and forgets the matching pending entry; unknown/duplicate
+    // ids are ignored.
+    function handleSaveFileResult(msg) {
+        var pending = pendingSaveFiles[msg.id];
+        if (!pending) return;
+        delete pendingSaveFiles[msg.id];
+        pending({ ok: msg.ok, path: msg.path, error: msg.error });
+    }
+
+    // Test-transport only: the stress-test harness's testApi.
+    // triggerDownload(name, text) asks the extension host to post this to
+    // the active panel, which calls the SITE's real, unmodified
+    // downloadBlob (js/shared/mtlx-ui.jsx, exported onto window) with a
+    // small text Blob -- exercising the exact same code path a real
+    // export button uses, not a bootstrap-only stand-in.
+    function handleTestTriggerDownload(msg) {
+        if (!isTransportTest) return;
+        var blob = new Blob([String(msg.text || '')], { type: 'text/plain' });
+        if (typeof window.downloadBlob === 'function') {
+            window.downloadBlob(blob, String(msg.name || 'probe.txt'));
+        } else {
+            postError('mtlx-test-trigger-download: window.downloadBlob is not available yet');
+        }
+    }
+
+    // Test-transport only: mirrors handleTestTriggerDownload but exercises
+    // the OTHER export path, downloadSnapshot(), against the Viewer's live
+    // render-view handle -- window.__mtlxViewerHandle, js/viewer-app.jsx's
+    // own pre-existing "test and console access" hook (set once the
+    // Viewer has actually rendered a frame), not something added for this
+    // harness. That render is async (WASM shader-gen + WebGL compile), so
+    // this polls for the handle to exist rather than assuming it's ready
+    // the instant the view mounts; gives up after 20s.
+    function handleTestTriggerSnapshot(msg) {
+        if (!isTransportTest) return;
+        var deadline = Date.now() + 20000;
+        (function poll() {
+            if (typeof window.downloadSnapshot === 'function' && window.__mtlxViewerHandle) {
+                window.downloadSnapshot(window.__mtlxViewerHandle, String(msg.baseName || 'probe'));
+                return;
+            }
+            if (Date.now() > deadline) {
+                postError('mtlx-test-trigger-snapshot: viewer handle never became available');
+                return;
+            }
+            setTimeout(poll, 300);
+        })();
     }
 
     // ------------------------------------------------------------------
@@ -151,7 +196,14 @@
     function postError(text) {
         if (!vscodeApi || errorPostCount >= MAX_ERROR_POSTS) return;
         errorPostCount++;
-        vscodeApi.postMessage({ type: 'mtlx-error', text: String(text).slice(0, MAX_ERROR_CHARS) });
+        var truncated = String(text).slice(0, MAX_ERROR_CHARS);
+        vscodeApi.postMessage({ type: 'mtlx-error', text: truncated });
+        // Mirrored on a dedicated channel only in test-transport mode, so
+        // the stress-test harness doesn't have to share the general
+        // error-forwarding pipeline with every other error source.
+        if (isTransportTest) {
+            vscodeApi.postMessage({ type: 'mtlx-test-error', text: truncated });
+        }
     }
     window.addEventListener('error', function (event) {
         var where = event && event.filename ? ' (' + event.filename + ':' + event.lineno + ')' : '';
@@ -271,6 +323,42 @@
     // no .mtlx document behind it for those views to show.
     window.__MTLX_DOCS_ONLY__ = (document.currentScript && document.currentScript.getAttribute('data-docs-only')) === '1';
 
+    // Same mechanism for the USD scene editor (sceneProvider.js): js/site-header.js
+    // then shows only the Scene Viewer and Graph Editor tabs.
+    window.__MTLX_SCENE_ONLY__ = (document.currentScript && document.currentScript.getAttribute('data-scene-only')) === '1';
+
+    // Test transport only: js/usd-scene-app.jsx calls this once per settled
+    // stage load with its counts, forwarded as 'mtlx-test-scene'.
+    if (isTransportTest) {
+        window.__mtlxSceneReport = function (report) {
+            if (vscodeApi) vscodeApi.postMessage({ type: 'mtlx-test-scene', report: report });
+        };
+    }
+
+    // Test transport only: recent console warnings/errors, CSP violations and
+    // failed resource loads, attached to the material preview report below.
+    var testLog = [];
+    function pushTestLog(kind, text) {
+        testLog.push(kind + ': ' + String(text).slice(0, 300));
+        if (testLog.length > 60) testLog.shift();
+    }
+    if (isTransportTest) {
+        ['warn', 'error'].forEach(function (level) {
+            var orig = console[level];
+            console[level] = function () {
+                try { pushTestLog(level, Array.prototype.map.call(arguments, String).join(' ')); } catch (e) { /* never break logging */ }
+                return orig.apply(console, arguments);
+            };
+        });
+        document.addEventListener('securitypolicyviolation', function (e) {
+            pushTestLog('csp', e.violatedDirective + ' ' + e.blockedURI);
+        });
+        window.addEventListener('error', function (e) {
+            var t = e && e.target;
+            if (t && t !== window && (t.src || t.href)) pushTestLog('resource', t.src || t.href);
+        }, true);
+    }
+
     // ------------------------------------------------------------------
     // Link interception: <base href="${baseUri}"> (webview.html) makes
     // every relative href in the site resolve to a webview-resource URL,
@@ -312,9 +400,9 @@
 
     // ------------------------------------------------------------------
     // Extension -> webview payload delivery. editorProvider.js posts
-    // { type: 'mtlx-open', mode, name, xml, filesB64 } (resolveCustomTextEditor's
-    // sendUpdate()) once on initial load and again on every debounced
-    // text-document change (live reload).
+    // { type: 'mtlx-open', mode, name, xml, filesB64, fileUrls }
+    // (resolveCustomTextEditor's sendUpdate()) once on initial load and
+    // again on every debounced text-document change (live reload).
     //
     // lastDocName / lastBlobMap: remembered from the most recent
     // 'mtlx-open' payload, so the hashchange listener further down
@@ -329,30 +417,8 @@
     // listener registered below (after these declarations) is reduced to
     // a dispatch over them. Split out of what was previously one large
     // inline handler purely for readability — every closure capture
-    // (pendingFetches, pendingSave, lastDocName/lastBlobMap, vscodeApi,
-    // ...) and every early-return guard is unchanged from before the
-    // split.
-
-    // 'mtlx-fetch-result': the extension host answering an 'mtlx-fetch'
-    // posted by the fetch() bridge above. Settle and forget the pending
-    // entry; unknown/duplicate ids are ignored.
-    function handleFetchResult(msg) {
-        var pending = pendingFetches[msg.id];
-        if (!pending) return;
-        delete pendingFetches[msg.id];
-        if (msg.ok && msg.bytesB64) {
-            pending.resolve(new Response(base64ToUint8(msg.bytesB64), {
-                status: 200,
-                headers: {
-                    'Content-Type': /\.wasm$/.test(pending.path)
-                        ? 'application/wasm'
-                        : 'application/octet-stream',
-                },
-            }));
-        } else {
-            pending.fallback();
-        }
-    }
+    // (pendingSave, lastDocName/lastBlobMap, vscodeApi, ...) and every
+    // early-return guard is unchanged from before the split.
 
     // 'mtlx-save-result': the extension host answering an 'mtlx-save'
     // posted by the Ctrl/Cmd+S handler below. Settle the one in-flight
@@ -414,40 +480,106 @@
         vscodeApi.postMessage({ type: isUndo ? 'mtlx-native-undo' : 'mtlx-native-redo' });
     }
 
-    // 'mtlx-open': editorProvider.js posts { type: 'mtlx-open', mode,
-    // name, xml, filesB64 } (resolveCustomTextEditor's sendUpdate()) once
-    // on initial load and again on every debounced text-document change
-    // (live reload), or { type: 'mtlx-open', mode: 'docs', hash } for a
-    // docs-panel (re)navigation. lastDocName/lastBlobMap are remembered
-    // here (module-scoped, not function-local) so the hashchange listener
-    // further down (Graph -> Viewer sync on view switch) can hand the
-    // Viewer the same name/texture-blob context the Graph editor itself
-    // was loaded with, even though that sync fires long after this
-    // function returns and the original payload is out of scope.
-    function handleOpen(msg) {
-        var mode = msg.mode;
-        var name = msg.name;
-        var xml = msg.xml;
-        var rawFiles = msg.filesB64 || null;
+    // openSeq: bumped once per 'mtlx-open' message received. Texture
+    // fetches (fetchTextureBlobs below) are async, so a newer message can
+    // arrive and finish before an older one's fetches settle: handleOpen
+    // captures mySeq per call and re-checks it before dispatching, so
+    // only the latest 'mtlx-open' ever reaches the site.
+    var openSeq = 0;
 
-        // filesB64: { relPath: base64string } as sent by docScanner.js via
-        // editorProvider.js's toMessageFilesB64(). See base64ToUint8 above
-        // for why these cross the boundary as base64 text rather than raw
-        // Uint8Array/Buffer values. Decode each entry and wrap it in the
-        // { relPath: Blob } shape js/graph-app.jsx / js/viewer-app.jsx's
-        // ingest() expects — the same shape their own drag-and-drop path
-        // produces.
-        var blobMap = null;
-        if (rawFiles) {
-            blobMap = {};
-            Object.keys(rawFiles).forEach(function (key) {
-                blobMap[key] = new Blob([base64ToUint8(rawFiles[key])]);
-            });
+    // Fetches every fileUrls entry with the page's plain fetch (siteFetch,
+    // captured above), at most 4 requests in flight at once. A failed
+    // fetch is reported through postError() (a warning line, not a thrown
+    // error) and simply left out of `blobs`, same as a missing texture
+    // today. Resolves once every entry has settled, with per-file
+    // blob/failure/timing maps (timings feed the test-transport report).
+    function fetchTextureBlobs(fileUrls, label, maxConcurrency) {
+        var keys = fileUrls ? Object.keys(fileUrls) : [];
+        var blobs = {};
+        var failures = {};
+        var timings = {};
+        var next = 0;
+        var what = label || 'Texture';
+
+        function now() {
+            return (window.performance && performance.now) ? performance.now() : Date.now();
         }
 
-        lastDocName = name;
-        lastBlobMap = blobMap;
+        function runOne() {
+            if (next >= keys.length) return Promise.resolve();
+            var key = keys[next++];
+            var url = fileUrls[key];
+            var start = now();
+            if (!siteFetch) {
+                timings[key] = 0;
+                failures[key] = 'fetch is not available';
+                postError(what + ' "' + key + '" could not be loaded: fetch is not available');
+                return runOne();
+            }
+            return siteFetch(url)
+                .then(function (res) {
+                    if (!res || !res.ok) throw new Error('HTTP ' + (res ? res.status : '?'));
+                    return res.blob();
+                })
+                .then(function (blob) {
+                    timings[key] = now() - start;
+                    blobs[key] = blob;
+                })
+                .catch(function (e) {
+                    timings[key] = now() - start;
+                    var reason = String((e && e.message) || e);
+                    failures[key] = reason;
+                    postError(what + ' "' + key + '" could not be loaded: ' + reason);
+                })
+                .then(runOne);
+        }
 
+        var starters = [];
+        var concurrency = Math.min(maxConcurrency || 4, keys.length);
+        for (var i = 0; i < concurrency; i++) starters.push(runOne());
+        return Promise.all(starters).then(function () {
+            return { blobs: blobs, failures: failures, timings: timings };
+        });
+    }
+
+    // Hex SHA-256 of an ArrayBuffer, for the test-transport files report
+    // below. Only ever called in test-transport mode.
+    function sha256Hex(buffer) {
+        return crypto.subtle.digest('SHA-256', buffer).then(function (digest) {
+            var bytes = new Uint8Array(digest);
+            var hex = '';
+            for (var i = 0; i < bytes.length; i++) {
+                var h = bytes[i].toString(16);
+                hex += h.length === 1 ? '0' + h : h;
+            }
+            return hex;
+        });
+    }
+
+    // Test-transport only: { size, sha256, ms } per successfully fetched
+    // texture blob, from fetchTextureBlobs' result. Computed BEFORE
+    // dispatching the document to the site, so the harness's report
+    // reflects exactly what the site is about to receive.
+    function buildTestFilesReport(result) {
+        var keys = Object.keys(result.blobs);
+        var files = {};
+        return Promise.all(keys.map(function (key) {
+            var blob = result.blobs[key];
+            return blob.arrayBuffer().then(sha256Hex).then(function (hex) {
+                files[key] = { size: blob.size, sha256: hex, ms: result.timings[key] };
+            });
+        })).then(function () {
+            return files;
+        });
+    }
+
+    // Dispatches an already-fully-built document payload to the site,
+    // exactly the window.__mtlxPendingImport / __mtlxPendingViewerImport +
+    // event contract js/shared/mtlx-ui.jsx's openInGraphEditor()/
+    // openInViewer() use for their own "send to viewer"/"send to editor"
+    // buttons. Split out of handleOpen so the async texture-fetch wait in
+    // handleOpen is easy to see is the only thing gating this.
+    function dispatchOpen(mode, name, xml, blobMap, hash) {
         if (mode === 'both') {
             // Primary path: materialxPlayground.open sends one document
             // to BOTH views at once. The site is a multi-view SPA where
@@ -493,18 +625,193 @@
             // No document payload contract for the docs view (it has no
             // per-file state to import) — just make sure the hash agrees.
             // A reused docs panel (the materialxPlayground.openDocs
-            // command's singleton) is re-navigated this way. msg.hash is
-            // NOT always '#!docs' in practice: the hover "Open
-            // Interactive Documentation" deep link (extension.js builds
-            // the hash, editorProvider.js's openDocsPanel forwards it as
-            // this same 'mtlx-open'/mode:'docs' message) routinely sends
+            // command's singleton) is re-navigated this way. hash is NOT
+            // always '#!docs' in practice: the hover "Open Interactive
+            // Documentation" deep link (extension.js builds the hash,
+            // editorProvider.js's openDocsPanel forwards it as this same
+            // 'mtlx-open'/mode:'docs' message) routinely sends
             // '#/<category>?sig=…' through this exact path — the
-            // '#!docs' fallback below only fires when msg.hash itself is
+            // '#!docs' fallback below only fires when hash itself is
             // falsy (a no-arg/category-less open: Command Palette,
             // explorer context menu, or a reused panel with nothing more
             // specific to show).
-            location.hash = msg.hash || '#!docs';
+            location.hash = hash || '#!docs';
         }
+    }
+
+    // 'mtlx-open': editorProvider.js posts { type: 'mtlx-open', mode,
+    // name, xml, filesB64, fileUrls } (resolveCustomTextEditor's
+    // sendUpdate()) once on initial load and again on every debounced
+    // text-document change (live reload), or { type: 'mtlx-open', mode:
+    // 'docs', hash } for a docs-panel (re)navigation. filesB64 (included
+    // .mtlx documents) decodes synchronously into Blobs, same as always;
+    // fileUrls (textures, a webview resource URL per docScanner.js map
+    // key) are fetched here, with the page's true fetch, and merged into
+    // the same blob map before dispatchOpen() runs: this is what lets a
+    // 4K/8K texture set load without ever base64-encoding it through
+    // postMessage. lastDocName/lastBlobMap are remembered here
+    // (module-scoped, not function-local) so the hashchange listener
+    // further down (Graph -> Viewer sync on view switch) can hand the
+    // Viewer the same name/texture-blob context the Graph editor itself
+    // was loaded with, even though that sync fires long after this
+    // function returns and the original payload is out of scope.
+    //
+    // Stale guard: openSeq is bumped on every call, and mySeq is
+    // re-checked once the (async) texture fetch settles, so a newer
+    // 'mtlx-open' arriving while an older one is still fetching wins, and
+    // the older one's dispatch (and lastDocName/lastBlobMap update) is
+    // dropped rather than overwriting the newer state.
+    function handleOpen(msg) {
+        var mySeq = ++openSeq;
+        var mode = msg.mode;
+        var name = msg.name;
+        var xml = msg.xml;
+        var rawFiles = msg.filesB64 || null;
+        var fileUrls = msg.fileUrls || null;
+        var hash = msg.hash;
+
+        // filesB64: { relPath: base64string } as sent by docScanner.js via
+        // editorProvider.js's toMessageFilesB64(), included .mtlx
+        // documents only now (textures travel as fileUrls instead). See
+        // base64ToUint8 above for why these cross the boundary as base64
+        // text rather than raw Uint8Array/Buffer values. Decode each
+        // entry and wrap it in the { relPath: Blob } shape
+        // js/graph-app.jsx / js/viewer-app.jsx's ingest() expects, the
+        // same shape their own drag-and-drop path produces.
+        var blobMap = null;
+        if (rawFiles) {
+            blobMap = {};
+            Object.keys(rawFiles).forEach(function (key) {
+                blobMap[key] = new Blob([base64ToUint8(rawFiles[key])]);
+            });
+        }
+
+        var startedAt = (window.performance && performance.now) ? performance.now() : Date.now();
+        fetchTextureBlobs(fileUrls).then(function (result) {
+            if (mySeq !== openSeq) return; // superseded by a newer mtlx-open
+
+            var textureKeys = Object.keys(result.blobs);
+            if (textureKeys.length) {
+                if (blobMap === null) blobMap = {};
+                textureKeys.forEach(function (key) { blobMap[key] = result.blobs[key]; });
+            }
+
+            function finish() {
+                if (mySeq !== openSeq) return; // superseded while the test report was being built
+                lastDocName = name;
+                lastBlobMap = blobMap;
+                dispatchOpen(mode, name, xml, blobMap, hash);
+            }
+
+            if (isTransportTest) {
+                buildTestFilesReport(result).then(function (filesReport) {
+                    var totalMs = ((window.performance && performance.now) ? performance.now() : Date.now()) - startedAt;
+                    if (vscodeApi) {
+                        vscodeApi.postMessage({
+                            type: 'mtlx-test-files',
+                            seq: mySeq,
+                            files: filesReport,
+                            failures: result.failures,
+                            totalMs: totalMs,
+                        });
+                    }
+                    finish();
+                });
+            } else {
+                finish();
+            }
+        });
+    }
+
+    // 'mtlx-open-scene': sceneProvider.js posts { root, name, fileUrls, mtimes }
+    // for a USD stage (initial load and every watched change). Every file is
+    // fetched here and handed to js/usd-scene-app.jsx as File objects whose
+    // lastModified is the file's mtime (the USD worker's input cache key).
+    var sceneSeq = 0;
+    function handleOpenScene(msg) {
+        var mySeq = ++sceneSeq;
+        var mtimes = msg.mtimes || {};
+        fetchTextureBlobs(msg.fileUrls || {}, 'Scene file', 6).then(function (result) {
+            if (mySeq !== sceneSeq) return; // superseded by a newer scene payload
+            var files = {};
+            Object.keys(result.blobs).forEach(function (key) {
+                var modified = typeof mtimes[key] === 'number' ? mtimes[key] : Date.now();
+                files[key] = new File([result.blobs[key]], key.slice(key.lastIndexOf('/') + 1), { lastModified: modified });
+            });
+            var payload = { files: files, root: msg.root, name: msg.name };
+            window.__mtlxPendingSceneImport = payload;
+            window.dispatchEvent(new CustomEvent('mtlx-load-scene', { detail: payload }));
+        });
+    }
+
+    // Test transport only: posts one 'mtlx-save' exactly like requestGraphSave
+    // (minus its view guards) and reports the host's answer as
+    // 'mtlx-test-graph-save', so the harness can prove a USD editor refuses it.
+    function handleTestTriggerGraphSave(msg) {
+        if (!isTransportTest || !vscodeApi || pendingSave) return;
+        new Promise(function (resolve, reject) {
+            pendingSave = { resolve: resolve, reject: reject };
+            vscodeApi.postMessage({ type: 'mtlx-save', xml: String(msg.xml || '') });
+        }).then(function () {
+            vscodeApi.postMessage({ type: 'mtlx-test-graph-save', ok: true });
+        }, function (e) {
+            vscodeApi.postMessage({ type: 'mtlx-test-graph-save', ok: false, error: String((e && e.message) || e) });
+        });
+    }
+
+    // Test transport only: the same pointerdown + dblclick a user makes at
+    // the scene viewport's centre, then polls the material preview panel and
+    // reports its state as 'mtlx-test-material-preview'.
+    function handleTestTriggerMaterialPreview(msg) {
+        if (!isTransportTest || !vscodeApi) return;
+        var started = Date.now();
+        var timeoutMs = Number(msg.timeoutMs) || 30000;
+        var deps = 'not requested';
+        function snapshot() {
+            var panel = document.querySelector('[data-testid="usd-scene-material-preview"]');
+            var text = panel ? (panel.textContent || '') : '';
+            var clicks = (window.__mtlxUsdSceneDoubleClicks || []).filter(function (c) { return c.event === 'dblclick'; });
+            return {
+                panel: !!panel,
+                panelHidden: panel ? panel.classList.contains('hidden') : null,
+                depsSpinner: /Loading preview/.test(text),
+                depsErrorShown: !!(panel && panel.querySelector('[data-testid="usd-scene-material-preview-error"]')),
+                graphLoading: /Loading graph/.test(text),
+                graphPreview: !!(panel && panel.querySelector('.mtlx-graph-preview')),
+                nodes: panel ? panel.querySelectorAll('.react-flow__node').length : 0,
+                previewUnavailable: /Preview unavailable in VS Code/.test(text),
+                hasGraphPreview: typeof window.MtlxGraphPreview,
+                hasReactFlow: !!window.ReactFlow,
+                hasDagre: !!window.dagre,
+                deps: deps,
+                dblReason: clicks.length ? clicks[clicks.length - 1].reason : null,
+                lastDblClick: clicks.length ? JSON.stringify(clicks[clicks.length - 1]).slice(0, 300) : null,
+                text: text.slice(0, 300),
+                elapsedMs: Date.now() - started,
+            };
+        }
+        function send(extra) {
+            vscodeApi.postMessage({ type: 'mtlx-test-material-preview', report: Object.assign(snapshot(), extra || {}, { log: testLog.slice(-30) }) });
+        }
+        var canvas = document.querySelector('[data-testid="usd-scene-canvas"]');
+        if (!canvas) { send({ fatal: 'no scene canvas' }); return; }
+        var r = canvas.getBoundingClientRect();
+        var x = r.left + r.width / 2;
+        var y = r.top + r.height / 2;
+        canvas.dispatchEvent(new PointerEvent('pointerdown', { clientX: x, clientY: y, bubbles: true, button: 0, pointerType: 'mouse' }));
+        canvas.dispatchEvent(new MouseEvent('dblclick', { clientX: x, clientY: y, bubbles: true, button: 0, detail: 2 }));
+        (function poll() {
+            // Observed only once the panel exists, so this never starts the
+            // load itself (mtlxLoadViewDeps is memoized: same promise).
+            if (deps === 'not requested' && document.querySelector('[data-testid="usd-scene-material-preview"]') && typeof window.mtlxLoadViewDeps === 'function') {
+                deps = 'pending';
+                window.mtlxLoadViewDeps('galleryDetail').then(function () { deps = 'resolved'; }, function (e) { deps = 'rejected: ' + String((e && e.message) || e); });
+            }
+            var s = snapshot();
+            var settled = (s.nodes > 0 && !s.graphLoading) || s.depsErrorShown || (!!s.dblReason && s.dblReason !== 'ok');
+            if (settled || Date.now() - started > timeoutMs) { send({ settled: settled }); return; }
+            setTimeout(poll, 500);
+        })();
     }
 
     // NOTE: this is NOT the only postMessage traffic this page can see —
@@ -514,10 +821,15 @@
     window.addEventListener('message', function (event) {
         var msg = event.data;
         if (!msg) return;
-        if (msg.type === 'mtlx-fetch-result') { handleFetchResult(msg); return; }
         if (msg.type === 'mtlx-save-result') { handleSaveResult(msg); return; }
+        if (msg.type === 'mtlx-save-file-result') { handleSaveFileResult(msg); return; }
         if (msg.type === 'mtlx-request-save') { handleRequestSave(msg); return; }
         if (msg.type === 'mtlx-request-undo' || msg.type === 'mtlx-request-redo') { handleRequestUndoRedo(msg); return; }
+        if (msg.type === 'mtlx-test-trigger-download') { handleTestTriggerDownload(msg); return; }
+        if (msg.type === 'mtlx-test-trigger-snapshot') { handleTestTriggerSnapshot(msg); return; }
+        if (msg.type === 'mtlx-test-trigger-graph-save') { handleTestTriggerGraphSave(msg); return; }
+        if (msg.type === 'mtlx-test-trigger-material-preview') { handleTestTriggerMaterialPreview(msg); return; }
+        if (msg.type === 'mtlx-open-scene') { handleOpenScene(msg); return; }
         if (msg.type !== 'mtlx-open') return;
         handleOpen(msg);
     }, false);

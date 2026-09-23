@@ -6,11 +6,19 @@ Full notes for every release, including every fix, are on the [GitHub Releases p
 
 ## Unreleased
 
+- The VS Code extension's settings moved to `materialxPlayground.defaultView`, `materialxPlayground.openBehavior` and `materialxPlayground.autoOpenPlayground`; the old `materialx.*` names still work but are marked deprecated.
+- The VS Code extension can now open USD stages (`.usd`, `.usda`, `.usdc`, `.usdz`) in the experimental USD Scene Viewer, with the "Open in USD Scene Viewer" command or Open With.
+- The USD Scene Viewer now opens automatically when you open a USD scene file, same as the Playground does for `.mtlx` files; turn it off with the new `materialxPlayground.autoOpenSceneViewer` setting.
+- The VS Code extension now has a "New Material from Example" command that copies a ready-made standard_surface or OpenPBR material into your workspace and opens it, also available from the Explorer folder context menu.
+- The VS Code extension now offers snippets for common material patterns and auto-complete for node names, node inputs and reference attributes in `.mtlx` files.
+- Attribute auto-complete now offers only the attributes valid for the element you're editing (a node, a node definition input, a look, and so on), instead of one generic list.
+- The VS Code extension now has a toolbar preview button, a file icon for `.mtlx` files, an outline with go to definition and find references, and color swatches with a picker in the text editor.
+- Large 4K and 8K textures now load in the VS Code extension.
 - VS Code extension published to the Marketplace as a preview. If you installed it from a GitHub release before, uninstall `local.materialx-playground` first.
 - Referenced textures and includes must now stay inside the opened workspace folder (or next to the file, if no folder is open).
 - Validation now runs off the editor thread and no longer reads files named by an `xi:include`.
 - Added support for VS Code's Restricted Mode.
-- The extension package is smaller.
+- The extension package is smaller: it now ships only the spec docs, license and one fallback material from the offline MaterialX snapshot, not the whole thing.
 
 ## 2026.9.4 (2026-09-15)
 

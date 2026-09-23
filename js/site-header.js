@@ -272,11 +272,13 @@
 
     // VS Code nav filtering: the webview always drops Home (no landing
     // page) and the Learn/Integrate dropdowns (browser-only surfaces). The
-    // custom editor also drops Docs; the standalone docs panel keeps only Docs.
+    // custom editor also drops Docs; the standalone docs panel keeps only Docs,
+    // and the USD scene editor keeps the Scene Viewer plus the Graph Editor.
     var navItems = window.__MTLX_VSCODE__
         ? NAV.filter(function (t) {
             if (t.group || t.id === 'home') return false;
             if (window.__MTLX_DOCS_ONLY__) return t.id === 'docs';
+            if (window.__MTLX_SCENE_ONLY__) return t.id === 'scene' || t.id === 'graph';
             return t.id === 'viewer' || t.id === 'graph';
         })
         : NAV;
