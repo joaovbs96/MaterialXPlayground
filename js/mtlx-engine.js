@@ -746,13 +746,17 @@ const countFragmentSamplers = (fs) => {
     const re = /uniform\s+(?:(?:low|medium|high)p\s+)?(sampler2D|sampler3D|samplerCube)\s+(\w+)\s*(?:\[\s*(\d+)\s*\])?\s*;/g;
     const names = [];
     let count = 0;
+    // Scene/engine samplers are all u_-prefixed; a material's own texture
+    // reads are named after their image node (<node>_file).
+    let scene = 0;
     let m;
     while ((m = re.exec(fs)) !== null) {
         const size = m[3] ? parseInt(m[3], 10) : 1;
         count += size;
+        if (/^u_/.test(m[2])) scene += size;
         names.push(m[3] ? m[2] + '[' + m[3] + ']' : m[2]);
     }
-    return { count, names };
+    return { count, names, scene, material: count - scene };
 };
 
 // Estimates fragment uniform vector cost against MAX_FRAGMENT_UNIFORM_VECTORS.
@@ -3163,6 +3167,8 @@ const readConstInputs = () => {
 // MaterialX input names whose value multiplies compile time: a uniform
 // thin-film thickness keeps the mx_fresnel_airy branch alive and a uniform
 // selector keeps every arm of its if-chain alive, in every closure context.
+// Array subscripts (the extract family's `index`) are handled by usage
+// instead, see selectDynamicIndexUniforms below.
 const CONST_INPUT_NAMES = ['thin_film_thickness', 'thin_film_ior', 'thin_film_IOR', 'thinfilm_thickness', 'thinfilm_ior',
     'distribution', 'scatter_mode', 'retroreflective', 'energy_compensation', 'mode'];
 // Names the Scene's thin-wall / light-transport patches and uniform builders
@@ -3206,6 +3212,97 @@ const constInputKey = (u, names = CONST_INPUT_NAMES) => {
     return null;
 };
 
+// Everything a usage scan must not see: line and block comments, the
+// preprocessor preamble, and every uniform declaration (a declaration is
+// not a use, and `uniform int foo[4];` is an array, not a subscript).
+const stripGlslForUsage = (src) => String(src || '')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/[^\n]*/g, ' ')
+    .replace(/^[ \t]*#[^\n]*/gm, ' ')
+    .replace(/^[ \t]*uniform\b[^;]*;/gm, ' ');
+
+const USAGE_IDENT_RE = /[A-Za-z_]\w*/g;
+const addIdents = (text, out) => {
+    let m;
+    USAGE_IDENT_RE.lastIndex = 0;
+    while ((m = USAGE_IDENT_RE.exec(text))) out.add(m[0]);
+};
+// Both operand sides of every comparison in a condition region.
+const addComparisonIdents = (text, out) => {
+    let m;
+    const left = /([A-Za-z_]\w*)[ \t]*(?:==|!=|<=|>=|<|>)/g;
+    while ((m = left.exec(text))) out.add(m[1]);
+    const right = /(?:==|!=|<=|>=|<|>)[ \t]*([A-Za-z_]\w*)/g;
+    while ((m = right.exec(text))) out.add(m[1]);
+};
+// Balanced span starting at the opening bracket at `open`; returns the
+// inner text, or null when the source is unbalanced.
+const balancedSpan = (src, open, openCh, closeCh) => {
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+        const c = src[i];
+        if (c === openCh) depth++;
+        else if (c === closeCh) { depth--; if (depth === 0) return src.slice(open + 1, i); }
+    }
+    return null;
+};
+// Walks left from a ternary `?` to the start of its condition, stopping at
+// the first unbalanced opener or statement separator at depth zero.
+const ternaryCondition = (src, qm) => {
+    let depth = 0;
+    let i = qm - 1;
+    for (; i >= 0; i--) {
+        const c = src[i];
+        if (c === ')' || c === ']') depth++;
+        else if (c === '(' || c === '[') { if (depth === 0) break; depth--; }
+        else if (depth === 0 && (c === ';' || c === '{' || c === '}' || c === ',' || c === ':' || c === '?')) break;
+        else if (depth === 0 && c === '=' && src[i - 1] !== '=' && src[i - 1] !== '!'
+            && src[i - 1] !== '<' && src[i - 1] !== '>' && src[i + 1] !== '=') break;
+    }
+    return src.slice(i + 1, qm);
+};
+
+// Usage rule for integer uniforms: an int whose identifier reaches an array
+// subscript, a switch operand or a comparison in an if/ternary condition is
+// what makes ANGLE emit a dyn_index_* helper or keep both arms alive, so it
+// is folded to its default. Plain arithmetic keeps it a uniform.
+const selectDynamicIndexUniforms = (vs, fs, introspected) => {
+    const picked = new Set();
+    const candidates = new Set();
+    for (const u of (introspected || [])) {
+        const name = String((u && u.name) || '');
+        if (!name || name.indexOf('u_') === 0) continue; // engine/private uniform
+        if (u.type !== 'integer' || CONST_INPUT_DENY.has(name)) continue;
+        candidates.add(name);
+    }
+    if (!candidates.size) return picked;
+    const used = new Set();
+    for (const raw of [vs, fs]) {
+        const src = stripGlslForUsage(raw);
+        for (let i = 0; i < src.length; i++) {
+            if (src[i] === '[') {
+                const inner = balancedSpan(src, i, '[', ']');
+                if (inner != null) addIdents(inner, used);
+            } else if (src[i] === '?') {
+                addComparisonIdents(ternaryCondition(src, i), used);
+            }
+        }
+        let m;
+        const switchRe = /\bswitch[ \t\n]*\(/g;
+        while ((m = switchRe.exec(src))) {
+            const inner = balancedSpan(src, switchRe.lastIndex - 1, '(', ')');
+            if (inner != null) addIdents(inner, used);
+        }
+        const ifRe = /\bif[ \t\n]*\(/g;
+        while ((m = ifRe.exec(src))) {
+            const inner = balancedSpan(src, ifRe.lastIndex - 1, '(', ')');
+            if (inner != null) addComparisonIdents(inner, used);
+        }
+    }
+    for (const name of candidates) if (used.has(name)) picked.add(name);
+    return picked;
+};
+
 // Rewrites `uniform T name;` into `const T name = <literal>;` for the
 // targeted inputs, so the driver can fold their branches away. Only a
 // scalar float/int/bool with exactly one declaration is touched; everything
@@ -3215,16 +3312,18 @@ const SELECTOR_CONST_INPUTS = new Set(['mode', 'type', 'style']);
 const constifyInputUniforms = (vs, fs, introspected, names = CONST_INPUT_NAMES) => {
     const constInputs = [];
     const kept = [];
+    const byUsage = selectDynamicIndexUniforms(vs, fs, introspected);
     let outVs = vs;
     let outFs = fs;
     for (const u of introspected) {
         const glslType = CONST_INPUT_GLSL_TYPES[u.type];
         const key = glslType ? constInputKey(u, names) : null;
+        const usageHit = glslType ? byUsage.has(String(u.name)) : false;
         // `mode`, `type` and `style` are generic names: only take them when
         // the generator typed them as an enum selector (integer), never a
         // float or boolean input.
-        if (!key || CONST_INPUT_DENY.has(String(u.name))
-            || (SELECTOR_CONST_INPUTS.has(key) && u.type !== 'integer')) { kept.push(u); continue; }
+        if ((!key && !usageHit) || CONST_INPUT_DENY.has(String(u.name))
+            || (key && !usageHit && SELECTOR_CONST_INPUTS.has(key) && u.type !== 'integer')) { kept.push(u); continue; }
         const literal = u.data == null ? null : constInputLiteral(u.type, u.data);
         if (literal == null) { kept.push(u); continue; }
         const escaped = String(u.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -4144,19 +4243,28 @@ const loadHdrTexture = async (blob) => {
 
 // Shared THREE.KTX2Loader instance (one transcoder worker pool for the
 // session). detectSupport() needs a WebGLRenderer to read the GPU's
-// supported compressed formats; the caller's own view.renderer is reused
-// when available, else a hidden renderer is created once and kept alive
-// for the rest of the session (detectSupport is cheap and idempotent).
+// supported compressed formats, but only writes them into workerConfig
+// (see vendor/three/KTX2Loader.js) and keeps no renderer reference, so the
+// result is cached and the probe renderer released, not kept alive.
 let _ktx2Loader = null;
-let _ktx2HiddenRenderer = null;
+let _ktx2SupportDetected = false;
 const getKtx2Loader = (view) => {
     if (!_ktx2Loader) {
         if (typeof THREE.KTX2Loader === 'undefined') return null;
         _ktx2Loader = new THREE.KTX2Loader();
         _ktx2Loader.setTranscoderPath(new URL('vendor/three/basis/', document.baseURI).href);
     }
-    const renderer = (view && view.renderer) || (_ktx2HiddenRenderer = _ktx2HiddenRenderer || new THREE.WebGLRenderer());
-    _ktx2Loader.detectSupport(renderer);
+    if (!_ktx2SupportDetected) {
+        const viewRenderer = view && view.renderer;
+        // No caller renderer yet: a throwaway hidden renderer, never
+        // attached to the DOM or reused elsewhere, safe to release below.
+        const renderer = viewRenderer || new THREE.WebGLRenderer();
+        _ktx2Loader.detectSupport(renderer);
+        _ktx2SupportDetected = true;
+        if (!viewRenderer) {
+            try { renderer.dispose(); } catch (e) { /* best-effort */ }
+        }
+    }
     return _ktx2Loader;
 };
 
@@ -7186,6 +7294,15 @@ const getWarmContext = () => {
         const gl = canvas.getContext('webgl2');
         const ext = gl && gl.getExtension('KHR_parallel_shader_compile');
         MTLX_WARM_CTX = (gl && ext) ? { gl, ext } : false;
+        // A lost warm context stays unusable forever unless we notice: drop
+        // the cache and the warmed-sources record so the next prewarm call
+        // recreates a fresh hidden context instead of silently no-op'ing.
+        if (gl) {
+            canvas.addEventListener('webglcontextlost', () => {
+                MTLX_WARM_CTX = null;
+                MTLX_WARMED_SOURCES.clear();
+            });
+        }
     } catch (e) {
         MTLX_WARM_CTX = false;
     }
@@ -7515,6 +7632,76 @@ const unresolvedNodesText = (found) => found.map((u) => (u.known
     : `Node "${u.name}" (type "${u.category}") has no definition in this MaterialX build.`
 )).join(' ');
 
+// Image-family nodes that cost one sampler2D each in the generated ESSL.
+const MERGEABLE_IMAGE_CATEGORIES = new Set([
+    'image', 'tiledimage', 'gltf_image', 'gltf_colorimage', 'gltf_normalmap',
+    'gltf_anisotropy_image', 'gltf_iridescence_thickness',
+]);
+// Editor-only attributes, never part of what a node reads.
+const MERGE_IGNORED_ATTRIBUTES = new Set(['name', 'xpos', 'ypos', 'doc']);
+
+// Identity of one node: category, type, its own attributes and every input's
+// attributes, so two nodes match only when they read the same file the same
+// way (file, colorspace, address/filter modes, texcoord, frame range, ...).
+const mxNodeSignature = (node) => {
+    const parts = [mxElCat(node), mxElType(node)];
+    for (const attr of vecToArray(mxSafe(() => node.getAttributeNames(), [])).slice().sort()) {
+        if (MERGE_IGNORED_ATTRIBUTES.has(attr)) continue;
+        parts.push('@' + attr + '=' + mxElAttr(node, attr));
+    }
+    const inputs = vecToArray(mxSafe(() => node.getInputs(), [])).map((input) => {
+        const attrs = vecToArray(mxSafe(() => input.getAttributeNames(), [])).slice().sort();
+        return mxElName(input) + '{' + attrs.map((a) => a + '=' + mxElAttr(input, a)).join(',') + '}';
+    }).sort();
+    return parts.join('|') + '|' + inputs.join('|');
+};
+
+// Two image nodes that read the same file the same way cost two texture
+// units for one texture, which is how a four-texture glTF material ran out
+// of sampler slots. Rewires every downstream reference in the same scope
+// onto the first of each group; the duplicates stay in the document but
+// become unreachable, so codegen never emits them. Runs on the LIVE
+// document, so the caller MUST call restore() in a finally.
+const mergeDuplicateImageNodes = (doc) => {
+    const restores = [];
+    const groups = [];
+    let merged = 0;
+    if (!doc) return { restore: () => {}, merged, groups };
+    mxWarnIfLocked('mergeDuplicateImageNodes'); // exported doc-mutating helper, see mxWarnIfLocked's header comment
+    const scopes = [doc].concat(vecToArray(mxSafe(() => doc.getNodeGraphs ? doc.getNodeGraphs() : null, [])));
+    for (const scope of scopes) {
+        const children = vecToArray(mxSafe(() => scope.getChildren(), []));
+        const bySignature = new Map();
+        const renames = new Map(); // duplicate name -> canonical name
+        for (const node of children) {
+            if (!MERGEABLE_IMAGE_CATEGORIES.has(mxElCat(node))) continue;
+            // An interface-bound input can be rebound per instance; leave those alone.
+            const bound = vecToArray(mxSafe(() => node.getInputs(), []))
+                .some((input) => mxElHasAttr(input, 'interfacename'));
+            if (bound) continue;
+            const signature = mxNodeSignature(node);
+            const first = bySignature.get(signature);
+            if (!first) { bySignature.set(signature, node); continue; }
+            renames.set(mxElName(node), mxElName(first));
+        }
+        if (!renames.size) continue;
+        for (const child of children) {
+            const ports = [child].concat(vecToArray(mxSafe(() => child.getChildren(), [])));
+            for (const port of ports) {
+                if (!mxElHasAttr(port, 'nodename')) continue;
+                const from = mxElAttr(port, 'nodename');
+                const to = renames.get(from);
+                if (!to || to === from) continue;
+                if (mxSetAttr(port, 'nodename', to)) restores.push(() => mxSetAttr(port, 'nodename', from));
+            }
+        }
+        for (const [from, to] of renames) groups.push({ kept: to, merged: from });
+        merged += renames.size;
+    }
+    const restore = () => { for (let i = restores.length - 1; i >= 0; i--) restores[i](); };
+    return { restore, merged, groups };
+};
+
 // ------------------------------------------------------------------
 // generatePreviewSources: shader-generation slice of createMtlxRenderView,
 // letting tryRefreshRenderView diff sources without a full rebuild.
@@ -7600,8 +7787,16 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     let colorspaceAliasResult = null;
     let colorspaceTransformResult = null;
     let materialWorkspaceResult = null;
+    let imageMergeResult = null;
     if (colorspaceDoc) {
         colorspaceAliasResult = applyColorspaceAliases(colorspaceDoc);
+        // After the aliases (so two spellings of one colorspace still match)
+        // and before the transforms, which would otherwise insert one
+        // conversion chain per duplicate image.
+        imageMergeResult = mergeDuplicateImageNodes(colorspaceDoc);
+        if (DEBUG_SHADERS && imageMergeResult.merged) {
+            console.log('[mtlx] merged ' + imageMergeResult.merged + ' duplicate image node(s) for "' + label + '":', imageMergeResult.groups);
+        }
         // Must follow the aliases: an authored "srgb_tx" only becomes a
         // name cmlib knows once applyColorspaceAliases has normalized it.
         colorspaceTransformResult = applyColorspaceTransforms(colorspaceDoc);
@@ -7646,6 +7841,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
         // Reverse order: the transforms were layered on top of the aliases.
         if (materialWorkspaceResult) materialWorkspaceResult.restore();
         if (colorspaceTransformResult) colorspaceTransformResult.restore();
+        if (imageMergeResult) imageMergeResult.restore();
         if (colorspaceAliasResult) colorspaceAliasResult.restore();
     }
     if (window.MTLX_PERF_LOG) {
@@ -8030,6 +8226,13 @@ const SAMPLER_BUDGET_DROP_ORDER = [
     { key: 'skipRefraction', label: 'refraction colour (u_opaqueColor)', userLabel: 'refraction' },
 ];
 
+// One accurate sentence for a material that ran out of texture units:
+// what it needed, where those samplers came from, and what was turned off.
+const samplerBudgetNotice = ({ needed, limit, effects, plural }) => 'needs ' + needed.count
+    + ' texture samplers (' + needed.material + ' from the material, ' + needed.scene
+    + ' from the scene) but this GPU allows ' + limit + ', so ' + effects
+    + (plural ? ' are' : ' is') + ' turned off for it';
+
 // Viewer-path generation with the same sampler budget as the Scene: drops
 // optional samplers in SAMPLER_BUDGET_DROP_ORDER until the fragment fits
 // the texture unit limit, and notes every drop on srcs.notices.
@@ -8038,22 +8241,27 @@ const generatePreviewSourcesWithinBudget = async (args) => {
     const budget = Number.isFinite(overrideBudget) ? overrideBudget : DEFAULT_SAMPLER_BUDGET;
     const dropped = [];
     let srcs = null;
+    let neededInfo = null; // the full-feature count, what the notice reports
     for (let attempt = 0; ; attempt++) {
         // The caller's feature gating is the base; budget drops add to it.
         const sceneFeatureOptions = Object.assign({}, args.sceneFeatureOptions || null);
         for (const d of dropped) sceneFeatureOptions[d.key] = true;
         srcs = await generatePreviewSources(Object.assign({}, args, { sceneFeatureOptions }));
         if (!srcs) return null;
-        if (countFragmentSamplers(srcs.fs).count <= budget) break;
+        const info = countFragmentSamplers(srcs.fs);
+        if (!neededInfo) neededInfo = info;
+        if (info.count <= budget) break;
         if (attempt >= SAMPLER_BUDGET_DROP_ORDER.length) break;
         dropped.push(SAMPLER_BUDGET_DROP_ORDER[attempt]);
     }
     if (dropped.length) {
-        const count = countFragmentSamplers(srcs.fs).count;
+        const info = countFragmentSamplers(srcs.fs);
         const effects = joinWithAnd(dropped.map((d) => d.userLabel));
-        srcs.notices = (srcs.notices || []).concat(['Texture slots: this material uses more textures than this GPU allows ('
-            + budget + '), so ' + effects + (dropped.length > 1 ? ' are' : ' is') + ' turned off for it']);
-        srcs.samplerBudget = { limit: budget, count, dropped: dropped.map((d) => d.label), droppedLabels: dropped.map((d) => d.userLabel) };
+        const needed = samplerBudgetNotice({ needed: neededInfo || info, limit: budget, effects, plural: dropped.length > 1 });
+        srcs.notices = (srcs.notices || []).concat(['Texture slots: this material ' + needed]);
+        srcs.samplerBudget = { limit: budget, count: info.count, material: info.material, scene: info.scene,
+            needed: (neededInfo || info).count, notice: needed,
+            dropped: dropped.map((d) => d.label), droppedLabels: dropped.map((d) => d.userLabel) };
     }
     return srcs;
 };
@@ -8076,6 +8284,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
     const dropped = [];
     let srcs = null;
     let samplerInfo = null;
+    let neededInfo = null; // the full-feature count, what the notice reports
     let budgetAttempts = 0;
     for (let attempt = 0; ; attempt++) {
         budgetAttempts = attempt + 1;
@@ -8085,6 +8294,7 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
         srcs = await generatePreviewSources({ mx, gen, genContext, renderable, label, materialName, isMounted, document: documentArg, sceneRgbt, lightTransport, sceneFeatureOptions, stageLightCount });
         if (!srcs) return null;
         samplerInfo = countFragmentSamplers(srcs.fs);
+        if (!neededInfo) neededInfo = samplerInfo;
         if (samplerInfo.count <= budget) break;
         if (attempt >= SAMPLER_BUDGET_DROP_ORDER.length) break; // hooks exhausted, still over
         dropped.push(SAMPLER_BUDGET_DROP_ORDER[attempt]);
@@ -8107,7 +8317,17 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
         label,
         samplerCount: samplerInfo.count,
         samplerNames: samplerInfo.names,
-        samplerBudget: { limit: budget, count: samplerInfo.count, dropped: dropped.map((d) => d.label) },
+        samplerBudget: {
+            limit: budget, count: samplerInfo.count, material: samplerInfo.material, scene: samplerInfo.scene,
+            needed: (neededInfo || samplerInfo).count,
+            dropped: dropped.map((d) => d.label), droppedLabels: dropped.map((d) => d.userLabel),
+            // Ready-made sentence for the scene's warnings list, so the
+            // count and its material/scene split stay together.
+            notice: dropped.length ? samplerBudgetNotice({
+                needed: neededInfo || samplerInfo, limit: budget,
+                effects: joinWithAnd(dropped.map((d) => d.userLabel)), plural: dropped.length > 1,
+            }) : null,
+        },
         samplerOverBudget: overBudget,
         budgetAttempts,
         fragmentUniformVectors: { estimate: uniformInfo.estimate, limit: uniformLimit, largest: uniformInfo.largest },
@@ -9389,7 +9609,10 @@ const createRgbtPeelPipeline = (renderer, {
         // Opaque colour mips for mx_scene_refraction. No half-float-linear
         // means nearest-across-levels instead (still real LOD blur, just
         // blockier); refractionLod in debug() reports which one.
-        const halfLinearOk = !!renderer.extensions.get('OES_texture_half_float_linear');
+        // WebGL2 has half-float linear filtering in core and never exposes
+        // the extension, so querying it only logs a three warning.
+        const halfLinearOk = !!(renderer.capabilities && renderer.capabilities.isWebGL2)
+            || !!renderer.extensions.get('OES_texture_half_float_linear');
         const opaqueMips = new THREE.WebGLRenderTarget(w, h, {
             minFilter: halfLinearOk ? THREE.LinearMipmapLinearFilter : THREE.NearestMipmapNearestFilter,
             magFilter: THREE.LinearFilter,
@@ -10499,6 +10722,13 @@ const createMtlxRenderView = async ({
             canvas.removeEventListener('webglcontextlost', onGlLost);
             canvas.removeEventListener('webglcontextrestored', onGlRestored);
         }
+        // No forceContextLoss() here: this same disposePartial() backs both
+        // the superseded-rebuild bail AND the public handle.dispose(), and
+        // every call site (viewer-app.jsx, node-preview.jsx, graph/preview.jsx)
+        // disposes the old view then immediately builds a new one on the
+        // SAME canvas ref. Forcing context loss would leave that reused
+        // canvas's context stuck lost until an async restore, breaking the
+        // very next build; the canvas is never actually discarded here.
         if (renderer) renderer.dispose();
     };
     // [mtlx-perf] whole-function total, from shader generation through
@@ -10537,7 +10767,15 @@ const createMtlxRenderView = async ({
                 // disposePartial() is still a safe no-op here.
                 if (!isMounted()) { disposePartial(); return null; }
                 const __rendererPerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
-                renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+                // Acquire WebGL2 ourselves and pass it via `context`, so
+                // three skips its own getContext('webgl2')-then-'webgl'
+                // fallback: a transient failure throws instead of poisoning this canvas with WebGL1.
+                const gl = canvas.getContext('webgl2', { antialias: true, alpha: true, depth: true, stencil: true,
+                    premultipliedAlpha: true, preserveDrawingBuffer: false, powerPreference: 'default', failIfMajorPerformanceCaveat: false });
+                if (!gl) {
+                    throw new Error('WebGL2 context could not be created for this preview (the browser refused WebGL2). Reload the tab or check the browser GPU settings.');
+                }
+                renderer = new THREE.WebGLRenderer({ canvas, context: gl, antialias: true, alpha: true });
                 // A reused canvas still carries GL state left by the prior
                 // renderer, but fresh r128 state caches assume defaults, so
                 // leaked blending corrupts the PMREM bake below; resync both.
@@ -12599,6 +12837,7 @@ Object.assign(window, {
     PREVIEW_TRIANGLE_BUDGET, pickSubdivisionLevel,
     getHeightToNormalTexel, setHeightToNormalTexel,
     parseUniforms, parseVertexInputs, stripVersion, encodeDisplay, countFragmentSamplers,
+    mergeDuplicateImageNodes, mxNodeSignature,
     mxErr, mxWriteValue, vecToArray,
     mxSafe, mxElName, mxElCat, mxElType, mxElAttr,
     mxSetAttr, mxRemoveAttr, mxSetColorspace, nextFrame,

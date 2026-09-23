@@ -411,6 +411,76 @@
             // (site panel-collapse policy).
             const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
             const [searchQuery, setSearchQuery] = React.useState('');
+            // Pulls out:<type>/in:<type> tokens (case-insensitive) from the
+            // search box; whatever's left is the plain name substring.
+            const searchTokens = React.useMemo(() => {
+                let outType = null, inType = null;
+                const nameParts = [];
+                String(searchQuery || '').split(/\s+/).forEach((tok) => {
+                    if (!tok) return;
+                    const m = /^(out|in):(.+)$/i.exec(tok);
+                    if (!m) { nameParts.push(tok); return; }
+                    if (/^out$/i.test(m[1])) outType = m[2]; else inType = m[2];
+                });
+                return { name: nameParts.join(' ').trim().toLowerCase(), outType, inType };
+            }, [searchQuery]);
+            // Removes any existing out:/in: token and, if value is truthy,
+            // appends the new one; shared by both port-type dropdowns.
+            const setSearchTypeToken = (prefix, value) => {
+                setSearchQuery((prev) => {
+                    const stripped = String(prev || '')
+                        .replace(new RegExp('\\b' + prefix + ':\\S+', 'gi'), '')
+                        .replace(/\s+/g, ' ')
+                        .trim();
+                    return value ? (stripped ? stripped + ' ' : '') + prefix + ':' + value : stripped;
+                });
+            };
+            const setSearchOutType = (v) => setSearchTypeToken('out', v);
+            const setSearchInType = (v) => setSearchTypeToken('in', v);
+            // Distinct port types across the whole pregenerated index, for
+            // the two dropdowns. Outputs: sigGroup.type plus any version's
+            // outputTypes values. Takes: union of input and output types.
+            const outputTypeOptions = React.useMemo(() => {
+                if (!genData) return [];
+                const s = new Set();
+                Object.values(genData.nodes).forEach((entry) => (entry.sigGroups || []).forEach((sg) => {
+                    if (sg.type) s.add(sg.type);
+                    (sg.versions || []).forEach((v) => v.outputTypes && Object.values(v.outputTypes).forEach((t) => t && s.add(t)));
+                }));
+                return Array.from(s).sort();
+            }, [genData]);
+            const takesTypeOptions = React.useMemo(() => {
+                if (!genData) return [];
+                const s = new Set();
+                Object.values(genData.nodes).forEach((entry) => (entry.sigGroups || []).forEach((sg) => (sg.versions || []).forEach((v) => {
+                    if (v.inputTypes) Object.values(v.inputTypes).forEach((t) => t && s.add(t));
+                    if (v.outputTypes) Object.values(v.outputTypes).forEach((t) => t && s.add(t));
+                })));
+                return Array.from(s).sort();
+            }, [genData]);
+            // A category (node name) matches active out:/in: filters when
+            // SOME signature group in genData satisfies both.
+            const categoryMatchesTypeFilters = React.useCallback((name) => {
+                const { outType, inType } = searchTokens;
+                if (!outType && !inType) return true;
+                const entry = genData && genData.nodes[name];
+                const sigGroups = entry && entry.sigGroups;
+                if (!sigGroups || !sigGroups.length) return false;
+                return sigGroups.some((sg) => {
+                    if (outType) {
+                        const outOk = (sg.type && sg.type.toLowerCase() === outType.toLowerCase())
+                            || (sg.versions || []).some((v) => v.outputTypes
+                                && Object.values(v.outputTypes).some((t) => t && t.toLowerCase() === outType.toLowerCase()));
+                        if (!outOk) return false;
+                    }
+                    if (inType) {
+                        const inOk = (sg.versions || []).some((v) => v.inputTypes
+                            && Object.values(v.inputTypes).some((t) => t && t.toLowerCase() === inType.toLowerCase()));
+                        if (!inOk) return false;
+                    }
+                    return true;
+                });
+            }, [genData, searchTokens]);
             // Global 3D-preview switch, persisted across sessions so slow
             // machines stay preview-free. localStorage is best-effort
             // (private mode etc. throws) — default is ON.
@@ -454,8 +524,8 @@
             // groups/libs pruned.
             const treeData = React.useMemo(() => {
                 if (!jsonData) return jsonData;
-                const query = searchQuery.trim().toLowerCase();
-                if (docFilter === 'all' && !query) return jsonData;
+                const { name: query, outType, inType } = searchTokens;
+                if (docFilter === 'all' && !query && !outType && !inType) return jsonData;
                 const filtered = {};
                 Object.entries(jsonData).forEach(([lib, groups]) => {
                     Object.entries(groups).forEach(([group, nodes]) => {
@@ -464,6 +534,7 @@
                             if (docFilter === 'undocumented' && !isUndocumented(info)) return;
                             if (docFilter === 'documented' && isUndocumented(info)) return;
                             if (query && !name.toLowerCase().includes(query)) return;
+                            if ((outType || inType) && !categoryMatchesTypeFilters(name)) return;
                             kept[name] = info;
                         });
                         if (Object.keys(kept).length > 0) {
@@ -473,7 +544,7 @@
                     });
                 });
                 return filtered;
-            }, [jsonData, docFilter, searchQuery]);
+            }, [jsonData, docFilter, searchTokens, categoryMatchesTypeFilters]);
 
             // While searching, show all matches regardless of stored
             // expansion state; clearing the query restores the prior state.
@@ -607,6 +678,32 @@
             // types are known, and passed down — see resolvePreviewDisabled
             // above for the type-gating rules.
             const previewDisabled = resolvePreviewDisabled(selectedGroup, selectedVersion, selectedNode);
+            // "View implementation" button: only when the selected
+            // signature's impl row (matched by .key, same shape
+            // ImplTargetMatrix reads) says a library nodegraph implements it.
+            // Not gated on IN_VSCODE any more — it now just toggles the
+            // self-contained inline panel below (js/docs/impl-preview.jsx),
+            // which works fine in the docs-only vscode webview too; only
+            // the panel's own "View in Graph Editor" button (a real handoff)
+            // stays IN_VSCODE-gated, like the other editor handoffs above.
+            const implRowForSig = React.useMemo(() => {
+                if (!genData || !selectedNode || !selectedGroup) return null;
+                const rows = (genData.nodes[selectedNode.name] && genData.nodes[selectedNode.name].impl) || [];
+                return rows.find((r) => r.key === selectedGroup.key) || null;
+            }, [genData, selectedNode, selectedGroup]);
+            const canViewImpl = !!implRowForSig && !!implRowForSig.graph
+                && !!selectedVersion && !!selectedNode;
+            // Inline implementation-preview panel open state. Reset (closed)
+            // whenever the node or the selected signature changes, so at
+            // most one panel is ever open and it never shows a stale graph.
+            const [implPanelOpen, setImplPanelOpen] = React.useState(false);
+            React.useEffect(() => {
+                setImplPanelOpen(false);
+            }, [selectedNode && selectedNode.name, selectedGroup && selectedGroup.key]);
+            const toggleImplPanel = () => {
+                if (!canViewImpl) return;
+                setImplPanelOpen((v) => !v);
+            };
             // Column set for the displayed table(s).
             const columns = React.useMemo(
                 () => displayTables.length > 0 ? unionColumns(displayTables) : EMPTY_COLUMNS,
@@ -671,10 +768,11 @@
                                    for edge-to-edge (md-scoped: collapse only
                                    exists at md+); md:gap-0 keeps the strip flush. */
                                 ? 'grid grid-cols-1 md:grid-cols-[auto_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)] gap-3 sm:gap-6 md:gap-0 md:flex-1 md:min-h-[20rem] md:-m-6'
-                                // Expanded: sizes the sidebar column to its min-content —
-                                // just wide enough for the filter tri-state + "3D Preview"
-                                // row. The doc pane's columns stay minmax(0,1fr).
-                                : 'grid grid-cols-1 md:grid-cols-[min-content_repeat(3,minmax(0,1fr))] md:grid-rows-[minmax(0,1fr)] gap-3 sm:gap-6 md:flex-1 md:min-h-[20rem]')}>
+                                // Expanded: fixed 340px sidebar column (widest content:
+                                // the two type-filter segments on one line plus padding)
+                                // so the panel never resizes when the filter row toggles.
+                                // The doc pane's columns stay minmax(0,1fr).
+                                : 'grid grid-cols-1 md:grid-cols-[340px_repeat(3,minmax(0,1fr))] md:grid-rows-[minmax(0,1fr)] gap-3 sm:gap-6 md:flex-1 md:min-h-[20rem]')}>
 
                             {/* Vertical twin of the footer's collapsed "Disclaimer" strip: a slim
                                 full-height in-flow bar in the grid's auto column; click re-opens
@@ -704,6 +802,12 @@
                                     forceOpen={forceOpen}
                                     searchQuery={searchQuery}
                                     setSearchQuery={setSearchQuery}
+                                    searchOutType={searchTokens.outType || ''}
+                                    searchInType={searchTokens.inType || ''}
+                                    setSearchOutType={setSearchOutType}
+                                    setSearchInType={setSearchInType}
+                                    outputTypeOptions={outputTypeOptions}
+                                    takesTypeOptions={takesTypeOptions}
                                     matchCount={matchCount}
                                     expandAll={expandAll}
                                     collapseAll={collapseAll}
@@ -807,6 +911,21 @@
                                                     )}
                                                 </button>
                                                 )}
+                                                {canViewImpl && (
+                                                <button
+                                                    onClick={toggleImplPanel}
+                                                    title="Show this node's library implementation graph inline"
+                                                    aria-pressed={implPanelOpen}
+                                                    className={'inline-flex items-center gap-1 h-6 px-2 rounded-md border text-[11px] font-medium transition-colors ' + (
+                                                        implPanelOpen
+                                                            ? 'bg-blue-700/30 border-blue-600/60 text-blue-300'
+                                                            : 'border-gray-600/50 bg-gray-900/70 text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100'
+                                                    )}
+                                                >
+                                                    <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
+                                                    View implementation
+                                                </button>
+                                                )}
                                                 {/* Signature + Version pickers live up here in
                                                     the badge row — they drive the preview AND
                                                     the port table below, so they shouldn't be
@@ -884,6 +1003,26 @@
                                             embed={chromeless}
                                         />
                                         </PreviewErrorBoundary>
+
+                                        {/* Inline implementation-nodegraph preview
+                                            (js/docs/impl-preview.jsx), toggled by the
+                                            "View implementation" badge above. Sits between
+                                            the 3D preview and the Implementations matrix. */}
+                                        {canViewImpl && implPanelOpen && (
+                                            <div className="mt-4 mb-4">
+                                                <DocsImplPreviewPanel
+                                                    open={implPanelOpen}
+                                                    lib={selectedNode.lib}
+                                                    group={selectedNode.group}
+                                                    nodeName={selectedNode.name}
+                                                    ndName={selectedVersion.name}
+                                                    outType={selectedGroup.type}
+                                                    returnHash={inline ? '' : window.location.hash}
+                                                    onClose={() => setImplPanelOpen(false)}
+                                                    inVSCode={IN_VSCODE}
+                                                />
+                                            </div>
+                                        )}
 
                                         {/* Implementation-target matrix: which shading
                                             languages the standard library ships an

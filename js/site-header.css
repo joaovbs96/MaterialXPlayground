@@ -1,8 +1,11 @@
 /* site-header.css — complete, self-contained styling for the shared site
-   shell (header + footer) injected by js/site-header.js into
-   <div id="site-header"> / <div id="site-footer"> on every surface: the
-   SPA (index.html), the tutorials MkDocs subsite, and the VS Code
-   webview.
+   header injected by js/site-header.js into <div id="site-header"> on
+   every surface: the SPA (index.html), the tutorials MkDocs subsite, and
+   the VS Code webview.
+
+   Also styles the About dialog's disclaimer paragraphs (js/shell.jsx
+   AboutDialog), mounted by React into #root, not #site-header, so the
+   .mtlx-about-* rules below are deliberately unscoped.
 
    Must render IDENTICALLY on all three, with or without Tailwind present
    — this stylesheet is Tailwind-free and token-driven (see
@@ -14,18 +17,18 @@
 
    Class scheme: semantic, `mtlx-`-prefixed classes, one per component
    piece (see js/site-header.js, which builds the markup using exactly
-   these class names). A small mini-reset (scoped to #site-header /
-   #site-footer via zero-specificity :where()) stands in for the parts of
-   Tailwind's preflight the markup used to depend on, so real component
-   classes below always win regardless of source order. */
+   these class names). A small mini-reset (scoped to #site-header via
+   zero-specificity :where()) stands in for the parts of Tailwind's
+   preflight the markup used to depend on, so real component classes
+   below always win regardless of source order. */
 
-:where(#site-header, #site-header *, #site-footer, #site-footer *) {
+:where(#site-header, #site-header *) {
     box-sizing: border-box;
     margin: 0;
     border: 0 solid var(--site-gray-200);
 }
 
-:where(#site-header, #site-footer) :where(button) {
+:where(#site-header) :where(button) {
     font: inherit;
     color: inherit;
     background: transparent;
@@ -33,16 +36,15 @@
     cursor: pointer;
 }
 
-:where(#site-header, #site-footer) :where(svg, img) {
+:where(#site-header) :where(svg, img) {
     display: block;
     vertical-align: middle;
 }
 
-/* Link reset: no underline, inherit color. The footer's inline text link
-   (.mtlx-footer-link below) opts back into an underline via its own real
-   class, which — thanks to :where() contributing zero specificity here —
-   wins outright. */
-:where(#site-header, #site-footer) :where(a) {
+/* Link reset: no underline, inherit color. The About dialog's inline text
+   links (.mtlx-about-link/-amber below) opt back in via their own real
+   class, which wins outright thanks to :where()'s zero specificity. */
+:where(#site-header) :where(a) {
     color: inherit;
     text-decoration: none;
 }
@@ -50,8 +52,7 @@
 /* Base typography: matches the SPA's own body font/smoothing so the
    header/footer render identically inside mkdocs (which sets its own
    body font-size/smoothing) and inside the VS Code webview. */
-.mtlx-header,
-.mtlx-footer {
+.mtlx-header {
     font-family: var(--site-font-sans);
     font-size: 16px;
     line-height: 1.5;
@@ -96,14 +97,6 @@
     }
 }
 
-/* Compact stage (js/site-header.js's measure()): hides the abbreviatable
-   half of the version/source pills before falling back to the hamburger,
-   see .mtlx-badge-word / .mtlx-source-owner further down. */
-.mtlx-header-bar.is-compact .mtlx-badge-word,
-.mtlx-header-bar.is-compact .mtlx-source-owner {
-    display: none;
-}
-
 /* Window Controls Overlay (Electron shell, marker class in site-header.js):
    drag region for the title bar, put on the full-width outer strip and
    the inner bar (also full width below), so it drags edge to edge. */
@@ -146,7 +139,7 @@
 }
 /* Every interactive descendant opts out of the drag region: nav links,
    group triggers plus their popover panels (.mtlx-menu, incl. disabled
-   rows), the version/source pills, and the mobile hamburger toggle. */
+   rows), the source pill, and the mobile hamburger toggle. */
 .mtlx-header.mtlx-desktop-titlebar a,
 .mtlx-header.mtlx-desktop-titlebar button,
 .mtlx-header.mtlx-desktop-titlebar select,
@@ -155,14 +148,6 @@
 .mtlx-header.mtlx-desktop-titlebar .mtlx-menu {
     -webkit-app-region: no-drag;
     app-region: no-drag;
-}
-
-/* Electron's right cluster is icon-only (GitHub + settings cog), no reason
-   to also show the MaterialX version pill; the id selector's extra
-   specificity here beats the plain #mtlx-header-version media-query rule
-   below regardless of source order. */
-.mtlx-header-bar.mtlx-desktop-titlebar #mtlx-header-version {
-    display: none;
 }
 
 /* Brand: logo mark + site title. Color lives on the outer element
@@ -370,22 +355,25 @@
     height: 14px;
 }
 
-/* align-items: stretch (not center) so the version pill below always
-   stretches to match the GitHub widget's height — 30px before its facts
-   row loads, 42px after — with no hardcoded height on either side.
-   align-self: center is required alongside it: .mtlx-header-bar is itself
-   `align-items: stretch`, so without this the whole cluster would stretch
-   to fill the 56px bar and its children would fill it edge-to-edge with
-   no gap. align-self makes .mtlx-nav-right hug its tallest child (the
-   GitHub widget) and center that within the bar, while align-items:
-   stretch still grows the version pill to match. */
+/* --mtlx-ctl-h is the explicit shared height for the About button, the
+   Electron settings cog, and the GitHub widget. Computed from the
+   widget's own two-line content: repo line-height 16px + 2px meta gap +
+   facts line-height 14px = 32px, plus its 4px top/bottom padding = 40px,
+   plus its 1px top/bottom border = 42px. A flex-stretch token was tried
+   before (2af03de) and failed: align-items: stretch resolves each
+   child's cross size AFTER aspect-ratio has already sized
+   .mtlx-icon-btn's width from its own hypothetical (unstretched) height,
+   so the button never actually squared up to its stretched height. An
+   explicit variable sidesteps that ordering problem entirely.
+   align-items: center now centers children against this fixed height
+   instead of stretch driving it. */
 .mtlx-nav-right {
     display: none;
     margin-left: auto;
-    align-items: stretch;
-    align-self: center;
+    align-items: center;
     gap: 6px;
     white-space: nowrap;
+    --mtlx-ctl-h: 42px;
 }
 @media (min-width: 640px) {
     .mtlx-nav-right {
@@ -396,67 +384,6 @@
     .mtlx-nav-right {
         display: flex;
     }
-}
-
-/* Pills: version / source / feedback links in the right-side cluster
-   (and their identical mobile-panel counterparts use .mtlx-mobile-link
-   instead, see below). inline-flex + align-items:center (not
-   inline-block) so the text stays vertically centered once
-   .mtlx-nav-right's align-items:stretch above grows this pill taller
-   than its own content. */
-.mtlx-badge {
-    display: inline-flex;
-    align-items: center;
-    /* .mtlx-nav-right children default to flex-shrink: 1 — without this,
-       under width pressure the pill compresses below its nowrap content
-       width and clips its text, and because the bar then doesn't overflow,
-       the measured hamburger collapse in js/site-header.js's measure()
-       (which checks scrollWidth > clientWidth) never fires to rescue it. */
-    flex-shrink: 0;
-    font-size: 12px;
-    line-height: 16px;
-    padding: 6px 10px;
-    border-radius: 8px;
-    border: 1px solid var(--site-gray-600);
-    background-color: var(--site-gray-800);
-    color: var(--site-gray-200);
-    white-space: nowrap;
-    transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
-        background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
-        border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.mtlx-badge:hover {
-    background-color: var(--site-gray-700);
-}
-/* Version pill: text-gray-300 (not the badge default gray-200) and
-   hidden below 640px. Targeted by id (already unique — js/site-header.js
-   uses it as a version-badge mount point) rather than a one-off class. */
-#mtlx-header-version {
-    display: none;
-    color: var(--site-gray-300);
-    /* The logo and the "MaterialX <ver>" text are separate flex items in
-       this inline-flex row (below); column-gap spaces the logo from the
-       text. The text itself is a single flex item (js/site-header.js
-       wraps "MaterialX " + the version <span> in one <span>), so its own
-       natural trailing space renders normally instead of being collapsed
-       and double-spaced by this gap. 4px ≈ a space at this 12px font. */
-    column-gap: 4px;
-}
-@media (min-width: 640px) {
-    #mtlx-header-version {
-        display: inline-flex;
-    }
-}
-/* Official MaterialX wordmark, matched to the GitHub octocat's 20px width
-   (.mtlx-source-icon) so the two pills' icons read as the same size —
-   the source SVG is wider than tall (~1.72:1), so height auto renders it
-   at roughly 12px tall. It's just another flex item in
-   #mtlx-header-version's inline-flex row, so the pill's own
-   column-gap: 4px above already spaces it from the "MaterialX" text —
-   no extra margin needed. */
-.mtlx-badge-logo {
-    width: 20px;
-    height: auto;
 }
 
 /* Same wordmark, used as the "What is MaterialX?" nav leaf's icon. Wider
@@ -475,35 +402,46 @@
     mask: url("../images/materialx-logo.svg") no-repeat center / contain;
 }
 
-/* GitHub repo widget (mkdocs-material style): octocat + repo slug, with
-   an async facts row (latest release / stars / forks) filled in by
-   js/site-header.js's initSourceFacts(). Replaces the old separate
-   "Source" and issues-link pills — their now-unused icon/label/pill
-   modifier classes were removed above. */
+/* GitHub repo widget: a flat icon + text link (no pill chrome), octocat +
+   short repo name, with an async facts row (latest release / stars /
+   forks) filled in by js/site-header.js's initSourceFacts(). Hover only
+   recolors the icon/text (below), it never gets a background or border. */
 .mtlx-source {
     display: inline-flex;
     align-items: center;
-    /* Same reasoning as .mtlx-badge above: shrinking would clip its nowrap
-       content AND hide the overflow from measure()'s collapse check. */
+    box-sizing: border-box;
+    height: var(--mtlx-ctl-h);
+    /* Shrinking would clip its nowrap content AND hide the overflow from
+       measure()'s collapse check below. Horizontal padding gives the
+       hover background room on both sides instead of hugging the text;
+       set at rest too so nothing shifts on hover. */
     flex-shrink: 0;
     gap: 8px;
-    padding: 4px 10px;
+    padding: 0 12px;
     border-radius: 8px;
-    border: 1px solid var(--site-gray-600);
-    background-color: var(--site-gray-800);
+    border: 1px solid transparent;
+    background-color: transparent;
     white-space: nowrap;
-    transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
-        background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+    transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
         border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
+/* Hover matches .mtlx-icon-btn:hover exactly (same bg/border tokens and
+   radius, below) so the flat-at-rest widget picks up the same "pressable"
+   affordance as the About button beside it. */
 .mtlx-source:hover {
     background-color: var(--site-gray-700);
+    border-color: var(--site-gray-600);
+}
+.mtlx-source:hover .mtlx-source-icon,
+.mtlx-source:hover .mtlx-source-repo {
+    color: var(--site-gray-100);
 }
 .mtlx-source-icon {
     width: 20px;
     height: 20px;
     flex-shrink: 0;
     color: var(--site-gray-200);
+    transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .mtlx-source-meta {
     display: flex;
@@ -516,6 +454,7 @@
     font-weight: 500;
     color: var(--site-gray-200);
     white-space: nowrap;
+    transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .mtlx-source-facts {
     display: flex;
@@ -538,18 +477,22 @@
     height: 12px;
 }
 
-/* Electron-only icon buttons: the compacted GitHub widget and the new
-   settings cog, sized/shaped as a matched pair (site-header.js applies
-   this class to both). Sits after .mtlx-source above so its square
-   sizing wins over that pill's own padding/gap for the GitHub button. */
+/* Square icon buttons: the About button (every host), the Electron-only
+   settings cog, and the compacted GitHub widget in Electron, sized/shaped
+   as a matched set. Sits after .mtlx-source above so its square sizing
+   wins over that widget's own padding/gap for the GitHub button.
+   Width and height are both the --mtlx-ctl-h token (set on
+   #mtlx-nav-right), so the square's side always equals the widget's
+   height, explicitly rather than via flex stretch. */
 .mtlx-icon-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    box-sizing: border-box;
+    width: var(--mtlx-ctl-h);
+    height: var(--mtlx-ctl-h);
     flex-shrink: 0;
-    width: 32px;
-    height: 32px;
-    padding: 6px;
+    padding: 0;
     gap: 0;
     border-radius: 8px;
     /* Transparent at rest, but keep the 1px border reserving its own
@@ -744,27 +687,15 @@
 .mtlx-mobile-link:hover {
     background-color: rgba(31, 41, 55, 0.4); /* gray-800/40 */
 }
-/* Mobile version link: text-gray-300 (not the default gray-200), same
-   reasoning as #mtlx-header-version above. */
-#mtlx-header-version-mobile {
-    color: var(--site-gray-300);
-}
-/* Turns the version row from a plain block link into an icon+text row,
+/* Turns the About row from a plain block button into an icon+text row,
    aligned the same way as .mtlx-source-mobile below (left-aligned icon
    column, vertically centered) — kept as its own class rather than
    reusing .mtlx-source-mobile since that one's gap is tuned for a square
-   octocat glyph, not this wider-than-tall wordmark. */
+   octocat glyph, not the About icon. */
 .mtlx-mobile-link-brand {
     display: flex;
     align-items: center;
     gap: 10px;
-}
-/* Matched to the GitHub octocat's 20px width (.mtlx-source-icon) so the two
-   mobile rows' icon columns line up. The source SVG is wider than tall
-   (~1.72:1), so height auto renders it at roughly 12px tall. */
-.mtlx-badge-logo-mobile {
-    width: 20px;
-    height: auto;
 }
 
 /* Mobile GitHub row: a flat copy of the desktop .mtlx-source widget
@@ -814,7 +745,7 @@
 }
 /* The :where() reset near the top of this file sets svg{display:block};
    this icon sits inline with the row's text, so override that here,
-   same as .mtlx-footer-warn-icon does below. */
+   same as .mtlx-about-warn-icon does above. */
 .mtlx-build-banner-icon {
     display: inline;
     width: 16px;
@@ -867,148 +798,63 @@
     opacity: 1;
 }
 
-/* ---- Footer --------------------------------------------------------- */
-/* On hover-capable pointers the footer rests collapsed and hover-expands
-   (click pins it open); that state machine lives entirely in
-   site-header.js's mountFooter() — no CSS :hover rule opens the footer,
-   applyFooter() is the single writer of .is-collapsed. */
+/* ---- About dialog disclaimer paragraphs ------------------------------ */
+/* Rendered by js/shell.jsx's AboutDialog (mounted into #root, not
+   #site-header), so these rules are deliberately unscoped. The footer
+   strip that used to share this markup is gone. */
 
-.mtlx-footer {
-    position: relative;
-    flex-shrink: 0;
-    border-top: 1px solid var(--site-gray-800);
-    background-color: var(--site-gray-900);
-}
-
-/* Expanded body: an overlay above the strip — the in-flow footer is
-   always just the 28px strip, so expanding never resizes #root (and
-   never disturbs the graph/viewer canvases). */
-.mtlx-footer-pop {
-    position: absolute;
-    bottom: 100%;
-    left: 0;
-    right: 0;
-    z-index: 40; /* above in-page HUDs, below modal dialogs (z-50) */
-    background-color: var(--site-gray-900);
-    border-top: 1px solid var(--site-gray-800);
-    box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.45);
-}
-
-/* Slim toggle strip: a full-width native <button> (the :where() reset at
-   the top of this file supplies font/cursor); its own inner span is
-   width-capped/centered like every other row so it lines up with the
-   header/footer content above and below it. */
-.mtlx-footer-toggle {
-    display: block;
-    width: 100%;
-    text-align: left;
-}
-.mtlx-footer-toggle-inner {
-    max-width: var(--site-max-width);
-    margin-left: auto;
-    margin-right: auto;
-    padding: 4px 12px; /* 28px strip */
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    line-height: 20px;
-    font-weight: 500;
-    color: var(--site-gray-400);
-    transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.mtlx-footer-toggle:hover .mtlx-footer-toggle-inner {
-    color: var(--site-gray-200);
-}
-@media (min-width: 640px) {
-    .mtlx-footer-toggle-inner {
-        padding: 4px 24px;
-    }
-}
-.mtlx-footer-chevron {
-    width: 16px;
-    height: 16px;
-    transition: transform 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.mtlx-footer.is-collapsed .mtlx-footer-chevron {
-    transform: rotate(180deg);
-}
-/* .mtlx-footer-pop is an overlay (see the rule above), so expanding it
-   never resizes #root or thrashes the graph/viewer ResizeObservers/WebGL
-   buffers — collapse just stays instant (display:none) for simplicity.
-   Only the chevron rotation above animates. */
-.mtlx-footer.is-collapsed .mtlx-footer-pop {
-    display: none;
-}
-
-.mtlx-footer-inner {
-    max-width: var(--site-max-width);
-    margin-left: auto;
-    margin-right: auto;
-    padding: 10px 12px 12px;
+.mtlx-about-inner {
     font-size: 13px;
     line-height: 18px;
     color: var(--site-gray-400);
 }
-@media (min-width: 640px) {
-    .mtlx-footer-inner {
-        padding: 10px 24px 12px;
-    }
-}
-/* Two stacked paragraphs (Experimental Preview, then affiliation) inside
-   the same collapsible body — the :where() reset zeroes out <p> margins,
-   so space them by hand. */
-.mtlx-footer-inner p {
+/* The :where() reset only scopes #site-header, and this paragraph pair
+   lives outside it, so zero <p> margins by hand here too. */
+.mtlx-about-inner p {
     margin: 0;
 }
-.mtlx-footer-inner p + p {
+.mtlx-about-inner p + p {
     margin-top: 6px;
 }
 
-.mtlx-footer-link {
+.mtlx-about-link {
     text-decoration: underline;
     color: var(--site-gray-200);
     transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.mtlx-footer-link:hover {
+.mtlx-about-link:hover {
     color: var(--site-gray-100);
 }
 
-/* Experimental Preview paragraph, moved here from the docs page's own
-   bottom-of-page banner so it shows on every route (see js/site-header.js
-   footerHtml). Amber accent + alert-triangle icon kept from the original
-   banner; text sized down to match the rest of the footer body. */
-.mtlx-footer-experimental {
+/* Experimental Preview paragraph. Amber accent + alert-triangle icon. */
+.mtlx-about-experimental {
     color: var(--site-amber-300);
     opacity: 0.9;
 }
-.mtlx-footer-experimental strong {
+.mtlx-about-experimental strong {
     font-weight: 600;
     opacity: 1;
 }
-/* The :where() reset above sets svg{display:block} — this icon sits
-   inline with the paragraph's text, so override that explicitly. */
-.mtlx-footer-warn-icon {
+.mtlx-about-warn-icon {
     display: inline;
     width: 14px;
     height: 14px;
     vertical-align: -2px;
     margin-right: 4px;
 }
-.mtlx-footer-link-amber {
+.mtlx-about-link-amber {
     text-decoration: underline;
     color: var(--site-amber-200);
     transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.mtlx-footer-link-amber:hover {
+.mtlx-about-link-amber:hover {
     color: var(--site-amber-100);
 }
 
-/* DesktopAboutDialog (js/shell.jsx) wraps the same experimental-notice
-   markup in the site's amber warning box idiom instead of the footer
-   strip; neutralize the footer's own amber color/opacity here so the
-   box's Tailwind text color is not fought paragraph-side. */
-.mtlx-about-disclaimer .mtlx-footer-experimental {
+/* AboutDialog wraps this in the site's amber warning box idiom; neutralize
+   .mtlx-about-experimental's own color/opacity so the box's Tailwind
+   text color is not fought paragraph-side. */
+.mtlx-about-disclaimer .mtlx-about-experimental {
     color: inherit;
     opacity: 1;
 }

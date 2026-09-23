@@ -1,12 +1,9 @@
-// site-header.js — shared site shell (header + footer), used by every page.
-// Plain (non-Babel) script injected synchronously into <div id="site-header">
-// so the header paints before React, Babel, three.js, or the MaterialX WASM
-// start downloading, making page switches feel like one site, not two loads.
-// The footer is shared the same way but isn't paint-critical, so it's
-// injected at DOMContentLoaded into <div id="site-footer"> instead (a page
-// that omits it gets one auto-created). Single source of truth for site
-// title/links: home-app.jsx, js/docs/doc-links.jsx and js/docs/sidebar.jsx
-// read window.SITE_LINKS / window.SITE_TITLE.
+// site-header.js: shared site header, used by every page. Plain
+// (non-Babel) script injected synchronously into <div id="site-header">
+// so the header paints before React, Babel, three.js, or the MaterialX WASM start downloading.
+// Also publishes window.SITE_DISCLAIMER_PARTS (read by js/shell.jsx's
+// AboutDialog) and window.SITE_LINKS / window.SITE_TITLE, the single
+// source of truth read by home-app.jsx, doc-links.jsx and sidebar.jsx.
 
 (function () {
     'use strict';
@@ -48,7 +45,8 @@
     // hardcoded — consumed by the GitHub repo widget markup below and by
     // initSourceFacts' api.github.com calls.
     var REPO_SLUG = LINKS.repo.replace(/^https?:\/\/github\.com\//, '');
-    // Split for the desktop widget's owner/name styling (D below).
+    // Split so the widgets below can show just REPO_NAME, and LINKS.site
+    // (below) can derive the Pages URL from REPO_OWNER.
     var REPO_OWNER = REPO_SLUG.split('/')[0];
     var REPO_NAME = REPO_SLUG.split('/').slice(1).join('/');
     // Public GitHub Pages URL, derived the same way (About dialog).
@@ -90,10 +88,21 @@
             '<path d="M9 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0" />' +
         '</svg>';
 
-    // Electron-only header help button (Tabler outline "help"), same
-    // viewBox/stroke/normalization convention as ICON_SETTINGS above.
+    // Header help button (Tabler outline "help"), same stroke/normalization
+    // convention as ICON_SETTINGS above. viewBox cropped to "2 2 20 20"
+    // (not "0 0 24 24"): the ring's outer stroke edge sits at 2..22 in the
+    // original grid, so this crop fills the icon's box edge to edge like
+    // the octocat glyph does, instead of leaving visible padding around it.
     var ICON_ABOUT =
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<svg viewBox="2 2 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" />' +
+            '<path d="M12 17l0 .01" />' +
+            '<path d="M12 13.5a1.5 1.5 0 0 1 1 -1.5a2.6 2.6 0 1 0 -3 -4" />' +
+        '</svg>';
+    // Same glyph as ICON_ABOUT, with .mtlx-source-icon so it matches the
+    // mobile GitHub row's 20px icon column (see the mobile About row below).
+    var ICON_ABOUT_MOBILE =
+        '<svg class="mtlx-source-icon" viewBox="2 2 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
             '<path d="M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" />' +
             '<path d="M12 17l0 .01" />' +
             '<path d="M12 13.5a1.5 1.5 0 0 1 1 -1.5a2.6 2.6 0 1 0 -3 -4" />' +
@@ -440,46 +449,44 @@
                 // hamburger + mobile panel below covers mobile).
                 '<nav id="mtlx-nav-desktop" class="mtlx-nav-desktop" aria-label="Site">' + tabs + '</nav>' +
 
-                // Right: version badge + GitHub repo widget, desktop only.
-                // CSS white-space:nowrap (container + children) forces
+                // Right: About + GitHub repo widget, desktop only. CSS
+                // white-space:nowrap (container + children) forces
                 // overflow horizontal, which measure() below relies on.
+                // The version pill that used to live here is gone; the
+                // version itself is still tracked (window.MTLX_HEADER_VERSION,
+                // filled in by setVer() below) for js/shell.jsx's AboutDialog.
                 '<div id="mtlx-nav-right" class="mtlx-nav-right">' +
-                    '<a id="mtlx-header-version" href="' + LINKS.spec + '" target="_blank" rel="noopener noreferrer"' +
-                        ' title="MaterialX specification &amp; documentation (version reported by the MaterialX JS API)"' +
-                        ' class="mtlx-badge">' +
-                        '<img class="mtlx-badge-logo" src="images/materialx-logo.svg" alt="">' +
-                        // Label + version wrapped in ONE flex item so the
-                        // pill's column-gap (between flex items) doesn't
-                        // double up with the space already between them.
-                        '<span><span class="mtlx-badge-word">MaterialX </span><span data-role="ver">\u2026</span></span>' +
-                    '</a>' +
-                    // GitHub repo widget (mkdocs-material style): octocat +
-                    // repo slug + async facts row, filled in below. In
-                    // Electron this compacts to an icon-only button (CSS,
+                    // About button, immediately left of the GitHub widget.
+                    // Dispatches an event for js/shell.jsx's AboutDialog to
+                    // pick up (same "just a CustomEvent" contract as the
+                    // settings cog below).
+                    '<button type="button" id="mtlx-about-btn" class="mtlx-icon-btn"' +
+                        ' title="About" aria-label="About">' +
+                        ICON_ABOUT +
+                    '</button>' +
+                    // GitHub repo widget (flat icon + text link, no pill
+                    // chrome): octocat + short repo name + async facts row,
+                    // filled in below. Visible name is REPO_NAME only
+                    // (REPO_OWNER dropped); title/aria-label carry the full
+                    // REPO_SLUG so the owner is still available on hover/to
+                    // screen readers. Rightmost item of the cluster (before
+                    // the Electron-only settings cog). In Electron this
+                    // compacts to an icon-only button (CSS,
                     // SOURCE_COMPACT_CLASS above); the meta span stays in the
                     // DOM (just hidden) so initSourceFacts' lookups below
                     // never see a missing node.
                     // LINKS.issues stays defined too (About dialog, footer).
                     '<a id="mtlx-source-widget" href="' + LINKS.repo + '" target="_blank" rel="noopener noreferrer"' +
-                        ' title="View the source code on GitHub" class="mtlx-source' + SOURCE_COMPACT_CLASS + '">' +
+                        ' title="View ' + REPO_SLUG + ' on GitHub" aria-label="View ' + REPO_SLUG + ' on GitHub"' +
+                        ' class="mtlx-source' + SOURCE_COMPACT_CLASS + '">' +
                         '<svg class="mtlx-source-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
                             ICON_OCTOCAT +
                         '</svg>' +
                         '<span class="mtlx-source-meta">' +
-                            '<span class="mtlx-source-repo"><span class="mtlx-source-owner">' + REPO_OWNER + '/</span>' + REPO_NAME + '</span>' +
+                            '<span class="mtlx-source-repo">' + REPO_NAME + '</span>' +
                             '<span id="mtlx-source-facts" class="mtlx-source-facts"></span>' +
                         '</span>' +
                     '</a>' +
-                    // Electron-only help button, between the GitHub icon and
-                    // the settings cog. Dispatches an event for js/shell.jsx's
-                    // DesktopAboutDialog to pick up (same "just a
-                    // CustomEvent" contract as the settings cog below).
-                    (IS_ELECTRON ?
-                        '<button type="button" id="mtlx-about-btn" class="mtlx-icon-btn"' +
-                            ' title="About" aria-label="About">' +
-                            ICON_ABOUT +
-                        '</button>'
-                    : '') +
                     // Electron-only settings cog, rightmost in the cluster.
                     // Dispatches an event for js/shell.jsx's
                     // DesktopSettingsDialog to pick up (same "just a
@@ -514,24 +521,27 @@
                     // .mtlx-mobile-link-brand adds a flex row (icon + text)
                     // over .mtlx-mobile-link's flat styling, kept separate
                     // from .mtlx-source-mobile (its gap suits a square glyph).
-                    '<a id="mtlx-header-version-mobile" href="' + LINKS.spec + '" target="_blank" rel="noopener noreferrer"' +
-                        ' class="mtlx-mobile-link mtlx-mobile-link-brand">' +
-                        '<img class="mtlx-badge-logo-mobile" src="images/materialx-logo.svg" alt="">' +
-                        // Same "MaterialX" label as the desktop pill,
-                        // wrapped in ONE flex item so this row's gap:10px
-                        // doesn't double up with the space already there.
-                        '<span><span class="mtlx-badge-word">MaterialX </span><span data-role="ver">\u2026</span></span>' +
-                    '</a>' +
+                    // Mobile copy of the About button (desktop-only cluster
+                    // is hidden on narrow widths): opens js/shell.jsx's
+                    // AboutDialog, same event as the header button above.
+                    // Ordered right before the GitHub row, mirroring the
+                    // desktop cluster's About-then-GitHub order.
+                    '<button type="button" id="mtlx-about-btn-mobile" class="mtlx-mobile-link mtlx-mobile-link-brand">' +
+                        ICON_ABOUT_MOBILE +
+                        '<span>About</span>' +
+                    '</button>' +
                     // Flat copy of the desktop GitHub widget (octocat +
                     // repo slug + facts row) instead of a plain "Source"
                     // link; initSourceFacts() below fills both containers.
+                    // Rightmost/last item, matching the desktop cluster.
                     '<a id="mtlx-source-widget-mobile" href="' + LINKS.repo + '" target="_blank" rel="noopener noreferrer"' +
+                        ' title="View ' + REPO_SLUG + ' on GitHub" aria-label="View ' + REPO_SLUG + ' on GitHub"' +
                         ' class="mtlx-mobile-link mtlx-source-mobile">' +
                         '<svg class="mtlx-source-icon" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
                             ICON_OCTOCAT +
                         '</svg>' +
                         '<span class="mtlx-source-meta">' +
-                            '<span class="mtlx-source-repo-mobile">' + REPO_SLUG + '</span>' +
+                            '<span class="mtlx-source-repo-mobile">' + REPO_NAME + '</span>' +
                             '<span id="mtlx-source-facts-mobile" class="mtlx-source-facts"></span>' +
                         '</span>' +
                     '</a>' +
@@ -542,13 +552,13 @@
     var mount = document.getElementById('site-header');
     if (mount) mount.innerHTML = html;
 
-    // Electron-only help button: opens js/shell.jsx's DesktopAboutDialog.
+    // Help button (every host, desktop + mobile copies): opens
+    // js/shell.jsx's AboutDialog.
+    var aboutOpen = function () { window.dispatchEvent(new CustomEvent('mtlx-about')); };
     var aboutBtn = document.getElementById('mtlx-about-btn');
-    if (aboutBtn) {
-        aboutBtn.addEventListener('click', function () {
-            window.dispatchEvent(new CustomEvent('mtlx-desktop-about'));
-        });
-    }
+    if (aboutBtn) aboutBtn.addEventListener('click', aboutOpen);
+    var aboutBtnMobile = document.getElementById('mtlx-about-btn-mobile');
+    if (aboutBtnMobile) aboutBtnMobile.addEventListener('click', aboutOpen);
 
     // Electron-only settings cog: opens js/shell.jsx's DesktopSettingsDialog.
     var settingsBtn = document.getElementById('mtlx-settings-btn');
@@ -593,9 +603,9 @@
             publishHeaderHeight();
         });
         // Any link inside the mobile panel (nav item or source/version
-        // link) closes the panel once activated.
+        // link), or the About button, closes the panel once activated.
         mobileMenu.addEventListener('click', function (e) {
-            if (e.target && e.target.closest && e.target.closest('a')) {
+            if (e.target && e.target.closest && e.target.closest('a, #mtlx-about-btn-mobile')) {
                 closeMobileMenu();
             }
         });
@@ -804,10 +814,6 @@
         // Web font metrics can still be settling after first paint —
         // re-measure once everything (including fonts) has fully loaded.
         window.addEventListener('load', measure);
-        // The version badge widens the right-side cluster once the WASM
-        // reports itself; that alone can push the bar from fitting to
-        // overflowing.
-        window.addEventListener('mtlx-version', measure);
         // The overlay rect can change without a window resize (e.g. still
         // settling right after launch); re-measure whenever it does.
         if (navigator.windowControlsOverlay) {
@@ -1159,122 +1165,52 @@
         });
     }
 
-    // Version badge: mtlx-engine.js sets window.__mtlxVersion and fires
-    // 'mtlx-version' once WASM loads, but the home view never triggers
-    // that, so fall back to MTLX_TAG (update it when re-vendoring).
+    // Version tracking: no visible pill anymore, but js/shell.jsx's
+    // AboutDialog still needs the version. mtlx-engine.js sets
+    // window.__mtlxVersion and fires 'mtlx-version' once WASM loads, but
+    // the home view never triggers that, so fall back to MTLX_TAG (update
+    // it when re-vendoring). window.MTLX_HEADER_VERSION holds the 'v...'
+    // tag string, same shape as MTLX_TAG.
     var MTLX_VERSION_FALLBACK = MTLX_TAG.replace(/^v/, '');
     var setVer = function (v) {
         if (!v) return;
-        var els = document.querySelectorAll('#mtlx-header-version [data-role="ver"], #mtlx-header-version-mobile [data-role="ver"]');
-        for (var i = 0; i < els.length; i++) { els[i].textContent = 'v' + v; }
+        window.MTLX_HEADER_VERSION = 'v' + v;
     };
     setVer(window.__mtlxVersion || MTLX_VERSION_FALLBACK);
     window.addEventListener('mtlx-version', function (e) { setVer(e.detail || window.__mtlxVersion); });
 
-    // ---- Shared footer --------------------------------------------------
-    // Two paragraphs on every page (Experimental Preview + affiliation
-    // note), injected at DOMContentLoaded (mount auto-created if missing).
-    // Expanded body is an absolute overlay so it never resizes #root/layout.
-    // DISCLAIMER_BODY_HTML is the single source of truth for these two
-    // paragraphs: the footer below and shell.jsx's DesktopAboutDialog (in
-    // Electron, where the footer strip is hidden) both render this same
-    // string, so the wording never drifts between the two.
-    // Experimental Preview notice, moved from the docs page's own banner
-    // so it shows on every route. Needs display:inline: :where() sets
-    // svg{display:block}.
-    // Host noun for the two sentences below: the web/VS Code wording
-    // ("this site" / "This website") reads wrong in the desktop About
-    // dialog, which is not a website, so it swaps to app-appropriate phrasing there.
-    var DISCLAIMER_HOST_NOUN = IS_ELECTRON ? 'this app' : 'this site';
-    var DISCLAIMER_PROJECT_SUBJECT = IS_ELECTRON ? SITE_TITLE : 'This website';
+    // ---- Disclaimer text --------------------------------------------------
+    // Two paragraphs (Experimental Preview + affiliation note), rendered
+    // only inside js/shell.jsx's AboutDialog now (the footer strip that
+    // used to show them on every page has been removed).
+    // Host noun/subject swap in app-appropriate phrasing: "this site" /
+    // "This website" reads wrong inside the desktop app or the extension.
+    var DISCLAIMER_HOST_NOUN = IS_ELECTRON ? 'this app' : (window.__MTLX_VSCODE__ ? 'this extension' : 'this site');
+    var DISCLAIMER_PROJECT_SUBJECT = IS_ELECTRON ? SITE_TITLE : (window.__MTLX_VSCODE__ ? 'This extension' : 'This website');
     var DISCLAIMER_EXPERIMENTAL_HTML =
-            '<p class="mtlx-footer-experimental">' +
+            '<p class="mtlx-about-experimental">' +
                 '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
                     ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"' +
-                    ' class="mtlx-footer-warn-icon">' +
+                    ' class="mtlx-about-warn-icon">' +
                     '<path d="M12 9v4"/><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.871l-8.106 -13.534a1.914 1.914 0 0 0 -3.274 0z"/><path d="M12 16h.01"/>' +
                 '</svg>' +
                 '<strong>Experimental preview:</strong> ' + DISCLAIMER_HOST_NOUN + ' is under active development, 3D previews and parameter values may not match reference renders. Spotted a problem? Report it in the ' +
-                '<a href="' + LINKS.issues + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link-amber">project repository</a>.' +
+                '<a href="' + LINKS.issues + '" target="_blank" rel="noopener noreferrer" class="mtlx-about-link-amber">project repository</a>.' +
             '</p>';
     var DISCLAIMER_AFFILIATION_HTML =
             '<p>' +
                 DISCLAIMER_PROJECT_SUBJECT + ' is an independent, open-source project and is not officially affiliated with MaterialX or the Academy Software Foundation. ' +
                 'In the event of any discrepancies, the specification in the ' +
-                '<a href="' + LINKS.specMain + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link">official MaterialX repository</a> ' +
+                '<a href="' + LINKS.specMain + '" target="_blank" rel="noopener noreferrer" class="mtlx-about-link">official MaterialX repository</a> ' +
                 'remains the definitive source of truth.' +
             '</p>';
-    var DISCLAIMER_BODY_HTML = DISCLAIMER_EXPERIMENTAL_HTML + DISCLAIMER_AFFILIATION_HTML;
-
-    var footerHtml =
-        '<footer id="mtlx-footer" class="mtlx-footer">' +
-            '<button id="mtlx-footer-toggle" type="button" class="mtlx-footer-toggle"' +
-                ' aria-expanded="true" aria-controls="mtlx-footer-body">' +
-                '<span class="mtlx-footer-toggle-inner">' +
-                    '<span>Disclaimer</span>' +
-                    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
-                        ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"' +
-                        ' class="mtlx-footer-chevron">' +
-                        '<path d="M6 9l6 6 6-6" />' +
-                    '</svg>' +
-                '</span>' +
-            '</button>' +
-            '<div id="mtlx-footer-body" class="mtlx-footer-pop">' +
-                '<div class="mtlx-footer-inner">' +
-                    DISCLAIMER_BODY_HTML +
-                '</div>' +
-            '</div>' +
-        '</footer>';
-
-    var mountFooter = function () {
-        var el = document.getElementById('site-footer');
-        if (!el) {
-            el = document.createElement('div');
-            el.id = 'site-footer';
-            document.body.appendChild(el);
-        }
-        el.innerHTML = footerHtml;
-
-        // ---- Collapsible disclaimer: rests collapsed, click toggles -----
-        // Rests collapsed on every route/device; the strip click is the
-        // only toggle, state is ephemeral (no localStorage). Expanded body
-        // is an overlay (.mtlx-footer-pop), so it never resizes #root/layout.
-        var footerEl = document.getElementById('mtlx-footer');
-        var toggleBtn = document.getElementById('mtlx-footer-toggle');
-        if (!footerEl || !toggleBtn) return;
-
-        var collapsed = true;
-        function applyFooter() {
-            footerEl.classList.toggle('is-collapsed', collapsed);
-            toggleBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-        }
-        applyFooter();
-
-        toggleBtn.addEventListener('click', function () {
-            collapsed = !collapsed;
-            applyFooter();
-        });
-    };
-    // Skipped entirely under VS Code (this shrink-0 strip would steal
-    // bottom height from the full-bleed webview views) and under Electron
-    // (js/shell.jsx's DesktopAboutDialog shows SITE_DISCLAIMER_PARTS instead,
-    // reachable from the header help button there).
-    if (!window.__MTLX_VSCODE__ && !window.__MTLX_ELECTRON__) {
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', mountFooter);
-        } else {
-            mountFooter();
-        }
-    }
 
     // Published for the React apps (page <title>s, doc-ui links, ...).
     window.SITE_TITLE = SITE_TITLE;
     window.SITE_LINKS = LINKS;
     window.SITE_LOGO_PATHS = LOGO_PATHS;
-    window.SITE_DISCLAIMER_HTML = DISCLAIMER_BODY_HTML;
-    // Split paragraphs for shell.jsx's DesktopAboutDialog, which styles the
-    // experimental notice as its own warning box (the footer keeps composing
-    // both paragraphs together above, unchanged).
+    // Split paragraphs for shell.jsx's AboutDialog, which styles the
+    // experimental notice as its own warning box.
     window.SITE_DISCLAIMER_PARTS = {
         experimental: DISCLAIMER_EXPERIMENTAL_HTML,
         affiliation: DISCLAIMER_AFFILIATION_HTML

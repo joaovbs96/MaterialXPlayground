@@ -72,7 +72,7 @@ const BANNER = `    <!-- =======================================================
          focus-outline CSS near the bottom) are fragments defined in
          scripts/build-webview.mjs — edit them there instead. Loaders:
          RGBELoader, GLTFLoader, DRACOLoader, OBJLoader, OrbitControls.
-         Contains six \${...} placeholders substituted at runtime by
+         Contains eight \${...} placeholders substituted at runtime by
          vscode_extension/src/editorProvider.js's buildHtml().
          ================================================================ -->`;
 
@@ -165,8 +165,10 @@ const BOOTSTRAP_BLOCK = `    <!-- Bootstrap: MUST be the first script to run, be
          standalone docs panel; data-scene-only does the same for the USD
          scene editor), installs the in-page link interceptor,
          and wires up the extension <-> webview postMessage contract. See
-         vscode_extension/media/bootstrap.js. -->
-    <script src="\${bootstrapUri}" data-initial-hash="\${initialHash}" data-docs-only="\${docsOnly}" data-scene-only="\${sceneOnly}"></script>`;
+         vscode_extension/media/bootstrap.js.
+         data-extension-version/data-vscode-version feed window.__MTLX_VSCODE_VERSIONS__,
+         read by js/shell.jsx's AboutDialog. -->
+    <script src="\${bootstrapUri}" data-initial-hash="\${initialHash}" data-docs-only="\${docsOnly}" data-scene-only="\${sceneOnly}" data-extension-version="\${extensionVersion}" data-vscode-version="\${vscodeVersion}"></script>`;
 
 // Webview-only :focus{outline:none}: VS Code's Chromium shows a native
 // focus outline that a regular browser's :focus-visible heuristics
@@ -182,7 +184,7 @@ const FOCUS_CSS_BLOCK = `
             outline: none;
         }`;
 
-const PLACEHOLDERS = ["${cspSource}", "${baseUri}", "${bootstrapUri}", "${initialHash}", "${docsOnly}", "${sceneOnly}"];
+const PLACEHOLDERS = ["${cspSource}", "${baseUri}", "${bootstrapUri}", "${initialHash}", "${docsOnly}", "${sceneOnly}", "${extensionVersion}", "${vscodeVersion}"];
 
 /** Count non-overlapping occurrences of `needle` in `haystack`. */
 function countOccurrences(haystack, needle) {

@@ -680,6 +680,10 @@
             // just a selection) should be framed once the rebuilt flow has
             // measured it, the library-implementation-graph return path.
             const pendingFrameRef = React.useRef(null);
+            // Set by handleImport for a docs-page implOf handoff: { nodedef,
+            // fromId }. Consumed once parsed settles, right after the
+            // imported node itself is selected in root scope.
+            const pendingImplRef = React.useRef(null);
             // { id, scope } of the node whose "Explore Node Graph" pill/menu
             // opened the CURRENT scope, so leaving a library implementation
             // graph returns to (and frames) that node instead of scope root.
@@ -720,6 +724,14 @@
                 // origin.graph is the library graph it was recorded for ,
                 // must match the scope we're CURRENTLY leaving, not the
                 // scope we're returning to (origin.scope).
+                if (origin && origin.graph === scopeRef.current && origin.returnHash) {
+                    // Opened from the docs page's implementation preview
+                    // panel: leaving this view-only scope goes back to that
+                    // Node Specs page, not up to the (unrelated) doc root.
+                    scopeOriginRef.current = null;
+                    window.location.hash = origin.returnHash;
+                    return;
+                }
                 if (origin && origin.graph === scopeRef.current) {
                     // Leaving a library implementation graph opened from
                     // inside origin.scope: return there and frame the node
@@ -736,9 +748,11 @@
             };
             // Enters a library implementation graph from node fromId,
             // remembering where to return on Backspace/breadcrumb-up.
-            const openImplGraph = (graphName, fromId) => {
+            // `returnHash`: set only for a docs-page handoff — goUpScope
+            // navigates straight to it instead of stepping up in-editor.
+            const openImplGraph = (graphName, fromId, returnHash) => {
                 if (!graphName) return;
-                scopeOriginRef.current = { id: fromId, scope: scopeRef.current, graph: graphName };
+                scopeOriginRef.current = { id: fromId, scope: scopeRef.current, graph: graphName, returnHash: returnHash || null };
                 changeScope(graphName);
             };
             // { stack: [{xml, scope, tag}], index, savedIndex }. index === -1
@@ -1617,6 +1631,14 @@
                     // A hint naming a node the document lacks is harmless —
                     // selectedNode resolves to null and displayNode falls back.
                     pendingScopeSelectRef.current = payload.select ? 'n:' + payload.select : null;
+                    // Docs implementation-preview handoff: resolved once
+                    // parsed settles, by the flow-rebuild effect below.
+                    // returnHash (the docs page's own hash) rides along so
+                    // goUpScope can send Backspace/breadcrumb-up back to
+                    // Node Specs instead of the document root.
+                    pendingImplRef.current = (payload.implOf && payload.select)
+                        ? { nodedef: payload.implOf, fromId: 'n:' + payload.select, returnHash: payload.returnHash || null }
+                        : null;
                     const safeName = (payload.name || 'material').replace(/[^a-z0-9_\-]+/gi, '_') || 'material';
                     const map = Object.assign({}, payload.files || {}, {
                         [safeName + '.mtlx']: new Blob([payload.xml], { type: 'application/xml' }),
@@ -1878,6 +1900,17 @@
                         scheduleViewSettle(() => fitViewSoon({ nodes: [{ id: frameId }], duration: 400, padding: 0.4, maxZoom: 1.2 }));
                     } else if (switchedScope) {
                         scheduleViewSettle(() => fitViewSoon({ padding: 0.15, duration: 350 }));
+                    }
+                    // Docs "View implementation" handoff: jump into the
+                    // imported node's implementation nodegraph, same path
+                    // "Explore Node Graph" uses from inside the editor.
+                    const pendingImpl = pendingImplRef.current;
+                    if (pendingImpl) {
+                        pendingImplRef.current = null;
+                        const graphName = parsed.implGraphByNodedef && parsed.implGraphByNodedef.get(pendingImpl.nodedef);
+                        if (graphName && built.nodes.some((n) => n.id === pendingImpl.fromId)) {
+                            openImplGraph(graphName, pendingImpl.fromId, pendingImpl.returnHash);
+                        }
                     }
                 } catch (e) {
                     setFlow({ nodes: [], edges: [] });
@@ -7258,7 +7291,11 @@
                             <div className="flex items-center h-7 min-w-0">
                                 <div className="text-[11px] font-sans text-gray-400 max-w-full truncate">
                                     <button className="hover:text-gray-200 underline decoration-dotted" onClick={goUpScope}>
-                                        {parsed.label}
+                                        {/* A docs-page implementation handoff (scopeOriginRef.returnHash)
+                                            makes this scope's "up" action a page navigation back to
+                                            Node Specs, not a step up the document — label it that way. */}
+                                        {(scopeOriginRef.current && scopeOriginRef.current.graph === scope && scopeOriginRef.current.returnHash)
+                                            ? 'Back to Node Specs' : parsed.label}
                                     </button>
                                     {scope && <span className="inline-flex items-center align-middle text-gray-500 mx-1"><MtlxIcon name="chevron-right" className="w-3 h-3" /></span>}
                                     {scope && <span className="text-blue-300">{scope}</span>}

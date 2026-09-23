@@ -359,6 +359,14 @@
         }, true);
     }
 
+    // Extension + VS Code versions, read the same synchronous-currentScript
+    // way as the flags above. Consumed by js/shell.jsx's AboutDialog
+    // for its VS Code version block (Extension X / VS Code Y).
+    window.__MTLX_VSCODE_VERSIONS__ = {
+        extension: (document.currentScript && document.currentScript.getAttribute('data-extension-version')) || '',
+        vscode: (document.currentScript && document.currentScript.getAttribute('data-vscode-version')) || '',
+    };
+
     // ------------------------------------------------------------------
     // Link interception: <base href="${baseUri}"> (webview.html) makes
     // every relative href in the site resolve to a webview-resource URL,
@@ -808,7 +816,10 @@
                 window.mtlxLoadViewDeps('galleryDetail').then(function () { deps = 'resolved'; }, function (e) { deps = 'rejected: ' + String((e && e.message) || e); });
             }
             var s = snapshot();
-            var settled = (s.nodes > 0 && !s.graphLoading) || s.depsErrorShown || (!!s.dblReason && s.dblReason !== 'ok');
+            // The Scene Viewer pre-warms this panel hidden with a stub document,
+            // so only a visible panel showing the clicked material counts.
+            var shown = s.panel && !s.panelHidden && !/preview-warmup/.test(s.text);
+            var settled = (shown && ((s.nodes > 0 && !s.graphLoading) || s.depsErrorShown)) || (!!s.dblReason && s.dblReason !== 'ok');
             if (settled || Date.now() - started > timeoutMs) { send({ settled: settled }); return; }
             setTimeout(poll, 500);
         })();

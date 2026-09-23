@@ -116,12 +116,12 @@ function fail(message) {
 // ---------------------------------------------------------------------
 // Sources -> outputs. Exactly what js/shell.jsx's VIEW_DEPS.viewer needs
 // (babelScripts: ['js/shared/mtlx-ui.jsx'], app: 'js/viewer-app.jsx')
-// plus js/mtlx-engine.js, which index.html:149 loads eagerly (not listed
+// plus js/mtlx-engine.js, which index.html:240 loads eagerly (not listed
 // in VIEW_DEPS — see js/shell.jsx:107-108).
 //
 // `wrap: true` mirrors loadJsxApp's IIFE injection (js/shell.jsx:94) for
 // the two lazy-loaded files; `wrap: false` mirrors js/mtlx-engine.js's
-// eager <script type="text/babel"> tag (index.html:149), which runs
+// eager <script type="text/mtlx-babel"> tag (index.html:240), which runs
 // unwrapped at top level. Getting this backwards changes scoping
 // semantics silently — see js/shell.jsx:70-100.
 const TARGETS = [
@@ -131,16 +131,24 @@ const TARGETS = [
   { src: "js/viewer-app.jsx", out: "embed/gen/viewer-app.js", wrap: true },
 ];
 
-// The exact config js/shell.jsx:79-83 (loadJsxApp) and index.html's
-// data-presets="react" tag both use. React preset ONLY — never add
-// preset-env: index.html:139-146 documents that preset-env lowers the
-// dynamic import() at js/mtlx-engine.js:68 to require(), which throws
-// "require is not defined" the first time getMxEnv() runs in a browser.
+// The exact config js/shell.jsx:79-83 (loadJsxApp) and index.html's own
+// Babel bootstrap both use. React preset ONLY — never add preset-env:
+// index.html:212-227 documents that preset-env lowers the dynamic
+// import() at js/mtlx-engine.js:68 to require(), which throws "require is
+// not defined" the first time getMxEnv() runs in a browser.
 function transform(src, filename) {
+  // Precomputes exactly what compact: "auto" (Babel's default) would
+  // compute itself — true once the source string exceeds 500K chars —
+  // and passes it explicitly. Output bytes are identical either way; the
+  // only difference is "auto" also prints a "[BABEL] Note: ... has
+  // deoptimised the styling of <file>" console.error the moment it flips
+  // to true, which this build would otherwise reprint on every run for
+  // js/mtlx-engine.js.
   const { code } = Babel.transform(src, {
     presets: [["react", { runtime: "classic" }]],
     sourceType: "script",
     filename,
+    compact: src.length > 500000,
   });
   return code;
 }
@@ -161,7 +169,7 @@ async function buildOne(target) {
   }
   code = normalizeEol(code);
 
-  // Preset-env regression guard (index.html:139-146): if a future edit to
+  // Preset-env regression guard (index.html:212-227): if a future edit to
   // this script (or to @babel/standalone's defaults) ever lowers the
   // dynamic import(), catch it here instead of shipping a build that
   // throws "require is not defined" the first time getMxEnv() runs.
@@ -176,7 +184,7 @@ async function buildOne(target) {
     if (/\brequire\s*\(/.test(code)) {
       fail(
         `error: transformed ${target.src} contains require( — this is the preset-env ` +
-          "regression index.html:139-146 warns about: preset-env lowers the dynamic import() at " +
+          "regression index.html:212-227 warns about: preset-env lowers the dynamic import() at " +
           "mtlx-engine.js:68 to require(), which throws \"require is not defined\" the first time " +
           "getMxEnv() runs in a browser. Check scripts/build-embed.mjs uses ONLY the react preset."
       );

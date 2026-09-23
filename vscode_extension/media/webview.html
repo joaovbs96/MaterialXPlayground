@@ -16,7 +16,7 @@
          focus-outline CSS near the bottom) are fragments defined in
          scripts/build-webview.mjs — edit them there instead. Loaders:
          RGBELoader, GLTFLoader, DRACOLoader, OBJLoader, OrbitControls.
-         Contains six ${...} placeholders substituted at runtime by
+         Contains eight ${...} placeholders substituted at runtime by
          vscode_extension/src/editorProvider.js's buildHtml().
          ================================================================ -->
 
@@ -102,8 +102,10 @@
          standalone docs panel; data-scene-only does the same for the USD
          scene editor), installs the in-page link interceptor,
          and wires up the extension <-> webview postMessage contract. See
-         vscode_extension/media/bootstrap.js. -->
-    <script src="${bootstrapUri}" data-initial-hash="${initialHash}" data-docs-only="${docsOnly}" data-scene-only="${sceneOnly}"></script>
+         vscode_extension/media/bootstrap.js.
+         data-extension-version/data-vscode-version feed window.__MTLX_VSCODE_VERSIONS__,
+         read by js/shell.jsx's AboutDialog. -->
+    <script src="${bootstrapUri}" data-initial-hash="${initialHash}" data-docs-only="${docsOnly}" data-scene-only="${sceneOnly}" data-extension-version="${extensionVersion}" data-vscode-version="${vscodeVersion}"></script>
 
     <title>MaterialX Playground — Node Library, Viewer & Graph Editor</title>
     <link rel="icon" type="image/x-icon" href="favicon.ico">
@@ -138,7 +140,7 @@
             }
         })();
     </script>
-    <script>window.__MTLX_BUILD = '2a4d96bf276f7650';</script>
+    <script>window.__MTLX_BUILD = 'b5d7e3ebf3795b4d';</script>
     <!-- Build-id probe. Lives here, beside the stamp, deliberately: every
          other script (shell.jsx, mtlx-assets.js) is separately cached and
          may itself be the stale file this is meant to detect. -->

@@ -1229,7 +1229,7 @@ const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotat
 // Hand a document off to the node graph editor: stash it (plus any loose
 // files) where js/graph-app.jsx's 'mtlx-load-document' listener expects
 // it, fire that event, then hash-route to the graph view.
-const openInGraphEditor = ({ xml, name, files, select }) => {
+const openInGraphEditor = ({ xml, name, files, select, implOf }) => {
     // Drop out of any active fullscreen (native or the CSS-maximize
     // fallback) before leaving this view — the shell keeps the old view
     // mounted (CSS-hidden), so fullscreen would otherwise persist on it.
@@ -1237,7 +1237,9 @@ const openInGraphEditor = ({ xml, name, files, select }) => {
     // `select`: optional node NAME to land on once the document settles,
     // for handoffs where the editor's own default would pick a different
     // node than the one the sender was showing.
-    window.__mtlxPendingImport = { xml, name, files: files || null, select: select || null };
+    // `implOf`: optional nodedef name whose library implementation
+    // nodegraph to jump into (docs page's "View implementation" button).
+    window.__mtlxPendingImport = { xml, name, files: files || null, select: select || null, implOf: implOf || null };
     window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: window.__mtlxPendingImport }));
     window.location.hash = '#!graph';
 };
@@ -2696,6 +2698,12 @@ const MXS_SURFACE_SOFT = 'color-mix(in srgb, ' + MXS_SURFACE + ' 95%, transparen
 // select reading as a darker slab than the icon buttons beside it.
 const MXS_SURFACE_BAR = 'color-mix(in srgb, ' + MXS_SURFACE + ' 80%, transparent)';
 const MXS_SURFACE_BAR_HOVER = 'color-mix(in srgb, ' + MXS_SURFACE_HOVER + ' 80%, transparent)';
+// `sidebar` variant: matches the docs sidebar's search field (bg-gray-900,
+// border-gray-700) rather than the field variant's lighter gray-800 panel
+// fill, so a trigger sitting right under that field reads as one group.
+const MXS_SIDEBAR_SURFACE = 'var(--mx-select-sidebar-surface, var(--site-gray-900, #111827))';
+const MXS_SIDEBAR_SURFACE_HOVER = 'var(--mx-select-sidebar-surface-hover, var(--site-gray-800, #1f2937))';
+const MXS_SIDEBAR_BORDER = 'var(--mx-select-sidebar-border, var(--site-gray-700, #374151))';
 
 // theme prop keys -> the custom property each one feeds. Used to stamp
 // theme overrides as inline custom properties, and to know which
@@ -2757,6 +2765,7 @@ const SELECT_VARIANT_CLS = {
     // as a much darker slab than its neighbours.
     toolbar: 'border backdrop-blur',
     field: 'border',
+    sidebar: 'border',
     plain: 'border-0',
 };
 
@@ -2788,7 +2797,7 @@ const normalizeSelectOptions = (options, labels, extras) => {
 
 const MtlxSelect = ({
     value, options, labels = {}, badges, dots, defValue, onChange, title, className, popWidth,
-    icon, icons, titles, disabledOptions, disabled, placeholder, emptyOption,
+    icon, icons, titles, disabledOptions, disabled, placeholder, emptyOption, valuePrefix,
     size = 'sm', variant = 'toolbar', block, font, maxWidth,
     popMaxHeight, theme,
     commitFocus = 'trigger', ariaLabel, align,
@@ -3103,8 +3112,10 @@ const MtlxSelect = ({
         color: MXS_TEXT, borderRadius: MXS_RADIUS, fontSize: MXS_FONT_SIZE,
         background: variant === 'toolbar'
             ? (triggerHover ? MXS_SURFACE_BAR_HOVER : MXS_SURFACE_BAR)
-            : (triggerHover ? MXS_SURFACE_HOVER : MXS_SURFACE),
-        borderColor: MXS_BORDER,
+            : variant === 'sidebar'
+                ? (triggerHover ? MXS_SIDEBAR_SURFACE_HOVER : MXS_SIDEBAR_SURFACE)
+                : (triggerHover ? MXS_SURFACE_HOVER : MXS_SURFACE),
+        borderColor: variant === 'sidebar' ? MXS_SIDEBAR_BORDER : MXS_BORDER,
     };
     // Fit-to-text sizing, skipped for `block` triggers (w-full already
     // owns their width) and for callers that already declare their own
@@ -3127,10 +3138,13 @@ const MtlxSelect = ({
     const selectedLabel = selected ? selected.label : (labels[value] || value);
     const showPlaceholder = placeholder != null && (!selected || value === '' || value == null);
     const triggerLabel = showPlaceholder ? placeholder : selectedLabel;
+    // valuePrefix: additive, trigger-only text (e.g. "Outputs: "). It never
+    // reaches the popover rows, which always render the bare `label`.
+    const prefixedTriggerLabel = valuePrefix ? valuePrefix + triggerLabel : triggerLabel;
     // Tooltip: always includes the full selected label (a truncated
     // trigger otherwise has no way to reveal it), plus the caller's own
     // `title` when one is set.
-    const triggerTitle = [title, selectedLabel].filter((s) => s != null && s !== '').join('\n') || undefined;
+    const triggerTitle = [title, prefixedTriggerLabel].filter((s) => s != null && s !== '').join('\n') || undefined;
 
     // POPOVER font: explicit font prop or theme.font wins; else the
     // ambient value captured off the trigger (fixes the portal losing
@@ -3300,7 +3314,12 @@ const MtlxSelect = ({
                         style={{ backgroundColor: selected.dot }}
                     />
                 )}
-                <span className="truncate min-w-0" style={{ color: showPlaceholder ? MXS_MUTED : undefined }}>{triggerLabel}</span>
+                <span className="truncate min-w-0">
+                    {valuePrefix && (
+                        <span style={{ color: MXS_MUTED }}>{valuePrefix}</span>
+                    )}
+                    <span style={{ color: showPlaceholder ? MXS_MUTED : undefined }}>{triggerLabel}</span>
+                </span>
                 {/* Right-stuck regardless of alignLeft: ml-auto pins the
                     chevron to the field's right edge even when a non-block
                     trigger's fitStyle minWidth leaves extra room after the

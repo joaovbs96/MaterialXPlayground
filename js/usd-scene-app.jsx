@@ -8,6 +8,9 @@
     // ('mtlx-load-scene'); pickers, drop and the example are hidden there.
     const IN_VSCODE = !!window.__MTLX_VSCODE__;
     const ROOT_EXTENSIONS = ['.usd', '.usda', '.usdc', '.usdz'];
+    // glTF/OBJ roots route through window.MtlxSceneSources (js/usd-scene-sources.js)
+    // instead of the USD worker; see detectRootKind() and load() below.
+    const MODEL_ROOT_EXTENSIONS = ['.glb', '.gltf', '.obj'];
     const EXAMPLE_ROOT = 'tests/fixtures/usd-scene/root.usda';
     const EXAMPLE_FILES = [
         EXAMPLE_ROOT,
@@ -32,11 +35,14 @@
 
     const asPath = (file) => String(file.webkitRelativePath || file.relativePath || file.name || '').replace(/\\/g, '/');
     const ext = (path) => { const i = path.lastIndexOf('.'); return i < 0 ? '' : path.slice(i).toLowerCase(); };
+    const ALL_ROOT_EXTENSIONS = ROOT_EXTENSIONS.concat(MODEL_ROOT_EXTENSIONS);
+    const isUsdRootPath = (path) => ROOT_EXTENSIONS.indexOf(ext(path)) >= 0;
+    const isModelRootPath = (path) => MODEL_ROOT_EXTENSIONS.indexOf(ext(path)) >= 0;
     const rootCandidates = (files) => {
-        // Keep every supplied USD layer selectable. A nested layer may be the
-        // intentional root of a folder upload, while the default still picks
-        // a conventional top-level root in pickDefaultRootLayer().
-        return files.filter((f) => ROOT_EXTENSIONS.indexOf(ext(f.path)) >= 0);
+        // Keep every supplied USD or model (glTF/OBJ) root selectable; the
+        // default still picks a conventional top-level root in
+        // pickDefaultRootLayer().
+        return files.filter((f) => ALL_ROOT_EXTENSIONS.indexOf(ext(f.path)) >= 0);
     };
     const dirOf = (path) => { const i = String(path).lastIndexOf('/'); return i < 0 ? '' : path.slice(0, i); };
     // Collapses '.' and '..' segments without touching the filesystem, the
@@ -50,6 +56,49 @@
             out.push(part);
         });
         return out.join('/');
+    };
+    // Source containers (the dropped .glb/.usdz/.obj and friends) are never
+    // textures: handing one to the material preview ships megabytes through
+    // the embed for nothing.
+    const CONTAINER_EXTENSIONS = ['.glb', '.gltf', '.obj', '.fbx', '.zip', '.usd', '.usda', '.usdc', '.usdz'];
+    // Files the floating material preview and the graph hand-off get: the
+    // renderer's own per-material map, plus any scene file whose name
+    // matches a file="..." reference the renderer did not resolve. Pure so
+    // tests/unit/usd-scene-preview-files.test.mjs can exercise it.
+    const materialPreviewFiles = (documentFiles, documentXml, sceneFiles) => {
+        const out = {};
+        const isContainer = (path) => {
+            const lower = String(path).toLowerCase();
+            return CONTAINER_EXTENSIONS.some((e) => lower.endsWith(e));
+        };
+        Object.keys(documentFiles || {}).forEach((key) => {
+            if (!isContainer(key)) out[key] = documentFiles[key];
+        });
+        const scene = sceneFiles || {};
+        const sceneKeys = Object.keys(scene).filter((key) => !isContainer(key));
+        if (!sceneKeys.length) return out;
+        const refs = new Set();
+        String(documentXml || '').replace(/(?:file|value)\s*=\s*"([^"]+)"/g, (all, ref) => {
+            const trimmed = ref.trim();
+            if (trimmed) refs.add(trimmed);
+            return all;
+        });
+        const baseName = (path) => String(path).split('/').pop().toLowerCase();
+        const wanted = new Set();
+        refs.forEach((ref) => {
+            const normalized = ref.split('\\').join('/');
+            wanted.add(normalized.toLowerCase());
+            wanted.add(baseName(normalized));
+        });
+        sceneKeys.forEach((key) => {
+            if (out[key] !== undefined) return;
+            const normalized = key.split('\\').join('/').toLowerCase();
+            if (wanted.has(normalized) || wanted.has(baseName(normalized))
+                || Array.from(wanted).some((ref) => ref.length > 3 && normalized.endsWith('/' + ref))) {
+                out[key] = scene[key];
+            }
+        });
+        return out;
     };
     const rootNamePattern = /(^|\/)root\.(usd|usda|usdc|usdz)$/i;
     const oldDefaultRoot = (candidates) => {
@@ -87,9 +136,39 @@
         rootLayerCache.set(key, value);
         return value;
     };
+    // Shallowest-first, then alphabetical, the same tiebreak
+    // pickDefaultUsdRootLayer uses for composition roots below.
+    const shallowestFirst = (a, b) => {
+        const depthDiff = String(a.path).split('/').length - String(b.path).split('/').length;
+        if (depthDiff !== 0) return depthDiff;
+        const aPath = String(a.path), bPath = String(b.path);
+        return aPath < bPath ? -1 : (aPath > bPath ? 1 : 0);
+    };
+    // Model-only root selection (no USD candidate present): a single root
+    // wins outright; otherwise prefer the shallowest .gltf/.glb over any
+    // .obj, since glTF roots carry their own scene graph and .obj does not.
+    function pickDefaultModelRoot(modelCandidates) {
+        if (modelCandidates.length === 0) return '';
+        if (modelCandidates.length === 1) return modelCandidates[0].path;
+        const gltfLike = modelCandidates.filter((f) => ext(f.path) === '.gltf' || ext(f.path) === '.glb');
+        const pool = (gltfLike.length ? gltfLike : modelCandidates.filter((f) => ext(f.path) === '.obj')) || [];
+        const sorted = (pool.length ? pool : modelCandidates).slice().sort(shallowestFirst);
+        return sorted[0].path;
+    }
+    // A USD root always wins the default pick over a co-uploaded model
+    // root, which comes back as an ignoredModelRoots entry for the
+    // caller's diagnostics; with no USD root, a model root is picked.
     async function pickDefaultRootLayer(files) {
-        const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
         const candidates = rootCandidates(files);
+        if (candidates.length === 0) return { path: '', ignoredModelRoots: [] };
+        const usdCandidates = candidates.filter((f) => isUsdRootPath(f.path));
+        const modelCandidates = candidates.filter((f) => isModelRootPath(f.path));
+        if (usdCandidates.length === 0) return { path: pickDefaultModelRoot(modelCandidates), ignoredModelRoots: [] };
+        const path = await pickDefaultUsdRootLayer(usdCandidates);
+        return { path, ignoredModelRoots: modelCandidates.map((f) => f.path) };
+    }
+    async function pickDefaultUsdRootLayer(candidates) {
+        const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
         if (candidates.length === 0) return '';
         if (candidates.length === 1) return candidates[0].path;
         const cacheKey = candidates.map((f) => {
@@ -298,15 +377,19 @@
     };
 
     // Pure: keeps a panel rect fully inside bounds, shrinking it first when
-    // it is larger than the container. No side effects, safe for a Node test.
-    const clampPanelRect = (rect, bounds) => {
+    // it is larger than the container. `minY` keeps the top edge below a HUD
+    // row (e.g. the scene toolbar); it never grows the rect past the bottom.
+    // No side effects, safe for a Node test.
+    const clampPanelRect = (rect, bounds, minY) => {
         // Empty bounds mean the view is hidden (display none); clamping
         // against them would collapse the rect to nothing, so keep it.
         if (!bounds || !(bounds.width > 0) || !(bounds.height > 0)) return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        const top = minY || 0;
         const width = Math.max(0, Math.min(rect.width, bounds.width));
         const height = Math.max(0, Math.min(rect.height, bounds.height));
         const x = Math.max(0, Math.min(rect.x, bounds.width - width));
-        const y = Math.max(0, Math.min(rect.y, bounds.height - height));
+        const maxY = Math.max(0, bounds.height - height);
+        const y = Math.min(Math.max(rect.y, top), maxY);
         return { x, y, width, height };
     };
     window.usdSceneClampPanelRect = clampPanelRect;
@@ -314,6 +397,10 @@
     const MATERIAL_PREVIEW_RECT_KEY = 'mtlx_scene_material_preview_rect';
     const MATERIAL_PREVIEW_DEFAULT_SIZE = { width: 640, height: 420 };
     const MATERIAL_PREVIEW_MIN_SIZE = { width: 320, height: 220 };
+    // Click offset and HUD-row clearance for a fresh open. 44px clears the
+    // top-2 (8px) HUD row of h-7 (28px) pills plus a small margin.
+    const MATERIAL_PREVIEW_CLICK_OFFSET = 12;
+    const MATERIAL_PREVIEW_TOP_INSET = 44;
     const readStoredMaterialPreviewRect = () => {
         try {
             const raw = localStorage.getItem(MATERIAL_PREVIEW_RECT_KEY);
@@ -327,12 +414,28 @@
         return null;
     };
 
+    // Trivial document the panel loads while still hidden, so the embed
+    // iframe boots its MaterialX runtime, environment and render view
+    // before the first double-click instead of during it.
+    const MATERIAL_PREVIEW_WARM_XML = [
+        '<?xml version="1.0"?>',
+        '<materialx version="1.38">',
+        '  <standard_surface name="warm_surface" type="surfaceshader" />',
+        '  <surfacematerial name="warm_material" type="material">',
+        '    <input name="surfaceshader" type="surfaceshader" nodename="warm_surface" />',
+        '  </surfacematerial>',
+        '</materialx>',
+    ].join('\n');
+    const MATERIAL_PREVIEW_WARM_PAYLOAD = { xml: MATERIAL_PREVIEW_WARM_XML, name: 'preview-warmup', materialName: '', primPath: '', files: null, warm: true };
+
     // Floating graph + shaderball preview for the material under a
     // double-click in the viewport. Stays mounted (CSS-hidden) after first
     // open so the graph-preview/materialx-viewer instances survive reopens.
-    function MaterialPreviewPanel({ open, payload, anchor, onClose, containerRef, panelRef, sceneFiles }) {
+    // `warm` mounts it hidden with the warm-up document ahead of any open.
+    function MaterialPreviewPanel({ open, payload, anchor, onClose, containerRef, panelRef, sceneFiles, warm }) {
         const shownRef = React.useRef(null);
         if (payload) shownRef.current = payload;
+        if (!shownRef.current && warm) shownRef.current = MATERIAL_PREVIEW_WARM_PAYLOAD;
         const shown = shownRef.current;
         const [rect, setRect] = React.useState(() => readStoredMaterialPreviewRect());
         const rectRef = React.useRef(rect);
@@ -350,28 +453,43 @@
         React.useEffect(() => {
             if (!containerRef.current) return;
             const bounds = containerRef.current.getBoundingClientRect();
-            setRect((prev) => (prev ? clampPanelRect(prev, bounds) : prev));
+            setRect((prev) => (prev ? clampPanelRect(prev, bounds, MATERIAL_PREVIEW_TOP_INSET) : prev));
             // eslint-disable-next-line react-hooks/exhaustive-deps
         }, []);
 
-        // First-ever open with no persisted rect: default 640x420 anchored
-        // at the click. A later open keeps whatever rect the user left.
-        React.useEffect(() => {
+        // First-ever open with no persisted rect: default 640x420, top-left
+        // offset from the click point, clamped inside the viewport and below
+        // the HUD row. useLayoutEffect (not useEffect) so the panel never
+        // paints a frame at the wrong spot before this runs. An open with no
+        // anchor (keyboard, or a re-open before any click) centres instead.
+        React.useLayoutEffect(() => {
             if (!open || !containerRef.current) return;
             const bounds = containerRef.current.getBoundingClientRect();
             // A remembered rect is re-clamped on every open so one saved from
             // a larger window still lands inside the current viewport.
-            if (rectRef.current) { setRect(clampPanelRect(rectRef.current, bounds)); return; }
-            if (!anchor) return;
-            const base = {
-                x: anchor.x - MATERIAL_PREVIEW_DEFAULT_SIZE.width / 2,
-                y: anchor.y - MATERIAL_PREVIEW_DEFAULT_SIZE.height / 2,
-                width: MATERIAL_PREVIEW_DEFAULT_SIZE.width,
-                height: MATERIAL_PREVIEW_DEFAULT_SIZE.height,
-            };
-            setRect(clampPanelRect(base, bounds));
+            if (rectRef.current) { setRect(clampPanelRect(rectRef.current, bounds, MATERIAL_PREVIEW_TOP_INSET)); return; }
+            const width = MATERIAL_PREVIEW_DEFAULT_SIZE.width;
+            const height = MATERIAL_PREVIEW_DEFAULT_SIZE.height;
+            const base = anchor
+                ? { x: anchor.x + MATERIAL_PREVIEW_CLICK_OFFSET, y: anchor.y + MATERIAL_PREVIEW_CLICK_OFFSET, width, height }
+                : { x: (bounds.width - width) / 2, y: (bounds.height - height) / 2, width, height };
+            setRect(clampPanelRect(base, bounds, MATERIAL_PREVIEW_TOP_INSET));
             // eslint-disable-next-line react-hooks/exhaustive-deps
         }, [open, anchor]);
+
+        // The container's own ResizeObserver (below) covers layout-driven
+        // resizes; a window resize (e.g. leaving fullscreen) can change the
+        // viewport without necessarily firing that observer first.
+        React.useEffect(() => {
+            if (!open) return undefined;
+            const onWindowResize = () => {
+                if (!containerRef.current) return;
+                const bounds = containerRef.current.getBoundingClientRect();
+                setRect((prev) => (prev ? clampPanelRect(prev, bounds, MATERIAL_PREVIEW_TOP_INSET) : prev));
+            };
+            window.addEventListener('resize', onWindowResize);
+            return () => window.removeEventListener('resize', onWindowResize);
+        }, [open]);
 
         React.useEffect(() => {
             if (!rect) return;
@@ -380,9 +498,9 @@
 
         // Keyed on depsReady, not window.MtlxGraphPreview: a load that finished
         // while the panel was closed must still flip it on reopen (memoized, so
-        // cheap). A rejection shows its reason; the next open retries.
+        // cheap). Warm-up loads too; a rejection shows its reason, the next open retries.
         React.useEffect(() => {
-            if (!open || depsReady) return undefined;
+            if (!(open || warm) || depsReady) return undefined;
             let cancelled = false;
             window.mtlxLoadViewDeps('galleryDetail').then(() => {
                 if (!cancelled) { setDepsError(''); setDepsReady(true); }
@@ -391,7 +509,7 @@
                 if (!cancelled) setDepsError(String((e && e.message) || e));
             });
             return () => { cancelled = true; };
-        }, [open, depsReady]);
+        }, [open, warm, depsReady]);
 
         // Deps on !!shown, not []: the body div does not exist in the DOM
         // until the panel opens for the first time (shown is still null on
@@ -429,7 +547,7 @@
                 x: drag.rect.x + (e.clientX - drag.startX),
                 y: drag.rect.y + (e.clientY - drag.startY),
                 width: drag.rect.width, height: drag.rect.height,
-            }, bounds);
+            }, bounds, MATERIAL_PREVIEW_TOP_INSET);
             setRect(next);
         };
         const onResizeMove = (e) => {
@@ -440,17 +558,20 @@
                 x: drag.rect.x, y: drag.rect.y,
                 width: Math.max(MATERIAL_PREVIEW_MIN_SIZE.width, drag.rect.width + (e.clientX - drag.startX)),
                 height: Math.max(MATERIAL_PREVIEW_MIN_SIZE.height, drag.rect.height + (e.clientY - drag.startY)),
-            }, bounds);
+            }, bounds, MATERIAL_PREVIEW_TOP_INSET);
             setRect(next);
         };
 
+        // Only what this material's document references: the scene's whole
+        // loose map would push the source .glb/.usdz through the embed's
+        // postMessage and into the viewer's file map for nothing. Memoized
+        // because a new identity reloads GraphPreviewViewer's document.
+        const handoffFiles = React.useMemo(
+            () => materialPreviewFiles(shown && shown.files, shown && shown.xml, sceneFiles),
+            [shown, sceneFiles]);
+
         if (!shown) return null; // never opened yet this session
 
-        // The full scene's loose files (every dropped/loaded non-.mtlx
-        // entry), not just getMaterialDocument's own filename-ref-scoped
-        // map: the exporter's own matcher can resolve a texture under a
-        // relative form the renderer's narrower scan did not try.
-        const handoffFiles = (sceneFiles && Object.keys(sceneFiles).length) ? sceneFiles : shown.files;
         const openInEditor = () => {
             window.openInGraphEditor({ xml: shown.xml, name: shown.name, files: handoffFiles, select: shown.materialName });
         };
@@ -506,6 +627,7 @@
                             controls={['zoom']}
                             autoFocus="fit"
                             chrome="card"
+                            flush
                             height={bodyHeight || (MATERIAL_PREVIEW_DEFAULT_SIZE.height - 60)}
                         />
                     )}
@@ -608,7 +730,9 @@
             title: 'Balanced quality and speed',
             values: {
                 textureMaxSize: QUALITY_TEXTURE_MAX_SIZE_DEFAULT, textureBudgetGib: QUALITY_TEXTURE_BUDGET_DEFAULT_GIB, subdivision: QUALITY_SUBDIVISION_DEFAULT,
-                shadows: true, ao: true, skyVis: true, transparency: true,
+                // Sky visibility, AO and shadows off by default (2026-09-22):
+                // matches storedSceneShadows/Ao/SkyVis in usd-scene-renderer.js.
+                shadows: false, ao: false, skyVis: false, transparency: true,
                 displacement: true, displacementSubdivision: QUALITY_DISPLACEMENT_SUBDIVISION_DEFAULT,
                 triangleLimits: QUALITY_TRIANGLE_LIMITS_DEFAULT, bounce: true, localReflections: false, specularAA: true,
                 ...LIVE_QUALITY_VALUES,
@@ -763,25 +887,30 @@
         const sidebarOpenRef = React.useRef(sidebarOpen);
         sidebarOpenRef.current = sidebarOpen;
         const [files, setFiles] = React.useState([]);
-        // Full loose (non-.mtlx) file map of the loaded scene, for the
-        // material preview panel's editor hand-off: the renderer's own
-        // getMaterialDocument().files is scoped to what its own filename-ref
-        // scan matched, which can miss a texture the export scanner later
-        // wants under a different relative form.
-        const sceneLooseFiles = React.useMemo(() => {
-            const map = {};
-            files.forEach(({ path, data }) => {
-                if (!path || /\.mtlx$/i.test(path)) return;
-                if (window.isHiddenSideFile && window.isHiddenSideFile(path)) return;
-                map[path] = (data instanceof ArrayBuffer) ? new Blob([data]) : data;
-            });
-            return map;
-        }, [files]);
         const [rootPath, setRootPath] = React.useState('');
         const [status, setStatus] = React.useState('idle');
         const [progress, setProgress] = React.useState({ phase: '', done: 0, total: 0, message: '' });
         const [stage, setStage] = React.useState(null);
         const [handle, setHandle] = React.useState(null);
+        // Full loose (non-.mtlx) file map of the loaded scene, for the
+        // material preview panel's editor hand-off: the renderer's own
+        // getMaterialDocument().files is scoped to what its own filename-ref
+        // scan matched, which can miss a texture the export scanner later
+        // wants under a different relative form. Also merges stage.assets so
+        // synthetic entries (glTF-embedded textures/materials, USDZ-internal
+        // textures) the loader already decoded into memory are included,
+        // not just the user's originally-dropped files.
+        const sceneLooseFiles = React.useMemo(() => {
+            const map = {};
+            const add = ({ path, data }) => {
+                if (!path || /\.mtlx$/i.test(path)) return;
+                if (window.isHiddenSideFile && window.isHiddenSideFile(path)) return;
+                map[path] = (data instanceof ArrayBuffer) ? new Blob([data]) : data;
+            };
+            files.forEach(add);
+            (stage && Array.isArray(stage.assets) ? stage.assets : []).forEach(add);
+            return map;
+        }, [files, stage]);
         const [error, setError] = React.useState('');
         const [previewOpen, setPreviewOpen] = React.useState(false);
         // Short viewport note explaining why a double-click opened nothing.
@@ -800,6 +929,7 @@
             'no-document': 'Double-click: no MaterialX document for this material',
         };
         const [previewPayload, setPreviewPayload] = React.useState(null);
+        const [previewWarm, setPreviewWarm] = React.useState(false);
         const [previewAnchor, setPreviewAnchor] = React.useState(null);
         const previewPanelRef = React.useRef(null);
         const [dragOver, setDragOver] = React.useState(false);
@@ -810,6 +940,9 @@
             setSelectedCamera(defaultCameraPathFor(stageCameras) || 'default');
         }, [stage]);
         const [rootTouched, setRootTouched] = React.useState(false);
+        // Model (glTF/OBJ) root candidates set aside when a USD root layer
+        // was also supplied; surfaced as an info-level diagnostic below.
+        const [ignoredModelRoots, setIgnoredModelRoots] = React.useState([]);
         const [envFileName, setEnvFileName] = React.useState('');
         const [envImportError, setEnvImportError] = React.useState(null);
         const [envRotation, setEnvRotation] = React.useState(0);
@@ -865,8 +998,12 @@
         const [stageLightsOn, setStageLightsOn] = React.useState(true);
         const [stageLightsEv, setStageLightsEv] = React.useState(0);
         const [presentation, setPresentation] = React.useState(SCENE_PRESENTATION_DEFAULT);
-        const [shadowsOn, setShadowsOn] = React.useState(true);
-        const [aoOn, setAoOn] = React.useState(true);
+        // Off by default (2026-09-22): matches storedSceneShadows and the
+        // "default" quality level's shadows value below.
+        const [shadowsOn, setShadowsOn] = React.useState(false);
+        // Off by default (2026-09-22): matches storedSceneAo and the
+        // "default" quality level's ao value below.
+        const [aoOn, setAoOn] = React.useState(false);
         const [aoStrength, setAoStrength] = React.useState(0.85);
         // Default on (v3, 2026-09-20): see storedSceneBounce in
         // js/usd-scene-renderer.js. Strength default must track
@@ -879,7 +1016,9 @@
         const [ssrOn, setSsrOn] = React.useState(false);
         const [ssrStrength, setSsrStrength] = React.useState(1);
         const [ssrMaxRoughness, setSsrMaxRoughness] = React.useState(0.5);
-        const [skyVisOn, setSkyVisOn] = React.useState(true);
+        // Off by default (2026-09-22): matches storedSceneSkyVis and the
+        // "default" quality level's skyVis value below.
+        const [skyVisOn, setSkyVisOn] = React.useState(false);
         const [skyVisStrength, setSkyVisStrength] = React.useState(1);
         // Local reflections: off by default (storedSceneLocalReflections in
         // js/usd-scene-renderer.js), never on in an embed.
@@ -1003,8 +1142,24 @@
             if (active) return;
             setPreviewOpen(false);
             setPreviewPayload(null);
+            setPreviewWarm(false);
             setPreviewEpoch((epoch) => epoch + 1);
         }, [active]);
+        // Warm the preview once the stage is on screen and the main thread
+        // is idle: the panel mounts hidden and boots the embed's runtime, so
+        // a double-click only pays this material's own shader generation.
+        React.useEffect(() => {
+            if (!active || status !== 'rendered' || previewWarm) return undefined;
+            let timer = 0;
+            let idle = 0;
+            const arm = () => setPreviewWarm(true);
+            if (typeof requestIdleCallback === 'function') idle = requestIdleCallback(arm, { timeout: 1500 });
+            else timer = setTimeout(arm, 500);
+            return () => {
+                if (idle && typeof cancelIdleCallback === 'function') cancelIdleCallback(idle);
+                if (timer) clearTimeout(timer);
+            };
+        }, [active, status, previewWarm]);
         const abortRef = React.useRef(null);
         const mountedRef = React.useRef(true);
         const filesRef = React.useRef(files);
@@ -1082,9 +1237,10 @@
         const applyChosenFiles = async (next, generation) => {
             if (!mountedRef.current || generation !== generationRef.current) return;
             setFiles(next);
-            const preferredRoot = await pickDefaultRootLayer(next);
+            const { path: preferredRoot, ignoredModelRoots } = await pickDefaultRootLayer(next);
             if (!mountedRef.current || generation !== generationRef.current) return;
             setRootPath(preferredRoot);
+            setIgnoredModelRoots(ignoredModelRoots);
             setRootTouched(false);
             setStage(null);
             setStatus(next.length ? 'ready-to-load' : 'idle');
@@ -1112,9 +1268,16 @@
             applyChosenFiles(filesFromMap(map), generation);
         };
         const load = async (loadFiles = filesRef.current, loadRoot = rootPath) => {
-            const loader = apiFunction('loadUsdStage');
-            if (typeof loader !== 'function') { setError('USD stage loader is unavailable in this build.'); setStatus('error'); return; }
-            if (!loadRoot) { setError('Select one USD root layer before loading.'); setStatus('error'); return; }
+            if (!loadRoot) { setError('Select one root layer before loading.'); setStatus('error'); return; }
+            // js/usd-scene-sources.js tells a glTF/OBJ root apart from a
+            // USD one; its loaders resolve to the same neutral stage
+            // payload, so everything downstream stays identical either way.
+            const sources = window.MtlxSceneSources;
+            const kind = (sources && typeof sources.detectRootKind === 'function') ? sources.detectRootKind(loadRoot) : 'usd';
+            const loader = kind === 'gltf' ? (sources && sources.loadGltfStage)
+                : kind === 'obj' ? (sources && sources.loadObjStage)
+                : apiFunction('loadUsdStage');
+            if (typeof loader !== 'function') { setError('Scene loader is unavailable in this build.'); setStatus('error'); return; }
             const generation = ++generationRef.current;
             if (abortRef.current) abortRef.current.abort();
             const controller = new AbortController();
@@ -1123,6 +1286,9 @@
             handleRef.current = null; setHandle(null); setStage(null); setError(''); setStatus('loading');
             window.__mtlxUsdSceneHandle = null;
             try {
+                // subdivisionLevel/triangleLimits are USD-only knobs; a
+                // glTF/OBJ stage arrives already tessellated, so the model
+                // loaders simply ignore the two fields.
                 const result = await loader({ files: loadFiles, rootPath: loadRoot, signal: controller.signal, subdivisionLevel: subdivisionLevelRef.current, triangleLimits: triangleLimitsRef.current, onProgress: (value) => updateProgress(value, generation) });
                 if (!mountedRef.current || controller.signal.aborted || generation !== generationRef.current) return;
                 setStage(result); setStatus('loaded');
@@ -1149,7 +1315,8 @@
             } catch (e) { if (mountedRef.current && generation === generationRef.current) { setError(String(e && e.message || e)); setStatus('error'); } }
         };
         // VS Code host entry: { files: { relPath: File }, root } from the
-        // extension (media/bootstrap.js), loaded with its explicit root layer.
+        // extension (media/bootstrap.js). load() routes the explicit root by
+        // kind, so a USD, glTF/GLB or OBJ root all take the same path.
         const loadFromHostRef = React.useRef(null);
         loadFromHostRef.current = (payload) => {
             if (!payload || !payload.files || !payload.root) return;
@@ -1160,6 +1327,7 @@
             window.__mtlxUsdSceneHandle = null;
             const next = filesFromMap(payload.files);
             setFiles(next); setRootPath(payload.root); setRootTouched(true); setError('');
+            setIgnoredModelRoots([]);
             load(next, payload.root);
         };
         React.useEffect(() => {
@@ -1347,7 +1515,11 @@
         const meshes = stageMeshes(stage);
         const cameras = Array.isArray(stage && stage.cameras) ? stage.cameras : [];
         const materials = stageMaterials(stage);
-        const warningDetails = warningRecords(materialWarningList(stage).concat(handle && Array.isArray(handle.warnings) ? handle.warnings.map(String) : []));
+        // A USD root layer always wins over a co-uploaded glTF/OBJ root; the
+        // ignored model roots surface here as [info], the same tag prefix
+        // severityOf() below already recognizes.
+        const ignoredRootWarnings = ignoredModelRoots.map((path) => '[info] Ignored model root (a USD root layer was found): ' + path);
+        const warningDetails = warningRecords(materialWarningList(stage).concat(ignoredRootWarnings).concat(handle && Array.isArray(handle.warnings) ? handle.warnings.map(String) : []));
         const warnings = warningDetails.map((record) => record.label);
         // Diagnostics carry no severity of their own, so classify by wording:
         // anything that stopped working is an error, anything that merely
@@ -2197,7 +2369,7 @@
                                 placeholder="No stage loaded"
                                 multiple
                                 icon="files"
-                                accept=".usd,.usda,.usdc,.usdz,.mtlx,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff,.ktx2"
+                                accept=".usd,.usda,.usdc,.usdz,.glb,.gltf,.obj,.mtl,.bin,.mtlx,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff,.ktx2"
                                 onFiles={chooseFiles}
                                 inputTestId="usd-scene-file-picker"
                             />
@@ -2535,7 +2707,7 @@
                             />
                             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center px-6">
                                 <div className="text-gray-500 text-sm max-w-sm">
-                                    {IN_VSCODE ? 'Reading the USD stage and its referenced files' : 'Drop a USD stage (.usd, .usda, .usdc, .usdz) and its referenced files'}
+                                    {IN_VSCODE ? 'Reading the scene and its referenced files' : 'Drop a USD stage (.usd, .usda, .usdc, .usdz), a glTF (.gltf, .glb) or an OBJ (.obj) and its referenced files'}
                                 </div>
                                 {!IN_VSCODE && (
                                     <button type="button" onClick={loadExample} className={PILL_ACTION}>
@@ -2683,6 +2855,7 @@
                         containerRef={containerRef}
                         panelRef={previewPanelRef}
                         sceneFiles={sceneLooseFiles}
+                        warm={previewWarm}
                     />
                 </div>
             </div>

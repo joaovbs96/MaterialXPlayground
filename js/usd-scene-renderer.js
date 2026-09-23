@@ -86,15 +86,14 @@ const storedSceneSpecularAA = () => {
 };
 
 // Baked sky visibility: the room-scale half of the same missing visibility
-// term. Screen space AO handles contacts, this handles walls. Default on,
-// because an interior lit by a dome is wrong without it and the bake is a
-// one-off cost per stage.
+// term. Screen space AO handles contacts, this handles walls. Off by
+// default (2026-09-22): the Default quality level starts with it off.
 const SCENE_SKYVIS_KEY = 'mtlx_scene_skyvis';
 const SCENE_SKYVIS_STRENGTH_KEY = 'mtlx_scene_skyvis_strength';
 const SCENE_SKYVIS_STRENGTH_DEFAULT = 1;
 const storedSceneSkyVis = () => {
     if (window.top !== window) return false;
-    try { return localStorage.getItem(SCENE_SKYVIS_KEY) !== '0'; } catch (e) { return true; }
+    try { return localStorage.getItem(SCENE_SKYVIS_KEY) === '1'; } catch (e) { return false; }
 };
 const storedSceneSkyVisStrength = () => {
     if (window.top !== window) return 1;
@@ -111,12 +110,11 @@ const SCENE_AO_KEY = 'mtlx_scene_ao';
 const SCENE_AO_STRENGTH_KEY = 'mtlx_scene_ao_strength';
 const SCENE_AO_STRENGTH_DEFAULT = 0.85;
 
-// Default on. The environment is most of the light in an interior and it has
-// no visibility term of its own, so without this every object sits on its
-// surroundings with no contact shading at all.
+// Off by default (2026-09-22): the Default quality level starts with it
+// off, same as shadows and sky visibility.
 const storedSceneAo = () => {
     if (window.top !== window) return false;
-    try { return localStorage.getItem(SCENE_AO_KEY) !== '0'; } catch (e) { return true; }
+    try { return localStorage.getItem(SCENE_AO_KEY) === '1'; } catch (e) { return false; }
 };
 // Default 0.7 rather than full strength: the term multiplies the WHOLE
 // environment contribution in one flat multiply (MaterialX has no per-lobe
@@ -232,12 +230,11 @@ const storedSceneLocalReflectionStrength = () => {
     } catch (e) { return 1; }
 };
 
-// Default on. Shadows are what makes objects sit in a scene rather than float
-// in it, and the cost is bounded: the atlas is redrawn only when the camera
-// actually moves, and the caster count drops on very large stages.
+// Off by default (2026-09-22): the Default quality level starts with it
+// off, same as AO and sky visibility.
 const storedSceneShadows = () => {
     if (window.top !== window) return false;
-    try { return localStorage.getItem(SCENE_SHADOWS_KEY) !== '0'; } catch (e) { return true; }
+    try { return localStorage.getItem(SCENE_SHADOWS_KEY) === '1'; } catch (e) { return false; }
 };
 
 // Scene transparency is independent from the shared Material Viewer Force
@@ -1801,18 +1798,96 @@ const createMtlxSceneView = async ({
     let active = true;
     let raf = 0;
     let studioPolarApplied = false;
-    let studioDistanceApplied = false;
     let lastFrameDistance = 0;
+    // Radius of the stage's world bounding sphere, refreshed by frameAll()
+    // and applyCamera(); the dolly bounds below are derived from it.
+    let stageBoundsRadius = 0;
+    let floorLiftNoticed = false;
     // null = the Default (auto framing) entry; otherwise a stage.cameras
     // primPath. resetCamera() re-applies whichever of these is selected.
     let selectedCameraPath = null;
-    const clearAppliedStudioCameraLimits = (cameraControls, polarApplied, distanceApplied, authoredSelected) => {
-        if (!cameraControls || !authoredSelected) return { polarApplied, distanceApplied };
-        if (polarApplied) cameraControls.maxPolarAngle = Math.PI;
-        if (distanceApplied) cameraControls.maxDistance = Infinity;
-        return { polarApplied: false, distanceApplied: false };
+    // Dolly bounds from the stage's world bounding-sphere radius, applied to
+    // every camera source. In studio mode the far bound also stays inside the
+    // closed cyclorama so its rim never comes into view. Pure: see
+    // tests/unit/usd-scene-camera-limits.test.mjs.
+    const sceneOrbitDollyLimits = (radius, frameDistance, studioScale, studioMaxOrbitDistance, isStudio) => {
+        const r = Number(radius) > 0 ? Number(radius) : 0;
+        if (!(r > 0)) return { minDistance: 0, maxDistance: Infinity };
+        const frame = Number(frameDistance) > 0 ? Number(frameDistance) : 0;
+        let minDistance = r * 0.05;
+        if (frame > 0) minDistance = Math.min(minDistance, frame * 0.5);
+        let maxDistance = r * 12;
+        const scale = Number(studioScale) > 0 ? Number(studioScale) : 0;
+        const orbit = Number(studioMaxOrbitDistance) > 0 ? Number(studioMaxOrbitDistance) : 9;
+        if (isStudio && scale > 0) maxDistance = Math.min(maxDistance, orbit * scale * 0.9);
+        maxDistance = Math.max(maxDistance, frame * 1.05, minDistance * 2);
+        return { minDistance, maxDistance };
     };
-    const shouldClampStudioCamera = (cameraPath) => !cameraPath;
+    // The eye height an authored camera has to be lifted to when it sits under
+    // the studio floor, or null when it is already clear of it. Pure.
+    const studioFloorLiftY = (eyeY, floorY, clearance) => {
+        if (!Number.isFinite(eyeY) || !Number.isFinite(floorY)) return null;
+        const minY = floorY + (Number(clearance) || 0);
+        return eyeY < minY ? minY : null;
+    };
+    // Polar angle (radians from +Y) at which the eye touches the floor
+    // plane, given the orbit target's height above it. Pure: see
+    // tests/unit/usd-scene-floor-clamp.test.mjs.
+    const studioFloorPolarLimit = (maxPolar, floorY, clearance, targetY, distance) => {
+        if (!Number.isFinite(floorY) || !Number.isFinite(targetY)) return maxPolar;
+        if (!Number.isFinite(distance) || distance <= 1e-3) return maxPolar;
+        const rel = (floorY + (Number(clearance) || 0)) - targetY;
+        return Math.min(maxPolar, Math.acos(Math.max(-1, Math.min(1, rel / distance))));
+    };
+    // Mirrors the material viewer's applyStudioPolarClamp (js/mtlx-
+    // engine.js:4804-4819): the orbit target sits above the floor, so a
+    // fixed dip below the horizon drops the eye through the floor once the
+    // distance grows. Re-derived per frame from that distance, for every
+    // camera source: an authored camera gets no exception.
+    const applyStudioPolarClamp = () => {
+        if (!controls) return;
+        const studio = window.MtlxStudio;
+        const maxPolar = (studio && Number(studio.studioMaxPolar)) || Math.PI * 0.54;
+        if (!environmentBridge || !environmentBridge.isStudio || !environmentBridge.isStudio()) {
+            if (studioPolarApplied) { controls.maxPolarAngle = Math.PI; studioPolarApplied = false; }
+            return;
+        }
+        const floorY = environmentBridge.getFloorY ? environmentBridge.getFloorY() : null;
+        if (floorY == null) return;
+        const clearance = environmentBridge.getFloorClearance ? environmentBridge.getFloorClearance() : 0;
+        const dist = camera.position.distanceTo(controls.target);
+        controls.maxPolarAngle = studioFloorPolarLimit(maxPolar, floorY, clearance, controls.target.y, dist);
+        studioPolarApplied = true;
+    };
+    // Wheel/pinch dolly bounds. In studio mode the far bound keeps the eye
+    // inside the closed cyclorama (wall at STUDIO_WALL_R * studioScale), so
+    // the floor never shows a rim against the page.
+    const applyOrbitDistanceLimits = () => {
+        if (!controls) return;
+        const studio = window.MtlxStudio;
+        const isStudio = !!(environmentBridge && environmentBridge.isStudio && environmentBridge.isStudio());
+        const studioScale = environmentBridge && environmentBridge.getStudioScale
+            ? environmentBridge.getStudioScale() : 0;
+        const limits = sceneOrbitDollyLimits(stageBoundsRadius, lastFrameDistance, studioScale,
+            studio && Number(studio.studioMaxOrbitDistance), isStudio);
+        controls.minDistance = limits.minDistance;
+        controls.maxDistance = limits.maxDistance;
+    };
+    // An authored camera under the studio floor is lifted onto it, keeping
+    // its target, so the floor clamp applies to it like any other view.
+    const liftCameraAboveStudioFloor = () => {
+        if (!environmentBridge || !environmentBridge.isStudio || !environmentBridge.isStudio()) return;
+        const floorY = environmentBridge.getFloorY ? environmentBridge.getFloorY() : null;
+        if (floorY == null) return;
+        const clearance = environmentBridge.getFloorClearance ? environmentBridge.getFloorClearance() : 0;
+        const lifted = studioFloorLiftY(camera.position.y, floorY, clearance);
+        if (lifted == null) return;
+        camera.position.y = lifted;
+        if (floorLiftNoticed) return;
+        floorLiftNoticed = true;
+        warnings.push('[info] Scene camera: an authored camera sat below the studio floor and was lifted onto it.');
+    };
+    const applyOrbitLimits = () => { applyStudioPolarClamp(); applyOrbitDistanceLimits(); };
     // Turntable/GIF capture state: while true, resize() is a no-op so the
     // fixed capture resolution set by beginCapture() sticks between frames.
     let resizeSuspended = false;
@@ -2497,7 +2572,7 @@ const createMtlxSceneView = async ({
     // worker's collectMaterialOverrides, not an input of the surface node.
     const isSynthesizedUsdShadeMaterial = (record) => {
         const candidates = [record && record.sourceAsset, record && record.materialX && record.materialX.path];
-        return candidates.some((path) => /^__(?:inline|usdshade)_/.test(String(path || '').split('/').pop() || ''));
+        return candidates.some((path) => /^__(?:inline|usdshade|usdpreview|gltf|obj)_/.test(String(path || '').split('/').pop() || ''));
     };
     const findOrAddInput = (node, inputName) => {
         let input = window.mxSafe(() => node.getInput(inputName), null);
@@ -3197,8 +3272,9 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             if (compiled.samplerBudget && compiled.samplerBudget.dropped.length) {
                 const effects = compiled.samplerBudget.droppedLabels || compiled.samplerBudget.dropped;
                 const list = effects.length <= 1 ? effects.join('') : effects.slice(0, -1).join(', ') + ' and ' + effects[effects.length - 1];
-                warnings.push('Texture slots: ' + label + ' uses more textures than this GPU allows (' + compiled.samplerBudget.limit
-                    + '), so ' + list + (effects.length > 1 ? ' are' : ' is') + ' turned off for this material');
+                warnings.push('Texture slots: ' + label + ' ' + (compiled.samplerBudget.notice
+                    || ('uses more textures than this GPU allows (' + compiled.samplerBudget.limit
+                        + '), so ' + list + (effects.length > 1 ? ' are' : ' is') + ' turned off for this material')));
             }
             if (compiled.samplerOverBudget) {
                 warnings.push('Texture slots: ' + label + ' needs ' + compiled.samplerBudget.count + ' textures but this GPU allows '
@@ -3542,13 +3618,9 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
         const materialHasSource = (record) => !!(record && (record.renderable || record.node || record.sourceAsset
             || (record.materialX && record.materialX.path)));
         const noSourceWarned = new Set();
-        // A record with no MaterialX network at all (a flattened
-        // UsdPreviewSurface, or a network the worker could not read) can
-        // never compile; skip it instead of failing loadRenderable every
-        // time. An unbound record like that (no mesh uses it) needs neither
-        // a neutral material nor a warning. A record WITH a source keeps
-        // compiling even when unbound, since the material panel and picker
-        // still expect its document.
+        // A record with no MaterialX network at all (one the worker could
+        // neither read nor convert) can never compile; skip it, and skip the
+        // warning too when no mesh binds it. A record WITH a source compiles.
         const skipMaterialCompile = (record) => {
             if (materialHasSource(record)) return false;
             const path = String((record && record.path) || '');
@@ -3557,9 +3629,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             const label = record && (record.materialName || record.path || record.sourceAsset) || 'material';
             if (path && !noSourceWarned.has(path)) {
                 noSourceWarned.add(path);
-                warnings.push(record && record.shaderId === 'UsdPreviewSurface'
-                    ? path + ' is a UsdPreviewSurface material, which the Scene cannot render yet; it shows neutral grey'
-                    : path + ' has no MaterialX network the Scene can read; it shows neutral grey');
+                warnings.push(path + ' has no MaterialX network the Scene can read; it shows neutral grey');
             }
             byPath.set(path, { material: sceneNeutralMaterial(label), compiled: null });
             materialRecords.set(path, record);
@@ -5481,7 +5551,10 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 ssrHistoryTarget = null;
             }
             if (!ssrHistoryTarget) {
-                const halfLinearOk = !!renderer.extensions.get('OES_texture_half_float_linear');
+                // WebGL2 has half-float linear filtering in core and never
+                // exposes the extension, so querying it only logs a warning.
+                const halfLinearOk = !!(renderer.capabilities && renderer.capabilities.isWebGL2)
+                    || !!renderer.extensions.get('OES_texture_half_float_linear');
                 ssrHistoryTarget = new THREE.WebGLRenderTarget(w, h, {
                     minFilter: halfLinearOk ? THREE.LinearMipmapLinearFilter : THREE.NearestMipmapNearestFilter,
                     magFilter: THREE.LinearFilter,
@@ -6460,7 +6533,14 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 environmentBridge.refreshDisplayTransform();
             }
         };
-        renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+        // Acquire WebGL2 ourselves so three never silently falls back to
+        // a WebGL1 context on this canvas, which would poison it for good.
+        const gl = canvas.getContext('webgl2', { antialias: true, alpha: true, depth: true, stencil: true,
+            premultipliedAlpha: true, preserveDrawingBuffer: false, powerPreference: 'default', failIfMajorPerformanceCaveat: false });
+        if (!gl) {
+            throw new Error('WebGL2 context could not be created for this preview (the browser refused WebGL2). Reload the tab or check the browser GPU settings.');
+        }
+        renderer = new THREE.WebGLRenderer({ canvas, context: gl, antialias: true, alpha: true });
         // r128's blend-state cache otherwise corrupts VSM and PMREM passes;
         // see js/mtlx-engine.js:4290-4292 for the same reset after construction.
         renderer.resetState();
@@ -6841,6 +6921,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             const halfX = Math.atan(Math.tan(halfY) * Math.max(camera.aspect, 0.01));
             const distance = Math.max(radius / Math.tan(halfY), radius / Math.tan(halfX)) * 1.25;
             lastFrameDistance = distance;
+            stageBoundsRadius = radius;
             camera.position.copy(center).add(new THREE.Vector3(0, 0.25, 1).normalize().multiplyScalar(distance));
             camera.near = Math.max(radius / 1000, 0.001);
             // Studio wall sits at STUDIO_WALL_R + STUDIO_MAX_ORBIT_DISTANCE (world
@@ -6849,7 +6930,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             const studioScale = environmentBridge && environmentBridge.getStudioScale ? environmentBridge.getStudioScale() : 0;
             camera.far = Math.max(distance + radius * 4, 100, studioScale * 36);
             camera.updateProjectionMatrix();
-            if (controls) { controls.target.copy(center); controls.update(); }
+            if (controls) { controls.target.copy(center); applyOrbitLimits(); controls.update(); }
         };
         const getCameras = () => sceneArray(stage.cameras).map((record) => ({
             primPath: String(record.primPath || ''),
@@ -6907,20 +6988,30 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             const focalLength = Number(record.focalLength) || 50;
             camera.fov = 2 * Math.atan(verticalAperture / (2 * focalLength)) * 180 / Math.PI;
             const clip = Array.isArray(record.clippingRange) ? record.clippingRange : [0.1, 100000];
-            camera.near = Math.max(Number(clip[0]) * meters, boxRadius / 1000, 0.001);
-            camera.far = Math.max(Number(clip[1]) * meters, camera.near + 1);
+            if (boxRadius > 0) stageBoundsRadius = boxRadius;
+            const authoredStudioScale = environmentBridge && environmentBridge.getStudioScale
+                ? environmentBridge.getStudioScale() : 0;
+            // An authored near plane can sit past the whole stage (glTF often
+            // exports znear 1 for a metre-scale model), which cuts a hard hole
+            // in the floor at a grazing angle; hold it under the near dolly bound.
+            camera.near = Math.max(Math.min(Number(clip[0]) * meters, boxRadius * 0.025),
+                boxRadius / 1000, 0.001);
+            // The authored far plane may stop short of the studio room, which
+            // the bounded dolly can now pull fully into frame.
+            camera.far = Math.max(Number(clip[1]) * meters, camera.near + 1,
+                distance + boxRadius * 4, authoredStudioScale * 36);
             camera.position.copy(position);
             camera.quaternion.copy(quaternion);
             camera.updateProjectionMatrix();
             if (controls) {
-                const limits = clearAppliedStudioCameraLimits(
-                    controls, studioPolarApplied, studioDistanceApplied, !!selectedCameraPath);
-                studioPolarApplied = limits.polarApplied;
-                studioDistanceApplied = limits.distanceApplied;
                 controls.target.copy(target);
+                liftCameraAboveStudioFloor();
+                lastFrameDistance = camera.position.distanceTo(controls.target);
+                applyOrbitLimits();
                 controls.update();
+            } else {
+                lastFrameDistance = distance;
             }
-            lastFrameDistance = distance;
             return true;
         };
         const resetCamera = () => { applyCamera(selectedCameraPath); };
@@ -7187,59 +7278,6 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             console.log('[mtlx-perf] scene materials: ' + JSON.stringify(scenePerf));
         }
         report({ phase: 'renderer', status: 'ready', warnings: warnings.slice() });
-        // Mirrors the material viewer's applyStudioPolarClamp (js/mtlx-
-        // engine.js:4804-4819): the orbit target sits above the floor, so a
-        // fixed dip below the horizon drops the eye through the floor once
-        // the distance grows. Re-derived per frame from that distance.
-        const applyStudioPolarClamp = () => {
-            if (!controls) return;
-            if (!shouldClampStudioCamera(selectedCameraPath)) {
-                const limits = clearAppliedStudioCameraLimits(
-                    controls, studioPolarApplied, studioDistanceApplied, true);
-                studioPolarApplied = limits.polarApplied;
-                studioDistanceApplied = limits.distanceApplied;
-                return;
-            }
-            const studio = window.MtlxStudio;
-            const maxPolar = (studio && Number(studio.studioMaxPolar)) || Math.PI * 0.54;
-            if (!environmentBridge || !environmentBridge.isStudio || !environmentBridge.isStudio()) {
-                if (studioPolarApplied) { controls.maxPolarAngle = Math.PI; studioPolarApplied = false; }
-                return;
-            }
-            const floorY = environmentBridge.getFloorY ? environmentBridge.getFloorY() : null;
-            if (floorY == null) return;
-            const clearance = environmentBridge.getFloorClearance ? environmentBridge.getFloorClearance() : 0;
-            const dist = camera.position.distanceTo(controls.target);
-            const rel = (floorY + clearance) - controls.target.y;
-            const limit = dist > 1e-3
-                ? Math.acos(Math.max(-1, Math.min(1, rel / dist)))
-                : maxPolar;
-            controls.maxPolarAngle = Math.min(maxPolar, limit);
-            studioPolarApplied = true;
-        };
-        // Keeps the orbit from zooming out past the studio backdrop: the wall
-        // sits at studioMaxOrbitDistance * studioScale (matching the Viewer's
-        // own maxDistance-vs-STUDIO_WALL_R relationship), scaled down 10% so
-        // the top-down clamp still stays under the studio ceiling.
-        const applyStudioDistanceClamp = () => {
-            if (!controls) return;
-            if (!shouldClampStudioCamera(selectedCameraPath)) {
-                const limits = clearAppliedStudioCameraLimits(
-                    controls, studioPolarApplied, studioDistanceApplied, true);
-                studioPolarApplied = limits.polarApplied;
-                studioDistanceApplied = limits.distanceApplied;
-                return;
-            }
-            if (!environmentBridge || !environmentBridge.isStudio || !environmentBridge.isStudio()) {
-                if (studioDistanceApplied) { controls.maxDistance = Infinity; studioDistanceApplied = false; }
-                return;
-            }
-            const studio = window.MtlxStudio;
-            const maxOrbitDistance = (studio && Number(studio.studioMaxOrbitDistance)) || 9;
-            const studioScale = environmentBridge.getStudioScale ? environmentBridge.getStudioScale() : 1;
-            controls.maxDistance = Math.max(lastFrameDistance, maxOrbitDistance * studioScale * 0.9);
-            studioDistanceApplied = true;
-        };
         // renderFrame(): the one chokepoint for every display render (loop,
         // captureFrame, renderNow, snapshot). Routes through the peel
         // pipeline only when Force Transparency is on and at least one
@@ -7448,8 +7486,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             }
             if (window.MTLX_CLOCK && typeof window.clockTick === 'function') window.clockTick(performance.now());
             if (environmentBridge && environmentBridge.update) environmentBridge.update();
-            applyStudioPolarClamp();
-            applyStudioDistanceClamp();
+            applyOrbitLimits();
             if (controls) controls.update();
             renderFrame();
             raf = requestAnimationFrame(render);
@@ -7979,8 +8016,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             },
             setBackdrop: (mode) => {
                 const result = environmentBridge && environmentBridge.setBackdrop ? environmentBridge.setBackdrop(mode) : mode;
-                applyStudioPolarClamp();
-                applyStudioDistanceClamp();
+                applyOrbitLimits();
                 return result;
             },
             getBackdrop: () => environmentBridge && environmentBridge.getBackdrop ? environmentBridge.getBackdrop() : 'studio',

@@ -1432,9 +1432,70 @@ const MTLX_TYPE_SUFFIXES = [
   "_color4", "_color3", "_vector4", "_vector3", "_vector2", "_float",
 ].sort((a, b) => b.length - a.length);
 
+// USD preview-network shader ids, whose MaterialX category and type do not
+// follow from the id: UsdPrimvarReader_float2 is the vector2 nodedef of the
+// single UsdPrimvarReader category, and UsdUVTexture is multi-output.
+const USD_PREVIEW_NODE_IDS = {
+  UsdPreviewSurface: { category: "UsdPreviewSurface", type: "surfaceshader" },
+  UsdUVTexture: { category: "UsdUVTexture", type: "multioutput", multiOutput: true },
+  UsdTransform2d: { category: "UsdTransform2d", type: "vector2" },
+  UsdPrimvarReader_float: { category: "UsdPrimvarReader", type: "float" },
+  UsdPrimvarReader_float2: { category: "UsdPrimvarReader", type: "vector2" },
+  UsdPrimvarReader_float3: { category: "UsdPrimvarReader", type: "vector3" },
+  UsdPrimvarReader_float4: { category: "UsdPrimvarReader", type: "vector4" },
+  UsdPrimvarReader_normal: { category: "UsdPrimvarReader", type: "vector3" },
+  UsdPrimvarReader_point: { category: "UsdPrimvarReader", type: "vector3" },
+  UsdPrimvarReader_vector: { category: "UsdPrimvarReader", type: "vector3" },
+  UsdPrimvarReader_int: { category: "UsdPrimvarReader", type: "integer" },
+  UsdPrimvarReader_string: { category: "UsdPrimvarReader", type: "string" },
+};
+
+// Input types the preview nodedefs declare, where the USD value type alone
+// picks the wrong MaterialX type (UsdUVTexture scale and bias are float4 in
+// USD and color4 in MaterialX).
+const USD_PREVIEW_INPUT_TYPES = {
+  UsdPreviewSurface: {
+    diffuseColor: "color3", emissiveColor: "color3", specularColor: "color3",
+    useSpecularWorkflow: "integer", metallic: "float", roughness: "float",
+    clearcoat: "float", clearcoatRoughness: "float", opacity: "float",
+    opacityThreshold: "float", ior: "float", normal: "vector3",
+    displacement: "float", occlusion: "float",
+  },
+  UsdUVTexture: {
+    file: "filename", st: "vector2", wrapS: "string", wrapT: "string",
+    fallback: "color4", scale: "color4", bias: "color4",
+  },
+  UsdTransform2d: {
+    in: "vector2", rotation: "float", scale: "vector2", translation: "vector2",
+  },
+  UsdPrimvarReader: { varname: "string" },
+};
+
+// Output types of the multi-output UsdUVTexture ports.
+const USD_PREVIEW_PORT_TYPES = {
+  r: "float", g: "float", b: "float", a: "float", rgb: "color3", rgba: "color4",
+};
+
+// Source-to-target pairs a `convert` node bridges, for a USD connection whose
+// two sides are the same USD type but different MaterialX types (a texture's
+// color3 rgb feeding the vector3 normal input).
+const MTLX_CONVERTIBLE_TYPES = new Set([
+  "color3:vector3", "vector3:color3", "color4:vector4", "vector4:color4",
+  "color4:color3", "vector4:vector3", "float:color3", "float:vector3",
+  "float:color4", "float:vector4", "float:vector2",
+]);
+
+// USD wrap tokens against the MaterialX enum (black, clamp, periodic, mirror).
+const USD_WRAP_MODES = {
+  repeat: "periodic", periodic: "periodic", clamp: "clamp",
+  mirror: "mirror", black: "black",
+};
+
 // MaterialX category and type from `info:id` (strip ND_ and a type suffix);
 // ids without a suffix (1.38 ND_normalmap) take the USD output type.
 function resolveNodeCategoryAndType(id, declaredOutputUsdType) {
+  const preview = USD_PREVIEW_NODE_IDS[id];
+  if (preview) return { ...preview };
   const base = id.startsWith("ND_") ? id.slice(3) : id;
   for (const suffix of MTLX_TYPE_SUFFIXES) {
     if (base.endsWith(suffix) && base.length > suffix.length) {
@@ -1469,6 +1530,8 @@ function anchorAssetPath(layerPath, assetValue) {
 function formatShadeValue(rawValue, usdType) {
   let value = String(rawValue ?? "").trim();
   if (usdType === "asset") return value.replace(/^@/, "").replace(/@$/, "").trim();
+  if ((usdType === "token" || usdType === "string") && value.length > 1
+    && value.startsWith('"') && value.endsWith('"')) return value.slice(1, -1);
   if (value.startsWith("(") && value.endsWith(")")) value = value.slice(1, -1).trim();
   if (usdType === "bool") return (value === "1" || value.toLowerCase() === "true") ? "true" : "false";
   return value;
@@ -1477,7 +1540,7 @@ function formatShadeValue(rawValue, usdType) {
 // MaterialX 1.39 document for the UsdShade network under `materialPath`
 // (direct shaders or inside NodeGraphs). Returns null on any gap, which keeps
 // the native payload.
-function buildUsdShadeMaterialX(api, root, materialPath, usdaLayers) {
+function buildUsdShadeMaterialX(api, root, materialPath, usdaLayers, options = {}) {
   try {
     let materialBody = null;
     let layerPath = null;
@@ -1514,13 +1577,19 @@ function buildUsdShadeMaterialX(api, root, materialPath, usdaLayers) {
     if (!shaders.size) return null;
 
     const materialAttrs = parseShadeAttrs(materialBody);
-    const surfaceEntry = materialAttrs.outputs.get("mtlx:surface");
+    // A UsdPreviewSurface material publishes the plain `outputs:surface`
+    // terminal; only a record the native payload flattened as one takes it,
+    // so an authored MaterialX network still wins over its preview network.
+    const previewTerminals = options.allowPreviewSurface === true
+      && !materialAttrs.outputs.get("mtlx:surface")?.isConnect;
+    const terminal = name => materialAttrs.outputs.get(previewTerminals ? name : "mtlx:" + name);
+    const surfaceEntry = terminal("surface");
     if (!surfaceEntry?.isConnect) return null;
     const surfaceResolved = resolveShadeConnection(surfaceEntry.connect, shaders, nodeGraphs);
     if (!surfaceResolved || surfaceResolved.kind !== "node" || !shaders.has(surfaceResolved.path)) return null;
 
-    const displacementEntry = materialAttrs.outputs.get("mtlx:displacement");
-    const volumeEntry = materialAttrs.outputs.get("mtlx:volume");
+    const displacementEntry = terminal("displacement");
+    const volumeEntry = terminal("volume");
     const displacementResolved = displacementEntry?.isConnect
       ? resolveShadeConnection(displacementEntry.connect, shaders, nodeGraphs) : null;
     const volumeResolved = volumeEntry?.isConnect
@@ -1558,42 +1627,110 @@ function buildUsdShadeMaterialX(api, root, materialPath, usdaLayers) {
       return composed !== undefined && composed !== "" ? composed : fallback;
     };
 
+    // Output ports every shader is read through, so a multi-output preview
+    // node can pick the nodedef version that declares the port it feeds.
+    const referencedPorts = new Map();
+    for (const node of shaders.values()) {
+      for (const entry of node.attrs.inputs.values()) {
+        if (!entry.isConnect) continue;
+        const resolved = resolveShadeConnection(entry.connect, shaders, nodeGraphs);
+        if (!resolved || resolved.kind !== "node" || !resolved.port) continue;
+        let ports = referencedPorts.get(resolved.path);
+        if (!ports) { ports = new Set(); referencedPorts.set(resolved.path, ports); }
+        ports.add(resolved.port);
+      }
+    }
+    const inputTypeFor = (nodeId, inputName, usdType) => {
+      const category = USD_PREVIEW_NODE_IDS[nodeId]?.category;
+      const declared = category ? USD_PREVIEW_INPUT_TYPES[category]?.[inputName] : undefined;
+      return declared || USD_TO_MTLX_TYPE[usdType] || usdType;
+    };
+
     let gapFound = false;
     const nodeBlocks = [];
+    const convertBlocks = [];
     for (const [path, node] of shaders) {
       const output = primaryOutput(node.attrs);
-      const { category, type } = resolveNodeCategoryAndType(node.id, output?.usdType);
+      const preview = USD_PREVIEW_NODE_IDS[node.id];
+      // A preview network built from `outputs:surface` must resolve every id,
+      // otherwise the flattened converter gives a better result than a
+      // document referencing a nodedef that does not exist.
+      if (previewTerminals && !preview && !node.id.startsWith("ND_")) { gapFound = true; break; }
+      let { category, type } = resolveNodeCategoryAndType(node.id, output?.usdType);
+      // MaterialX 1.39.5 does not forward UsdPrimvarReader's varname into the
+      // geompropvalue inside its implementation, so read the primvar
+      // directly; a vector2 reader is the default UV set.
+      let primvarInput = null;
+      if (preview?.category === "UsdPrimvarReader") {
+        if (type === "vector2") {
+          category = "texcoord";
+          primvarInput = () => null;
+        } else {
+          category = type === "string" ? "geompropvalueuniform" : "geompropvalue";
+          primvarInput = name => (name === "varname" ? "geomprop" : name === "fallback" ? "default" : name);
+        }
+      }
       const displayName = displayNames.get(path);
+      // ND_UsdUVTexture 2.3 has no rgba output; only the 2.2 nodedef does.
+      const versionAttr = preview?.multiOutput && referencedPorts.get(path)?.has("rgba")
+        ? ' version="2.2"' : "";
       const inputLines = [];
       for (const [inputName, entry] of node.attrs.inputs) {
-        const mtlxType = USD_TO_MTLX_TYPE[entry.usdType] || entry.usdType;
+        const emitName = primvarInput ? primvarInput(inputName) : inputName;
+        if (!emitName) continue;
+        const mtlxType = inputTypeFor(node.id, inputName, entry.usdType);
         if (entry.isConnect) {
           const resolved = resolveShadeConnection(entry.connect, shaders, nodeGraphs);
           if (!resolved) { gapFound = true; break; }
           if (resolved.kind === "node") {
             const targetNode = shaders.get(resolved.path);
             if (!targetNode) { gapFound = true; break; }
+            const targetPreview = USD_PREVIEW_NODE_IDS[targetNode.id];
             const targetOutputName = primaryOutput(targetNode.attrs)?.name || "out";
-            const outputAttr = resolved.port && resolved.port !== targetOutputName
-              ? ` output="${xmlEscape(resolved.port)}"` : "";
+            let outputAttr = "";
+            if (targetPreview) {
+              // Preview nodedefs name their single output `out` whatever USD
+              // called it, so only a multi-output node takes the attribute.
+              if (targetPreview.multiOutput && resolved.port) outputAttr = ` output="${xmlEscape(resolved.port)}"`;
+            } else if (resolved.port && resolved.port !== targetOutputName) {
+              outputAttr = ` output="${xmlEscape(resolved.port)}"`;
+            }
+            const sourceType = targetPreview
+              ? (targetPreview.multiOutput ? USD_PREVIEW_PORT_TYPES[resolved.port] : targetPreview.type)
+              : null;
+            if (sourceType && sourceType !== mtlxType && MTLX_CONVERTIBLE_TYPES.has(`${sourceType}:${mtlxType}`)) {
+              const convertName = `${displayName}_${sanitizeMtlxName(emitName)}_convert`;
+              convertBlocks.push(
+                `  <convert name="${xmlEscape(convertName)}" type="${xmlEscape(mtlxType)}">\n    <input name="in" type="${xmlEscape(sourceType)}" nodename="${xmlEscape(displayNames.get(resolved.path))}"${outputAttr}/>\n  </convert>`
+              );
+              inputLines.push(
+                `    <input name="${xmlEscape(sanitizeMtlxName(emitName))}" type="${xmlEscape(mtlxType)}" nodename="${xmlEscape(convertName)}"/>`
+              );
+              continue;
+            }
             inputLines.push(
-              `    <input name="${xmlEscape(sanitizeMtlxName(inputName))}" type="${xmlEscape(mtlxType)}" nodename="${xmlEscape(displayNames.get(resolved.path))}"${outputAttr}/>`
+              `    <input name="${xmlEscape(sanitizeMtlxName(emitName))}" type="${xmlEscape(mtlxType)}" nodename="${xmlEscape(displayNames.get(resolved.path))}"${outputAttr}/>`
             );
           } else {
             const rawValue = composedValue(resolved.path, resolved.port, resolved.value);
             const formatted = formatShadeValue(rawValue, resolved.usdType);
-            inputLines.push(buildShadeInputTag(inputName, mtlxType, formatted, resolved.colorSpace, layerPath));
+            inputLines.push(buildShadeInputTag(emitName, mtlxType, formatted, resolved.colorSpace, layerPath));
           }
         } else {
           if (entry.value === undefined || entry.value === "") continue;
           const rawValue = composedValue(path, inputName, entry.value);
-          const formatted = formatShadeValue(rawValue, entry.usdType);
-          inputLines.push(buildShadeInputTag(inputName, mtlxType, formatted, entry.colorSpace, layerPath));
+          let formatted = formatShadeValue(rawValue, entry.usdType);
+          if (preview?.category === "UsdUVTexture" && (inputName === "wrapS" || inputName === "wrapT")) {
+            // `useMetadata` and anything unknown fall back to the nodedef default.
+            formatted = USD_WRAP_MODES[formatted];
+            if (!formatted) continue;
+          }
+          inputLines.push(buildShadeInputTag(emitName, mtlxType, formatted, entry.colorSpace, layerPath));
         }
       }
       if (gapFound) break;
       nodeBlocks.push(
-        `  <${category} name="${xmlEscape(displayName)}" type="${xmlEscape(type)}">\n${inputLines.join("\n")}${inputLines.length ? "\n" : ""}  </${category}>`
+        `  <${category} name="${xmlEscape(displayName)}" type="${xmlEscape(type)}"${versionAttr}>\n${inputLines.join("\n")}${inputLines.length ? "\n" : ""}  </${category}>`
       );
     }
     if (gapFound) return null;
@@ -1615,6 +1752,7 @@ function buildUsdShadeMaterialX(api, root, materialPath, usdaLayers) {
       '<?xml version="1.0"?>',
       '<materialx version="1.39">',
       ...nodeBlocks,
+      ...convertBlocks,
       materialBlock,
       "</materialx>",
       "",
@@ -1623,6 +1761,31 @@ function buildUsdShadeMaterialX(api, root, materialPath, usdaLayers) {
   } catch {
     return null;
   }
+}
+
+// Loaded on demand so the worker keeps a single static import and the
+// converter only costs a fetch on stages that need it.
+let materialDocsModule;
+function loadMaterialDocs() {
+  if (!materialDocsModule) materialDocsModule = import("./mtlx-material-docs.js");
+  return materialDocsModule;
+}
+
+// Encodes a synthesized MaterialX document, points the material record at it
+// and publishes it as a top-level asset the renderer can resolve.
+function attachSynthesizedMaterialX(result, material, mtlxPath, xml, materialName) {
+  const bytes = new TextEncoder().encode(xml);
+  material.materialX = {
+    path: mtlxPath,
+    mimeType: "application/xml",
+    materialName,
+    data: bytes,
+  };
+  material.sourceAsset = mtlxPath;
+  material.materialName = materialName;
+  delete material.subIdentifier;
+  result.assets.push({ path: mtlxPath, data: bytes.buffer });
+  result.transfer.push(bytes.buffer);
 }
 
 function buildShadeInputTag(inputName, mtlxType, formattedValue, colorSpace, layerPath) {
@@ -2592,22 +2755,29 @@ async function load(request) {
     const overrides = collectMaterialOverrides(api, root, usdaTexts, mtlxTexts, material.path, stageTime);
     if (overrides.length) material.overrides = overrides;
 
-    const built = buildUsdShadeMaterialX(api, root, material.path, usdaTexts);
+    const isPreviewSurface = String(material.shaderId || "") === "UsdPreviewSurface";
+    const materialLeaf = String(material.path || "").split("/").filter(Boolean).pop() || "material";
+    const built = buildUsdShadeMaterialX(api, root, material.path, usdaTexts, {
+      allowPreviewSurface: isPreviewSurface,
+    });
     if (built) {
-      const bytes = new TextEncoder().encode(built.xml);
-      const mtlxPath = `__usdshade_${material.path.split("/").filter(Boolean).pop()}.mtlx`;
-      material.materialX = {
-        path: mtlxPath,
-        mimeType: "application/xml",
-        materialName: built.materialName,
-        data: bytes,
-      };
-      material.sourceAsset = mtlxPath;
-      material.materialName = built.materialName;
-      delete material.subIdentifier;
-      result.assets.push({ path: mtlxPath, data: bytes.buffer });
-      result.transfer.push(bytes.buffer);
+      attachSynthesizedMaterialX(result, material, `__usdshade_${materialLeaf}.mtlx`, built.xml, built.materialName);
       continue;
+    }
+    // Binary layers carry no text to read the network from, so the flattened
+    // native payload becomes a UsdPreviewSurface document instead.
+    if (isPreviewSurface) {
+      const { usdPreviewSurfaceDocument } = await loadMaterialDocs();
+      const converted = usdPreviewSurfaceDocument({
+        name: materialLeaf,
+        record: material,
+        textureRefs: texture => (texture && texture.path ? texture.path : null),
+      });
+      if (converted?.xml) {
+        attachSynthesizedMaterialX(result, material, `__usdpreview_${materialLeaf}.mtlx`, converted.xml, converted.materialName);
+        result.warnings.push(`${material.path}: UsdPreviewSurface converted from the flattened payload (channel picks, wrap modes and texture transforms are not available in binary layers)`);
+        continue;
+      }
     }
     const sourceAsset = text(material.sourceAsset) || "";
     if (sourceAsset.startsWith("__inline_")) {

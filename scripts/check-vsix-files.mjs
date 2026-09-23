@@ -125,6 +125,11 @@ const RUNTIME_ASSETS = [
   "js/usd/usd-stage-loader.js",
   "js/usd/usd-stage-worker.js",
   "js/usd/usd-webview-worker-shim.js",
+  // glTF/OBJ scene roots (js/usd-scene-sources.js import()s the loaders; the
+  // loaders and the stage worker import the MaterialX converters).
+  "js/usd/gltf-stage-loader.js",
+  "js/usd/obj-stage-loader.js",
+  "js/usd/mtlx-material-docs.js",
   "vendor/usd-webview-bindings/LICENSE",
   "vendor/usd-webview-bindings/usdWebViewBindings.js",
   "vendor/usd-webview-bindings/usdWebViewBindingsModule.js",

@@ -15,7 +15,7 @@ import { test, expect } from './lib/test-base.mjs';
 // after a pick.
 const PRESET_SETTINGS = {
   performance: { resolution: '512 px', memory: '1 GB', subdivision: 'Off', shadows: false, ao: false, skyVis: false, transparency: false },
-  default: { resolution: '2048 px', memory: '1 GB', subdivision: 'Off', shadows: true, ao: true, skyVis: true, transparency: true },
+  default: { resolution: '2048 px', memory: '1 GB', subdivision: 'Off', shadows: false, ao: false, skyVis: false, transparency: true },
   quality: { resolution: '4096 px', memory: '4 GB', subdivision: '2', shadows: true, ao: true, skyVis: true, transparency: true },
 };
 
@@ -172,14 +172,16 @@ test('@scene stages popover changes until Apply, and Cancel discards them', asyn
   const popover = await openPopover(page);
   await openTab(popover, 'Lighting');
   const shadows = toggleLocator(popover, 'Shadows');
-  await expect(shadows).toHaveAttribute('aria-checked', 'true');
+  await expect(shadows).toHaveAttribute('aria-checked', 'false');
 
   // Toggling a staged row flips the draft switch immediately but must not
   // touch the live renderer: the footer names the pending change (no header
   // pill anymore).
   await shadows.click();
-  await expect(shadows).toHaveAttribute('aria-checked', 'false');
-  await expect(popover.getByText(/change/)).toBeVisible();
+  await expect(shadows).toHaveAttribute('aria-checked', 'true');
+  // Anchored on the count: the Shadows row's own description also says
+  // "changes", and it is on screen whenever the Lighting tab is open.
+  await expect(popover.getByText(/^\d+ changes?\./)).toBeVisible();
   await expect(applyButton(popover)).toBeEnabled();
 
   // Cancel restores the row and closes the popover; nothing was ever sent
@@ -188,7 +190,7 @@ test('@scene stages popover changes until Apply, and Cancel discards them', asyn
   await expect(popover).toBeHidden();
   const reopened = await openPopover(page);
   await openTab(reopened, 'Lighting');
-  await expect(toggleLocator(reopened, 'Shadows')).toHaveAttribute('aria-checked', 'true');
+  await expect(toggleLocator(reopened, 'Shadows')).toHaveAttribute('aria-checked', 'false');
 });
 
 test('@scene applies a staged draft and Reset returns it to the selected level', async ({ page, embedURL }) => {
@@ -205,13 +207,13 @@ test('@scene applies a staged draft and Reset returns it to the selected level',
   await expect(resetButton(popover)).toBeEnabled();
 
   await resetButton(popover).click();
-  await expect(shadows).toHaveAttribute('aria-checked', 'true');
+  await expect(shadows).toHaveAttribute('aria-checked', 'false');
   await expect(applyButton(popover)).toBeDisabled();
 
   await shadows.click();
   await applyButton(popover).click();
   await expect.poll(() => page.getByTestId('usd-scene-status').textContent()).toContain('rendered');
-  await expect(shadows).toHaveAttribute('aria-checked', 'false');
+  await expect(shadows).toHaveAttribute('aria-checked', 'true');
   await expect(applyButton(popover)).toBeDisabled();
 });
 
@@ -228,7 +230,9 @@ test('@scene shows an unapplied-changes marker while a draft differs from curren
   // Closing any other way (not Cancel) keeps the draft.
   await page.getByTestId('usd-scene-render-settings').click();
   await expect(popover).toBeHidden();
-  await expect(page.getByTitle('Unapplied changes')).toBeVisible();
+  // The badge span, not the button: the button's own title is
+  // "Render settings (unapplied changes)" and getByTitle matches substrings.
+  await expect(page.getByTestId('usd-scene-render-settings').locator('[title="Unapplied changes"]')).toBeVisible();
 });
 
 test('@scene moving a live slider away from the level applies immediately, and Reset moves it back', async ({ page, embedURL }) => {
@@ -239,16 +243,18 @@ test('@scene moving a live slider away from the level applies immediately, and R
   await waitForReload(page);
 
   const popover = await openPopover(page);
-  await openTab(popover, 'Effects');
-  const aoSlider = popover.getByText('Ambient occlusion strength', { exact: true }).locator('../..').getByRole('slider');
-  const defaultValue = await aoSlider.inputValue();
-  await aoSlider.fill('0.1');
+  // Camera exposure rather than AO strength: the AO strength row only
+  // renders while AO is on, and AO starts off on every level below Quality.
+  await openTab(popover, 'Display');
+  const exposure = popover.getByText('Camera exposure', { exact: true }).locator('../..').getByRole('slider');
+  const defaultValue = await exposure.inputValue();
+  await exposure.fill('2');
   // A live key, so it applies immediately (no Apply needed).
-  await expect(aoSlider).toHaveValue('0.1');
+  await expect(exposure).toHaveValue('2');
   await expect(resetButton(popover)).toBeEnabled();
 
   await resetButton(popover).click();
-  await expect(aoSlider).toHaveValue(defaultValue);
+  await expect(exposure).toHaveValue(defaultValue);
 });
 
 test('@scene keeps the same draft and dots across a plain close and reopen, and Cancel still reverts to session start', async ({ page, embedURL }) => {
@@ -267,7 +273,7 @@ test('@scene keeps the same draft and dots across a plain close and reopen, and 
 
   popover = await openPopover(page);
   await openTab(popover, 'Lighting');
-  await expect(toggleLocator(popover, 'Shadows')).toHaveAttribute('aria-checked', 'false');
+  await expect(toggleLocator(popover, 'Shadows')).toHaveAttribute('aria-checked', 'true');
   await expect(applyButton(popover)).toBeEnabled();
 
   // Cancel restores the value from when this editing session began (the
@@ -275,7 +281,7 @@ test('@scene keeps the same draft and dots across a plain close and reopen, and 
   await cancelButton(popover).click();
   popover = await openPopover(page);
   await openTab(popover, 'Lighting');
-  await expect(toggleLocator(popover, 'Shadows')).toHaveAttribute('aria-checked', 'true');
+  await expect(toggleLocator(popover, 'Shadows')).toHaveAttribute('aria-checked', 'false');
 });
 
 test('@scene reloads the stage when the applied preset changes subdivision or triangle limits', async ({ page, embedURL }) => {
@@ -312,9 +318,9 @@ test('@scene reloads the stage when the applied preset changes subdivision or tr
   await waitForReload(page);
   expect(await page.evaluate(() => window.__usdFactoryCalls)).toBe(3);
 
-  // Back to Default: subdivision (0) already matches Performance's, but
-  // triangleLimits does not change either (both true), ao/shadows/skyVis do
-  // and only rebuild; no reload expected.
+  // Back to Default: subdivision (0) already matches Performance's, and
+  // triangleLimits does not change either (both true); textureMaxSize and
+  // specularAA do change but only rebuild, no reload expected.
   await applyQualityLevel(page, 'default');
   await page.waitForTimeout(500);
   expect(await page.evaluate(() => window.__usdFactoryCalls)).toBe(3);
@@ -354,11 +360,11 @@ test('@scene Apply with no scene loaded only persists settings, never reloads or
   expect(await page.evaluate(() => window.__usdFactoryCalls)).toBe(0);
 
   // The persisted value is what the next load reads: loading a scene now
-  // comes up with Shadows already off, no extra Apply needed.
+  // comes up with Shadows already on, no extra Apply needed.
   await page.getByTestId('usd-scene-load-example').click();
   await waitForReload(page);
   expect(await page.evaluate(() => window.__usdFactoryCalls)).toBe(1);
   const reopened = await openPopover(page);
   await openTab(reopened, 'Lighting');
-  await expect(toggleLocator(reopened, 'Shadows')).toHaveAttribute('aria-checked', 'false');
+  await expect(toggleLocator(reopened, 'Shadows')).toHaveAttribute('aria-checked', 'true');
 });

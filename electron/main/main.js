@@ -333,7 +333,7 @@ ipcMain.handle('mtlx-get-settings', () => ({
     jumpListStatus,
 }));
 
-// Renderer-side About dialog (js/shell.jsx's DesktopAboutDialog) reads
+// Renderer-side About dialog (js/shell.jsx's AboutDialog) reads
 // these instead of the unreachable native menu's About item.
 // Unpackaged dev runs read electron/package.json's committed version via
 // app.getVersion(); dev.mjs resolves the real version from git instead
