@@ -1,8 +1,6 @@
-// js/shared/mesh-udim.js: UDIM tile classification and triangle
-// partitioning/compaction, shared by the Material Viewer's custom-geometry
-// UDIM split (js/mtlx-engine.js) and, later, the Scene (P6). Pure helpers,
-// no load-time THREE; ported verbatim from js/usd-scene-renderer.js's
-// sceneUdim*/bucket helpers (see each function's header comment below).
+// js/shared/mesh-udim.js: UDIM tile classification and triangle bucketing for
+// the Material Viewer and the Scene; pure helpers with no load-time THREE,
+// ported verbatim from js/usd-scene-renderer.js's sceneUdim* helpers.
 (function () {
     'use strict';
 
@@ -42,10 +40,9 @@
         return tile;
     };
 
-    // partitionTriangles: buckets every triangle in indices[start:end] by
-    // UDIM tile code, mirroring the Scene's bucket loop
-    // (js/usd-scene-renderer.js ~3910-3930). bucketKey: 'crossing', or the
-    // tile's numeric code as a string. Returns { buckets, crossingCount }.
+    // Buckets triangles in indices[start:end] by tile code ('crossing' for
+    // triangles spanning tiles), like the Scene's bucket loop.
+    // Returns { buckets, crossingCount }.
     const partitionTriangles = ({ uvs, indices, start = 0, end, vFlip = false }) => {
         const idx = indices || [];
         const stop = end != null ? end : idx.length;
@@ -65,10 +62,9 @@
         return { buckets, crossingCount };
     };
 
-    // compactBucket: welds a bucket's triangles into a fresh, tightly
-    // indexed vertex set (source-index dedup, first-seen order), mirroring
-    // js/usd-scene-renderer.js's per-bucket vertex remap (~3931-3958). No
-    // THREE: returns plain arrays, the caller builds its own geometry.
+    // Welds a bucket into a tightly indexed vertex set (source-index dedup,
+    // first-seen order) like the Scene's per-bucket remap; returns plain
+    // arrays so the caller builds its own geometry.
     const compactBucket = ({ positions, normals, uvs, geomprops, triangles }) => {
         const vertexMap = new Map();
         const outPositions = [], outNormals = [], outUvs = [], outIndices = [];
