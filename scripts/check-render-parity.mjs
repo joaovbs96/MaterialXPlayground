@@ -440,6 +440,7 @@ const EAGER_EMBED_FILES = [
   "js/shared/gif-encoder.js",
   "js/shared/mesh-subdivision.js",
   "js/shared/mesh-displacement.js",
+  "js/shared/mesh-udim.js",
   "js/shared/mtlx-turntable.js",
   "js/shared/render-settings.js",
   "js/shared/render-environment.js",

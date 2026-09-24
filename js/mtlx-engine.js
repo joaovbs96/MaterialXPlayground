@@ -4712,7 +4712,13 @@ const boundDecodedTexture = async (tex, maxSize) => {
 // the .exr/.hdr parsers above). `onBound` fires per texture that lands.
 const bindDroppedTextures = (view, fileMap, onBound) => {
     if (view && typeof view.onDisplacementFileMap === 'function') view.onDisplacementFileMap(fileMap);
+    if (view && typeof view.bindTextureFileMap === 'function') view.bindTextureFileMap(fileMap);
     const bound = [], missing = [], udimFirstTile = [];
+    // P4d stage 2: one entry per <UDIM> ref this drop touched, however it
+    // was resolved (single first-tile bind here, or a full per-mesh split
+    // via bindTextureFileMap above, which a live view reports separately
+    // through getUdimTileCount()); a diagnostics-only report field.
+    const udimTiles = [];
     const pending = [];
     const session = view && view.textureSession;
     const cache = view.textureCache || TEXTURE_CACHE;
@@ -4735,7 +4741,7 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
             let sessionHit = session.resolve(fileMap, ref);
             if (!sessionHit && /<UDIM>/i.test(ref)) {
                 const tiles = session.resolveTiles(fileMap, ref).slice().sort((a, b) => a.ref.localeCompare(b.ref));
-                if (tiles.length) { sessionHit = tiles[0]; udimFirstTile.push(ref); }
+                if (tiles.length) { sessionHit = tiles[0]; udimFirstTile.push(ref); udimTiles.push({ ref, tiles: tiles.length }); }
             }
             if (!sessionHit) { missing.push(ref); continue; }
             if (sessionHit.substituted) ktx2Substituted += 1;
@@ -4764,7 +4770,7 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
         // first tile, so bind the lowest-numbered tile instead of nothing.
         if (!hit && /<UDIM>/i.test(ref)) {
             const tiles = findFilesForRef(fileMap, ref).sort((a, b) => a.ref.localeCompare(b.ref));
-            if (tiles.length) { hit = { key: tiles[0].key, how: 'udim-first-tile' }; udimFirstTile.push(ref); }
+            if (tiles.length) { hit = { key: tiles[0].key, how: 'udim-first-tile' }; udimFirstTile.push(ref); udimTiles.push({ ref, tiles: tiles.length }); }
         }
         if (!hit) { missing.push(ref); continue; }
         const originalHit = hit;
@@ -4867,7 +4873,7 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
     }
     if (ktx2Substituted > 0) console.info('bindDroppedTextures: ' + ktx2Substituted + ' texture(s) loaded from .ktx2 sibling(s)');
     if (udimFirstTile.length) console.info('bindDroppedTextures: ' + udimFirstTile.length + ' UDIM reference(s) bound to their first tile for the preview');
-    return { bound, missing, pending, ktx2Substituted, udimFirstTile };
+    return { bound, missing, pending, ktx2Substituted, udimFirstTile, udimTiles };
 };
 
 // ------------------------------------------------------------------
@@ -5625,7 +5631,10 @@ const normalizeGeometry = (geometry) => {
 // ---- Custom preview geometry (experimental) ----
 // Session-wide registry shared by the docs previewer and graph preview, in-memory only.
 // The graph editor's DocsDialog iframe has its own separate registry; callers guard for this.
-const CUSTOM_GEOM = { geometry: null, name: '', epoch: 0 };
+// uvOrigin: 'bottom' (OBJ/UDIM convention, V=0 at the bottom) or 'top'
+// (glTF convention, V=0 at the top); feeds classifyTriangle's vFlip so a
+// glTF import's UDIM tiles classify the same as an OBJ's would.
+const CUSTOM_GEOM = { geometry: null, name: '', epoch: 0, uvOrigin: 'bottom' };
 // Latest loadCustomPreviewGeomFromFile/Url call wins; bumped by both and by clearCustomPreviewGeom.
 let customGeomLoadSeq = 0;
 const getCustomPreviewGeom = () => (CUSTOM_GEOM.geometry ? CUSTOM_GEOM : null);
@@ -6122,6 +6131,7 @@ const commitCustomGeom = (root, label, seqId) => {
     const prev = CUSTOM_GEOM.geometry;
     CUSTOM_GEOM.geometry = built;
     CUSTOM_GEOM.name = String(label || 'custom');
+    CUSTOM_GEOM.uvOrigin = /\.(glb|gltf)$/i.test(String(label || '')) ? 'top' : 'bottom';
     CUSTOM_GEOM.epoch += 1;
     if (prev) { try { prev.dispose(); } catch (e) { /* registry copy is never GPU-uploaded */ } }
     // Keep-alive hidden preview tools subscribe to this event to mirror the
@@ -9687,7 +9697,46 @@ const createDisplacementRunner = ({
         }),
         settled: () => (runInFlight ? (settlePromise || Promise.resolve()) : Promise.resolve()),
         dispose: () => { cancel(); },
+        // P4d stage 2: per-call evaluate for a caller-supplied geometry
+        // (a UDIM tile's vertex subset), independent of build()/evaluate()'s
+        // own token/state bookkeeping. The caller scatters the returned
+        // offsets back onto the shared base and runs buildDisplacedGeometry
+        // once on the whole thing (no cracks). Uses this runner's own
+        // renderer/textureSession/isAlive.
+        evaluateGeometry: ({ geometry, displacement, worldMatrix, fileMap, time } = {}) => evaluateDisplacement({
+            renderer, displacement, geometry, worldMatrix, fileMap,
+            textureCache: undefined, textureSession, isAlive, time,
+        }),
     };
+};
+
+// findUdimRefs: filename-typed introspected uniforms whose authored path
+// contains a <UDIM> marker (case-insensitive), mirroring the Scene's
+// sceneUdimRefs (js/usd-scene-renderer.js ~1264) but over a plain
+// `introspected` array instead of a `{introspected}` wrapper.
+const findUdimRefs = (introspected) => (introspected || [])
+    .filter((u) => u.type === 'filename' && typeof u.data === 'string' && /<UDIM>/i.test(u.data));
+
+// createUdimVariantUniforms: a per-tile uniforms object derived from
+// `base`, overriding only the UDIM sampler name(s) in `tileBindings`
+// (name -> texture). shareSlots true (Preview): every OTHER slot object is
+// the SAME reference as base's, so setUniforms/env setters/peel/tryRefresh/
+// sliders that mutate a slot's `.value` in place reach every variant for
+// free. shareSlots false (Scene, P6): sceneCloneUniforms behavior instead
+// (js/usd-scene-renderer.js ~1287): value objects cloned, textures shared.
+const createUdimVariantUniforms = (base, tileBindings, { shareSlots = true } = {}) => {
+    const names = Object.keys(tileBindings || {});
+    const out = shareSlots
+        ? Object.assign({}, base)
+        : Object.fromEntries(Object.entries(base || {}).map(([name, slot]) => {
+            const value = slot && slot.value;
+            let cloned = value;
+            if (value && !value.isTexture && typeof value.clone === 'function') cloned = value.clone();
+            else if (Array.isArray(value)) cloned = value.slice();
+            return [name, Object.assign({}, slot, { value: cloned })];
+        }));
+    for (const name of names) out[name] = { value: tileBindings[name] };
+    return out;
 };
 
 // ------------------------------------------------------------------
@@ -10870,6 +10919,19 @@ const createMtlxRenderView = async ({
     // P4d stage 1: owns dispToken/dispState/dispSettlePromise/notices/
     // debounce, assigned once the renderer/textureSession exist below.
     let dispRunner = null;
+    // P4d stage 2: custom-geometry UDIM split state. udimParts: child
+    // THREE.Mesh objects added under `mesh`, one per successfully bound
+    // tile beyond the lowest (which `mesh` itself keeps). udimFullIndex:
+    // mesh.geometry's ORIGINAL index/attribute-count, saved once so a
+    // later material with no UDIM refs can restore the whole mesh.
+    // udimBucketsKey/udimBuckets: partitionTriangles() cached per
+    // (CUSTOM_GEOM.epoch, ref) since the base geometry doesn't change
+    // between material swaps. udimNoticeText: the one notice covering
+    // crossing/missing/over-cap tiles, folded into syncHandleNotices.
+    let udimParts = [], udimFullIndex = null, udimSplitActive = false;
+    let udimBucketsKey = null, udimBuckets = null, udimFileMap = null;
+    let udimNoticeText = null, udimTileCount = 0;
+    const PREVIEW_UDIM_MAX_TILES = 64;
     // Reassigned once, below, to the real handle object literal; declared
     // here (with the rest of this shell's state) so displacement closures
     // defined ahead of it can still dispatch { view: handle } once it exists.
@@ -10990,6 +11052,15 @@ const createMtlxRenderView = async ({
             const dispGeoms = new Set([originalGeometry, baseGeometry, displacedGeometry].filter(Boolean));
             dispGeoms.delete(geometry);
             dispGeoms.forEach((g) => { try { g.dispose(); } catch (e2) { /* already disposed/invalid */ } });
+        } catch (e) { /* best-effort */ }
+        // P4d stage 2: UDIM split child meshes' own material clones (their
+        // geometries only own an index buffer over shared attributes,
+        // already covered above/left to GC); referenced directly here
+        // rather than through teardownUdimParts, which may not exist yet
+        // on an early bail (TDZ before that const's declaration runs).
+        try {
+            udimParts.forEach((p) => { try { if (p.material) p.material.dispose(); } catch (e2) { /* already disposed/invalid */ } });
+            udimParts = [];
         } catch (e) { /* best-effort */ }
         // bgMesh + studio backdrop, owned by createPreviewBackdrop.
         if (previewBackdrop) previewBackdrop.dispose();
@@ -11523,7 +11594,7 @@ const createMtlxRenderView = async ({
                 const currentDispNotices = () => dispRunner.getState().notices;
                 // Rebuilt, never appended, so re-runs cannot stack stale copies.
                 const syncHandleNotices = () => {
-                    if (handle) handle.notices = materialNotices.concat(currentDispNotices());
+                    if (handle) handle.notices = materialNotices.concat(currentDispNotices(), udimNoticeText ? [udimNoticeText] : []);
                 };
                 const dispDispatchStatus = () => {
                     if (!handle) return;
@@ -11596,6 +11667,123 @@ const createMtlxRenderView = async ({
                     // program is filename-driven.
                     await dispRunner.runFirstBuild();
                 }
+
+                // P4d stage 2: custom-geometry UDIM split. Removes any
+                // previous split's child meshes and restores mesh.geometry's
+                // full index; a no-op when there is nothing to tear down.
+                const teardownUdimParts = () => {
+                    if (udimParts.length) {
+                        udimParts.forEach((p) => {
+                            try { mesh.remove(p); } catch (e) { /* mesh mid-teardown */ }
+                            try { p.geometry.dispose(); } catch (e) { /* shares base attrs, index-only */ }
+                            try { p.material.dispose(); } catch (e) { /* already disposed/invalid */ }
+                        });
+                        udimParts = [];
+                    }
+                    if (udimSplitActive && mesh && mesh.geometry) {
+                        if (udimFullIndex) mesh.geometry.setIndex(udimFullIndex);
+                        udimSplitActive = false;
+                    }
+                    if (udimNoticeText) { udimNoticeText = null; syncHandleNotices(); }
+                };
+
+                // A fresh BufferGeometry sharing baseGeom's attribute
+                // OBJECTS (no data copy) with its own index over `triangles`
+                // (design: "sub-geometry sharing the base BufferAttributes
+                // with its own index"); .dispose() on it only frees that
+                // OWN index buffer, never the shared attributes.
+                const buildUdimPartGeometry = (baseGeom, triangles) => {
+                    const g = new THREE.BufferGeometry();
+                    for (const name of Object.keys(baseGeom.attributes)) g.setAttribute(name, baseGeom.attributes[name]);
+                    const flat = new Uint32Array(triangles.length * 3);
+                    let w = 0;
+                    for (const tri of triangles) { flat[w] = tri[0]; flat[w + 1] = tri[1]; flat[w + 2] = tri[2]; w += 3; }
+                    g.setIndex(new THREE.BufferAttribute(flat, 1));
+                    g.boundingSphere = baseGeom.boundingSphere;
+                    g.boundingBox = baseGeom.boundingBox;
+                    return g;
+                };
+
+                // Called whenever a file map arrives (bindDroppedTextures,
+                // for every live view) and whenever the material changes
+                // (applyMaterialInternal below); splits `mesh` into one
+                // sub-geometry per resolved UDIM tile when the CURRENT
+                // material has UDIM refs and more than one tile is present
+                // in the mesh's UVs. Built-in geometry (sceneMode/flat2d/
+                // non-'custom') is unaffected: bindDroppedTextures's
+                // existing first-tile binding still covers it.
+                const applyUdimSplit = (introspected, fileMap) => {
+                    if (stopped || flat2d || sceneMode || geomName !== 'custom' || !mesh || !originalGeometry
+                        || !window.MtlxMeshUdim || !textureSession || displacementSources) { teardownUdimParts(); return; }
+                    const udimRefs = findUdimRefs(introspected);
+                    if (!udimRefs.length) { teardownUdimParts(); return; }
+                    const ref = udimRefs[0].data, uName = udimRefs[0].name;
+                    const baseGeom = mesh.geometry;
+                    const posAttr = baseGeom.getAttribute('position');
+                    if (!posAttr) { teardownUdimParts(); return; }
+                    const idxAttr = baseGeom.getIndex();
+                    const indices = idxAttr ? idxAttr.array : Array.from({ length: posAttr.count }, (_, i) => i);
+                    const uvAttr = baseGeom.getAttribute('uv');
+                    const cacheKey = CUSTOM_GEOM.epoch + '|' + ref;
+                    if (udimBucketsKey !== cacheKey) {
+                        udimBuckets = window.MtlxMeshUdim.partitionTriangles({
+                            uvs: uvAttr ? uvAttr.array : null, indices, vFlip: CUSTOM_GEOM.uvOrigin === 'top',
+                        });
+                        udimBucketsKey = cacheKey;
+                    }
+                    const { buckets, crossingCount } = udimBuckets;
+                    const numericKeys = Array.from(buckets.keys()).filter((k) => k !== 'crossing').sort((a, b) => Number(a) - Number(b));
+                    if (numericKeys.length < 2) { teardownUdimParts(); return; }
+                    const tileHits = textureSession.resolveTiles(fileMap, ref);
+                    if (!tileHits.length) { teardownUdimParts(); return; }
+                    const tileByCode = new Map(tileHits.map((h) => [h.code, h]));
+                    const lowestKey = numericKeys[0];
+
+                    teardownUdimParts();
+                    if (!udimFullIndex && idxAttr) udimFullIndex = idxAttr.clone();
+
+                    // Everything that isn't a cleanly resolved higher tile
+                    // (the lowest bucket itself, UV-crossing triangles,
+                    // missing tiles, tiles past the cap) renders through
+                    // `mesh`'s own default/lowest-tile texture: no cracks,
+                    // degraded to the default look with one notice.
+                    const defaultTriangles = buckets.get(lowestKey).triangles.slice();
+                    const crossingBucket = buckets.get('crossing');
+                    if (crossingBucket) defaultTriangles.push(...crossingBucket.triangles);
+
+                    let overflowCount = 0, missingCount = 0, placed = 0;
+                    for (const key of numericKeys) {
+                        if (key === lowestKey) continue;
+                        const bucket = buckets.get(key);
+                        if (placed >= PREVIEW_UDIM_MAX_TILES - 1) { defaultTriangles.push(...bucket.triangles); overflowCount += bucket.triangles.length; continue; }
+                        const hit = tileByCode.get(Number(key));
+                        if (!hit) { defaultTriangles.push(...bucket.triangles); missingCount += bucket.triangles.length; continue; }
+                        const acquired = textureSession.acquire(hit, { samplerModes: udimRefs[0].samplerModes || null });
+                        const bindVariant = (result) => {
+                            if (!result || !result.texture || stopped || !mesh) return;
+                            const variantUniforms = createUdimVariantUniforms(uniforms, { [uName]: result.texture }, { shareSlots: true });
+                            const variantMaterial = material.clone();
+                            variantMaterial.uniforms = variantUniforms;
+                            const partMesh = new THREE.Mesh(buildUdimPartGeometry(baseGeom, bucket.triangles), variantMaterial);
+                            partMesh.castShadow = mesh.castShadow;
+                            partMesh.receiveShadow = mesh.receiveShadow;
+                            partMesh.frustumCulled = false;
+                            mesh.add(partMesh);
+                            udimParts.push(partMesh);
+                        };
+                        if (acquired && typeof acquired.then === 'function') acquired.then(bindVariant); else bindVariant(acquired);
+                        placed += 1;
+                    }
+                    mesh.geometry = buildUdimPartGeometry(baseGeom, defaultTriangles);
+                    geometry = mesh.geometry;
+                    udimSplitActive = true;
+                    udimTileCount = placed + 1;
+                    const badTriangles = crossingCount + overflowCount + missingCount;
+                    udimNoticeText = badTriangles > 0
+                        ? ('UDIM: ' + badTriangles + ' triangle(s) had a crossing or unresolved tile and use the default tile')
+                        : null;
+                    syncHandleNotices();
+                };
 
                 if (fullScene && sceneOrbit && controls) {
                     // OrbitControls' constructor already ran update()
@@ -12299,6 +12487,10 @@ const createMtlxRenderView = async ({
                 syncHandleNotices();
                 handle.isTransparent = !!srcs.transparent;
                 handle.syncDisplacementSources(srcs.displacement || null);
+                // P4d stage 2: a material swap can change which (if any)
+                // UDIM refs are present; rebuild the split against the last
+                // file map this view saw, if any.
+                if (udimFileMap) applyUdimSplit(srcs.introspected, udimFileMap);
                 if (window.MTLX_PERF_LOG) {
                     console.log('[mtlx-perf] applyMaterial total: '
                         + (performance.now() - __applyPerfStart).toFixed(1) + 'ms (target: ' + label + ')');
@@ -12355,10 +12547,20 @@ const createMtlxRenderView = async ({
                     runDisplacement();
                 }
             },
+            // P4d stage 2: bindDroppedTextures calls this once per drop for
+            // every live view (same pattern as onDisplacementFileMap above);
+            // splits custom geometry into per-UDIM-tile sub-meshes when the
+            // current material has UDIM refs. Not a core handle-contract
+            // name (guard (g) only reserves the HANDLE_CONTRACT list).
+            bindTextureFileMap: (fileMap) => {
+                udimFileMap = fileMap;
+                applyUdimSplit(handle.introspected, fileMap);
+            },
+            getUdimTileCount: () => udimTileCount,
             }, // end extras
             // Debug hook: raw GPU state for a headed diagnosis harness.
             // Not for production UI code.
-            __debug: () => ({ material: mesh ? mesh.material : material, mesh, geometry }),
+            __debug: () => ({ material: mesh ? mesh.material : material, mesh, geometry, renderer }),
         };
 
         // buildHandle (js/shared/render-session.js) composes the plain
