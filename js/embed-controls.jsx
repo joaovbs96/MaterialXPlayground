@@ -68,14 +68,15 @@ const EmbedRenderSettings = ({ keys }) => {
                         </React.Fragment>
                     );
                 }
-                if (row.type === 'enum') {
+                if (row.type === 'enum' || row.control === 'select') {
+                    const coerce = row.type === 'enum' ? (v) => v : Number;
                     return (
                         <div className="mtlx-ec-panel-row" key={row.key}>
                             <span>{row.label}</span>
                             <select
                                 className="mtlx-ec-select"
                                 value={value}
-                                onChange={(e) => onChange(e.target.value)}
+                                onChange={(e) => onChange(coerce(e.target.value))}
                                 title={row.hint}
                             >
                                 {row.options.map((opt) => (

@@ -72,14 +72,15 @@ const EmbedRenderSettings = ({
         className: "mtlx-ec-desc"
       }, row.hint));
     }
-    if (row.type === 'enum') {
+    if (row.type === 'enum' || row.control === 'select') {
+      const coerce = row.type === 'enum' ? v => v : Number;
       return /*#__PURE__*/React.createElement("div", {
         className: "mtlx-ec-panel-row",
         key: row.key
       }, /*#__PURE__*/React.createElement("span", null, row.label), /*#__PURE__*/React.createElement("select", {
         className: "mtlx-ec-select",
         value: value,
-        onChange: e => onChange(e.target.value),
+        onChange: e => onChange(coerce(e.target.value)),
         title: row.hint
       }, row.options.map(opt => /*#__PURE__*/React.createElement("option", {
         key: String(opt),

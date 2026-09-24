@@ -163,6 +163,7 @@
         },
         {
             key: 'previewSubdivision', label: 'Subdivision', group: 'geometry', order: 11, type: 'number', min: 0, max: 3, step: 1, apply: 'geometry', ui: true,
+            control: 'select', options: [0, 1, 2, 3],
             optionLabels: { 0: 'Off', 1: '1', 2: '2', 3: '3' },
             hint: 'Applied to preview geometry when the material has displacement; each level is 4x triangles, capped at 1.5M.',
             profiles: {
@@ -296,6 +297,7 @@
         },
         {
             key: 'subdivision', label: 'Subdivision', group: 'geometry', order: 2, type: 'number', min: 0, max: 2, apply: 'reload', ui: true,
+            control: 'select', options: [0, 1, 2], optionLabels: { 0: 'Off', 1: '1', 2: '2' },
             profiles: { stage: { storage: 'mtlx_scene_subdivision', codec: 'int', min: 0, max: 2, levels: { performance: 0, default: 0, quality: 2 } } },
             surfaces: { viewer: NA('the Material Viewer has no stage subdivision'), compare: NA('the Material Viewer has no stage subdivision'), docs: NA('the Material Viewer has no stage subdivision'), graph: NA('the Material Viewer has no stage subdivision'), embed: NA('the Material Viewer has no stage subdivision'), scene: 'yes' },
         },

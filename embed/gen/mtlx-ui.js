@@ -861,6 +861,25 @@ function RenderSettingsSection({
         className: "mt-1 text-[11px] text-gray-400"
       }, row.hint));
     }
+    // number rendered as a dropdown (manifest control: 'select'),
+    // e.g. Subdivision: a small fixed set of levels, not a range.
+    if (row.control === 'select') {
+      return /*#__PURE__*/React.createElement("div", {
+        key: row.key
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "flex items-center justify-between gap-2"
+      }, labelNode, /*#__PURE__*/React.createElement(MtlxSelect, {
+        value: value,
+        options: row.options,
+        labels: row.optionLabels || {},
+        onChange: onChange,
+        defValue: row.options[0],
+        title: row.hint,
+        size: "sm"
+      })), showHint && row.hint && /*#__PURE__*/React.createElement("div", {
+        className: "mt-1 text-[11px] text-gray-400"
+      }, row.hint));
+    }
     // number
     return /*#__PURE__*/React.createElement("div", {
       key: row.key
@@ -926,6 +945,7 @@ function SettingsDialog({
   if (!open) return null;
   return ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
     ref: popRef,
+    "data-mtlx-settings-dialog": true,
     onPointerDown: e => e.stopPropagation(),
     style: Object.assign({
       position: 'fixed',
@@ -1664,6 +1684,7 @@ const EnvDialog = ({
   if (!open) return null;
   return ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
     ref: popRef,
+    "data-mtlx-env-dialog": true,
     onPointerDown: e => e.stopPropagation(),
     style: Object.assign({
       position: 'fixed',

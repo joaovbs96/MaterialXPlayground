@@ -686,6 +686,27 @@ function RenderSettingsSection({ surface, groups, keys, variant = 'sidebar', exc
                         </div>
                     );
                 }
+                // number rendered as a dropdown (manifest control: 'select'),
+                // e.g. Subdivision: a small fixed set of levels, not a range.
+                if (row.control === 'select') {
+                    return (
+                        <div key={row.key}>
+                            <div className="flex items-center justify-between gap-2">
+                                {labelNode}
+                                <MtlxSelect
+                                    value={value}
+                                    options={row.options}
+                                    labels={row.optionLabels || {}}
+                                    onChange={onChange}
+                                    defValue={row.options[0]}
+                                    title={row.hint}
+                                    size="sm"
+                                />
+                            </div>
+                            {showHint && row.hint && <div className="mt-1 text-[11px] text-gray-400">{row.hint}</div>}
+                        </div>
+                    );
+                }
                 // number
                 return (
                     <div key={row.key}>
@@ -743,6 +764,7 @@ function SettingsDialog({ anchorRef, open, onClose, children, surface }) {
     return ReactDOM.createPortal(
         <div
             ref={popRef}
+            data-mtlx-settings-dialog
             onPointerDown={(e) => e.stopPropagation()}
             style={Object.assign({ position: 'fixed', zIndex: 9999, width: SETTINGS_DIALOG_W }, pos || {})}
             className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden"
@@ -1440,6 +1462,7 @@ const EnvDialog = ({
     return ReactDOM.createPortal(
         <div
             ref={popRef}
+            data-mtlx-env-dialog
             onPointerDown={(e) => e.stopPropagation()}
             style={Object.assign({ position: 'fixed', zIndex: 9999, width: ENV_DIALOG_W }, pos || {})}
             className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl p-3 space-y-2.5 text-[11px] text-gray-300"
