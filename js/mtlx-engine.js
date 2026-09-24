@@ -441,6 +441,20 @@ const setDisplacementEnabled = (v, { persist = true } = {}) => {
     try { window.dispatchEvent(new CustomEvent('mtlx-settings-changed', { detail: { key: 'displacement', value: DISPLACEMENT_ENABLED } })); } catch (e) { /* best-effort */ }
 };
 
+// "Texture Anisotropy" (Settings dialog, default 8). Sessions apply this
+// live via textureSession.setAnisotropy on every LIVE_VIEWS handle that has
+// one; configureLoadedTexture's own default (8) covers callers with no
+// session (Scene until P6, the legacy Map path).
+let TEXTURE_ANISOTROPY = (() => {
+    try { return Number(window.MtlxRenderSettings.get('textureAnisotropy', { surface: 'viewer' })) || 8; } catch (e) { return 8; }
+})();
+const getTextureAnisotropy = () => TEXTURE_ANISOTROPY;
+const setTextureAnisotropy = (v, { persist = true } = {}) => {
+    TEXTURE_ANISOTROPY = Number(v) || 8;
+    try { window.MtlxRenderSettings.set('textureAnisotropy', TEXTURE_ANISOTROPY, { surface: 'viewer', persist }); } catch (e) { /* best-effort */ }
+    LIVE_VIEWS.forEach((view) => { try { view.textureSession && view.textureSession.setAnisotropy(TEXTURE_ANISOTROPY); } catch (e) { /* view mid-teardown */ } });
+};
+
 // Displacement shading-normal mode (Settings/test hook): 'analytic' derives
 // the normal from two extra tangent-offset evaluations of the displacement
 // network per vertex (crisp creases, matches the analytic surface); 'mesh'
@@ -3755,9 +3769,31 @@ const expandZips = async (map) => {
     return map;
 };
 
-// Find a dropped file for a path referenced inside the document:
-// exact normalized match → unique suffix match → unique basename match.
-const findFileForRef = (fileMap, ref) => {
+// Join a base directory and a reference into one path, resolving '.' and
+// '..' segments. Backslashes normalize and a leading './' or '/' strips,
+// but case is preserved (unlike normPath, which lowercases for fuzzy
+// matching). Moved from the Scene's sceneJoinPath for the exact resolvers.
+const joinRefPath = (fromDir, ref) => {
+    const casedNorm = (v) => String(v || '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\//, '');
+    return casedNorm((fromDir ? fromDir + '/' : '') + String(ref || ''))
+        .split('/').reduce((out, part) => {
+            if (!part || part === '.') return out;
+            if (part === '..') { out.pop(); return out; }
+            out.push(part); return out;
+        }, []).join('/');
+};
+
+// Find a dropped file for a path referenced inside the document. Fuzzy
+// (default): exact normalized match -> unique suffix match -> unique
+// basename match. Exact ({exact:true, fromDir}): hasOwnProperty lookup on
+// joinRefPath(fromDir, ref) only, no suffix or basename fallback (a
+// composed scene can have duplicate basenames, so a miss must stay a miss).
+const findFileForRef = (fileMap, ref, opts) => {
+    if (opts && opts.exact) {
+        const want = joinRefPath(opts.fromDir, ref);
+        if (!want || !Object.prototype.hasOwnProperty.call(fileMap, want)) return null;
+        return { key: want, how: 'exact' };
+    }
     const want = normPath(ref);
     if (!want) return null;
     const keys = Object.keys(fileMap);
@@ -3775,7 +3811,28 @@ const findFileForRef = (fileMap, ref) => {
 // A <UDIM> reference names a tile set: every key whose path matches the
 // reference with the token replaced by four digits, each hit carrying the
 // concrete tile ref. Plain references yield the single findFileForRef hit.
-const findFilesForRef = (fileMap, ref) => {
+// Exact ({exact:true}): literal prefix/suffix split around <UDIM>, 4 case-
+// sensitive digits, code >= 1001, no suffix/basename retry. Both modes
+// return { key, how, ref, code, u, v } sorted by code.
+const findFilesForRef = (fileMap, ref, opts) => {
+    if (opts && opts.exact) {
+        const raw = String(ref || '');
+        const splitParts = raw.split(/<UDIM>/);
+        if (splitParts.length !== 2) return [];
+        const prefix = splitParts[0], suffix = splitParts[1];
+        const hits = [];
+        for (const key of Object.keys(fileMap)) {
+            if (!key.startsWith(prefix) || !key.endsWith(suffix)) continue;
+            const end = suffix.length ? key.length - suffix.length : key.length;
+            const codeText = key.slice(prefix.length, end);
+            if (!/^\d{4}$/.test(codeText)) continue;
+            const code = Number(codeText);
+            if (code < 1001) continue;
+            const offset = code - 1001;
+            hits.push({ key, how: 'exact', ref: raw.replace(/<UDIM>/, codeText), code, u: offset % 10, v: Math.floor(offset / 10) });
+        }
+        return hits.sort((a, b) => a.code - b.code);
+    }
     const raw = String(ref || '');
     if (!/<UDIM>/i.test(raw)) {
         const hit = findFileForRef(fileMap, raw);
@@ -3792,9 +3849,13 @@ const findFilesForRef = (fileMap, ref) => {
         const hits = [];
         for (const key of Object.keys(fileMap)) {
             const m = re.exec(normPath(key));
-            if (m) hits.push({ key, how, ref: raw.replace(/<UDIM>/gi, m[m.length - 1]) });
+            if (!m) continue;
+            const codeText = m[m.length - 1];
+            const code = Number(codeText);
+            const offset = code - 1001;
+            hits.push({ key, how, ref: raw.replace(/<UDIM>/gi, codeText), code, u: offset % 10, v: Math.floor(offset / 10) });
         }
-        if (hits.length) return hits;
+        if (hits.length) return hits.sort((a, b) => a.code - b.code);
     }
     return [];
 };
@@ -3802,9 +3863,9 @@ const findFilesForRef = (fileMap, ref) => {
 // Given a resolved file-map hit, prefer a sibling "<stem>.ktx2" in the same
 // directory when one exists (per-UDIM tile too, since the tile code lives in
 // the stem: "wall.1001.png" -> "wall.1001.ktx2"), and never touch the
-// original file. Returns the (possibly substituted) hit.
+// original file or a .mtlx document. Returns the (possibly substituted) hit.
 const preferKtx2Sibling = (fileMap, hit) => {
-    if (!hit || /\.ktx2$/i.test(hit.key)) return hit;
+    if (!hit || /\.ktx2$/i.test(hit.key) || /\.mtlx$/i.test(hit.key)) return hit;
     const dot = hit.key.lastIndexOf('.');
     if (dot < 0) return hit;
     const ktx2Key = hit.key.slice(0, dot) + '.ktx2';
@@ -3817,8 +3878,16 @@ const preferKtx2Sibling = (fileMap, hit) => {
 // Inline <xi:include href="..."/> from the dropped files (MaterialX
 // documents may be split across files; readFromXmlString can't reach
 // our in-memory map). Missing includes are dropped with a warning.
-const resolveIncludes = async (xml, fileMap, fromDir, visited) => {
+// Exact ({exact:true, warnings, transformChild}): matches the Scene's
+// resolveSceneIncludes: only the exact lookup (no bare-href retry), an
+// already-visited include is skipped silently (no comment), and an
+// unresolved one pushes to `warnings` instead of console.warn.
+// transformChild(childXml, key), when given, post-processes each resolved
+// child before the wrapper strip (used by the Scene's canonicalization).
+const resolveIncludes = async (xml, fileMap, fromDir, visited, opts) => {
     visited = visited || new Set();
+    const options = opts || {};
+    const exact = !!options.exact;
     // href may not be the first attribute and may be single-quoted,
     // any tag this regex misses would be handed to MaterialX, which
     // would try (and fail) to fetch it over HTTP itself.
@@ -3829,6 +3898,26 @@ const resolveIncludes = async (xml, fileMap, fromDir, visited) => {
         parts.push(xml.slice(last, m.index));
         last = m.index + m[0].length;
         const href = m[1] || m[2];
+
+        if (exact) {
+            const hit = findFileForRef(fileMap, href, { exact: true, fromDir });
+            if (!hit) {
+                if (options.warnings) options.warnings.push('Unresolved MaterialX include ' + href + ' from ' + (fromDir || '.'));
+                parts.push('<!-- unresolved include: ' + href.replace(/--/g, '- -') + ' -->');
+                continue;
+            }
+            if (visited.has(hit.key)) continue; // already in this document closure, skip silently
+            visited.add(hit.key);
+            let inc = await fileMap[hit.key].text();
+            const incDir = hit.key.indexOf('/') >= 0 ? hit.key.slice(0, hit.key.lastIndexOf('/')) : '';
+            inc = await resolveIncludes(inc, fileMap, incDir, visited, options);
+            if (options.transformChild) inc = options.transformChild(inc, hit.key);
+            inc = inc.replace(/<\?xml[^>]*\?>/, '');
+            inc = inc.replace(/<materialx\b[^>]*>/, '').replace(/<\/materialx>\s*$/, '');
+            parts.push(inc);
+            continue;
+        }
+
         const refPath = fromDir ? fromDir + '/' + href : href;
         const hit = findFileForRef(fileMap, refPath) || findFileForRef(fileMap, href);
         if (!hit || visited.has(hit.key)) {
@@ -4625,6 +4714,7 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
     if (view && typeof view.onDisplacementFileMap === 'function') view.onDisplacementFileMap(fileMap);
     const bound = [], missing = [], udimFirstTile = [];
     const pending = [];
+    const session = view && view.textureSession;
     const cache = view.textureCache || TEXTURE_CACHE;
     const isAlive = () => typeof view.isAlive !== 'function' || view.isAlive();
     let ktx2Substituted = 0;
@@ -4636,6 +4726,39 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
             else if (u.data != null) ref = String(u.data);
         } catch (e) { ref = ''; }
         if (!ref) continue; // no file reference recorded
+
+        // F3: a preview handle's own textureSession owns decode/refcount/
+        // dispose instead of the shared TEXTURE_CACHE Map, so a rebuild does
+        // not leak the previous GL copies. Falls back to the Map path below
+        // when the view has no session (Scene, legacy callers).
+        if (session) {
+            let sessionHit = session.resolve(fileMap, ref);
+            if (!sessionHit && /<UDIM>/i.test(ref)) {
+                const tiles = session.resolveTiles(fileMap, ref).slice().sort((a, b) => a.ref.localeCompare(b.ref));
+                if (tiles.length) { sessionHit = tiles[0]; udimFirstTile.push(ref); }
+            }
+            if (!sessionHit) { missing.push(ref); continue; }
+            if (sessionHit.substituted) ktx2Substituted += 1;
+            const samplerModes = u.samplerModes || null;
+            const apply = (result) => {
+                if (!result) { missing.push(ref); return; }
+                if (!isAlive()) return;
+                if (view.uniforms[u.name]) view.uniforms[u.name].value = result.texture;
+                if (onBound) onBound();
+            };
+            const acquired = session.acquire(sessionHit, { samplerModes });
+            if (acquired && typeof acquired.then === 'function') {
+                pending.push(acquired.then(apply, (error) => {
+                    console.warn('mtlx-engine: texture decode failed for ' + sessionHit.key + ', keeping the node default color:', error);
+                    missing.push(ref);
+                }));
+            } else {
+                apply(acquired);
+            }
+            bound.push(ref + '  →  ' + sessionHit.key);
+            continue;
+        }
+
         let hit = findFileForRef(fileMap, ref);
         // A UDIM set has no single file; the shaderball's UVs live in the
         // first tile, so bind the lowest-numbered tile instead of nothing.
@@ -4745,6 +4868,297 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
     if (ktx2Substituted > 0) console.info('bindDroppedTextures: ' + ktx2Substituted + ' texture(s) loaded from .ktx2 sibling(s)');
     if (udimFirstTile.length) console.info('bindDroppedTextures: ' + udimFirstTile.length + ' UDIM reference(s) bound to their first tile for the preview');
     return { bound, missing, pending, ktx2Substituted, udimFirstTile };
+};
+
+// ------------------------------------------------------------------
+// createTextureSession: decoded CPU prototypes (TEXTURE_SOURCES) are
+// refcounted and shared across sessions, kept in an idle LRU up to 256 MiB
+// after their last release (no-flash rebind); each session clones a proto
+// into one wrapper per (source, samplerModes) via configureLoadedTexture,
+// uploaded only on that session's own renderer. TEXTURE_CACHE above stays
+// for the legacy Map path (Scene, until P6).
+// ------------------------------------------------------------------
+const TEXTURE_SOURCE_IDLE_BUDGET = 256 * 1024 * 1024;
+const TEXTURE_SOURCES = new Map(); // key -> { proto, bytes, refs }
+let textureSourceIdleBytes = 0;
+const textureSourceIdleOrder = []; // keys with refs === 0, oldest first
+
+const textureSourceBytes = (proto) => {
+    if (!proto || !proto.image) return 0;
+    const w = proto.image.width || 0, h = proto.image.height || 0;
+    const bpp = proto.isCompressedTexture ? 1 : (proto.type === THREE.FloatType ? 16 : 4);
+    const mipped = !(proto.type === THREE.FloatType) || proto.isCompressedTexture;
+    return Math.ceil(w * h * bpp * (mipped ? 4 / 3 : 1));
+};
+
+const evictIdleTextureSources = () => {
+    while (textureSourceIdleBytes > TEXTURE_SOURCE_IDLE_BUDGET && textureSourceIdleOrder.length) {
+        const key = textureSourceIdleOrder.shift();
+        const entry = TEXTURE_SOURCES.get(key);
+        if (!entry) continue;
+        textureSourceIdleBytes -= entry.bytes;
+        TEXTURE_SOURCES.delete(key);
+        if (entry.proto && entry.proto.image && typeof entry.proto.image.close === 'function') entry.proto.image.close();
+        if (entry.proto && entry.proto.dispose) entry.proto.dispose();
+    }
+};
+
+const releaseTextureSource = (cache, key) => {
+    const entry = cache.get(key);
+    if (!entry) return;
+    entry.refs -= 1;
+    if (entry.refs > 0) return;
+    textureSourceIdleOrder.push(key);
+    textureSourceIdleBytes += entry.bytes;
+    evictIdleTextureSources();
+};
+
+const acquireTextureSourceRef = (cache, key) => {
+    const entry = cache.get(key);
+    if (!entry) return null;
+    if (entry.refs === 0) {
+        const at = textureSourceIdleOrder.indexOf(key);
+        if (at >= 0) { textureSourceIdleOrder.splice(at, 1); textureSourceIdleBytes -= entry.bytes; }
+    }
+    entry.refs += 1;
+    return entry;
+};
+
+// Decode matrix: png/jpg at tier Infinity go through THREE.TextureLoader
+// (keeps preview pixels identical to today); ktx2 through loadKtx2Texture
+// with capKtx2MipLevels; exr/hdr/tif through the shared heavy-decode
+// limiter, then boundDecodedTexture when a finite tier is requested; else
+// (png/jpg at a finite tier) the bounded ImageBitmap path.
+const decodeTextureSource = async (blob, ext, path, tier, renderer) => {
+    if (ext === 'ktx2') {
+        const tex = await loadKtx2Texture(blob, renderer ? { renderer } : null, path);
+        if (tex && Number.isFinite(tier)) capKtx2MipLevels(tex, tier);
+        return tex;
+    }
+    if (ext === 'exr' || ext === 'hdr' || ext === 'tif' || ext === 'tiff') {
+        const startDecode = () => (ext === 'exr' ? loadExrTexture(blob) : ext === 'hdr' ? loadHdrTexture(blob) : loadTifTexture(blob, path));
+        let tex = await runHeavyTextureDecode(startDecode);
+        if (tex && Number.isFinite(tier)) tex = await boundDecodedTexture(tex, tier);
+        return tex;
+    }
+    if (Number.isFinite(tier) && typeof createImageBitmap === 'function') {
+        return loadBoundedBitmapTexture(blob, tier, null);
+    }
+    const url = URL.createObjectURL(blob);
+    try {
+        return await new Promise((resolve, reject) => {
+            new THREE.TextureLoader().load(url, resolve, undefined, reject);
+        });
+    } finally {
+        URL.revokeObjectURL(url);
+    }
+};
+
+// R:2384-2446's ladder/estimate math, generalized over a session's own
+// fileMap resolver (exact or fuzzy) instead of the Scene's sceneExactFile.
+const planTextureSession = async (session, refs, fileMap) => {
+    const entries = new Map(); // key -> blob
+    for (const raw of refs || []) {
+        if (raw == null) continue;
+        const ref = String(raw);
+        if (/<UDIM>/i.test(ref)) {
+            for (const hit of session.resolveTiles(fileMap, ref)) {
+                if (hit && !entries.has(hit.key)) entries.set(hit.key, hit.blob);
+            }
+            continue;
+        }
+        const hit = session.resolve(fileMap, ref);
+        if (hit && !entries.has(hit.key)) entries.set(hit.key, hit.blob);
+    }
+    const dims = await Promise.all(Array.from(entries.entries()).map(async ([key, blob]) => {
+        const ext = String(key).split('.').pop().toLowerCase();
+        let dimensions = null;
+        try { dimensions = await readImageDimensions(blob); } catch (e) { dimensions = null; }
+        const w = (dimensions && dimensions.width) || 4096;
+        const h = (dimensions && dimensions.height) || 4096;
+        const isFloat = ext === 'exr' || ext === 'hdr';
+        const mipmapped = !isFloat;
+        const bytesPerPixel = ext === 'ktx2' ? 1 : (isFloat ? 16 : 4);
+        return { key, w, h, bytesPerPixel, mipmapped };
+    }));
+    const textureCount = dims.length;
+    const requested = Number.isFinite(session.maxSize) ? session.maxSize : Infinity;
+    const ladder = Array.from(new Set([requested].concat(session.tiers).filter((v) => v <= requested))).sort((a, b) => b - a);
+    if (!ladder.length) ladder.push(session.tiers[session.tiers.length - 1] || 512);
+    const estimateAt = (tier) => dims.reduce((total, d) => {
+        const w = Math.min(d.w, tier), h = Math.min(d.h, tier);
+        return total + w * h * d.bytesPerPixel * (d.mipmapped ? 4 / 3 : 1);
+    }, 0);
+    const fullBytes = estimateAt(requested === Infinity ? Math.max(4096, ...dims.map((d) => Math.max(d.w, d.h)), 1) : requested);
+    let chosen = ladder[ladder.length - 1];
+    let plannedBytes = estimateAt(chosen);
+    for (const tier of ladder) {
+        const estimate = estimateAt(tier);
+        if (estimate <= session.budgetBytes) { chosen = tier; plannedBytes = estimate; break; }
+        plannedBytes = estimate;
+    }
+    const udimTileCount = dims.filter((d) => /\.(\d{4})\./.test(d.key) || /1[0-9]{3}/.test(d.key)).length;
+    return { tier: chosen, plannedBytes, fullBytes, textureCount, udimTileCount };
+};
+
+const createTextureSession = (opts) => {
+    const options = opts || {};
+    const cache = options.cache || TEXTURE_SOURCES;
+    const tiers = options.tiers || [4096, 2048, 1024, 512];
+    const exact = !!options.exact;
+    const maxSize = options.maxSize != null ? options.maxSize : Infinity;
+    const budgetBytes = options.budgetBytes != null ? options.budgetBytes : Infinity;
+    const concurrency = options.concurrency || 5;
+    const renderer = options.renderer || null;
+    const isAlive = typeof options.isAlive === 'function' ? options.isAlive : () => true;
+
+    const sourceRefs = new Map(); // sourceKey -> ref count this session holds
+    const wrappers = new Map(); // wrapperKey -> { texture, sourceKey }
+    const inflight = new Map(); // sourceKey -> Promise<entry|null>, dedupes concurrent decodes
+    const reservations = new Set();
+    let reservedBytes = 0;
+    let anisotropy = options.anisotropy != null ? options.anisotropy : 8;
+    let disposed = false;
+
+    const queueTails = Array.from({ length: concurrency }, () => Promise.resolve());
+    let queueNext = 0;
+    const enqueue = (fn) => {
+        const slot = queueNext % queueTails.length;
+        queueNext += 1;
+        const chained = queueTails[slot].catch(() => {}).then(fn);
+        queueTails[slot] = chained.catch(() => {});
+        return chained;
+    };
+
+    const resolve = (fileMap, ref, opts2) => {
+        const fromDir = opts2 && opts2.fromDir;
+        let hit = exact ? findFileForRef(fileMap, ref, { exact: true, fromDir }) : findFileForRef(fileMap, ref);
+        if (!hit) return null;
+        hit = preferKtx2Sibling(fileMap, hit);
+        return Object.assign({}, hit, { blob: fileMap[hit.key] });
+    };
+    const resolveTiles = (fileMap, ref, opts2) => {
+        const fromDir = opts2 && opts2.fromDir;
+        const hits = exact ? findFilesForRef(fileMap, ref, { exact: true, fromDir }) : findFilesForRef(fileMap, ref);
+        return hits.map((hit) => {
+            const subbed = preferKtx2Sibling(fileMap, hit);
+            return Object.assign({}, hit, subbed, { blob: fileMap[subbed.key] });
+        });
+    };
+
+    // Named `api`, not the handle-builder's own binding name: check-render-
+    // parity.mjs's guard (g) locates that pair of object literals further
+    // down this file by a naive first-match regex, which a same-named local
+    // here anywhere earlier in the file would shadow.
+    const api = {
+        tiers, maxSize, budgetBytes, exact,
+        resolve, resolveTiles,
+        plan: (refs, fileMap) => planTextureSession(api, refs, fileMap),
+        reserve: (key, opts2) => {
+            const options2 = opts2 || {};
+            const k = String(key || '');
+            if (reservations.has(k)) return true;
+            if (!Number.isFinite(budgetBytes)) { reservations.add(k); return true; }
+            const side = Number.isFinite(maxSize) ? maxSize : 4096;
+            const estimate = options2.bytes != null ? options2.bytes : Math.ceil(4 * side * side * 4 / 3);
+            if (reservedBytes + estimate > budgetBytes) return false;
+            reservations.add(k);
+            reservedBytes += estimate;
+            return true;
+        },
+        acquire: (hit, opts2) => {
+            if (!hit || disposed) return null;
+            const options2 = opts2 || {};
+            const samplerModes = options2.samplerModes || null;
+            const tier = options2.tier != null ? options2.tier : maxSize;
+            const ext = String(hit.key).split('.').pop().toLowerCase();
+            const sourceKey = textureCacheKey(hit.blob, hit.key) + '|' + (Number.isFinite(tier) ? tier : 'orig');
+            const wrapperKey = sourceKey + '|' + samplerCacheKey('', samplerModes);
+
+            const existingWrapper = wrappers.get(wrapperKey);
+            if (existingWrapper) return { texture: existingWrapper.texture };
+
+            // Idempotent under the concurrent-acquire race below: two
+            // filename uniforms sharing one (source, samplerModes) both
+            // resolve past the decode before either has stored a wrapper,
+            // so the second call here must reuse the first's clone.
+            const buildWrapper = (proto) => {
+                const already = wrappers.get(wrapperKey);
+                if (already) return already.texture;
+                const texture = proto.clone();
+                configureLoadedTexture(texture, samplerModes, anisotropy);
+                wrappers.set(wrapperKey, { texture, sourceKey });
+                return texture;
+            };
+
+            const existingEntry = cache.get(sourceKey);
+            if (existingEntry) {
+                acquireTextureSourceRef(cache, sourceKey);
+                sourceRefs.set(sourceKey, (sourceRefs.get(sourceKey) || 0) + 1);
+                return { texture: buildWrapper(existingEntry.proto) };
+            }
+
+            // Two uniforms referencing the same file (same or different
+            // sampler modes) bound in the same pass call acquire() before
+            // either await lands; share one in-flight decode instead of
+            // starting a second one for the same sourceKey.
+            if (inflight.has(sourceKey)) {
+                return inflight.get(sourceKey).then((entry) => {
+                    if (!entry) return null;
+                    sourceRefs.set(sourceKey, (sourceRefs.get(sourceKey) || 0) + 1);
+                    acquireTextureSourceRef(cache, sourceKey);
+                    return { texture: buildWrapper(entry.proto), bytes: entry.bytes };
+                });
+            }
+
+            const decodePromise = enqueue(() => decodeTextureSource(hit.blob, ext, hit.key, Number.isFinite(tier) ? tier : Infinity, renderer))
+                .then((proto) => {
+                    if (!proto) return null;
+                    if (disposed || !isAlive()) { proto.dispose && proto.dispose(); return null; }
+                    let entry = cache.get(sourceKey);
+                    if (entry) {
+                        // Another session raced this decode and stored first.
+                        proto.dispose && proto.dispose();
+                    } else {
+                        entry = { proto, bytes: textureSourceBytes(proto), refs: 0 };
+                        cache.set(sourceKey, entry);
+                    }
+                    return entry;
+                });
+            inflight.set(sourceKey, decodePromise);
+            decodePromise.then(() => inflight.delete(sourceKey), () => inflight.delete(sourceKey));
+
+            return decodePromise.then((entry) => {
+                if (!entry) return null;
+                sourceRefs.set(sourceKey, (sourceRefs.get(sourceKey) || 0) + 1);
+                acquireTextureSourceRef(cache, sourceKey);
+                return { texture: buildWrapper(entry.proto), bytes: entry.bytes };
+            });
+        },
+        bind: (target, fileMap, onBound) => {
+            target.textureSession = api;
+            return bindDroppedTextures(target, fileMap, onBound);
+        },
+        setAnisotropy: (value) => {
+            anisotropy = value;
+            wrappers.forEach((w) => { w.texture.anisotropy = value; w.texture.needsUpdate = true; });
+        },
+        stats: () => ({
+            wrapperCount: wrappers.size,
+            sourceCount: sourceRefs.size,
+            reservedBytes,
+            anisotropy,
+        }),
+        dispose: () => {
+            if (disposed) return;
+            disposed = true;
+            wrappers.forEach((w) => { w.texture.dispose && w.texture.dispose(); });
+            wrappers.clear();
+            sourceRefs.forEach((count, key) => { for (let i = 0; i < count; i++) releaseTextureSource(cache, key); });
+            sourceRefs.clear();
+        },
+    };
+    return api;
 };
 
 // Extracts a plain JS array from a real array or an embind vector-like
@@ -4956,7 +5370,7 @@ const rebindFilenameDefault = (uniforms, defaultUniformName, type, value) => {
 // Configure a user-loaded texture the way the generated shaders expect
 // to sample a `filename` input: repeat wrapping, no flipY, anisotropic
 // filtering (three clamps to the device max at upload).
-const configureLoadedTexture = (t, samplerModes) => {
+const configureLoadedTexture = (t, samplerModes, anisotropy) => {
     const modes = samplerModes || { u: 'periodic', v: 'periodic' };
     const wrap = (mode) => {
         switch (normalizeSamplerAddressMode(mode)) {
@@ -4968,7 +5382,7 @@ const configureLoadedTexture = (t, samplerModes) => {
     t.wrapS = wrap(modes.u);
     t.wrapT = wrap(modes.v);
     t.flipY = false;
-    t.anisotropy = 8;
+    t.anisotropy = anisotropy == null ? 8 : anisotropy;
     t.needsUpdate = true;
     return t;
 };
@@ -8720,7 +9134,7 @@ const applyIntrospectedUniformDefaults = (uniforms, introspected, { overwrite = 
 const hasDisplacementFileRef = (displacement) =>
     !!displacement && (displacement.introspected || []).some((u) => u.type === 'filename' && typeof u.data === 'string' && u.data);
 
-const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMatrix, fileMap, textureCache, textureQueue, maxTextureSize, isAlive, time = 0 }) => {
+const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMatrix, fileMap, textureCache, textureQueue, maxTextureSize, textureSession, isAlive, time = 0 }) => {
     if (!renderer || !displacement || !geometry) return null;
     const notices = [];
     const mode = displacement.mode || 'auto';
@@ -8774,7 +9188,7 @@ const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMat
         if (fileMap && (displacement.introspected || []).some((u) => u.type === 'filename')) {
             const bindResult = bindDroppedTextures(
                 { uniforms, introspected: displacement.introspected, textureCache: textureCache || TEXTURE_CACHE,
-                    textureQueue, maxTextureSize, isAlive, notices },
+                    textureQueue, maxTextureSize, textureSession, isAlive, notices },
                 fileMap
             );
             if (bindResult.missing.length) {
@@ -10138,6 +10552,12 @@ const createMtlxRenderView = async ({
     // here (with the rest of this shell's state) so displacement closures
     // defined ahead of it can still dispatch { view: handle } once it exists.
     let handle = null;
+    // F3 fix: this view's own refcounted texture session (createTextureSession),
+    // replacing the shared TEXTURE_CACHE Map so a rebuild's GL copies are
+    // freed instead of leaked. Built once the renderer exists, disposed by
+    // disposePartial BEFORE MtlxRender.disposeRendererCore.
+    let textureSession = null;
+    let unsubTextureAnisotropy = null;
     // Scene-mode state, null/empty when sceneMode is null (sphere/cube
     // path guards with `if (sceneGroup)`). sceneGroup: instantiated GLB
     // root. sceneOwnedMaterials/pmremRT: disposed by disposePartial below.
@@ -10286,6 +10706,11 @@ const createMtlxRenderView = async ({
             if (canvas && onContextLostSleep) canvas.removeEventListener('webglcontextlost', onContextLostSleep);
             if (canvas && onContextRestoredWake) canvas.removeEventListener('webglcontextrestored', onContextRestoredWake);
         } catch (e) { /* already disposed/invalid */ }
+        // F3: dispose the session's wrapper clones BEFORE the renderer, so
+        // texture.dispose() still runs against live GL state (renderer.dispose
+        // clears the WebGLProperties map onTextureDispose needs to find them).
+        if (unsubTextureAnisotropy) { unsubTextureAnisotropy(); unsubTextureAnisotropy = null; }
+        try { if (textureSession) textureSession.dispose(); } catch (e) { /* already disposed/invalid */ }
         MtlxRender.disposeRendererCore({ canvas, onGlLost, onGlRestored, renderer });
     };
     // [mtlx-perf] whole-function total, from shader generation through
@@ -10332,6 +10757,15 @@ const createMtlxRenderView = async ({
                 renderer = __acquired.renderer;
                 onGlLost = __acquired.onGlLost;
                 onGlRestored = __acquired.onGlRestored;
+                // F3: one texture session per preview handle (maxSize/budget
+                // stay Infinity, matching today's unbounded preview loads);
+                // tiers/exact are the Scene's own knobs (P6 adoption).
+                textureSession = createTextureSession({ renderer, isAlive: () => !stopped, anisotropy: getTextureAnisotropy() });
+                unsubTextureAnisotropy = window.MtlxRenderSettings && window.MtlxRenderSettings.subscribe
+                    ? window.MtlxRenderSettings.subscribe((detail) => {
+                        if (detail && detail.key === 'textureAnisotropy' && textureSession) textureSession.setAnisotropy(detail.value);
+                    })
+                    : null;
                 // Hoisted once renderer exists: gates u_peelLinear binding,
                 // peel-layer/accum half-float storage, and finalMat's shader
                 // choice, all from this one extension check (see allocPeel).
@@ -10965,7 +11399,7 @@ const createMtlxRenderView = async ({
                         result = await evaluateDisplacement({
                             renderer, displacement: displacementSources, geometry: baseGeometry,
                             worldMatrix: mesh ? mesh.matrixWorld : new THREE.Matrix4(),
-                            fileMap: dispFileMap, textureCache: undefined,
+                            fileMap: dispFileMap, textureCache: undefined, textureSession,
                             isAlive: () => !stopped && token === dispToken,
                         });
                     } catch (e) {
@@ -10996,7 +11430,7 @@ const createMtlxRenderView = async ({
                         const evalPromise = evaluateDisplacement({
                             renderer, displacement: displacementSources, geometry: baseGeometry,
                             worldMatrix: mesh ? mesh.matrixWorld : new THREE.Matrix4(),
-                            fileMap: dispFileMap, textureCache: undefined,
+                            fileMap: dispFileMap, textureCache: undefined, textureSession,
                             isAlive: () => !stopped && token === dispToken,
                         }).catch((e) => ({ offsets: null, notices: ['Displacement evaluation failed: ' + (e && e.message ? e.message : String(e))] }));
                         const FIRST_BUILD_DISPLACEMENT_TIMEOUT_MS = 4000;
@@ -11448,6 +11882,9 @@ const createMtlxRenderView = async ({
                 // above happened before `handle` existed, so any notice it
                 // produced couldn't append here yet, fold it in now.
                 notices: (materialNotices = notices || []).concat(currentDispNotices()),
+                // F3: bindDroppedTextures reads this straight off the view
+                // it's handed (this same handle) to route through the session.
+                textureSession,
             },
             // Background switch: 'studio'/'studio-dark' cyclorama /
             // 'environment' skybox / 'none', see applyBackdrop above.
@@ -11667,6 +12104,10 @@ const createMtlxRenderView = async ({
                 if (wasOff || prevLevel !== dispSubdivLevel) runDisplacement();
             },
             extras: {
+            // Texture session stats (wrapper/source counts, reserved bytes,
+            // current anisotropy). Not a core handle-contract name; the
+            // Textures card UI itself is deferred (P4-DESIGN.md section 3).
+            getTextureStats: () => (textureSession ? textureSession.stats() : null),
             // Fullscreen "fit to ball" toggle: keeps the whole shaderball
             // visible while fullscreen, FOV-only (camera position/
             // orientation untouched). No-op outside full-scene mode.
@@ -12028,7 +12469,7 @@ Object.assign(window, {
     getMxEnv, DEBUG_SHADERS, mtlxWarn, mxExclusive,
     MTLX_CLOCK, clockTick,
     getForceTransparency, setForceTransparency,
-    getDisplacementEnabled, setDisplacementEnabled,
+    getDisplacementEnabled, setDisplacementEnabled, getTextureAnisotropy, setTextureAnisotropy,
     getDisplacementNormalsMode, setDisplacementNormalsMode,
     getPreviewSubdivisionLevel, setPreviewSubdivisionLevel,
     PREVIEW_TRIANGLE_BUDGET, pickSubdivisionLevel,
@@ -12040,9 +12481,9 @@ Object.assign(window, {
     mxSetAttr, mxRemoveAttr, mxSetColorspace, nextFrame,
     findConvertChain, ensureTypedInput, stripValuesFromConnectedInputs,
     listDocRenderables,
-    normPath, readDroppedItems, expandZips, isHiddenSideFile, findFileForRef, findFilesForRef, preferKtx2Sibling, resolveIncludes, readMtlxText, readMtlxXml,
+    normPath, joinRefPath, readDroppedItems, expandZips, isHiddenSideFile, findFileForRef, findFilesForRef, preferKtx2Sibling, resolveIncludes, readMtlxText, readMtlxXml,
     isExportAttribution, splitXmlEnvelope, withXmlEnvelope, preserveSourceFormatting,
-    TEXTURE_CACHE, textureCacheKey, samplerCacheKey, normalizeSamplerAddressMode, collectImageSamplerModes, annotateFilenameSamplerModes, bindDroppedTextures,
+    TEXTURE_CACHE, TEXTURE_SOURCES, textureCacheKey, samplerCacheKey, normalizeSamplerAddressMode, collectImageSamplerModes, annotateFilenameSamplerModes, bindDroppedTextures, createTextureSession,
     loadExrTexture, loadHdrTexture, loadTifTexture, loadKtx2Texture, capKtx2MipLevels,
     runHeavyTextureDecode,
     loadBoundedBitmapTexture,

@@ -171,6 +171,16 @@
             embed: { attr: 'previewsubdivision', live: true },
         },
         {
+            key: 'textureAnisotropy', label: 'Texture Anisotropy', group: 'geometry', order: 13, type: 'number', min: 1, max: 16, apply: 'texture', ui: true,
+            control: 'select', options: [1, 2, 4, 8, 16],
+            hint: 'Anisotropic filtering samples for grazing-angle textures. Higher looks sharper at oblique angles and costs more bandwidth.',
+            profiles: {
+                preview: { storage: 'mtlx_texture_anisotropy', codec: 'int', min: 1, max: 16, setter: 'setTextureAnisotropy', levels: { performance: 8, default: 8, quality: 8 } },
+                stage: { storage: 'mtlx_scene_texture_anisotropy', codec: 'int', min: 1, max: 16, levels: { performance: 8, default: 8, quality: 8 } },
+            },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: PLANNED('P6') },
+        },
+        {
             key: 'heightToNormalTexel', label: 'Height-to-Normal Texel Space', group: 'effects', order: 20, type: 'bool', apply: 'regenerate', ui: false, experimental: true,
             profiles: {
                 preview: { storage: 'mtlxHeightToNormalTexel', codec: 'bool01', query: 'heightToNormalTexel', queryDecode: (raw) => raw === '1', setter: 'setHeightToNormalTexel', levels: { performance: false, default: false, quality: false } },

@@ -414,9 +414,12 @@ function checkRenderFeaturesDoc() {
 // (f) embed build/runtime consistency
 // ---------------------------------------------------------------------
 // Current eager embed payload (bytes), now including embed/gen/*.js and
-// embed/embed-boot.js, is ~2,215,311; budget is that measured total x 1.03.
+// embed/embed-boot.js, is ~2,282,131; budget is that measured total x 1.03.
+// Raised for P4c: createTextureSession (js/mtlx-engine.js, precompiled into
+// embed/gen/mtlx-engine.js) adds the refcounted-source/wrapper/idle-LRU
+// texture pipeline and the exact:true resolvers.
 // Raise deliberately (with a comment on why) if the payload grows further.
-const EMBED_PAYLOAD_BUDGET = 2281771;
+const EMBED_PAYLOAD_BUDGET = 2350595;
 
 const EAGER_EMBED_FILES = [
   "vendor/react/react.production.min.js",
@@ -612,6 +615,44 @@ function checkRendererCreationGuard() {
   log(`(h) renderer-creation guard OK, ${files.length} files scanned.`);
 }
 
+// ---------------------------------------------------------------------
+// (i) resolver/texture-session duplication ledger (P4-DESIGN.md section 6
+// "Slices", every slice's note): the engine copies below intentionally
+// duplicate a Scene function's behavior (P4c's exact:true resolvers and
+// texture session) rather than the Scene calling the shared one yet, since
+// P4 does not touch js/usd-scene-renderer.js. PENDING until the Scene
+// switches over (P6, per P4-DESIGN.md section 3 "Scene in P6"). This does
+// not fail the build: it is a visible ledger so the duplication cannot
+// silently rot, checked by confirming BOTH named symbols still exist.
+// ---------------------------------------------------------------------
+const RESOLVER_DUPLICATION_PENDING = [
+  { engine: "joinRefPath", scene: "sceneJoinPath", note: "P4c: exact-mode path join/resolve" },
+  { engine: "findFileForRef", scene: "sceneExactFile", note: "P4c: exact-mode single-file resolve" },
+  { engine: "preferKtx2Sibling", scene: "sceneKtx2SiblingPath", note: "P4c: ktx2 sibling substitution" },
+  { engine: "findFilesForRef", scene: "sceneUdimTiles", note: "P4c: exact-mode UDIM tile resolve" },
+  { engine: "resolveIncludes", scene: "resolveSceneIncludes", note: "P4c: exact-mode xi:include resolution" },
+  { engine: "planTextureSession", scene: "planTextureSize", note: "P4c: texture tier/budget ladder math" },
+  { engine: "decodeTextureSource", scene: "decodeUnboundedSceneTexture", note: "P4c: per-format texture decode matrix" },
+];
+
+function checkResolverDuplicationLedger() {
+  const problems = [];
+  const engineText = readFileSync(path.join(REPO_ROOT, "js", "mtlx-engine.js"), "utf8");
+  const sceneText = readFileSync(path.join(REPO_ROOT, "js", "usd-scene-renderer.js"), "utf8");
+  for (const entry of RESOLVER_DUPLICATION_PENDING) {
+    if (!new RegExp(`\\bconst ${entry.engine}\\b`).test(engineText)) {
+      problems.push(`ledger entry "${entry.engine}" (${entry.note}) is missing from js/mtlx-engine.js; update or remove this PENDING entry`);
+    }
+    if (!new RegExp(`\\bconst ${entry.scene}\\b`).test(sceneText)) {
+      problems.push(`ledger entry "${entry.scene}" (${entry.note}) is missing from js/usd-scene-renderer.js; update or remove this PENDING entry`);
+    }
+  }
+  if (problems.length) {
+    fail(["resolver duplication ledger (i) failed:", ...problems.map((p) => `  - ${p}`)].join("\n"));
+  }
+  log(`(i) resolver duplication ledger OK, ${RESOLVER_DUPLICATION_PENDING.length} PENDING pairs tracked (Scene consolidation: P6).`);
+}
+
 checkManifestShape();
 checkStorageKeyScan();
 checkOptionListRatchet();
@@ -620,4 +661,5 @@ checkRenderFeaturesDoc();
 checkEmbedConsistency();
 checkHandleContractGuard();
 checkRendererCreationGuard();
+checkResolverDuplicationLedger();
 log(`OK${CHECK_MODE ? " --check" : ""}`);
