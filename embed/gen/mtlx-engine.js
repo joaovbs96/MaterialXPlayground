@@ -2692,15 +2692,12 @@ let fetchedEnvMap=null;let envMapCallId=0;// guards latest-call-wins in setEnvMa
 // shared default/override env from getEnvironment()/envOverride.
 const disposeFetchedEnv=env=>{if(!env)return;try{if(env.radiance)env.radiance.dispose();}catch(e){/* already disposed/invalid */}try{if(env.irradiance&&env.irradiance!==env.radiance)env.irradiance.dispose();}catch(e){/* ditto */}try{if(env.irradianceConvolved&&env.irradianceConvolved!==env.irradiance&&env.irradianceConvolved!==env.radiance)env.irradianceConvolved.dispose();}catch(e){/* ditto */}try{if(env.radiancePrefiltered)env.radiancePrefiltered.dispose();}catch(e){/* ditto */}try{if(env.background)env.background.dispose();}catch(e){/* ditto */}};// No-OrbitControls fallback only (script blocked): mirrors the
 // autoRotate state so the fallback spin can be toggled too.
-let fallbackSpin=!!autoRotate;// wheelMode 'scroll' state: the canvas wheel-gate listener plus the
-// lazily-created zoom-hint overlay and its fade timer, all torn
-// down in disposePartial below.
-let wheelGateHandler=null;let wheelHintEl=null,wheelHintTimer=null;const isWheelHintMac=/Mac|iPhone|iPad|iPod/.test(navigator.platform||navigator.userAgent||'');// Shows (or refreshes) the "Use Ctrl/⌘ + scroll to zoom" pill,
-// centered over the canvas's positioned parent; fades ~1.2s after
-// the last gated wheel event. The node is created lazily, once.
-const showWheelHint=()=>{if(!wheelHintEl){const parent=canvas.parentElement;if(!parent)return;wheelHintEl=document.createElement('div');wheelHintEl.textContent=isWheelHintMac?'Use ⌘ + scroll to zoom':'Use Ctrl + scroll to zoom';wheelHintEl.style.cssText='position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);'+'padding:6px 14px;border-radius:9999px;background:rgba(17,24,39,0.85);'+'color:#f3f4f6;font:13px system-ui,sans-serif;pointer-events:none;'+'opacity:0;transition:opacity 200ms ease;z-index:30;white-space:nowrap;';parent.appendChild(wheelHintEl);}wheelHintEl.style.opacity='1';if(wheelHintTimer)clearTimeout(wheelHintTimer);wheelHintTimer=setTimeout(()=>{if(wheelHintEl)wheelHintEl.style.opacity='0';},1200);};const disposePartial=()=>{stopped=true;dispToken++;dispRunInFlight=false;if(dispSettleResolve){dispSettleResolve();dispSettleResolve=null;dispSettlePromise=null;}if(reqId)cancelAnimationFrame(reqId);if(sizer)sizer.dispose();if(controls)controls.dispose();// wheelMode 'scroll' teardown: the capture listener and the
-// hint overlay (plus its pending fade timer), if either exists.
-if(wheelGateHandler)canvas.removeEventListener('wheel',wheelGateHandler,{capture:true});if(wheelHintTimer)clearTimeout(wheelHintTimer);if(wheelHintEl&&wheelHintEl.parentElement)wheelHintEl.parentElement.removeChild(wheelHintEl);// Best-effort: renderer.dispose() below only frees the
+let fallbackSpin=!!autoRotate;// wheelMode 'scroll' state: the gate listener plus the zoom-hint
+// overlay, both moved to MtlxRender (js/shared/render-session.js);
+// wheelGate is attached further down, before OrbitControls exists.
+let wheelGate=null;const wheelHint=MtlxRender.createWheelHint(canvas);const disposePartial=()=>{stopped=true;dispToken++;dispRunInFlight=false;if(dispSettleResolve){dispSettleResolve();dispSettleResolve=null;dispSettlePromise=null;}if(reqId)cancelAnimationFrame(reqId);if(sizer)sizer.dispose();if(controls)controls.dispose();// wheelMode 'scroll' teardown: the capture listener and the
+// hint overlay, if either was ever created.
+if(wheelGate)wheelGate.dispose();wheelHint.dispose();// Best-effort: renderer.dispose() below only frees the
 // renderer's OWN GL state, not material/geometry, dispose those
 // too (each swap already disposes its own previous ones).
 try{if(material)material.dispose();}catch(e){/* already disposed/invalid */}try{if(geometry)geometry.dispose();}catch(e){/* ditto */}// Displacement (P5): `geometry` (just disposed) is whichever of
@@ -2783,10 +2780,10 @@ let sceneAuthoredPose=null;// flat2d: ortho frustum whose x extent tracks the ca
 // while pattern scale stays square in pixels. Head-on at
 // (0,0,1): the default camera orientation already faces
 // -Z, so no lookAt, and u_viewPosition becomes (0,0,1).
-const camera=flat2d?new THREE.OrthographicCamera(-1,1,1,-1,0.1,10):new THREE.PerspectiveCamera(45,cw/ch,0.1,100);if(flat2d){camera.position.set(0,0,1);}else{// Slightly elevated three-quarter framing; elevation
-// scales with distance so the viewing angle stays constant.
-// (fullScene overrides this wholesale immediately below.)
-camera.position.set(0,0.5*(cameraDistance/3.6),cameraDistance);}if(fullScene&&sceneInst.glbCamera){const gc=sceneInst.glbCamera;// DETACHED camera: the GLB's camera sits under a root
+// Default camera + pose, moved to MtlxRender.createDefaultCamera
+// (js/shared/render-session.js); fullScene overrides this
+// wholesale immediately below (GLB camera adoption stays here).
+const camera=MtlxRender.createDefaultCamera({flat2d,width:cw,height:ch,cameraDistance});if(fullScene&&sceneInst.glbCamera){const gc=sceneInst.glbCamera;// DETACHED camera: the GLB's camera sits under a root
 // node baking a 0.01 scale, rendering it in-hierarchy
 // would inflate distances ~100x, clipping past zfar=10.
 sceneGroup.updateMatrixWorld(true);// sceneGroup isn't added to `scene` until below; compute its world matrices standalone first
@@ -2803,13 +2800,12 @@ camera.aspect=cw/ch;camera.fov=effectiveFullSceneVFov(fullSceneAuthoredFov,fullS
 // exists, so it runs first on the canvas and can starve its
 // wheel handler via stopImmediatePropagation. The `controls`
 // check inside skips flat2d/fixed-camera views (no rig, no zoom).
-if(wheelMode==='scroll'){wheelGateHandler=e=>{if(!controls||e.ctrlKey||e.metaKey)return;const fsEl=fullscreenElement();if(fsEl&&fsEl.contains(canvas))return;e.stopImmediatePropagation();showWheelHint();};canvas.addEventListener('wheel',wheelGateHandler,{capture:true,passive:false});}// Orbit + zoom + auto-rotate: rotating the CAMERA (not
+wheelGate=MtlxRender.createWheelGate({canvas,wheelMode,getControls:()=>controls,fullscreenElement,onGated:()=>wheelHint.show()});// Orbit + zoom + auto-rotate: rotating the CAMERA (not
 // the mesh) lets orbit/zoom/pause compose naturally.
 // Full-scene mode is FIXED by default; opt in with sceneOrbit.
-controls=null;if(THREE.OrbitControls&&!flat2d&&(!fullScene||sceneOrbit)){controls=new THREE.OrbitControls(camera,canvas);controls.enableDamping=true;controls.dampingFactor=0.08;controls.enablePan=false;controls.enableZoom=wheelMode!=='none';controls.minDistance=1.4;controls.maxDistance=window.MtlxStudio.studioMaxOrbitDistance;// Camera auto-orbit (off by default): pins the
-// specular highlight to the same spot on the model
-// (showcase look); the visible environment pans as a tradeoff.
-controls.autoRotate=!!autoRotate;controls.autoRotateSpeed=1.5;}// No-OrbitControls fallback spin must also stay off in
+// Setup moved to MtlxRender.createOrbitControls (same
+// damping/pan/zoom/auto-rotate defaults as before).
+controls=null;if(THREE.OrbitControls&&!flat2d&&(!fullScene||sceneOrbit)){controls=MtlxRender.createOrbitControls({camera,canvas,wheelMode,autoRotate,maxDistance:window.MtlxStudio.studioMaxOrbitDistance});}// No-OrbitControls fallback spin must also stay off in
 // full-scene mode and for the fixed 2D buffer, no
 // controls instance exists to gate it, so force it here.
 if(fullScene||flat2d)fallbackSpin=false;// Fullscreen "fit to ball": keeps the ball's bounding
@@ -3148,11 +3144,10 @@ peelPipeline.render(scene,camera,[mesh]);};const animate=ts=>{if(stopped||!alive
 // controls.update() (syncs a peer) and the paused return.
 clockTick(ts);if(controls){// Before update(): OrbitControls clamps phi in there,
 // so a zoom-out this frame is corrected in the same one.
-applyStudioPolarClamp();controls.update();// damping + autoRotate
-// Scene-orbit hard containment (null elsewhere):
-// the primary floor/side-wall enforcement, since
-// maxDistance is the only OrbitControls-native limit.
-if(sceneOrbitClampBox&&!sceneOrbitClampBox.containsPoint(camera.position)){sceneOrbitClampBox.clampPoint(camera.position,camera.position);camera.lookAt(controls.target);}}// Paused views must still track camera input (drag/damping);
+applyStudioPolarClamp();// damping + autoRotate, then scene-orbit hard
+// containment (null elsewhere); moved to
+// MtlxRender.updateControls (render-session.js).
+MtlxRender.updateControls({controls,camera,clampBox:sceneOrbitClampBox});}// Paused views must still track camera input (drag/damping);
 // compare's diff mode reads pixels on demand, not via this render.
 if(!isActive())return;if(!controls&&fallbackSpin){// OrbitControls script blocked → old behavior.
 // Spins the WHOLE assembled scene when present,
@@ -3160,7 +3155,9 @@ if(!isActive())return;if(!controls&&fallbackSpin){// OrbitControls script blocke
 (sceneGroup||mesh).rotation.y+=0.005;}setUniforms();renderFrame();};animate();if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] createMtlxRenderView total: '+(performance.now()-__totalPerfStart).toFixed(1)+'ms (target: '+label+')');}// snapshot/snapshotPixels/renderNow/beginCapture/captureFrame/
 // endCapture, moved to MtlxRender.createCaptureController
 // (js/shared/render-session.js); handle methods below delegate.
-captureController=MtlxRender.createCaptureController({renderer,canvas,sizer,renderFrame,setUniforms});handle={uniforms,introspected,vs,fs,controls,renderer,allowConstInputs,// Displacement (P5): the first-build subdivide/evaluate run
+captureController=MtlxRender.createCaptureController({renderer,canvas,sizer,renderFrame,setUniforms});// Handle's camera methods, moved to
+// MtlxRender.createCameraHandleMethods (js/shared/render-session.js).
+const cameraHandle=MtlxRender.createCameraHandleMethods({camera,controls,fullScene,flat2d,cameraDistance,setFallbackSpin:v=>{fallbackSpin=v;}});handle={uniforms,introspected,vs,fs,controls,renderer,allowConstInputs,// Displacement (P5): the first-build subdivide/evaluate run
 // above happened before `handle` existed, so any notice it
 // produced couldn't append here yet, fold it in now.
 notices:(materialNotices=notices||[]).concat(currentDispNotices()),isTransparent:!!transparent,// Live auto-orbit toggle (no regen needed). No-op in
@@ -3168,22 +3165,20 @@ notices:(materialNotices=notices||[]).concat(currentDispNotices()),isTransparent
 // button there, and fallbackSpin would rotate the authored scene.
 // Same contract for flat2d: no controls, and fallbackSpin
 // would spin the fullscreen quad.
-setAutoRotate:on=>{if(fullScene||flat2d)return;fallbackSpin=!!on;if(controls)controls.autoRotate=!!on;},// Fullscreen "fit to ball" toggle: keeps the whole shaderball
+setAutoRotate:cameraHandle.setAutoRotate,// Fullscreen "fit to ball" toggle: keeps the whole shaderball
 // visible while fullscreen, FOV-only (camera position/
 // orientation untouched). No-op outside full-scene mode.
 setFullscreenFit:on=>{if(!fullScene)return;fullscreenFit=!!on;recomputeCameraFov();camera.updateProjectionMatrix();},// Resets the camera to this view's default. With OrbitControls,
 // saveState/reset does it uniformly. The graph's fixed-camera
 // full scene and the fixed-ortho 2D buffer have controls ===
 // null, nothing to do there.
-resetCamera:()=>{if(controls){controls.reset();return;}if(fullScene||flat2d)return;camera.position.set(0,0.5*(cameraDistance/3.6),cameraDistance);camera.lookAt(0,0,0);},// Current camera pose for URL/state persistence. null when
+resetCamera:cameraHandle.resetCamera,// Current camera pose for URL/state persistence. null when
 // there is no OrbitControls rig (flat2d, fixed full-scene).
 // Rounded to 4 decimals, plenty of precision for a short URL.
-getCamera:()=>{if(!controls)return null;const r4=n=>Math.round(n*10000)/10000;return{position:[camera.position.x,camera.position.y,camera.position.z].map(r4),target:[controls.target.x,controls.target.y,controls.target.z].map(r4)};},// Applies a saved pose from getCamera(); invalid input is
+getCamera:cameraHandle.getCamera,// Applies a saved pose from getCamera(); invalid input is
 // silently ignored. makeDefault also rebases resetCamera()'s
 // saveState() snapshot onto this pose (default: off).
-setCamera:(pose,makeDefault)=>{if(!controls||!pose)return false;const isVec3=v=>Array.isArray(v)&&v.length===3&&v.every(n=>typeof n==='number'&&isFinite(n));if(pose.position!==undefined&&!isVec3(pose.position))return false;if(pose.target!==undefined&&!isVec3(pose.target))return false;if(pose.position)camera.position.set(pose.position[0],pose.position[1],pose.position[2]);if(pose.target)controls.target.set(pose.target[0],pose.target[1],pose.target[2]);controls.update();// Rebases position0/target0/zoom0 so a later resetCamera()
-// returns HERE instead of the original authored default.
-if(makeDefault)controls.saveState();return true;},// Background switch: 'studio'/'studio-dark' cyclorama /
+setCamera:cameraHandle.setCamera,// Background switch: 'studio'/'studio-dark' cyclorama /
 // 'environment' skybox / 'none', see applyBackdrop above.
 // Live, no view rebuild; setup already ran this once for the `backdrop` option.
 setBackdrop:mode=>applyBackdrop(mode),getBackdrop:()=>backdropMode,// Thin aliases kept for existing callers, on/off maps onto

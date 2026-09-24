@@ -92,6 +92,152 @@
 
     const createRenderScene = () => new window.THREE.Scene();
 
+    // Default camera + pose: PerspectiveCamera 45/0.1/100 at the classic
+    // three-quarter framing, or the fixed OrthographicCamera for flat2d.
+    // fullScene GLB camera adoption stays a content-side hook that runs
+    // AFTER this returns (P3-DESIGN.md section 1(b)).
+    const createDefaultCamera = ({ flat2d, width, height, cameraDistance }) => {
+        const THREE = window.THREE;
+        const camera = flat2d
+            ? new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10)
+            : new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
+        if (flat2d) camera.position.set(0, 0, 1);
+        else camera.position.set(0, 0.5 * (cameraDistance / 3.6), cameraDistance);
+        return camera;
+    };
+
+    // OrbitControls with the shared preview defaults (damping, no pan,
+    // zoom gated by wheelMode, fixed auto-rotate speed). Callers decide
+    // WHETHER to build one at all (flat2d/full-scene gating is content-side).
+    const createOrbitControls = ({ camera, canvas, wheelMode, autoRotate, maxDistance }) => {
+        const controls = new window.THREE.OrbitControls(camera, canvas);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.08;
+        controls.enablePan = false;
+        controls.enableZoom = wheelMode !== 'none';
+        controls.minDistance = 1.4;
+        controls.maxDistance = maxDistance;
+        // Camera auto-orbit (off by default): pins the specular highlight
+        // to the same spot on the model, the visible environment pans.
+        controls.autoRotate = !!autoRotate;
+        controls.autoRotateSpeed = 1.5;
+        return controls;
+    };
+
+    // Pure decision for the wheelMode 'scroll' gate: should this wheel
+    // event be swallowed (page scrolls) instead of reaching OrbitControls?
+    // Split out from the DOM listener so the branching is unit-testable.
+    const shouldGateWheel = ({ hasControls, ctrlKey, metaKey, insideFullscreen }) => {
+        if (!hasControls || ctrlKey || metaKey) return false;
+        return !insideFullscreen;
+    };
+
+    // Registers the wheelMode 'scroll' capture listener, a no-op for any
+    // other mode. Must be attached BEFORE OrbitControls exists so it runs
+    // first on the canvas and can starve its handler via stopImmediatePropagation.
+    const createWheelGate = ({ canvas, wheelMode, getControls, fullscreenElement, onGated }) => {
+        if (wheelMode !== 'scroll') return { dispose: () => {} };
+        const handler = (e) => {
+            const fsEl = fullscreenElement();
+            const gate = shouldGateWheel({
+                hasControls: !!getControls(), ctrlKey: e.ctrlKey, metaKey: e.metaKey,
+                insideFullscreen: !!(fsEl && fsEl.contains(canvas)),
+            });
+            if (!gate) return;
+            e.stopImmediatePropagation();
+            onGated();
+        };
+        canvas.addEventListener('wheel', handler, { capture: true, passive: false });
+        return { dispose: () => canvas.removeEventListener('wheel', handler, { capture: true }) };
+    };
+
+    // Lazily-created "Use Ctrl/Cmd + scroll to zoom" pill shown while the
+    // wheelMode 'scroll' gate is swallowing an event; fades ~1.2s after
+    // the last gated wheel event.
+    const createWheelHint = (canvas) => {
+        let el = null, timer = null;
+        const isMac = /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || '');
+        return {
+            show: () => {
+                if (!el) {
+                    const parent = canvas.parentElement;
+                    if (!parent) return;
+                    el = document.createElement('div');
+                    el.textContent = isMac ? 'Use ⌘ + scroll to zoom' : 'Use Ctrl + scroll to zoom';
+                    el.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);'
+                        + 'padding:6px 14px;border-radius:9999px;background:rgba(17,24,39,0.85);'
+                        + 'color:#f3f4f6;font:13px system-ui,sans-serif;pointer-events:none;'
+                        + 'opacity:0;transition:opacity 200ms ease;z-index:30;white-space:nowrap;';
+                    parent.appendChild(el);
+                }
+                el.style.opacity = '1';
+                if (timer) clearTimeout(timer);
+                timer = setTimeout(() => { if (el) el.style.opacity = '0'; }, 1200);
+            },
+            dispose: () => {
+                if (timer) clearTimeout(timer);
+                if (el && el.parentElement) el.parentElement.removeChild(el);
+            },
+        };
+    };
+
+    // Render-loop controls tick: damping/auto-rotate, then the scene-orbit
+    // hard containment box (clampBox is null outside that mode), since
+    // maxDistance alone is not enough (only OrbitControls-native limit).
+    const updateControls = ({ controls, camera, clampBox }) => {
+        controls.update();
+        if (clampBox && !clampBox.containsPoint(camera.position)) {
+            clampBox.clampPoint(camera.position, camera.position);
+            camera.lookAt(controls.target);
+        }
+    };
+
+    // Handle's camera methods: getCamera/setCamera/resetCamera/setAutoRotate.
+    // Pure over the camera/controls objects the caller already owns (no
+    // THREE construction here), so this factory is unit-testable with fakes.
+    const createCameraHandleMethods = ({ camera, controls, fullScene, flat2d, cameraDistance, setFallbackSpin }) => ({
+        // Live auto-orbit toggle (no regen needed). No-op in full-scene
+        // mode and flat2d: no rotate button there, no fallback spin either.
+        setAutoRotate: (on) => {
+            if (fullScene || flat2d) return;
+            setFallbackSpin(!!on);
+            if (controls) controls.autoRotate = !!on;
+        },
+        // Resets the camera to this view's default. With OrbitControls,
+        // saveState/reset does it uniformly. The graph's fixed-camera
+        // full scene and the fixed-ortho 2D buffer have controls === null.
+        resetCamera: () => {
+            if (controls) { controls.reset(); return; }
+            if (fullScene || flat2d) return;
+            camera.position.set(0, 0.5 * (cameraDistance / 3.6), cameraDistance);
+            camera.lookAt(0, 0, 0);
+        },
+        // Current camera pose for URL/state persistence. null when there
+        // is no OrbitControls rig (flat2d, fixed full-scene).
+        getCamera: () => {
+            if (!controls) return null;
+            const r4 = (n) => Math.round(n * 10000) / 10000;
+            return {
+                position: [camera.position.x, camera.position.y, camera.position.z].map(r4),
+                target: [controls.target.x, controls.target.y, controls.target.z].map(r4),
+            };
+        },
+        // Applies a saved pose from getCamera(); invalid input is silently
+        // ignored. makeDefault also rebases resetCamera()'s saveState().
+        setCamera: (pose, makeDefault) => {
+            if (!controls || !pose) return false;
+            const isVec3 = (v) => Array.isArray(v) && v.length === 3
+                && v.every((n) => typeof n === 'number' && isFinite(n));
+            if (pose.position !== undefined && !isVec3(pose.position)) return false;
+            if (pose.target !== undefined && !isVec3(pose.target)) return false;
+            if (pose.position) camera.position.set(pose.position[0], pose.position[1], pose.position[2]);
+            if (pose.target) controls.target.set(pose.target[0], pose.target[1], pose.target[2]);
+            controls.update();
+            if (makeDefault) controls.saveState();
+            return true;
+        },
+    });
+
     // Drives renderer.setSize plus a caller-supplied `layout(w, h)` frame
     // hook (camera aspect / quad refit -- content-owned, see P3-DESIGN.md
     // section 1), shared by the ResizeObserver path (syncSize) and the
@@ -230,6 +376,13 @@
         createRenderSession,
         acquireRenderer,
         createRenderScene,
+        createDefaultCamera,
+        createOrbitControls,
+        shouldGateWheel,
+        createWheelGate,
+        createWheelHint,
+        updateControls,
+        createCameraHandleMethods,
         createSizer,
         createCaptureController,
         disposeRendererCore,
