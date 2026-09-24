@@ -29,6 +29,84 @@
         dispose: () => {},
     });
 
+    // Names every handle must expose as a function (P3-DESIGN.md section 2).
+    // Shared by Preview (this slice) and, later, the Scene handle.
+    const HANDLE_CONTRACT = Object.freeze([
+        'dispose', 'setActive', 'getSleepState', 'getCamera', 'setCamera', 'resetCamera',
+        'setAutoRotate', 'frameAll', 'renderNow', 'snapshot', 'snapshotPixels', 'beginCapture',
+        'captureFrame', 'endCapture', 'setResizeSuspended', 'resize', 'setEnvironment',
+        'setEnvMap', 'setEnvRotation', 'setEnvExposure', 'hasEnvBackground', 'setBackdrop',
+        'getBackdrop', 'refreshDisplaySettings', 'refreshRenderMode', 'refreshDisplacement',
+        'getNotices', 'getSamplerReport', 'getFeatureState', 'whenSettled', '__debug',
+    ]);
+
+    // Extra reserved names outside HANDLE_CONTRACT: still function-valued,
+    // still off-limits to a content's `extras`, but a session/content may
+    // leave them unimplemented (no generic fallback below).
+    const HANDLE_ALIASES = Object.freeze(['setEnvBackground']);
+
+    // Generic fallbacks for the handful of core names a content is allowed
+    // to skip. Preview (this slice) uses every one of these; Scene (P6)
+    // will supply its own real implementations instead.
+    const buildHandleDefaults = (handle) => ({
+        frameAll: () => handle.resetCamera(),
+        getSamplerReport: () => [],
+        getNotices: () => handle.notices || [],
+        getFeatureState: () => ({}),
+        whenSettled: () => Promise.resolve(),
+        resize: () => {},
+    });
+
+    // Composes the final handle object from a session (renderer-core,
+    // camera, capture...) and a content (material/geometry-specific)
+    // description. Plain object, own enumerable function properties only,
+    // so useViewToggle/compare's fan-out Proxy can enumerate/call by name.
+    // content directly supplies core-contract overrides (e.g.
+    // setEnvironment); content.extras are ADDITIONAL names, checked against
+    // the reserved set so a typo can't silently shadow a core method.
+    const buildHandle = (session, content) => {
+        const handle = {};
+        const reserved = HANDLE_CONTRACT.concat(HANDLE_ALIASES);
+        const pick = (name) => {
+            if (content && typeof content[name] === 'function') return content[name];
+            if (session && typeof session[name] === 'function') return session[name];
+            return null;
+        };
+        const defaults = buildHandleDefaults(handle);
+        HANDLE_CONTRACT.forEach((name) => {
+            if (name === '__debug') return; // built specially below
+            const fn = pick(name) || defaults[name];
+            if (typeof fn !== 'function') {
+                throw new Error('buildHandle: missing required handle method "' + name + '"');
+            }
+            handle[name] = fn;
+        });
+        HANDLE_ALIASES.forEach((name) => {
+            const fn = pick(name);
+            if (fn) handle[name] = fn;
+        });
+        // Writable data fields (uniforms, introspected, vs, fs, renderer,
+        // controls, notices, ...): tryRefreshRenderView mutates these
+        // directly on the handle afterward, so they must be own, plain,
+        // assignable properties, not getters.
+        const fields = Object.assign({}, session && session.fields, content && content.fields);
+        Object.keys(fields).forEach((k) => {
+            if (reserved.indexOf(k) !== -1) throw new Error('buildHandle: field "' + k + '" shadows a core handle name');
+            handle[k] = fields[k];
+        });
+        if (content && content.extras) {
+            Object.keys(content.extras).forEach((k) => {
+                if (reserved.indexOf(k) !== -1) throw new Error('buildHandle: extra "' + k + '" shadows a core handle name');
+                handle[k] = content.extras[k];
+            });
+        }
+        handle.__debug = () => Object.assign(
+            {}, session && typeof session.__debug === 'function' ? session.__debug() : {},
+            content && typeof content.__debug === 'function' ? content.__debug() : {}
+        );
+        return handle;
+    };
+
     // Acquires the WebGL2 context and configures the renderer's display
     // transform, exactly the sequence createMtlxRenderView ran inline:
     // same context options, same order (shadow map before size/pixel
@@ -512,6 +590,8 @@
     window.MtlxRender = Object.assign(window.MtlxRender || {}, {
         bindEngine,
         createRenderSession,
+        HANDLE_CONTRACT,
+        buildHandle,
         acquireRenderer,
         createRenderScene,
         createDefaultCamera,

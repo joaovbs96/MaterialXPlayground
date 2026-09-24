@@ -10158,6 +10158,9 @@ const createMtlxRenderView = async ({
     // view's irradiance sampler via handle.setEnvironment(currentEnvRef)
     // without a shader rebuild (P3-DESIGN.md section 4 S4).
     let currentEnvRef = null;
+    // Last caller-supplied owner tag from setEnvironment(env, {user}); this
+    // slice only records it (P3-DESIGN.md section 4 S5), no behavior reads it yet.
+    let envOwner = null;
     // envHasFile/envPrefilteredIrr: used only by the DEBUG_SHADERS log
     // in bindMaterialUniforms, to reproduce the old descriptive message
     // now that `env` no longer lives past the one-time shell-level fetch.
@@ -11478,14 +11481,14 @@ const createMtlxRenderView = async ({
                     setFallbackSpin: (v) => { fallbackSpin = v; },
                 });
 
-        handle = {
-            uniforms, introspected, vs, fs, controls, renderer,
-            allowConstInputs,
-            // Displacement (P5): the first-build subdivide/evaluate run
-            // above happened before `handle` existed, so any notice it
-            // produced couldn't append here yet, fold it in now.
-            notices: (materialNotices = notices || []).concat(currentDispNotices()),
-            isTransparent: !!transparent,
+        // Session (renderer-core/camera/capture) and content (material,
+        // displacement, env-bound uniforms) descriptions, composed into the
+        // plain handle object by MtlxRender.buildHandle (js/shared/
+        // render-session.js). P3-DESIGN.md section 4 S5: the boundary here
+        // is the lighter-touch split (handle construction only), not a full
+        // createPreviewContent/createRenderSession rewrite of this function.
+        const session = {
+            fields: { renderer, controls },
             // Sleep model (P3-DESIGN.md section 5): explicit long-term
             // activity, independent of the per-frame isActive() callback.
             setActive: (v) => {
@@ -11507,15 +11510,6 @@ const createMtlxRenderView = async ({
             // Same contract for flat2d: no controls, and fallbackSpin
             // would spin the fullscreen quad.
             setAutoRotate: cameraHandle.setAutoRotate,
-            // Fullscreen "fit to ball" toggle: keeps the whole shaderball
-            // visible while fullscreen, FOV-only (camera position/
-            // orientation untouched). No-op outside full-scene mode.
-            setFullscreenFit: (on) => {
-                if (!fullScene) return;
-                fullscreenFit = !!on;
-                recomputeCameraFov();
-                camera.updateProjectionMatrix();
-            },
             // Resets the camera to this view's default. With OrbitControls,
             // saveState/reset does it uniformly. The graph's fixed-camera
             // full scene and the fixed-ortho 2D buffer have controls ===
@@ -11529,6 +11523,52 @@ const createMtlxRenderView = async ({
             // silently ignored. makeDefault also rebases resetCamera()'s
             // saveState() snapshot onto this pose (default: off).
             setCamera: cameraHandle.setCamera,
+            // Pane drags: suspend buffer reallocation so the existing
+            // frame just scales, then resync once on release.
+            setResizeSuspended: (on) => sizer.setResizeSuspended(on),
+            // PNG snapshot of the CURRENT view. The drawing buffer isn't
+            // preserved between frames (preserveDrawingBuffer:false), so
+            // render synchronously right before reading it back.
+            snapshot: () => captureController.snapshot(),
+            // Reads back the current view at caller-chosen dimensions:
+            // syncs a render first, then resamples through a 2D canvas
+            // so two compare views can be read at identical sizes.
+            snapshotPixels: (w, h) => captureController.snapshotPixels(w, h),
+            // Cheap same-frame render (no readback), used by camera sync
+            // to remove one-frame lag between two mirrored views. Optional
+            // ts: pass the driving rAF timestamp so several views read one tick.
+            renderNow: (ts) => captureController.renderNow(ts),
+            // Fixed-resolution capture mode for the turntable recorder:
+            // syncSize's buffer pinned to width x height, canvas hidden.
+            // Returns false if the view is gone or already capturing.
+            beginCapture: (opts) => stopped ? false : captureController.beginCapture(opts),
+            // Renders one frame at the capture resolution and reads it
+            // back as ImageData, same cached-canvas path as snapshotPixels.
+            captureFrame: () => captureController.captureFrame(),
+            // Leaves capture mode: restores on-screen visibility, pixel
+            // ratio and layout-driven sizing. Idempotent, safe to call twice.
+            endCapture: () => captureController.endCapture(),
+            // Wrapped (not disposePartial directly) so dispose() also
+            // deregisters the handle from LIVE_VIEWS, otherwise
+            // setEnvOverride's broadcast could touch a torn-down view.
+            dispose: () => {
+                LIVE_VIEWS.delete(handle);
+                if (unsubDiffuseEnv) unsubDiffuseEnv();
+                disposePartial();
+            },
+            // Debug hook: raw GPU state for a headed diagnosis harness.
+            __debug: () => ({ renderer, scene, camera }),
+        };
+
+        const content = {
+            fields: {
+                uniforms, introspected, vs, fs, allowConstInputs,
+                isTransparent: !!transparent,
+                // Displacement (P5): the first-build subdivide/evaluate run
+                // above happened before `handle` existed, so any notice it
+                // produced couldn't append here yet, fold it in now.
+                notices: (materialNotices = notices || []).concat(currentDispNotices()),
+            },
             // Background switch: 'studio'/'studio-dark' cyclorama /
             // 'environment' skybox / 'none', see applyBackdrop above.
             // Live, no view rebuild; setup already ran this once for the `backdrop` option.
@@ -11537,9 +11577,6 @@ const createMtlxRenderView = async ({
             // Thin aliases kept for existing callers, on/off maps onto
             // the same two-mode slice of setBackdrop/getBackdrop.
             setEnvBackground: (on) => applyBackdrop(on ? 'environment' : 'none'),
-            // Pane drags: suspend buffer reallocation so the existing
-            // frame just scales, then resync once on release.
-            setResizeSuspended: (on) => sizer.setResizeSuspended(on),
             // Capability, NOT current mode: whether this view has an env
             // texture to show at all. node-preview/graph preview call it
             // once at setup to gate the env control. getBackdrop() is state.
@@ -11630,8 +11667,9 @@ const createMtlxRenderView = async ({
             // Live-swaps the environment without a shader rebuild, used
             // by the Environment dialog's Import/Reset. Also regenerates
             // scene-mode's PMREM. No-op on views with no lighting/env.
-            setEnvironment: (env) => {
+            setEnvironment: (env, opts) => {
                 if (!env) return;
+                if (opts && opts.user !== undefined) envOwner = opts.user;
                 currentEnvRef = env;
                 ensurePrefilteredEnv(renderer, env);
                 ensureConvolvedIrradiance(renderer, env);
@@ -11722,6 +11760,35 @@ const createMtlxRenderView = async ({
                         return true;
                     });
             },
+            // Called by the P3 setters through LIVE_VIEWS on every live
+            // view; a no-op for flat2d or a material with no displacement.
+            refreshDisplacement: () => {
+                if (flat2d || !displacementSources) return;
+                if (!getDisplacementEnabled()) {
+                    applyDispDebounceToken++;
+                    cancelDisplacementRun();
+                    if (dispState !== 'off') {
+                        swapMeshGeometry(originalGeometry);
+                        dispState = 'off';
+                        dispDispatchStatus();
+                    }
+                    return;
+                }
+                const prevLevel = dispSubdivLevel;
+                const wasOff = dispState === 'off' || dispState === 'none';
+                ensureBaseGeometry();
+                if (wasOff || prevLevel !== dispSubdivLevel) runDisplacement();
+            },
+            extras: {
+            // Fullscreen "fit to ball" toggle: keeps the whole shaderball
+            // visible while fullscreen, FOV-only (camera position/
+            // orientation untouched). No-op outside full-scene mode.
+            setFullscreenFit: (on) => {
+                if (!fullScene) return;
+                fullscreenFit = !!on;
+                recomputeCameraFov();
+                camera.updateProjectionMatrix();
+            },
             // Applies a new (or already-generated) material into this
             // SAME shell, instead of calling createMtlxRenderView() again.
             // Returns null when superseded/bailed; throws on real compile failure.
@@ -11795,28 +11862,6 @@ const createMtlxRenderView = async ({
                     runDisplacement();
                 }, 150);
             },
-            // PNG snapshot of the CURRENT view. The drawing buffer isn't
-            // preserved between frames (preserveDrawingBuffer:false), so
-            // render synchronously right before reading it back.
-            snapshot: () => captureController.snapshot(),
-            // Reads back the current view at caller-chosen dimensions:
-            // syncs a render first, then resamples through a 2D canvas
-            // so two compare views can be read at identical sizes.
-            snapshotPixels: (w, h) => captureController.snapshotPixels(w, h),
-            // Cheap same-frame render (no readback), used by camera sync
-            // to remove one-frame lag between two mirrored views. Optional
-            // ts: pass the driving rAF timestamp so several views read one tick.
-            renderNow: (ts) => captureController.renderNow(ts),
-            // Fixed-resolution capture mode for the turntable recorder:
-            // syncSize's buffer pinned to width x height, canvas hidden.
-            // Returns false if the view is gone or already capturing.
-            beginCapture: (opts) => stopped ? false : captureController.beginCapture(opts),
-            // Renders one frame at the capture resolution and reads it
-            // back as ImageData, same cached-canvas path as snapshotPixels.
-            captureFrame: () => captureController.captureFrame(),
-            // Leaves capture mode: restores on-screen visibility, pixel
-            // ratio and layout-driven sizing. Idempotent, safe to call twice.
-            endCapture: () => captureController.endCapture(),
             // Reads the live `uniforms` closure binding (same one setUniforms
             // uses), so a material swap is reflected without a stale copy.
             isAnimated: () => !!(uniforms && (uniforms.u_time || uniforms.u_frame)),
@@ -11834,25 +11879,6 @@ const createMtlxRenderView = async ({
             // Resolves once no evaluation is actively in flight (merely
             // waiting on a file map does NOT count, that could hang forever).
             whenDisplacementSettled: () => (dispRunInFlight ? (dispSettlePromise || Promise.resolve()) : Promise.resolve()),
-            // Called by the P3 setters through LIVE_VIEWS on every live
-            // view; a no-op for flat2d or a material with no displacement.
-            refreshDisplacement: () => {
-                if (flat2d || !displacementSources) return;
-                if (!getDisplacementEnabled()) {
-                    applyDispDebounceToken++;
-                    cancelDisplacementRun();
-                    if (dispState !== 'off') {
-                        swapMeshGeometry(originalGeometry);
-                        dispState = 'off';
-                        dispDispatchStatus();
-                    }
-                    return;
-                }
-                const prevLevel = dispSubdivLevel;
-                const wasOff = dispState === 'off' || dispState === 'none';
-                ensureBaseGeometry();
-                if (wasOff || prevLevel !== dispSubdivLevel) runDisplacement();
-            },
             // bindDroppedTextures calls this once per drop for every live
             // view (see its header comment below); re-runs only when the
             // displacement program actually samples a file.
@@ -11862,18 +11888,17 @@ const createMtlxRenderView = async ({
                     runDisplacement();
                 }
             },
-            // Wrapped (not disposePartial directly) so dispose() also
-            // deregisters the handle from LIVE_VIEWS, otherwise
-            // setEnvOverride's broadcast could touch a torn-down view.
-            dispose: () => {
-                LIVE_VIEWS.delete(handle);
-                if (unsubDiffuseEnv) unsubDiffuseEnv();
-                disposePartial();
-            },
+            }, // end extras
             // Debug hook: raw GPU state for a headed diagnosis harness.
             // Not for production UI code.
-            __debug: () => ({ renderer, scene, camera, material: mesh ? mesh.material : material, mesh, geometry }),
+            __debug: () => ({ material: mesh ? mesh.material : material, mesh, geometry }),
         };
+
+        // buildHandle (js/shared/render-session.js) composes the plain
+        // handle object: session's core methods/fields, content's core
+        // overrides plus its extras (applyMaterial, syncDisplacementSources,
+        // ...), throwing if an extra shadows a reserved name.
+        handle = MtlxRender.buildHandle(session, content);
         LIVE_VIEWS.add(handle);
         // Diffuse-environment method: setDiffuseEnvMethod broadcasts
         // 'mtlx-settings-changed' (key 'diffuseEnvMethod'); rebind via this

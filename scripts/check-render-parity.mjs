@@ -507,10 +507,117 @@ function checkEmbedConsistency() {
   log(`(f) embed consistency OK, eager payload ${total}/${EMBED_PAYLOAD_BUDGET} bytes.`);
 }
 
+// ---------------------------------------------------------------------
+// (g) handle-contract guard (P3-DESIGN.md section 4 S5, "guard (c)"):
+// an unambiguous HANDLE_CONTRACT name must not reappear as an
+// object-literal key/shorthand in js/mtlx-engine.js outside the
+// session/content objects that feed MtlxRender.buildHandle. dispose,
+// resize and snapshot are too generic (unrelated literals reuse them,
+// e.g. the peel pipeline's `{render, dispose}`) so they are excluded;
+// the unit test covers those instead. Scene files are PENDING.
+// ---------------------------------------------------------------------
+const HANDLE_GUARD_PENDING_FILES = ["js/usd-scene-renderer.js", "js/usd-scene-app.jsx"];
+const HANDLE_GUARD_GENERIC_NAMES = new Set(["dispose", "resize", "snapshot"]);
+
+function loadHandleContract() {
+  const source = readFileSync(path.join(REPO_ROOT, "js", "shared", "render-session.js"), "utf8");
+  const sandbox = { window: { addEventListener: () => {}, removeEventListener: () => {} } };
+  vm.createContext(sandbox);
+  vm.runInContext(source, sandbox);
+  return sandbox.window.MtlxRender.HANDLE_CONTRACT;
+}
+
+// Finds the char range of `const <name> = {` through its own closing
+// `};` line (8-space indented, matching this file's object literals);
+// returns null when the block is not present.
+function findObjectLiteralRange(text, constName) {
+  const startRe = new RegExp(`const ${constName} = \\{`);
+  const m = startRe.exec(text);
+  if (!m) return null;
+  const closeRe = /\n {8}\};/g;
+  closeRe.lastIndex = m.index;
+  const close = closeRe.exec(text);
+  if (!close) return null;
+  return [m.index, close.index + close[0].length];
+}
+
+// Scoped to js/mtlx-engine.js only (design: "live for the engine"), not
+// the whole repo: consumer files legitimately reuse these words for their
+// OWN unrelated objects (e.g. embed-boot.js's postMessage dispatch table),
+// which is not the regression this guard exists to catch.
+function checkHandleContractGuard() {
+  const problems = [];
+  const names = loadHandleContract().filter((n) => !HANDLE_GUARD_GENERIC_NAMES.has(n) && n !== "__debug");
+  const file = "js/mtlx-engine.js";
+  const text = readFileSync(path.join(REPO_ROOT, file), "utf8");
+  const allowedRanges = [findObjectLiteralRange(text, "session"), findObjectLiteralRange(text, "content")].filter(Boolean);
+  const inAllowedRange = (idx) => allowedRanges.some(([s, e]) => idx >= s && idx < e);
+  for (const name of names) {
+    const keyRe = new RegExp(`(?:^|[{,]\\s*)${name}\\s*:`, "gm");
+    let m;
+    while ((m = keyRe.exec(text))) {
+      const idx = m.index + m[0].indexOf(name);
+      if (inAllowedRange(idx)) continue;
+      problems.push(`handle-contract name "${name}" defined as an object-literal key in ${file} (outside the session/content passed to buildHandle)`);
+    }
+  }
+  if (problems.length) {
+    fail(["handle-contract guard (g) failed:", ...problems.map((p) => `  - ${p}`)].join("\n"));
+  }
+  log(`(g) handle-contract guard OK, ${names.length} names checked in ${file}; ${HANDLE_GUARD_PENDING_FILES.join(", ")} pending.`);
+}
+
+// ---------------------------------------------------------------------
+// (h) renderer-creation guard (P3-DESIGN.md section 4 S5, "guard (d)"):
+// `new THREE.WebGLRenderer(`, `getContext('webgl2'` and
+// `toneMappingExposure =` only in js/shared/render-session.js, plus a
+// short, verified allowlist. Scene files are PENDING.
+// ---------------------------------------------------------------------
+const RENDERER_CREATION_PATTERNS = [
+  "new THREE.WebGLRenderer(",
+  "getContext('webgl2'",
+  "toneMappingExposure =",
+];
+const RENDERER_CREATION_PENDING_FILES = ["js/usd-scene-renderer.js", "js/usd-scene-app.jsx"];
+// Verified one-off sites: a warm-compile probe context, the KTX2 basis
+// support probe, shell.jsx's WebGL2-availability probe, and Compare's
+// GPU diff readback, none of which build/own the actual view's renderer.
+const RENDERER_CREATION_ALLOW = [
+  { file: "js/mtlx-engine.js", pattern: "getContext('webgl2'", reason: "warm-compile probe context (getWarmContext)" },
+  { file: "js/mtlx-engine.js", pattern: "new THREE.WebGLRenderer(", reason: "KTX2 basis-transcode support probe (getKtx2Loader), throwaway and disposed" },
+  { file: "js/mtlx-engine.js", pattern: "toneMappingExposure =", reason: "refreshDisplaySettings live exposure write, not renderer creation; follow-up to fold into a session helper" },
+  { file: "js/shell.jsx", pattern: "getContext('webgl2'", reason: "startup WebGL2-availability probe" },
+  { file: "js/compare-app.jsx", pattern: "getContext('webgl2'", reason: "GPU diff readback context" },
+  { file: "js/compare-app.jsx", pattern: "new THREE.WebGLRenderer(", reason: "GPU diff readback renderer, verified compare-app.jsx:402/407" },
+];
+
+function checkRendererCreationGuard() {
+  const problems = [];
+  const files = listSourceFiles();
+  const allowSet = new Set(RENDERER_CREATION_ALLOW.map((e) => `${e.file}|${e.pattern}`));
+  for (const file of files) {
+    if (file === "js/shared/render-session.js") continue;
+    if (RENDERER_CREATION_PENDING_FILES.includes(file)) continue;
+    const abs = path.join(REPO_ROOT, file);
+    const text = readFileSync(abs, "utf8");
+    for (const pattern of RENDERER_CREATION_PATTERNS) {
+      if (!text.includes(pattern)) continue;
+      if (allowSet.has(`${file}|${pattern}`)) continue;
+      problems.push(`"${pattern}" found in ${file}, outside js/shared/render-session.js (not PENDING, not ALLOW-listed)`);
+    }
+  }
+  if (problems.length) {
+    fail(["renderer-creation guard (h) failed:", ...problems.map((p) => `  - ${p}`)].join("\n"));
+  }
+  log(`(h) renderer-creation guard OK, ${files.length} files scanned.`);
+}
+
 checkManifestShape();
 checkStorageKeyScan();
 checkOptionListRatchet();
 checkUiCoverage();
 checkRenderFeaturesDoc();
 checkEmbedConsistency();
+checkHandleContractGuard();
+checkRendererCreationGuard();
 log(`OK${CHECK_MODE ? " --check" : ""}`);
