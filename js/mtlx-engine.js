@@ -10084,21 +10084,15 @@ const createMtlxRenderView = async ({
     // Declared here (not inside the try block below) so disposePartial,
     // defined outside that block, can still remove them on every teardown path.
     let onGlLost = null, onGlRestored = null;
-    let resizeObs = null;
-    // While true the canvas keeps its current drawing buffer and the
-    // browser scales it to the CSS box. Lets a pane drag rescale the
-    // image smoothly instead of reallocating GL every frame.
-    let resizeSuspended = false;
-    let syncSizeRef = function () { /* set once the canvas sizing closure exists */ };
-    // Turntable/GIF capture state: non-null while beginCapture()/endCapture()
-    // bracket an off-screen render at a caller-chosen fixed resolution.
-    let captureState = null;
-    let __captureCanvas = null, __captureCtx = null;
+    // Sizing (applySize/syncSize/ResizeObserver) and the snapshot/capture
+    // trio now live in MtlxRender.createSizer/createCaptureController
+    // (js/shared/render-session.js), built once the renderer exists below;
+    // declared here so disposePartial, defined outside that block, can
+    // still reach them on every teardown path.
+    let sizer = null;
+    let captureController = null;
     let controls = null;
     let stopped = false;
-    // Reused by snapshotPixels below, avoids a fresh canvas/2D-context
-    // allocation on every readback call.
-    let __snapshotCanvas = null, __snapshotCtx = null;
     // Shell-level material/geometry/uniforms state, reassigned by
     // applyMaterialInternal() on every swap so one shell backs many edits.
     // `uniforms` MUST be `let`: every closure below shares this binding.
@@ -10239,7 +10233,7 @@ const createMtlxRenderView = async ({
         dispRunInFlight = false;
         if (dispSettleResolve) { dispSettleResolve(); dispSettleResolve = null; dispSettlePromise = null; }
         if (reqId) cancelAnimationFrame(reqId);
-        if (resizeObs) resizeObs.disconnect();
+        if (sizer) sizer.dispose();
         if (controls) controls.dispose();
         // wheelMode 'scroll' teardown: the capture listener and the
         // hint overlay (plus its pending fade timer), if either exists.
@@ -10283,10 +10277,6 @@ const createMtlxRenderView = async ({
         // createPeelPipeline instance, this view's OWN GPU resources,
         // same disposal rationale as pmremRT immediately above.
         try { if (peelPipeline) peelPipeline.dispose(); } catch (e) { /* already disposed/invalid */ }
-        if (canvas) {
-            canvas.removeEventListener('webglcontextlost', onGlLost);
-            canvas.removeEventListener('webglcontextrestored', onGlRestored);
-        }
         // No forceContextLoss() here: this same disposePartial() backs both
         // the superseded-rebuild bail AND the public handle.dispose(), and
         // every call site (viewer-app.jsx, node-preview.jsx, graph/preview.jsx)
@@ -10294,7 +10284,7 @@ const createMtlxRenderView = async ({
         // SAME canvas ref. Forcing context loss would leave that reused
         // canvas's context stuck lost until an async restore, breaking the
         // very next build; the canvas is never actually discarded here.
-        if (renderer) renderer.dispose();
+        MtlxRender.disposeRendererCore({ canvas, onGlLost, onGlRestored, renderer });
     };
     // [mtlx-perf] whole-function total, from shader generation through
     // the GL compile. See the finer-grained timers further down for a
@@ -10332,62 +10322,28 @@ const createMtlxRenderView = async ({
                 // disposePartial() is still a safe no-op here.
                 if (!isMounted()) { disposePartial(); return null; }
                 const __rendererPerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
-                // Acquire WebGL2 ourselves and pass it via `context`, so
-                // three skips its own getContext('webgl2')-then-'webgl'
-                // fallback: a transient failure throws instead of poisoning this canvas with WebGL1.
-                const gl = canvas.getContext('webgl2', { antialias: true, alpha: true, depth: true, stencil: true,
-                    premultipliedAlpha: true, preserveDrawingBuffer: false, powerPreference: 'default', failIfMajorPerformanceCaveat: false });
-                if (!gl) {
-                    throw new Error('WebGL2 context could not be created for this preview (the browser refused WebGL2). Reload the tab or check the browser GPU settings.');
-                }
-                renderer = new THREE.WebGLRenderer({ canvas, context: gl, antialias: true, alpha: true });
-                // A reused canvas still carries GL state left by the prior
-                // renderer, but fresh r128 state caches assume defaults, so
-                // leaked blending corrupts the PMREM bake below; resync both.
-                renderer.resetState();
-                // restored re-inits three's GL state but not render-target
-                // contents (PMREM bake, shadow map), so owners of this view
-                // must fully rebuild on restore, not just resume.
-                onGlLost = () => { window.dispatchEvent(new CustomEvent('mtlx-gl-context', { detail: { canvas, state: 'lost' } })); };
-                onGlRestored = () => { window.dispatchEvent(new CustomEvent('mtlx-gl-context', { detail: { canvas, state: 'restored' } })); };
-                canvas.addEventListener('webglcontextlost', onGlLost);
-                canvas.addEventListener('webglcontextrestored', onGlRestored);
-                // GLOBAL flag keying every lit material's program cache, so set
-                // ONCE here, before any material or PMREM work, and left at the
-                // default (off) for views that never build a studio bowl.
-                if (wantsStudio) {
-                    renderer.shadowMap.enabled = true;
-                    renderer.shadowMap.type = THREE.VSMShadowMap;
-                }
-                renderer.setSize(cw, ch, false);
-                renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxPixelRatio));
-                renderer.debug.checkShaderErrors = true;
-                // No-ops for the RawShaderMaterial surface (encodeDisplay bakes
-                // its transform in); set here for the ordinary three materials
-                // in the scene (skybox, backplanes, neutral glTF parts), kept in step with getDisplayTransform() so both match; a fresh renderer/materials each build means no needsUpdate is needed.
-                const __displayMode = getDisplayTransform();
-                // CustomToneMapping carries our own chunk (applyThreeToneMappingChunk),
-                // so these materials run the SAME curve and exposure as the
-                // MaterialX surface instead of only agreeing in 'aces'.
-                const __customTone = applyThreeToneMappingChunk(__displayMode);
-                if ('outputEncoding' in renderer) renderer.outputEncoding = __displayMode === 'lin_rec709' ? THREE.LinearEncoding : THREE.sRGBEncoding;
-                renderer.toneMapping = __customTone ? THREE.CustomToneMapping
-                    : (__displayMode === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping);
-                renderer.toneMappingExposure = displayExposureScale();
+                // WebGL2 acquisition, shadow-map flag, size/pixel-ratio and
+                // the display transform (encoding/tone-mapping/exposure),
+                // moved verbatim to MtlxRender.acquireRenderer (js/shared/
+                // render-session.js): same context options, same order.
+                const __acquired = MtlxRender.acquireRenderer({ canvas, wantsStudio, maxPixelRatio, width: cw, height: ch });
+                renderer = __acquired.renderer;
+                onGlLost = __acquired.onGlLost;
+                onGlRestored = __acquired.onGlRestored;
+                // Hoisted once renderer exists: gates u_peelLinear binding,
+                // peel-layer/accum half-float storage, and finalMat's shader
+                // choice, all from this one extension check (see allocPeel).
+                const peelLinearOk = __acquired.peelLinearOk;
                 if (window.MTLX_PERF_LOG) {
                     console.log('[mtlx-perf] WebGLRenderer init: '
                         + (performance.now() - __rendererPerfStart).toFixed(1) + 'ms');
                 }
-                // Hoisted once renderer exists: gates u_peelLinear binding,
-                // peel-layer/accum half-float storage, and finalMat's shader
-                // choice, all from this one extension check (see allocPeel).
-                const peelLinearOk = !!renderer.extensions.get('EXT_color_buffer_float');
                 // This shell's OWN peel pipeline instance (see
                 // createPeelPipeline above); renderFrame() below routes
                 // every peeling frame through it.
                 peelPipeline = createPeelPipeline(renderer, { getDisplayTransform });
 
-                const scene = new THREE.Scene();
+                const scene = MtlxRender.createRenderScene();
                 previewBackdrop = MtlxRender.createPreviewBackdrop({ scene, getDisplayTransform });
 
                 // Instantiates the scene-mode GLB (if any) BEFORE the
@@ -10626,46 +10582,27 @@ const createMtlxRenderView = async ({
                     geometry.computeBoundingSphere();
                 };
 
-                // Applies a target drawing-buffer size to the renderer AND
-                // the camera/quad-fit, shared by the layout path (syncSize)
-                // and the fixed-resolution capture path (beginCapture).
-                const applySize = (w, h) => {
-                    renderer.setSize(w, h, false);
-                    // Depth-peel render targets are sized to the drawing
-                    // buffer (see createPeelPipeline's allocPeel), just
-                    // free them here; renderFrame() lazily reallocates at
-                    // the new size on its next peeling frame, so a resize
-                    // with peeling OFF costs nothing extra.
-                    if (peelPipeline) peelPipeline.dispose();
-                    if (flat2d) {
-                        // OrthographicCamera has no .aspect/.fov, the
-                        // frustum/quad/UV fit tracks the aspect instead
-                        // (fitQuadToAspect updates the projection itself).
-                        fitQuadToAspect(w / h);
-                        return;
-                    }
-                    camera.aspect = w / h;
-                    // fullScene only: resize can flip which side of the
-                    // canvasAspect >= authoredAspect comparison we're on,
-                    // so this must be recomputed every resize, not once.
-                    recomputeCameraFov();
-                    camera.updateProjectionMatrix();
-                };
-
-                // Keeps the drawing buffer + aspect in sync with layout
-                // (panel reflow, mobile rotation/resize), without this
-                // the sphere stretches on any reflow.
-                const syncSize = () => {
-                    if (resizeSuspended) return;
-                    const w = canvas.clientWidth || cw;
-                    const h = canvas.clientHeight || ch;
-                    applySize(w, h);
-                };
-                syncSizeRef = syncSize;
-                if (window.ResizeObserver) {
-                    resizeObs = new ResizeObserver(syncSize);
-                    resizeObs.observe(canvas);
-                }
+                // Sizing (renderer.setSize, ResizeObserver, resize-suspend)
+                // moved to MtlxRender.createSizer (js/shared/render-session.js).
+                // `layout` is this shell's content-specific frame hook: peel
+                // targets are sized to the drawing buffer (see createPeelPipeline's
+                // allocPeel), just free them here so renderFrame() lazily
+                // reallocates at the new size; flat2d refits the quad/UVs
+                // (fitQuadToAspect owns the projection there), everything
+                // else re-aims the perspective camera.
+                sizer = MtlxRender.createSizer({
+                    canvas, renderer, fallbackWidth: cw, fallbackHeight: ch,
+                    layout: (w, h) => {
+                        if (peelPipeline) peelPipeline.dispose();
+                        if (flat2d) { fitQuadToAspect(w / h); return; }
+                        camera.aspect = w / h;
+                        // fullScene only: resize can flip which side of the
+                        // canvasAspect >= authoredAspect comparison we're on,
+                        // so this must be recomputed every resize, not once.
+                        recomputeCameraFov();
+                        camera.updateProjectionMatrix();
+                    },
+                });
 
                 // Image-based lighting for lit surfaces/BSDFs AND/OR
                 // scene-mode's glTF meshes (always lit via PMREM, even
@@ -11539,6 +11476,11 @@ const createMtlxRenderView = async ({
                         + (performance.now() - __totalPerfStart).toFixed(1) + 'ms (target: ' + label + ')');
                 }
 
+                // snapshot/snapshotPixels/renderNow/beginCapture/captureFrame/
+                // endCapture, moved to MtlxRender.createCaptureController
+                // (js/shared/render-session.js); handle methods below delegate.
+                captureController = MtlxRender.createCaptureController({ renderer, canvas, sizer, renderFrame, setUniforms });
+
         handle = {
             uniforms, introspected, vs, fs, controls, renderer,
             allowConstInputs,
@@ -11614,11 +11556,7 @@ const createMtlxRenderView = async ({
             setEnvBackground: (on) => applyBackdrop(on ? 'environment' : 'none'),
             // Pane drags: suspend buffer reallocation so the existing
             // frame just scales, then resync once on release.
-            setResizeSuspended: (on) => {
-                const was = resizeSuspended;
-                resizeSuspended = !!on;
-                if (was && !resizeSuspended) syncSizeRef();
-            },
+            setResizeSuspended: (on) => sizer.setResizeSuspended(on),
             // Capability, NOT current mode: whether this view has an env
             // texture to show at all. node-preview/graph preview call it
             // once at setup to gate the env control. getBackdrop() is state.
@@ -11877,81 +11815,25 @@ const createMtlxRenderView = async ({
             // PNG snapshot of the CURRENT view. The drawing buffer isn't
             // preserved between frames (preserveDrawingBuffer:false), so
             // render synchronously right before reading it back.
-            snapshot: () => {
-                setUniforms();
-                renderFrame();
-                return renderer.domElement.toDataURL('image/png');
-            },
+            snapshot: () => captureController.snapshot(),
             // Reads back the current view at caller-chosen dimensions:
             // syncs a render first, then resamples through a 2D canvas
             // so two compare views can be read at identical sizes.
-            // The canvas/context are cached in the closure and only
-            // resized when w/h change, instead of allocated per call.
-            snapshotPixels: (w, h) => {
-                setUniforms();
-                renderFrame();
-                if (!__snapshotCanvas) {
-                    __snapshotCanvas = document.createElement('canvas');
-                    __snapshotCtx = __snapshotCanvas.getContext('2d', { willReadFrequently: true });
-                }
-                if (__snapshotCanvas.width !== w || __snapshotCanvas.height !== h) {
-                    __snapshotCanvas.width = w; __snapshotCanvas.height = h;
-                }
-                // Source is alpha:true, so drawImage's source-over would
-                // blend it onto whatever this reused canvas held last,
-                // only a size change reallocates (and thus clears) it.
-                __snapshotCtx.clearRect(0, 0, w, h);
-                __snapshotCtx.drawImage(renderer.domElement, 0, 0, w, h);
-                return __snapshotCtx.getImageData(0, 0, w, h);
-            },
+            snapshotPixels: (w, h) => captureController.snapshotPixels(w, h),
             // Cheap same-frame render (no readback), used by camera sync
             // to remove one-frame lag between two mirrored views. Optional
             // ts: pass the driving rAF timestamp so several views read one tick.
-            renderNow: (ts) => { clockTick(ts); setUniforms(); renderFrame(); },
+            renderNow: (ts) => captureController.renderNow(ts),
             // Fixed-resolution capture mode for the turntable recorder:
             // syncSize's buffer pinned to width x height, canvas hidden.
             // Returns false if the view is gone or already capturing.
-            beginCapture: ({ width, height }) => {
-                if (stopped || captureState) return false;
-                captureState = {
-                    prevPixelRatio: renderer.getPixelRatio(),
-                    prevVisibility: canvas.style.visibility,
-                    width, height,
-                };
-                resizeSuspended = true;
-                renderer.setPixelRatio(1);
-                applySize(width, height);
-                canvas.style.visibility = 'hidden';
-                return true;
-            },
+            beginCapture: (opts) => stopped ? false : captureController.beginCapture(opts),
             // Renders one frame at the capture resolution and reads it
             // back as ImageData, same cached-canvas path as snapshotPixels.
-            captureFrame: () => {
-                if (!captureState) throw new Error('captureFrame() called with no active beginCapture().');
-                setUniforms();
-                renderFrame();
-                const { width: w, height: h } = captureState;
-                if (!__captureCanvas) {
-                    __captureCanvas = document.createElement('canvas');
-                    __captureCtx = __captureCanvas.getContext('2d', { willReadFrequently: true });
-                }
-                if (__captureCanvas.width !== w || __captureCanvas.height !== h) {
-                    __captureCanvas.width = w; __captureCanvas.height = h;
-                }
-                __captureCtx.clearRect(0, 0, w, h);
-                __captureCtx.drawImage(renderer.domElement, 0, 0, w, h);
-                return __captureCtx.getImageData(0, 0, w, h);
-            },
+            captureFrame: () => captureController.captureFrame(),
             // Leaves capture mode: restores on-screen visibility, pixel
             // ratio and layout-driven sizing. Idempotent, safe to call twice.
-            endCapture: () => {
-                if (!captureState) return;
-                canvas.style.visibility = captureState.prevVisibility;
-                renderer.setPixelRatio(captureState.prevPixelRatio);
-                captureState = null;
-                resizeSuspended = false;
-                syncSizeRef();
-            },
+            endCapture: () => captureController.endCapture(),
             // Reads the live `uniforms` closure binding (same one setUniforms
             // uses), so a material swap is reflected without a stale copy.
             isAnimated: () => !!(uniforms && (uniforms.u_time || uniforms.u_frame)),
@@ -12290,3 +12172,8 @@ Object.assign(window, {
     EXPORT_TARGETS, generateTargetSources,
     fullscreenElement, toggleFullscreen, watchFullscreen,
 });
+
+// Hands the render-session module (js/shared/render-session.js) the
+// engine internals it needs at call time; must run after every const
+// above is defined, so this stays the file's last line.
+MtlxRender.bindEngine({ getDisplayTransform, applyThreeToneMappingChunk, displayExposureScale, clockTick });

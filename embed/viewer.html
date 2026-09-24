@@ -136,6 +136,9 @@
          helpers are used lazily, at call time, so load order relative
          to the engine below does not matter. -->
     <script src="js/shared/render-environment.js"></script>
+    <!-- Renderer core: plain JS, no transform needed. Loaded after the
+         engine calls MtlxRender.bindEngine() on its own last line. -->
+    <script src="js/shared/render-session.js"></script>
 
     <script>
         // Loads the remaining precompiled scripts (scripts/build-embed.mjs)

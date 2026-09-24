@@ -136,7 +136,7 @@
             }
         })();
     </script>
-    <script>window.__MTLX_BUILD = '4d042b83f8a81f8e';</script>
+    <script>window.__MTLX_BUILD = '90c1da86083bb997';</script>
     <!-- Build-id probe. Lives here, beside the stamp, deliberately: every
          other script (shell.jsx, mtlx-assets.js) is separately cached and
          may itself be the stale file this is meant to detect. -->
@@ -345,6 +345,9 @@
          helpers are used lazily, at call time, so load order relative
          to the engine above does not matter. -->
     <script src="js/shared/render-environment.js"></script>
+    <!-- Renderer core: plain JS, no transform needed. Loaded after the
+         engine calls MtlxRender.bindEngine() on its own last line. -->
+    <script src="js/shared/render-session.js"></script>
     <script type="text/mtlx-babel" src="js/shell.jsx"></script>
     <script type="text/mtlx-babel">
         const root = ReactDOM.createRoot(document.getElementById('root'));

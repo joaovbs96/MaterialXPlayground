@@ -2626,14 +2626,12 @@ const wantsStudio=!flat2d&&sceneMode!=='full';// Unrecognized/missing values fal
 // at all; an explicit `backdrop` (even 'studio') always wins.
 const normalizeBackdropMode=v=>v==='environment'||v==='none'||v==='studio-dark'?v:'studio';let backdropMode=normalizeBackdropMode(backdrop!==undefined?backdrop:envBackground?'environment':'studio');let reqId=null;let renderer=null;// Declared here (not inside the try block below) so disposePartial,
 // defined outside that block, can still remove them on every teardown path.
-let onGlLost=null,onGlRestored=null;let resizeObs=null;// While true the canvas keeps its current drawing buffer and the
-// browser scales it to the CSS box. Lets a pane drag rescale the
-// image smoothly instead of reallocating GL every frame.
-let resizeSuspended=false;let syncSizeRef=function(){/* set once the canvas sizing closure exists */};// Turntable/GIF capture state: non-null while beginCapture()/endCapture()
-// bracket an off-screen render at a caller-chosen fixed resolution.
-let captureState=null;let __captureCanvas=null,__captureCtx=null;let controls=null;let stopped=false;// Reused by snapshotPixels below, avoids a fresh canvas/2D-context
-// allocation on every readback call.
-let __snapshotCanvas=null,__snapshotCtx=null;// Shell-level material/geometry/uniforms state, reassigned by
+let onGlLost=null,onGlRestored=null;// Sizing (applySize/syncSize/ResizeObserver) and the snapshot/capture
+// trio now live in MtlxRender.createSizer/createCaptureController
+// (js/shared/render-session.js), built once the renderer exists below;
+// declared here so disposePartial, defined outside that block, can
+// still reach them on every teardown path.
+let sizer=null;let captureController=null;let controls=null;let stopped=false;// Shell-level material/geometry/uniforms state, reassigned by
 // applyMaterialInternal() on every swap so one shell backs many edits.
 // `uniforms` MUST be `let`: every closure below shares this binding.
 let mesh=null,material=null,geometry=null,uniforms=null;// Displacement (P5) state: originalGeometry as built (kept until
@@ -2700,7 +2698,7 @@ let fallbackSpin=!!autoRotate;// wheelMode 'scroll' state: the canvas wheel-gate
 let wheelGateHandler=null;let wheelHintEl=null,wheelHintTimer=null;const isWheelHintMac=/Mac|iPhone|iPad|iPod/.test(navigator.platform||navigator.userAgent||'');// Shows (or refreshes) the "Use Ctrl/⌘ + scroll to zoom" pill,
 // centered over the canvas's positioned parent; fades ~1.2s after
 // the last gated wheel event. The node is created lazily, once.
-const showWheelHint=()=>{if(!wheelHintEl){const parent=canvas.parentElement;if(!parent)return;wheelHintEl=document.createElement('div');wheelHintEl.textContent=isWheelHintMac?'Use ⌘ + scroll to zoom':'Use Ctrl + scroll to zoom';wheelHintEl.style.cssText='position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);'+'padding:6px 14px;border-radius:9999px;background:rgba(17,24,39,0.85);'+'color:#f3f4f6;font:13px system-ui,sans-serif;pointer-events:none;'+'opacity:0;transition:opacity 200ms ease;z-index:30;white-space:nowrap;';parent.appendChild(wheelHintEl);}wheelHintEl.style.opacity='1';if(wheelHintTimer)clearTimeout(wheelHintTimer);wheelHintTimer=setTimeout(()=>{if(wheelHintEl)wheelHintEl.style.opacity='0';},1200);};const disposePartial=()=>{stopped=true;dispToken++;dispRunInFlight=false;if(dispSettleResolve){dispSettleResolve();dispSettleResolve=null;dispSettlePromise=null;}if(reqId)cancelAnimationFrame(reqId);if(resizeObs)resizeObs.disconnect();if(controls)controls.dispose();// wheelMode 'scroll' teardown: the capture listener and the
+const showWheelHint=()=>{if(!wheelHintEl){const parent=canvas.parentElement;if(!parent)return;wheelHintEl=document.createElement('div');wheelHintEl.textContent=isWheelHintMac?'Use ⌘ + scroll to zoom':'Use Ctrl + scroll to zoom';wheelHintEl.style.cssText='position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);'+'padding:6px 14px;border-radius:9999px;background:rgba(17,24,39,0.85);'+'color:#f3f4f6;font:13px system-ui,sans-serif;pointer-events:none;'+'opacity:0;transition:opacity 200ms ease;z-index:30;white-space:nowrap;';parent.appendChild(wheelHintEl);}wheelHintEl.style.opacity='1';if(wheelHintTimer)clearTimeout(wheelHintTimer);wheelHintTimer=setTimeout(()=>{if(wheelHintEl)wheelHintEl.style.opacity='0';},1200);};const disposePartial=()=>{stopped=true;dispToken++;dispRunInFlight=false;if(dispSettleResolve){dispSettleResolve();dispSettleResolve=null;dispSettlePromise=null;}if(reqId)cancelAnimationFrame(reqId);if(sizer)sizer.dispose();if(controls)controls.dispose();// wheelMode 'scroll' teardown: the capture listener and the
 // hint overlay (plus its pending fade timer), if either exists.
 if(wheelGateHandler)canvas.removeEventListener('wheel',wheelGateHandler,{capture:true});if(wheelHintTimer)clearTimeout(wheelHintTimer);if(wheelHintEl&&wheelHintEl.parentElement)wheelHintEl.parentElement.removeChild(wheelHintEl);// Best-effort: renderer.dispose() below only frees the
 // renderer's OWN GL state, not material/geometry, dispose those
@@ -2720,14 +2718,14 @@ try{if(pmremRT)pmremRT.dispose();}catch(e){/* already disposed/invalid */}// set
 try{if(fetchedEnvMap)disposeFetchedEnv(fetchedEnvMap);}catch(e){/* already disposed/invalid */}// Depth-peel render targets/quad materials, owned by the
 // createPeelPipeline instance, this view's OWN GPU resources,
 // same disposal rationale as pmremRT immediately above.
-try{if(peelPipeline)peelPipeline.dispose();}catch(e){/* already disposed/invalid */}if(canvas){canvas.removeEventListener('webglcontextlost',onGlLost);canvas.removeEventListener('webglcontextrestored',onGlRestored);}// No forceContextLoss() here: this same disposePartial() backs both
+try{if(peelPipeline)peelPipeline.dispose();}catch(e){/* already disposed/invalid */}// No forceContextLoss() here: this same disposePartial() backs both
 // the superseded-rebuild bail AND the public handle.dispose(), and
 // every call site (viewer-app.jsx, node-preview.jsx, graph/preview.jsx)
 // disposes the old view then immediately builds a new one on the
 // SAME canvas ref. Forcing context loss would leave that reused
 // canvas's context stuck lost until an async restore, breaking the
 // very next build; the canvas is never actually discarded here.
-if(renderer)renderer.dispose();};// [mtlx-perf] whole-function total, from shader generation through
+MtlxRender.disposeRendererCore({canvas,onGlLost,onGlRestored,renderer});};// [mtlx-perf] whole-function total, from shader generation through
 // the GL compile. See the finer-grained timers further down for a
 // breakdown (gen.generate / WebGLRenderer init / GL compile).
 const __totalPerfStart=window.MTLX_PERF_LOG?performance.now():0;try{// Generates the shader from the renderable surface node.
@@ -2748,31 +2746,17 @@ prewarmDisplacementSources(__srcs,isMounted,label);const warmResult=await prewar
 const cw=canvas.clientWidth||canvas.parentElement&&canvas.parentElement.clientWidth||400;const ch=canvas.clientHeight||256;// Bail before allocating the WebGL context if this build
 // was superseded during shader generation above,
 // disposePartial() is still a safe no-op here.
-if(!isMounted()){disposePartial();return null;}const __rendererPerfStart=window.MTLX_PERF_LOG?performance.now():0;// Acquire WebGL2 ourselves and pass it via `context`, so
-// three skips its own getContext('webgl2')-then-'webgl'
-// fallback: a transient failure throws instead of poisoning this canvas with WebGL1.
-const gl=canvas.getContext('webgl2',{antialias:true,alpha:true,depth:true,stencil:true,premultipliedAlpha:true,preserveDrawingBuffer:false,powerPreference:'default',failIfMajorPerformanceCaveat:false});if(!gl){throw new Error('WebGL2 context could not be created for this preview (the browser refused WebGL2). Reload the tab or check the browser GPU settings.');}renderer=new THREE.WebGLRenderer({canvas,context:gl,antialias:true,alpha:true});// A reused canvas still carries GL state left by the prior
-// renderer, but fresh r128 state caches assume defaults, so
-// leaked blending corrupts the PMREM bake below; resync both.
-renderer.resetState();// restored re-inits three's GL state but not render-target
-// contents (PMREM bake, shadow map), so owners of this view
-// must fully rebuild on restore, not just resume.
-onGlLost=()=>{window.dispatchEvent(new CustomEvent('mtlx-gl-context',{detail:{canvas,state:'lost'}}));};onGlRestored=()=>{window.dispatchEvent(new CustomEvent('mtlx-gl-context',{detail:{canvas,state:'restored'}}));};canvas.addEventListener('webglcontextlost',onGlLost);canvas.addEventListener('webglcontextrestored',onGlRestored);// GLOBAL flag keying every lit material's program cache, so set
-// ONCE here, before any material or PMREM work, and left at the
-// default (off) for views that never build a studio bowl.
-if(wantsStudio){renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.VSMShadowMap;}renderer.setSize(cw,ch,false);renderer.setPixelRatio(Math.min(window.devicePixelRatio,maxPixelRatio));renderer.debug.checkShaderErrors=true;// No-ops for the RawShaderMaterial surface (encodeDisplay bakes
-// its transform in); set here for the ordinary three materials
-// in the scene (skybox, backplanes, neutral glTF parts), kept in step with getDisplayTransform() so both match; a fresh renderer/materials each build means no needsUpdate is needed.
-const __displayMode=getDisplayTransform();// CustomToneMapping carries our own chunk (applyThreeToneMappingChunk),
-// so these materials run the SAME curve and exposure as the
-// MaterialX surface instead of only agreeing in 'aces'.
-const __customTone=applyThreeToneMappingChunk(__displayMode);if('outputEncoding'in renderer)renderer.outputEncoding=__displayMode==='lin_rec709'?THREE.LinearEncoding:THREE.sRGBEncoding;renderer.toneMapping=__customTone?THREE.CustomToneMapping:__displayMode==='aces'?THREE.ACESFilmicToneMapping:THREE.NoToneMapping;renderer.toneMappingExposure=displayExposureScale();if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] WebGLRenderer init: '+(performance.now()-__rendererPerfStart).toFixed(1)+'ms');}// Hoisted once renderer exists: gates u_peelLinear binding,
+if(!isMounted()){disposePartial();return null;}const __rendererPerfStart=window.MTLX_PERF_LOG?performance.now():0;// WebGL2 acquisition, shadow-map flag, size/pixel-ratio and
+// the display transform (encoding/tone-mapping/exposure),
+// moved verbatim to MtlxRender.acquireRenderer (js/shared/
+// render-session.js): same context options, same order.
+const __acquired=MtlxRender.acquireRenderer({canvas,wantsStudio,maxPixelRatio,width:cw,height:ch});renderer=__acquired.renderer;onGlLost=__acquired.onGlLost;onGlRestored=__acquired.onGlRestored;// Hoisted once renderer exists: gates u_peelLinear binding,
 // peel-layer/accum half-float storage, and finalMat's shader
 // choice, all from this one extension check (see allocPeel).
-const peelLinearOk=!!renderer.extensions.get('EXT_color_buffer_float');// This shell's OWN peel pipeline instance (see
+const peelLinearOk=__acquired.peelLinearOk;if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] WebGLRenderer init: '+(performance.now()-__rendererPerfStart).toFixed(1)+'ms');}// This shell's OWN peel pipeline instance (see
 // createPeelPipeline above); renderFrame() below routes
 // every peeling frame through it.
-peelPipeline=createPeelPipeline(renderer,{getDisplayTransform});const scene=new THREE.Scene();previewBackdrop=MtlxRender.createPreviewBackdrop({scene,getDisplayTransform});// Instantiates the scene-mode GLB (if any) BEFORE the
+peelPipeline=createPeelPipeline(renderer,{getDisplayTransform});const scene=MtlxRender.createRenderScene();previewBackdrop=MtlxRender.createPreviewBackdrop({scene,getDisplayTransform});// Instantiates the scene-mode GLB (if any) BEFORE the
 // camera: full-scene mode needs the GLB's embedded camera
 // to build the shell camera. isMounted bail is a safe no-op.
 const sceneInst=sceneMode?await instantiateShaderballScene(sceneMode):null;if(!isMounted()){disposePartial();return null;}if(sceneMode&&!sceneInst){// GLB missing/corrupt, no GLTFLoader, or the asset
@@ -2880,24 +2864,18 @@ const fitFovDeg=Math.max(vFovForVertical,vFovForHorizontal)*180/Math.PI*FIT_MARG
 // so re-fitting at any previous aspect is idempotent.
 const fitQuadToAspect=aspect=>{camera.left=-aspect;camera.right=aspect;camera.updateProjectionMatrix();if(!geometry)return;const pos=geometry.getAttribute('position');const uv=geometry.getAttribute('uv');if(!pos||!uv)return;for(let i=0;i<pos.count;i++){pos.setX(i,pos.getX(i)>0?aspect:-aspect);uv.setX(i,uv.getX(i)>0?aspect:0);}pos.needsUpdate=true;uv.needsUpdate=true;// Frustum culling reads the bounding sphere; keep it
 // in sync with the rewritten positions.
-geometry.computeBoundingSphere();};// Applies a target drawing-buffer size to the renderer AND
-// the camera/quad-fit, shared by the layout path (syncSize)
-// and the fixed-resolution capture path (beginCapture).
-const applySize=(w,h)=>{renderer.setSize(w,h,false);// Depth-peel render targets are sized to the drawing
-// buffer (see createPeelPipeline's allocPeel), just
-// free them here; renderFrame() lazily reallocates at
-// the new size on its next peeling frame, so a resize
-// with peeling OFF costs nothing extra.
-if(peelPipeline)peelPipeline.dispose();if(flat2d){// OrthographicCamera has no .aspect/.fov, the
-// frustum/quad/UV fit tracks the aspect instead
-// (fitQuadToAspect updates the projection itself).
-fitQuadToAspect(w/h);return;}camera.aspect=w/h;// fullScene only: resize can flip which side of the
+geometry.computeBoundingSphere();};// Sizing (renderer.setSize, ResizeObserver, resize-suspend)
+// moved to MtlxRender.createSizer (js/shared/render-session.js).
+// `layout` is this shell's content-specific frame hook: peel
+// targets are sized to the drawing buffer (see createPeelPipeline's
+// allocPeel), just free them here so renderFrame() lazily
+// reallocates at the new size; flat2d refits the quad/UVs
+// (fitQuadToAspect owns the projection there), everything
+// else re-aims the perspective camera.
+sizer=MtlxRender.createSizer({canvas,renderer,fallbackWidth:cw,fallbackHeight:ch,layout:(w,h)=>{if(peelPipeline)peelPipeline.dispose();if(flat2d){fitQuadToAspect(w/h);return;}camera.aspect=w/h;// fullScene only: resize can flip which side of the
 // canvasAspect >= authoredAspect comparison we're on,
 // so this must be recomputed every resize, not once.
-recomputeCameraFov();camera.updateProjectionMatrix();};// Keeps the drawing buffer + aspect in sync with layout
-// (panel reflow, mobile rotation/resize), without this
-// the sphere stretches on any reflow.
-const syncSize=()=>{if(resizeSuspended)return;const w=canvas.clientWidth||cw;const h=canvas.clientHeight||ch;applySize(w,h);};syncSizeRef=syncSize;if(window.ResizeObserver){resizeObs=new ResizeObserver(syncSize);resizeObs.observe(canvas);}// Image-based lighting for lit surfaces/BSDFs AND/OR
+recomputeCameraFov();camera.updateProjectionMatrix();}});// Image-based lighting for lit surfaces/BSDFs AND/OR
 // scene-mode's glTF meshes (always lit via PMREM, even
 // under an unlit material). Fetched ONCE at shell level.
 if(needsLighting||sceneInst){const env=envOverride||(await getEnvironment());if(!isMounted()){disposePartial();return null;}// Independent of envRadiance/etc. below: scene-mode's
@@ -3179,7 +3157,10 @@ if(sceneOrbitClampBox&&!sceneOrbitClampBox.containsPoint(camera.position)){scene
 if(!isActive())return;if(!controls&&fallbackSpin){// OrbitControls script blocked → old behavior.
 // Spins the WHOLE assembled scene when present,
 // rotating just `mesh` would leave the backdrop static.
-(sceneGroup||mesh).rotation.y+=0.005;}setUniforms();renderFrame();};animate();if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] createMtlxRenderView total: '+(performance.now()-__totalPerfStart).toFixed(1)+'ms (target: '+label+')');}handle={uniforms,introspected,vs,fs,controls,renderer,allowConstInputs,// Displacement (P5): the first-build subdivide/evaluate run
+(sceneGroup||mesh).rotation.y+=0.005;}setUniforms();renderFrame();};animate();if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] createMtlxRenderView total: '+(performance.now()-__totalPerfStart).toFixed(1)+'ms (target: '+label+')');}// snapshot/snapshotPixels/renderNow/beginCapture/captureFrame/
+// endCapture, moved to MtlxRender.createCaptureController
+// (js/shared/render-session.js); handle methods below delegate.
+captureController=MtlxRender.createCaptureController({renderer,canvas,sizer,renderFrame,setUniforms});handle={uniforms,introspected,vs,fs,controls,renderer,allowConstInputs,// Displacement (P5): the first-build subdivide/evaluate run
 // above happened before `handle` existed, so any notice it
 // produced couldn't append here yet, fold it in now.
 notices:(materialNotices=notices||[]).concat(currentDispNotices()),isTransparent:!!transparent,// Live auto-orbit toggle (no regen needed). No-op in
@@ -3209,7 +3190,7 @@ setBackdrop:mode=>applyBackdrop(mode),getBackdrop:()=>backdropMode,// Thin alias
 // the same two-mode slice of setBackdrop/getBackdrop.
 setEnvBackground:on=>applyBackdrop(on?'environment':'none'),// Pane drags: suspend buffer reallocation so the existing
 // frame just scales, then resync once on release.
-setResizeSuspended:on=>{const was=resizeSuspended;resizeSuspended=!!on;if(was&&!resizeSuspended)syncSizeRef();},// Capability, NOT current mode: whether this view has an env
+setResizeSuspended:on=>sizer.setResizeSuspended(on),// Capability, NOT current mode: whether this view has an env
 // texture to show at all. node-preview/graph preview call it
 // once at setup to gate the env control. getBackdrop() is state.
 hasEnvBackground:()=>!!envBgTexture,// Live rotation offset (radians) for the IBL environment,
@@ -3301,25 +3282,20 @@ handle.uniforms=uniforms;handle.introspected=srcs.introspected;handle.vs=srcs.vs
 syncDisplacementSources:newDisplacement=>{if(stopped)return;displacementSources=newDisplacement||null;if(!displacementSources){applyDispDebounceToken++;cancelDisplacementRun();if(dispState!=='none'){swapMeshGeometry(originalGeometry);dispState='none';dispKey=null;dispEvalNotices=[];syncHandleNotices();dispDispatchStatus();}return;}if(displacementSources.key===dispKey)return;cancelDisplacementRun();dispKey=displacementSources.key;const debounceToken=++applyDispDebounceToken;setTimeout(()=>{if(debounceToken!==applyDispDebounceToken||stopped)return;if(flat2d||!getDisplacementEnabled())return;if(!baseGeometry)ensureBaseGeometry();runDisplacement();},150);},// PNG snapshot of the CURRENT view. The drawing buffer isn't
 // preserved between frames (preserveDrawingBuffer:false), so
 // render synchronously right before reading it back.
-snapshot:()=>{setUniforms();renderFrame();return renderer.domElement.toDataURL('image/png');},// Reads back the current view at caller-chosen dimensions:
+snapshot:()=>captureController.snapshot(),// Reads back the current view at caller-chosen dimensions:
 // syncs a render first, then resamples through a 2D canvas
 // so two compare views can be read at identical sizes.
-// The canvas/context are cached in the closure and only
-// resized when w/h change, instead of allocated per call.
-snapshotPixels:(w,h)=>{setUniforms();renderFrame();if(!__snapshotCanvas){__snapshotCanvas=document.createElement('canvas');__snapshotCtx=__snapshotCanvas.getContext('2d',{willReadFrequently:true});}if(__snapshotCanvas.width!==w||__snapshotCanvas.height!==h){__snapshotCanvas.width=w;__snapshotCanvas.height=h;}// Source is alpha:true, so drawImage's source-over would
-// blend it onto whatever this reused canvas held last,
-// only a size change reallocates (and thus clears) it.
-__snapshotCtx.clearRect(0,0,w,h);__snapshotCtx.drawImage(renderer.domElement,0,0,w,h);return __snapshotCtx.getImageData(0,0,w,h);},// Cheap same-frame render (no readback), used by camera sync
+snapshotPixels:(w,h)=>captureController.snapshotPixels(w,h),// Cheap same-frame render (no readback), used by camera sync
 // to remove one-frame lag between two mirrored views. Optional
 // ts: pass the driving rAF timestamp so several views read one tick.
-renderNow:ts=>{clockTick(ts);setUniforms();renderFrame();},// Fixed-resolution capture mode for the turntable recorder:
+renderNow:ts=>captureController.renderNow(ts),// Fixed-resolution capture mode for the turntable recorder:
 // syncSize's buffer pinned to width x height, canvas hidden.
 // Returns false if the view is gone or already capturing.
-beginCapture:({width,height})=>{if(stopped||captureState)return false;captureState={prevPixelRatio:renderer.getPixelRatio(),prevVisibility:canvas.style.visibility,width,height};resizeSuspended=true;renderer.setPixelRatio(1);applySize(width,height);canvas.style.visibility='hidden';return true;},// Renders one frame at the capture resolution and reads it
+beginCapture:opts=>stopped?false:captureController.beginCapture(opts),// Renders one frame at the capture resolution and reads it
 // back as ImageData, same cached-canvas path as snapshotPixels.
-captureFrame:()=>{if(!captureState)throw new Error('captureFrame() called with no active beginCapture().');setUniforms();renderFrame();const{width:w,height:h}=captureState;if(!__captureCanvas){__captureCanvas=document.createElement('canvas');__captureCtx=__captureCanvas.getContext('2d',{willReadFrequently:true});}if(__captureCanvas.width!==w||__captureCanvas.height!==h){__captureCanvas.width=w;__captureCanvas.height=h;}__captureCtx.clearRect(0,0,w,h);__captureCtx.drawImage(renderer.domElement,0,0,w,h);return __captureCtx.getImageData(0,0,w,h);},// Leaves capture mode: restores on-screen visibility, pixel
+captureFrame:()=>captureController.captureFrame(),// Leaves capture mode: restores on-screen visibility, pixel
 // ratio and layout-driven sizing. Idempotent, safe to call twice.
-endCapture:()=>{if(!captureState)return;canvas.style.visibility=captureState.prevVisibility;renderer.setPixelRatio(captureState.prevPixelRatio);captureState=null;resizeSuspended=false;syncSizeRef();},// Reads the live `uniforms` closure binding (same one setUniforms
+endCapture:()=>captureController.endCapture(),// Reads the live `uniforms` closure binding (same one setUniforms
 // uses), so a material swap is reflected without a stale copy.
 isAnimated:()=>!!(uniforms&&(uniforms.u_time||uniforms.u_frame)),// Status snapshot: level/triangles/capped describe the current
 // baseGeometry (0 until one is built); notices merges the
@@ -3391,4 +3367,7 @@ const watchFullscreen=cb=>{const h=()=>cb(fullscreenElement());document.addEvent
 (()=>{if(typeof document==='undefined'||document.getElementById('mtlx-shared-css'))return;const st=document.createElement('style');st.id='mtlx-shared-css';st.textContent=['.mtlx-loading-bar{position:relative;overflow:hidden;height:6px;border-radius:9999px;background:rgba(75,85,99,.45);}','.mtlx-loading-bar::after{content:"";position:absolute;top:0;bottom:0;left:0;width:40%;border-radius:9999px;','background:linear-gradient(90deg,transparent,#60a5fa,transparent);animation:mtlx-loading-slide 1.1s ease-in-out infinite;}','@keyframes mtlx-loading-slide{from{transform:translateX(-100%);}to{transform:translateX(350%);}}'].join('');document.head.appendChild(st);})();// Custom highlight.js theme for the XML "Document" dialog, matching the
 // site's dark gray-900/800 + blue-400 palette. Background is explicitly
 // transparent so it doesn't paint over the dialog's own panel.
-(()=>{if(typeof document==='undefined'||document.getElementById('mtlx-hljs-theme'))return;const st=document.createElement('style');st.id='mtlx-hljs-theme';st.textContent=['.hljs{color:#d1d5db;background:transparent;}','.hljs-tag,.hljs-punctuation{color:#6b7280;}','.hljs-name{color:#60a5fa;}','.hljs-attr{color:#9ca3af;}','.hljs-string{color:#4ade80;}','.hljs-comment{color:#6b7280;font-style:italic;}'].join('');document.head.appendChild(st);})();Object.assign(window,{getMxEnv,DEBUG_SHADERS,mtlxWarn,mxExclusive,MTLX_CLOCK,clockTick,getForceTransparency,setForceTransparency,getDisplacementEnabled,setDisplacementEnabled,getDisplacementNormalsMode,setDisplacementNormalsMode,getPreviewSubdivisionLevel,setPreviewSubdivisionLevel,PREVIEW_TRIANGLE_BUDGET,pickSubdivisionLevel,getHeightToNormalTexel,setHeightToNormalTexel,parseUniforms,parseVertexInputs,stripVersion,encodeDisplay,countFragmentSamplers,mergeDuplicateImageNodes,mxNodeSignature,mxErr,mxWriteValue,vecToArray,mxSafe,mxElName,mxElCat,mxElType,mxElAttr,mxSetAttr,mxRemoveAttr,mxSetColorspace,nextFrame,findConvertChain,ensureTypedInput,stripValuesFromConnectedInputs,listDocRenderables,normPath,readDroppedItems,expandZips,isHiddenSideFile,findFileForRef,findFilesForRef,preferKtx2Sibling,resolveIncludes,readMtlxText,readMtlxXml,isExportAttribution,splitXmlEnvelope,withXmlEnvelope,preserveSourceFormatting,TEXTURE_CACHE,textureCacheKey,samplerCacheKey,normalizeSamplerAddressMode,collectImageSamplerModes,annotateFilenameSamplerModes,bindDroppedTextures,loadExrTexture,loadHdrTexture,loadTifTexture,loadKtx2Texture,capKtx2MipLevels,runHeavyTextureDecode,loadBoundedBitmapTexture,resetTexturePerf,sceneTextureFastPathEnabled,readImageDimensions,boundDecodedTexture,collectMxUniforms,mxValueToThreeUniform,linToSrgb,srgbToLin,rgbToHex,hexToRgb,getFilenameDefaultTexture,rebindFilenameDefault,configureLoadedTexture,samplerHoldsDefault,prepGeometry,normalizeGeometry,buildPreviewGeometry,bindGeompropAttributes,loadCustomPreviewGeomFromFile,loadCustomPreviewGeomFromUrl,getCustomPreviewGeom,clearCustomPreviewGeom,getGlobalGeom,setGlobalGeom,getDisplayTransform,setDisplayTransform,getDisplayExposure,setDisplayExposure,displayExposureScale,applyThreeToneMappingChunk,getDisplayTransformValues,displayTransformId,sceneDisplayTransformGLSL:DISPLAY_TRANSFORM_SWITCH_GLSL,COLOR_VIEWABLE,resolveNodeKind,makeEnvTexture,getEnvironment,COLORSPACES,loadEnvironmentFromFile,loadEnvironmentFromBuffer,makeFlatEnvironment,setEnvOverride,getEnvOverride,getKeyLightEnabled,setKeyLightEnabled,prewarmShaderCompile,createMtlxRenderView,compileMtlxSceneMaterial,createMtlxSceneUniforms,createLightTransportUniforms,generatePreviewSources,generatePreviewSourcesWithinBudget,evaluateDisplacement,generateDisplacementSourcesUnlocked,detectDisplacementMode,ensurePrefilteredEnv,getSpecularEnvMethod,ensureConvolvedIrradiance,envIrradianceForShading,getDiffuseEnvMethod,setDiffuseEnvMethod,getDummyTexWhite,getDummyTex3DWhite,SHADOW_FACE_SLOTS,SHADOW_LIGHT_SLOTS_MAX,SHADOW_NORMAL_OFFSET_TEXELS,SHADOW_DEPTH_BIAS_TEXELS,createPeelPipeline,createRgbtPeelPipeline,applyPeelMaterialMode,registerLiveView,unregisterLiveView,tryRefreshRenderView,prewarmPreviewTarget,checkTargetTransparency,EXPORT_TARGETS,generateTargetSources,fullscreenElement,toggleFullscreen,watchFullscreen});
+(()=>{if(typeof document==='undefined'||document.getElementById('mtlx-hljs-theme'))return;const st=document.createElement('style');st.id='mtlx-hljs-theme';st.textContent=['.hljs{color:#d1d5db;background:transparent;}','.hljs-tag,.hljs-punctuation{color:#6b7280;}','.hljs-name{color:#60a5fa;}','.hljs-attr{color:#9ca3af;}','.hljs-string{color:#4ade80;}','.hljs-comment{color:#6b7280;font-style:italic;}'].join('');document.head.appendChild(st);})();Object.assign(window,{getMxEnv,DEBUG_SHADERS,mtlxWarn,mxExclusive,MTLX_CLOCK,clockTick,getForceTransparency,setForceTransparency,getDisplacementEnabled,setDisplacementEnabled,getDisplacementNormalsMode,setDisplacementNormalsMode,getPreviewSubdivisionLevel,setPreviewSubdivisionLevel,PREVIEW_TRIANGLE_BUDGET,pickSubdivisionLevel,getHeightToNormalTexel,setHeightToNormalTexel,parseUniforms,parseVertexInputs,stripVersion,encodeDisplay,countFragmentSamplers,mergeDuplicateImageNodes,mxNodeSignature,mxErr,mxWriteValue,vecToArray,mxSafe,mxElName,mxElCat,mxElType,mxElAttr,mxSetAttr,mxRemoveAttr,mxSetColorspace,nextFrame,findConvertChain,ensureTypedInput,stripValuesFromConnectedInputs,listDocRenderables,normPath,readDroppedItems,expandZips,isHiddenSideFile,findFileForRef,findFilesForRef,preferKtx2Sibling,resolveIncludes,readMtlxText,readMtlxXml,isExportAttribution,splitXmlEnvelope,withXmlEnvelope,preserveSourceFormatting,TEXTURE_CACHE,textureCacheKey,samplerCacheKey,normalizeSamplerAddressMode,collectImageSamplerModes,annotateFilenameSamplerModes,bindDroppedTextures,loadExrTexture,loadHdrTexture,loadTifTexture,loadKtx2Texture,capKtx2MipLevels,runHeavyTextureDecode,loadBoundedBitmapTexture,resetTexturePerf,sceneTextureFastPathEnabled,readImageDimensions,boundDecodedTexture,collectMxUniforms,mxValueToThreeUniform,linToSrgb,srgbToLin,rgbToHex,hexToRgb,getFilenameDefaultTexture,rebindFilenameDefault,configureLoadedTexture,samplerHoldsDefault,prepGeometry,normalizeGeometry,buildPreviewGeometry,bindGeompropAttributes,loadCustomPreviewGeomFromFile,loadCustomPreviewGeomFromUrl,getCustomPreviewGeom,clearCustomPreviewGeom,getGlobalGeom,setGlobalGeom,getDisplayTransform,setDisplayTransform,getDisplayExposure,setDisplayExposure,displayExposureScale,applyThreeToneMappingChunk,getDisplayTransformValues,displayTransformId,sceneDisplayTransformGLSL:DISPLAY_TRANSFORM_SWITCH_GLSL,COLOR_VIEWABLE,resolveNodeKind,makeEnvTexture,getEnvironment,COLORSPACES,loadEnvironmentFromFile,loadEnvironmentFromBuffer,makeFlatEnvironment,setEnvOverride,getEnvOverride,getKeyLightEnabled,setKeyLightEnabled,prewarmShaderCompile,createMtlxRenderView,compileMtlxSceneMaterial,createMtlxSceneUniforms,createLightTransportUniforms,generatePreviewSources,generatePreviewSourcesWithinBudget,evaluateDisplacement,generateDisplacementSourcesUnlocked,detectDisplacementMode,ensurePrefilteredEnv,getSpecularEnvMethod,ensureConvolvedIrradiance,envIrradianceForShading,getDiffuseEnvMethod,setDiffuseEnvMethod,getDummyTexWhite,getDummyTex3DWhite,SHADOW_FACE_SLOTS,SHADOW_LIGHT_SLOTS_MAX,SHADOW_NORMAL_OFFSET_TEXELS,SHADOW_DEPTH_BIAS_TEXELS,createPeelPipeline,createRgbtPeelPipeline,applyPeelMaterialMode,registerLiveView,unregisterLiveView,tryRefreshRenderView,prewarmPreviewTarget,checkTargetTransparency,EXPORT_TARGETS,generateTargetSources,fullscreenElement,toggleFullscreen,watchFullscreen});// Hands the render-session module (js/shared/render-session.js) the
+// engine internals it needs at call time; must run after every const
+// above is defined, so this stays the file's last line.
+MtlxRender.bindEngine({getDisplayTransform,applyThreeToneMappingChunk,displayExposureScale,clockTick});
