@@ -241,7 +241,7 @@ const PEEL_LAYERS=8;// Shared 1x1 opaque-black dummy texture: the DEFAULT bindin
 // uniforms always have SOME bound texture even though they're only
 // sampled while u_peelMode != 0. Module-scope + lazily created.
 let MTLX_DUMMY_TEX=null;const getDummyTex=()=>{if(!MTLX_DUMMY_TEX){MTLX_DUMMY_TEX=new THREE.DataTexture(new Uint8Array([0,0,0,255]),1,1,THREE.RGBAFormat);MTLX_DUMMY_TEX.needsUpdate=true;}return MTLX_DUMMY_TEX;};// White counterpart, depth==1.0 (far plane): the fail-safe default for
-// u_opaqueDepth (see bindMaterialUniforms/renderFrame) so a stale/missing
+// u_opaqueDepth (see createMtlxSceneUniforms/renderFrame) so a stale/missing
 // binding reads as "nothing there", never triggering the peel discard.
 let MTLX_DUMMY_TEX_WHITE=null;// Shadow matrix meaning "no shadow": maps every world position to the origin,
 // so mx_shadow_occlusion samples the middle of a white moments map at depth
@@ -2184,7 +2184,12 @@ programKey:srcs.vs+'\\n/* scene-fs */\\n'+srcs.fs+'\\n/* displacement */\\n'+(sr
 notice:dropped.length?samplerBudgetNotice({needed:neededInfo||samplerInfo,limit:budget,effects:joinWithAnd(dropped.map(d=>d.userLabel)),plural:dropped.length>1}):null},samplerOverBudget:overBudget,budgetAttempts,fragmentUniformVectors:{estimate:uniformInfo.estimate,limit:uniformLimit,largest:uniformInfo.largest},fragmentUniformOverBudget:uniformInfo.estimate>uniformLimit};};// Create a detached uniform map for one scene object. Every call returns a
 // fresh map, so meshes may share the compiled Three.js program while retaining
 // independent world/normal matrices and MaterialX values.
-const createMtlxSceneUniforms=({compiled,env=null,lightData=[],stageLights=null,shadowMap=null,shadowMatrix=null,ssaoMap=null,ssaoTexel=null,ssaoStrength=1,thicknessMap=null,thicknessTexel=null,thicknessScale=1,refractionTwoSided=false,sceneRadius=1,envTilt=null,envRotationRad=0,envExposure=1,environmentIndirectScale=1,environmentKeyScale=1,lightScales=null,shadowDiagnosticVisibilityScale=1,displayTransform=null,shadowAtlas=null,shadowMatrices=null,shadowTiles=null,shadowDepthPlanes=null,shadowDepthRanges=null,shadowSourceRadii=null,shadowTexelSizes=null,shadowFaceOrigins=null,shadowFaceValid=null,shadowFaceBasisX=null,shadowFaceBasisY=null,shadowFaceBasisZ=null,shadowSlotFace=null,shadowSlotFaceCount=null,shadowTransmittance=null,shadowRecordCells=null,skyVisMap=null,skyVisMin=null,skyVisSize=null,skyVisStrength=1,skyVisCell=0,aoVolumeMap=null,aoVolumeMin=null,aoVolumeSize=null,aoVolumeStrength=1,aoVolumeCell=0,skyBounceMap=null,skyBounceMin=null,skyBounceSize=null,skyBounceStrength=0,skyBounceCell=0,bounceScale=0,bounceTint=null,localEnvMap=null,localEnvMips=1,localEnvStrength=0,localEnvProbe=null,localEnvBoxMin=null,localEnvBoxMax=null,localEnvParallax=0})=>{if(!compiled)throw new Error('Cannot create scene uniforms without compiled MaterialX source.');const uniforms={u_worldMatrix:{value:new THREE.Matrix4()},u_viewProjectionMatrix:{value:new THREE.Matrix4()},u_worldInverseTransposeMatrix:{value:new THREE.Matrix4()},u_viewPosition:{value:new THREE.Vector3()},u_peelMode:{value:0},u_peelHasPrev:{value:0},u_peelPrevDepth:{value:getDummyTex()},u_opaqueDepth:{value:getDummyTexWhite()},u_peelLinear:{value:0},// Injected by encodeDisplay, so these are never in MaterialX's own
+// Binds env radiance/irradiance to every declared sampler matching env
+// naming; skips u_localEnv* (bound separately, gated by strength). Shared
+// by createMtlxSceneUniforms and the Material Viewer's setEnvironment.
+const bindEnvironmentSamplers=(uniforms,declared,env)=>{const has=name=>declared.some(u=>u.name===name);const radiance=envRadianceForShading(env)||getDummyTex();const irradiance=envIrradianceForShading(env)||radiance;if(has('u_envRadiance'))uniforms.u_envRadiance={value:radiance};if(has('u_envIrradiance'))uniforms.u_envIrradiance={value:irradiance};for(const u of declared){if(!/sampler/i.test(u.type)||!/env/i.test(u.name)||/^u_localEnv/.test(u.name))continue;// "u_envIrradiance" contains "radiance", so the irradiance test
+// must run first or the diffuse term binds the sharp radiance map.
+if(/irradiance|diffuse/i.test(u.name))uniforms[u.name]={value:irradiance};else if(/radiance|specular|prefilter/i.test(u.name))uniforms[u.name]={value:radiance};}return{radiance,irradiance};};const createMtlxSceneUniforms=({compiled,env=null,lightData=[],stageLights=null,shadowMap=null,shadowMatrix=null,ssaoMap=null,ssaoTexel=null,ssaoStrength=1,thicknessMap=null,thicknessTexel=null,thicknessScale=1,refractionTwoSided=false,sceneRadius=1,envTilt=null,envRotationRad=0,envExposure=1,environmentIndirectScale=1,environmentKeyScale=1,lightScales=null,shadowDiagnosticVisibilityScale=1,displayTransform=null,shadowAtlas=null,shadowMatrices=null,shadowTiles=null,shadowDepthPlanes=null,shadowDepthRanges=null,shadowSourceRadii=null,shadowTexelSizes=null,shadowFaceOrigins=null,shadowFaceValid=null,shadowFaceBasisX=null,shadowFaceBasisY=null,shadowFaceBasisZ=null,shadowSlotFace=null,shadowSlotFaceCount=null,shadowTransmittance=null,shadowRecordCells=null,skyVisMap=null,skyVisMin=null,skyVisSize=null,skyVisStrength=1,skyVisCell=0,aoVolumeMap=null,aoVolumeMin=null,aoVolumeSize=null,aoVolumeStrength=1,aoVolumeCell=0,skyBounceMap=null,skyBounceMin=null,skyBounceSize=null,skyBounceStrength=0,skyBounceCell=0,bounceScale=0,bounceTint=null,localEnvMap=null,localEnvMips=1,localEnvStrength=0,localEnvProbe=null,localEnvBoxMin=null,localEnvBoxMax=null,localEnvParallax=0})=>{if(!compiled)throw new Error('Cannot create scene uniforms without compiled MaterialX source.');const uniforms={u_worldMatrix:{value:new THREE.Matrix4()},u_viewProjectionMatrix:{value:new THREE.Matrix4()},u_worldInverseTransposeMatrix:{value:new THREE.Matrix4()},u_viewPosition:{value:new THREE.Vector3()},u_peelMode:{value:0},u_peelHasPrev:{value:0},u_peelPrevDepth:{value:getDummyTex()},u_opaqueDepth:{value:getDummyTexWhite()},u_peelLinear:{value:0},// Injected by encodeDisplay, so these are never in MaterialX's own
 // introspection and cannot be gated on has() like the rest. The
 // transform defaults to the caller's, letting the Scene run a filmic
 // curve while the Material Viewer stays on plain sRGB for parity.
@@ -2222,9 +2227,10 @@ u_skyBounceMap:{value:skyBounceMap||getDummyTex3DWhite()},u_skyBounceMin:{value:
 // strength or the baked volume's readiness.
 u_bounceScale:{value:Number.isFinite(bounceScale)?Math.max(0,bounceScale):0},u_bounceTint:{value:bounceTint?bounceTint.clone():new THREE.Vector3(1,1,1)}});if(compiled.payloadSupported){// Scene RGB-T is opt-in at compile time and remains inactive until
 // the compositor sets these selectors.
-uniforms.u_peelRgbt={value:0};uniforms.u_peelRgbtPass={value:0};uniforms.u_peelRgbtLayer={value:0};}applyIntrospectedUniformDefaults(uniforms,compiled.introspected||[]);const declared=new Set((compiled.declared||[]).map(u=>u.name));const has=name=>declared.has(name);const radiance=envRadianceForShading(env)||getDummyTex();const irradiance=envIrradianceForShading(env)||radiance;const mips=env&&env.mips!=null?env.mips:1;if(has('u_time'))uniforms.u_time={value:MTLX_CLOCK.time};if(has('u_frame'))uniforms.u_frame={value:MTLX_CLOCK.frame};if(has('u_envRadiance'))uniforms.u_envRadiance={value:radiance};if(has('u_envIrradiance'))uniforms.u_envIrradiance={value:irradiance};for(const u of compiled.declared||[]){if(!/sampler/i.test(u.type)||!/env/i.test(u.name))continue;// "u_envIrradiance" contains "radiance", so the irradiance test
-// must run first or the diffuse term binds the sharp radiance map.
-if(/irradiance|diffuse/i.test(u.name))uniforms[u.name]={value:irradiance};else if(/radiance|specular|prefilter/i.test(u.name))uniforms[u.name]={value:radiance};}// envTilt carries a dome light's non-vertical orientation. The rotation
+uniforms.u_peelRgbt={value:0};uniforms.u_peelRgbtPass={value:0};uniforms.u_peelRgbtLayer={value:0};}applyIntrospectedUniformDefaults(uniforms,compiled.introspected||[]);// Some callers (the Material Viewer's preview sources) never carry a
+// pre-parsed `declared` list, so fall back to parsing the generated
+// source directly; the Scene always passes `declared`.
+const declaredList=compiled.declared||parseUniforms(compiled.fs||'').concat(parseUniforms(compiled.vs||''));const declared=new Set(declaredList.map(u=>u.name));const has=name=>declared.has(name);const mips=env&&env.mips!=null?env.mips:1;if(has('u_time'))uniforms.u_time={value:MTLX_CLOCK.time};if(has('u_frame'))uniforms.u_frame={value:MTLX_CLOCK.frame};bindEnvironmentSamplers(uniforms,declaredList,env);// envTilt carries a dome light's non-vertical orientation. The rotation
 // slider stays a pure yaw, so the dome's yaw is decomposed out of the tilt
 // and re-applied here: with the slider at the dome's own yaw this
 // reproduces the authored orientation exactly.
@@ -2661,7 +2667,7 @@ let viewIsTransparent=false;// Outer-scope binding for the createPeelPipeline in
 let peelPipeline=null;// The radiance texture, kept so the caller can toggle it as the
 // visible backdrop (setEnvBackground) via bgMesh below; the IBL
 // uniforms are bound regardless.
-let envBgTexture=null;let envRadSamplerName=null,envIrrSamplerName=null,envRotationRad=0;// See NEUTRAL_ENV_ROTATION_CHUNK's header comment above for the full
+let envBgTexture=null;let envRotationRad=0;// See NEUTRAL_ENV_ROTATION_CHUNK's header comment above for the full
 // derivation of why this is a bare RotationY(rad), no extra PI/2.
 const envRotationMatrix3=rad=>new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeRotationY(rad));// Attaches the live-rotatable env patch to one neutral glTF PBR
 // material. Nested here so onBeforeCompile reads `envRotationRad`
@@ -2674,16 +2680,16 @@ material.customProgramCacheKey=()=>'neutralEnvRotation';};// Skybox mesh + studi
 // `scene` exists, below).
 let previewBackdrop=null;// Shell-level env (IBL) state, fetched ONCE (not per material
 // apply) since env textures never change across a document edit.
-// bindMaterialUniforms() reads these on every apply.
+// shadingEnv()/createMtlxSceneUniforms read these on every apply.
 let envRadiance=null,envIrradiance=null,envMips=0,envExposure=1.0;// The full env object last applied (fetch, setEnvironment or
 // setEnvMap), kept ONLY so a diffuseEnv method switch can rebind this
 // view's irradiance sampler via handle.setEnvironment(currentEnvRef)
 // without a shader rebuild (P3-DESIGN.md section 4 S4).
 let currentEnvRef=null;// Last caller-supplied owner tag from setEnvironment(env, {user}); this
 // slice only records it (P3-DESIGN.md section 4 S5), no behavior reads it yet.
-let envOwner=null;// envHasFile/envPrefilteredIrr: used only by the DEBUG_SHADERS log
-// in bindMaterialUniforms, to reproduce the old descriptive message
-// now that `env` no longer lives past the one-time shell-level fetch.
+let envOwner=null;// envHasFile/envPrefilteredIrr: used only by logPreviewUniformDebug's
+// DEBUG_SHADERS log, to reproduce the old descriptive message now
+// that `env` no longer lives past the one-time shell-level fetch.
 let envHasFile=false,envPrefilteredIrr=false;// The active env's auto-extracted key light (null = none), see
 // extractKeyLight/currentLights. rigCount fixes u_lightData's length.
 let envKeyLight=null;// Cheaper fallback direction for the studio shadow ONLY (no direct
@@ -3001,90 +3007,13 @@ let fitCenter=null,fitRadius=null;if(mesh){mesh.updateMatrixWorld(true);const bb
 controls.saveState();}const vp=new THREE.Matrix4();// Hoisted above the first material apply: applyMaterialInternal
 // calls this after every swap, and animate() calls it every
 // frame. The guard is defensive only.
-const setUniforms=()=>{if(!mesh||!uniforms)return;mesh.updateMatrixWorld();camera.updateMatrixWorld();camera.matrixWorldInverse.copy(camera.matrixWorld).invert();uniforms.u_worldMatrix.value.copy(mesh.matrixWorld);vp.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);uniforms.u_viewProjectionMatrix.value.copy(vp);uniforms.u_worldInverseTransposeMatrix.value.copy(mesh.matrixWorld).invert().transpose();camera.getWorldPosition(uniforms.u_viewPosition.value);if(uniforms.u_time)uniforms.u_time.value=MTLX_CLOCK.time;if(uniforms.u_frame)uniforms.u_frame.value=MTLX_CLOCK.frame;};// ------------------------------------------------------
-// bindMaterialUniforms: builds a FRESH uniforms object
-// for ONE material apply, reading the shell-level env
-// state fetched once above rather than re-fetching. Returns
-// the object; does not touch the shell `uniforms` binding.
-// ------------------------------------------------------
-const bindMaterialUniforms=srcs=>{const{vs,fs,introspected}=srcs;// Shadow sampling and the occlusion block are gated out of
-// preview sources (nothing here can bind either), so their
-// no-op seeds are gated the same way.
-const featureSkips=srcs.featureSkips||{};// MaterialX-generated shaders expect their own attribute
-// names (i_position, i_normal, ...) and u_* transform
-// uniforms, so we use RawShaderMaterial and feed both manually.
-const newUniforms={u_worldMatrix:{value:new THREE.Matrix4()},u_viewProjectionMatrix:{value:new THREE.Matrix4()},u_worldInverseTransposeMatrix:{value:new THREE.Matrix4()},u_viewPosition:{value:new THREE.Vector3()},// Depth-peel uniforms (see injectPeelDiscard's header
-// comment above), declared on EVERY material
-// regardless of FORCE_TRANSPARENCY/hwTransparency, since
-// the shader itself always declares them now.
-// u_peelMode defaults to 0 (normal path, discard
-// block inert); renderFrame() (createMtlxRenderView)
-// flips these per-pass when peeling is active. The
-// two sampler uniforms default to a dummy texture so
-// they're never left pointing at "nothing" even
-// though they're only ever sampled while
-// u_peelMode != 0. u_opaqueDepth defaults to WHITE
-// (depth==1.0/far), a stale/missing binding then
-// reads as "nothing there", so `z >= _opaqueZ` never
-// spuriously discards (see getDummyTexWhite's header
-// comment). u_peelPrevDepth keeps the BLACK default
-// (depth==0.0) for the same fail-safe reason on its
-// own `z <= _prevZ + eps` comparison.
-u_peelMode:{value:0},u_peelHasPrev:{value:0},u_peelPrevDepth:{value:getDummyTex()},u_opaqueDepth:{value:getDummyTexWhite()},// Harmless when shadow sampling was gated out (no such
-// uniform then); with it generated the Viewer must bind
-// white moments (fully lit) or its materials render black.
-u_shadowMap:{value:getDummyTexWhite()},u_shadowMatrix:{value:shadowOffMatrix()},// encodeDisplay defers to finalMat only while the
-// peel pipeline draws a linear intermediate target.
-// Ordinary opaque frames must remain display encoded.
-u_peelLinear:{value:0},// Injected by encodeDisplay, so MaterialX never
-// introspects it and the defaults pass below cannot
-// supply it.
-u_displayExposure:{value:displayExposureScale()},u_displayTransform:{value:displayTransformId(getDisplayTransform())}};if(!featureSkips.shadowMap)Object.assign(newUniforms,{// No stage caster in the Viewer, so no slot is shadowed;
-// the white dummy moments map above says the same thing.
-// No stage caster in the Viewer: an all -1 slot map
-// makes the atlas lookup an exact no-op.
-u_shadowAtlas:{value:getDummyTexWhite()},u_shadowMatrices:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Matrix4())},u_shadowTiles:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4(0,0,1,1))},u_shadowDepthPlanes:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4(0,0,0,1))},u_shadowDepthRanges:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector2(0,1))},u_shadowSourceRadii:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4())},u_shadowTexelWorldSize:{value:new Array(SHADOW_FACE_SLOTS).fill(0)},u_shadowFaceOrigin:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3())},u_shadowFaceValid:{value:new Array(SHADOW_FACE_SLOTS).fill(0)},u_shadowFaceBasisX:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3(1,0,0))},u_shadowFaceBasisY:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3(0,1,0))},u_shadowFaceBasisZ:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3(0,0,1))},u_shadowSlotFace:{value:new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1)},u_shadowSlotFaceCount:{value:new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(0)},u_shadowDiagnosticVisibilityScale:{value:1}});if(!featureSkips.occlusion)Object.assign(newUniforms,{// Same sampler-unit hazard as the Scene: see
-// createMtlxSceneUniforms. No stage volume here, so
-// the white 1x1x1 dummy at strength 0 is the value.
-u_skyVisMap:{value:getDummyTex3DWhite()},u_skyVisMin:{value:new THREE.Vector3()},u_skyVisSize:{value:new THREE.Vector3(1,1,1)},u_skyVisCell:{value:0},u_skyVisStrength:{value:0},// No baked occlusion volume in the Viewer either;
-// same sampler-unit hazard as u_skyVisMap above.
-u_aoVolumeMap:{value:getDummyTex3DWhite()},u_aoVolumeMin:{value:new THREE.Vector3()},u_aoVolumeSize:{value:new THREE.Vector3(1,1,1)},u_aoVolumeCell:{value:0},u_aoVolumeStrength:{value:0}});// Baked diffuse bounce is patched in independently of the
-// occlusion gate, so it is seeded whatever that gate did.
-Object.assign(newUniforms,{// No baked diffuse bounce in the Viewer either; same
-// sampler-unit hazard as u_skyVisMap above.
-u_skyBounceMap:{value:getDummyTex3DWhite()},u_skyBounceMin:{value:new THREE.Vector3()},u_skyBounceSize:{value:new THREE.Vector3(1,1,1)},u_skyBounceCell:{value:0},u_skyBounceStrength:{value:0},u_bounceScale:{value:0},u_bounceTint:{value:new THREE.Vector3(1,1,1)}});// GLSL ES 3.0 forbids uniform initializers, so the app
-// must upload each default, an unset uniform reads as
-// 0 in WebGL, which blacked out every unlit/PBR preview.
-applyIntrospectedUniformDefaults(newUniforms,introspected);if(DEBUG_SHADERS){console.log('introspected uniforms:',introspected.map(u=>`${u.type} ${u.name}${u.data!=null?' (default uploaded)':''}`));if(!introspected.length){console.warn('Shader introspection found NO uniform blocks, defaults not uploaded; expect black. (Binding API mismatch, report the mxShader/stage method names used by generatePreviewSourcesUnlocked.)');}}// Discover what the generated shader actually declares,
-// so we bind by real names rather than assumptions.
-const declared=parseUniforms(fs).concat(parseUniforms(vs));const declaredNames=new Set(declared.map(u=>u.name));const has=n=>declaredNames.has(n);// MaterialX gives u_time/u_frame no default value, so the
-// introspected-defaults pass above never binds them.
-if(has('u_time'))newUniforms.u_time={value:MTLX_CLOCK.time};if(has('u_frame'))newUniforms.u_frame={value:MTLX_CLOCK.frame};// Finds a declared sampler by pattern, ALWAYS anchored
-// to /env/i first, without it, a material sampler
-// named e.g. "specular" could false-match (a real past bug).
-const findSampler=(re,exclude)=>declared.find(u=>/sampler/i.test(u.type)&&/env/i.test(u.name)&&re.test(u.name)&&!(exclude&&exclude.test(u.name)));if(DEBUG_SHADERS){console.group(`MaterialX preview: ${label}`);console.log('kind:',debugKind,'needsLighting:',needsLighting);console.log('declared uniforms:',declared.map(u=>`${u.type} ${u.name}`));console.log('VERTEX SHADER\n',vs);console.log('PIXEL SHADER\n',fs);console.groupEnd();}// Image-based lighting: binds the already-fetched,
-// shell-level env textures to whatever sampler names
-// THIS shader uses, matched loosely against version drift.
-if(needsLighting){// "u_envIrradiance" also matches /radiance/i, so the
-// radiance pattern must exclude it explicitly here.
-const radSampler=findSampler(/radiance|specular|prefilter/i,/irradiance/i);const irrSampler=findSampler(/irradiance|diffuse/i);if(radSampler)newUniforms[radSampler.name]={value:envRadiance};if(irrSampler)newUniforms[irrSampler.name]={value:envIrradiance};// Captured so the view-handle's setEnvironment()/
-// setEnvRotation()/setEnvExposure() methods below can
-// live-swap/mutate the right uniforms after creation.
-envRadSamplerName=radSampler&&radSampler.name;envIrrSamplerName=irrSampler&&irrSampler.name;// +90° Y is the official viewer's fixed base; the
-// user's rotation adds on top, seeded from
-// envRotationRad (not 0) so a material swap preserves it.
-if(has('u_envMatrix'))newUniforms.u_envMatrix={value:new THREE.Matrix4().makeRotationY(Math.PI/2+envRotationRad)};if(has('u_envRadianceMips'))newUniforms.u_envRadianceMips={value:envMips};if(has('u_envRadianceSamples'))newUniforms.u_envRadianceSamples={value:16};// Seeded from envExposure (not a literal 1.0) so a
-// material swap PRESERVES whatever exposure the
-// user already dialed in via setEnvExposure().
-if(has('u_envLightIntensity')&&!newUniforms.u_envLightIntensity)newUniforms.u_envLightIntensity={value:envExposure};// Generated ESSL declares u_refractionTwoSided (the name
-// the official viewer also binds). false matches upstream's
-// LightHandler default; true double-squares tinted transmission.
-if(has('u_refractionTwoSided'))newUniforms.u_refractionTwoSided={value:false};// Direct lights = rig (fixed) + auto-extracted env
-// key light (rotates live), ALWAYS bound at a FIXED
-// length (rigCount+1, see getMxEnv's
-// hwMaxActiveLightSources) so later updates can
-// mutate values in place without a rebuild.
-const nLights=activeLightCount(lightData,envKeyLight,null,srcs.maxLights);if(has('u_numActiveLightSources'))newUniforms.u_numActiveLightSources={value:nLights};if(has('u_lightData')){const entries=currentLights(lightData,envKeyLight,envRotationRad,null,undefined,null,srcs.maxLights);newUniforms.u_lightData={value:entries};}if(DEBUG_SHADERS){console.log('env bound → radiance:',radSampler&&radSampler.name,'| irradiance:',irrSampler&&irrSampler.name,envHasFile?envPrefilteredIrr?'(radiance + prefiltered irradiance files)':'(radiance file; irradiance SH-synthesized)':'(synthesized)','| direct lights:',nLights,'(rig '+rigCount+' + key '+(envKeyLight?1:0)+')');const envUnbound=declared.filter(u=>/sampler/i.test(u.type)&&/env/i.test(u.name)&&!newUniforms[u.name]);if(envUnbound.length)mtlxWarn('UNBOUND env samplers (likely cause of black):',envUnbound.map(u=>u.name));}}return newUniforms;};// syncMeshMaterialMode, derives the mesh material's
+const setUniforms=()=>{if(!mesh||!uniforms)return;mesh.updateMatrixWorld();camera.updateMatrixWorld();camera.matrixWorldInverse.copy(camera.matrixWorld).invert();uniforms.u_worldMatrix.value.copy(mesh.matrixWorld);vp.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);uniforms.u_viewProjectionMatrix.value.copy(vp);uniforms.u_worldInverseTransposeMatrix.value.copy(mesh.matrixWorld).invert().transpose();camera.getWorldPosition(uniforms.u_viewPosition.value);if(uniforms.u_time)uniforms.u_time.value=MTLX_CLOCK.time;if(uniforms.u_frame)uniforms.u_frame.value=MTLX_CLOCK.frame;};// Shell env state in the shape createMtlxSceneUniforms
+// expects; no radiancePrefiltered/irradianceConvolved
+// fields, so envRadianceForShading returns it as-is.
+const shadingEnv=()=>({radiance:envRadiance,irradiance:envIrradiance,mips:envMips,keyLight:envKeyLight});// DEBUG_SHADERS logging the old bindMaterialUniforms fork
+// used to print inline; kept as its own helper so
+// createMtlxSceneUniforms stays free of console noise.
+const logPreviewUniformDebug=(srcs,newUniforms)=>{if(!DEBUG_SHADERS)return;const introspected=srcs.introspected||[];console.log('introspected uniforms:',introspected.map(u=>`${u.type} ${u.name}${u.data!=null?' (default uploaded)':''}`));if(!introspected.length){console.warn('Shader introspection found NO uniform blocks, defaults not uploaded; expect black. (Binding API mismatch, report the mxShader/stage method names used by generatePreviewSourcesUnlocked.)');}const declared=srcs.declared||parseUniforms(srcs.fs||'').concat(parseUniforms(srcs.vs||''));console.group(`MaterialX preview: ${label}`);console.log('kind:',debugKind,'needsLighting:',needsLighting);console.log('declared uniforms:',declared.map(u=>`${u.type} ${u.name}`));console.log('VERTEX SHADER\n',srcs.vs);console.log('PIXEL SHADER\n',srcs.fs);console.groupEnd();if(needsLighting){const nLights=activeLightCount(lightData,envKeyLight,null,srcs.maxLights);console.log('env bound →',envHasFile?envPrefilteredIrr?'(radiance + prefiltered irradiance files)':'(radiance file; irradiance SH-synthesized)':'(synthesized)','| direct lights:',nLights,'(rig '+rigCount+' + key '+(envKeyLight?1:0)+')');const envUnbound=declared.filter(u=>/sampler/i.test(u.type)&&/env/i.test(u.name)&&!newUniforms[u.name]);if(envUnbound.length)mtlxWarn('UNBOUND env samplers (likely cause of black):',envUnbound.map(u=>u.name));}};// syncMeshMaterialMode, derives the mesh material's
 // blend/depth flags from viewIsTransparent/
 // FORCE_TRANSPARENCY, in place (no shader rebuild, the
 // peel discard block is baked into every shader
@@ -3107,7 +3036,7 @@ const wantLinear=peelOn&&peelLinearOk;linearToggle.sync(wantLinear);applyPeelMat
 // error, restores the OLD material/uniforms and disposes
 // the bad one BEFORE throwing, see the badProg branch below.
 // ------------------------------------------------------
-const applyMaterialInternal=(srcs,applyLabel)=>{if(geometry&&srcs.geomprops&&srcs.geomprops.length){bindGeompropAttributes(geometry,srcs.geomprops,text=>{if(!srcs.notices)srcs.notices=[];if(!srcs.notices.includes(text))srcs.notices.push(text);});}const newUniforms=bindMaterialUniforms(srcs);// Transparency verdict is srcs.transparent, gated on
+const applyMaterialInternal=(srcs,applyLabel)=>{if(geometry&&srcs.geomprops&&srcs.geomprops.length){bindGeompropAttributes(geometry,srcs.geomprops,text=>{if(!srcs.notices)srcs.notices=[];if(!srcs.notices.includes(text))srcs.notices.push(text);});}const newUniforms=createMtlxSceneUniforms({compiled:srcs,env:needsLighting?shadingEnv():null,lightData:needsLighting?lightData:null,envRotationRad,envExposure});logPreviewUniformDebug(srcs,newUniforms);// Transparency verdict is srcs.transparent, gated on
 // FORCE_TRANSPARENCY. When on, translucency is produced
 // by renderFrame()'s depth-peel passes (syncMeshMaterialMode,
 // above), not three.js blend state, STRAIGHT alpha
@@ -3259,10 +3188,13 @@ previewBackdrop.setEnvRotationBackdrop(rad,envKeyLight,envSoftKeyDir);// Scene-m
 sceneOwnedMaterials.forEach(m=>{const u=m.userData.envRotationUniform;if(u)u.value=envRotationMatrix3(rad);});},// IBL-only exposure multiplier, direct lights are
 // unaffected, but IBL is the dominant light source in these
 // previews so this reads as a full exposure control.
-setEnvExposure:x=>{if(uniforms.u_envLightIntensity)uniforms.u_envLightIntensity.value=x;// Persist onto the shell too: bindMaterialUniforms seeds
-// a NEW material's u_envLightIntensity from envExposure,
-// so a future swap keeps the user's setting, not resetting to 1.0.
-envExposure=x;// Scene-mode's sceneGroup meshes are ordinary glTF PBR
+setEnvExposure:x=>{if(uniforms.u_envLightIntensity)uniforms.u_envLightIntensity.value=x;// Persist onto the shell too: applyMaterialInternal seeds a
+// NEW material's u_envLightIntensity from envExposure, so a
+// future swap keeps the user's setting, not resetting to 1.0.
+envExposure=x;// Key light is energy split OUT of the env map (D5): its
+// bound intensity must track exposure the same way the IBL
+// uniform above just did, in place, no rebuild.
+updateKeyLightUniformEntry(uniforms,rigCount,envKeyLight,envRotationRad,x);// Scene-mode's sceneGroup meshes are ordinary glTF PBR
 // materials lit via scene.environment/PMREM, their
 // envMapIntensity is the equivalent knob. Skip `mesh`.
 if(sceneGroup){sceneGroup.traverse(obj=>{if(obj.isMesh&&obj!==mesh&&obj.material&&'envMapIntensity'in obj.material){obj.material.envMapIntensity=x;}});}},// Re-derives the material's blend/depth flags from the stored
@@ -3283,7 +3215,10 @@ refreshDisplaySettings:()=>{const scale=displayExposureScale();const mode=getDis
 previewBackdrop.refreshStudioShader(mode);scene.traverse(obj=>{if(obj.material&&obj.material.toneMapped)obj.material.needsUpdate=true;});renderFrame();},// Live-swaps the environment without a shader rebuild, used
 // by the Environment dialog's Import/Reset. Also regenerates
 // scene-mode's PMREM. No-op on views with no lighting/env.
-setEnvironment:(env,opts)=>{if(!env)return;if(opts&&opts.user!==undefined)envOwner=opts.user;currentEnvRef=env;ensurePrefilteredEnv(renderer,env);ensureConvolvedIrradiance(renderer,env);if(envRadSamplerName&&uniforms[envRadSamplerName])uniforms[envRadSamplerName].value=envRadianceForShading(env);if(envIrrSamplerName&&uniforms[envIrrSamplerName])uniforms[envIrrSamplerName].value=envIrradianceForShading(env);if(uniforms.u_envRadianceMips)uniforms.u_envRadianceMips.value=env.mips;// Persist onto the SHELL env state too, not just the
+setEnvironment:(env,opts)=>{if(!env)return;if(opts&&opts.user!==undefined)envOwner=opts.user;currentEnvRef=env;ensurePrefilteredEnv(renderer,env);ensureConvolvedIrradiance(renderer,env);// material's shader source is the same srcs.vs/fs
+// createMtlxSceneUniforms parsed at bind time (D7's
+// declared fallback).
+const declared=material?parseUniforms(material.fragmentShader).concat(parseUniforms(material.vertexShader)):[];bindEnvironmentSamplers(uniforms,declared,env);if(uniforms.u_envRadianceMips)uniforms.u_envRadianceMips.value=env.mips;// Persist onto the SHELL env state too, not just the
 // current material's uniforms, otherwise a future swap
 // silently reverts to the stale env.
 envRadiance=envRadianceForShading(env);envIrradiance=envIrradianceForShading(env);envMips=env.mips;envBgTexture=env.background;// New env => possibly a new (or no) key light; refresh the
@@ -3411,7 +3346,7 @@ const watchFullscreen=cb=>{const h=()=>cb(fullscreenElement());document.addEvent
 (()=>{if(typeof document==='undefined'||document.getElementById('mtlx-shared-css'))return;const st=document.createElement('style');st.id='mtlx-shared-css';st.textContent=['.mtlx-loading-bar{position:relative;overflow:hidden;height:6px;border-radius:9999px;background:rgba(75,85,99,.45);}','.mtlx-loading-bar::after{content:"";position:absolute;top:0;bottom:0;left:0;width:40%;border-radius:9999px;','background:linear-gradient(90deg,transparent,#60a5fa,transparent);animation:mtlx-loading-slide 1.1s ease-in-out infinite;}','@keyframes mtlx-loading-slide{from{transform:translateX(-100%);}to{transform:translateX(350%);}}'].join('');document.head.appendChild(st);})();// Custom highlight.js theme for the XML "Document" dialog, matching the
 // site's dark gray-900/800 + blue-400 palette. Background is explicitly
 // transparent so it doesn't paint over the dialog's own panel.
-(()=>{if(typeof document==='undefined'||document.getElementById('mtlx-hljs-theme'))return;const st=document.createElement('style');st.id='mtlx-hljs-theme';st.textContent=['.hljs{color:#d1d5db;background:transparent;}','.hljs-tag,.hljs-punctuation{color:#6b7280;}','.hljs-name{color:#60a5fa;}','.hljs-attr{color:#9ca3af;}','.hljs-string{color:#4ade80;}','.hljs-comment{color:#6b7280;font-style:italic;}'].join('');document.head.appendChild(st);})();Object.assign(window,{getMxEnv,DEBUG_SHADERS,mtlxWarn,mxExclusive,MTLX_CLOCK,clockTick,getForceTransparency,setForceTransparency,getDisplacementEnabled,setDisplacementEnabled,getDisplacementNormalsMode,setDisplacementNormalsMode,getPreviewSubdivisionLevel,setPreviewSubdivisionLevel,PREVIEW_TRIANGLE_BUDGET,pickSubdivisionLevel,getHeightToNormalTexel,setHeightToNormalTexel,parseUniforms,parseVertexInputs,stripVersion,encodeDisplay,countFragmentSamplers,mergeDuplicateImageNodes,mxNodeSignature,mxErr,mxWriteValue,vecToArray,mxSafe,mxElName,mxElCat,mxElType,mxElAttr,mxSetAttr,mxRemoveAttr,mxSetColorspace,nextFrame,findConvertChain,ensureTypedInput,stripValuesFromConnectedInputs,listDocRenderables,normPath,readDroppedItems,expandZips,isHiddenSideFile,findFileForRef,findFilesForRef,preferKtx2Sibling,resolveIncludes,readMtlxText,readMtlxXml,isExportAttribution,splitXmlEnvelope,withXmlEnvelope,preserveSourceFormatting,TEXTURE_CACHE,textureCacheKey,samplerCacheKey,normalizeSamplerAddressMode,collectImageSamplerModes,annotateFilenameSamplerModes,bindDroppedTextures,loadExrTexture,loadHdrTexture,loadTifTexture,loadKtx2Texture,capKtx2MipLevels,runHeavyTextureDecode,loadBoundedBitmapTexture,resetTexturePerf,sceneTextureFastPathEnabled,readImageDimensions,boundDecodedTexture,collectMxUniforms,mxValueToThreeUniform,linToSrgb,srgbToLin,rgbToHex,hexToRgb,getFilenameDefaultTexture,rebindFilenameDefault,configureLoadedTexture,samplerHoldsDefault,prepGeometry,normalizeGeometry,buildPreviewGeometry,bindGeompropAttributes,loadCustomPreviewGeomFromFile,loadCustomPreviewGeomFromUrl,getCustomPreviewGeom,clearCustomPreviewGeom,getGlobalGeom,setGlobalGeom,getDisplayTransform,setDisplayTransform,getDisplayExposure,setDisplayExposure,displayExposureScale,applyThreeToneMappingChunk,getDisplayTransformValues,displayTransformId,sceneDisplayTransformGLSL:DISPLAY_TRANSFORM_SWITCH_GLSL,COLOR_VIEWABLE,resolveNodeKind,makeEnvTexture,getEnvironment,COLORSPACES,loadEnvironmentFromFile,loadEnvironmentFromBuffer,makeFlatEnvironment,setEnvOverride,getEnvOverride,getKeyLightEnabled,setKeyLightEnabled,prewarmShaderCompile,createMtlxRenderView,compileMtlxSceneMaterial,createMtlxSceneUniforms,createLightTransportUniforms,generatePreviewSources,generatePreviewSourcesWithinBudget,evaluateDisplacement,generateDisplacementSourcesUnlocked,detectDisplacementMode,ensurePrefilteredEnv,getSpecularEnvMethod,ensureConvolvedIrradiance,envIrradianceForShading,getDiffuseEnvMethod,setDiffuseEnvMethod,getDummyTexWhite,getDummyTex3DWhite,SHADOW_FACE_SLOTS,SHADOW_LIGHT_SLOTS_MAX,SHADOW_NORMAL_OFFSET_TEXELS,SHADOW_DEPTH_BIAS_TEXELS,createPeelPipeline,createRgbtPeelPipeline,applyPeelMaterialMode,registerLiveView,unregisterLiveView,tryRefreshRenderView,prewarmPreviewTarget,checkTargetTransparency,EXPORT_TARGETS,generateTargetSources,fullscreenElement,toggleFullscreen,watchFullscreen});// Hands the render-session module (js/shared/render-session.js) the
+(()=>{if(typeof document==='undefined'||document.getElementById('mtlx-hljs-theme'))return;const st=document.createElement('style');st.id='mtlx-hljs-theme';st.textContent=['.hljs{color:#d1d5db;background:transparent;}','.hljs-tag,.hljs-punctuation{color:#6b7280;}','.hljs-name{color:#60a5fa;}','.hljs-attr{color:#9ca3af;}','.hljs-string{color:#4ade80;}','.hljs-comment{color:#6b7280;font-style:italic;}'].join('');document.head.appendChild(st);})();Object.assign(window,{getMxEnv,DEBUG_SHADERS,mtlxWarn,mxExclusive,MTLX_CLOCK,clockTick,getForceTransparency,setForceTransparency,getDisplacementEnabled,setDisplacementEnabled,getDisplacementNormalsMode,setDisplacementNormalsMode,getPreviewSubdivisionLevel,setPreviewSubdivisionLevel,PREVIEW_TRIANGLE_BUDGET,pickSubdivisionLevel,getHeightToNormalTexel,setHeightToNormalTexel,parseUniforms,parseVertexInputs,stripVersion,encodeDisplay,countFragmentSamplers,mergeDuplicateImageNodes,mxNodeSignature,mxErr,mxWriteValue,vecToArray,mxSafe,mxElName,mxElCat,mxElType,mxElAttr,mxSetAttr,mxRemoveAttr,mxSetColorspace,nextFrame,findConvertChain,ensureTypedInput,stripValuesFromConnectedInputs,listDocRenderables,normPath,readDroppedItems,expandZips,isHiddenSideFile,findFileForRef,findFilesForRef,preferKtx2Sibling,resolveIncludes,readMtlxText,readMtlxXml,isExportAttribution,splitXmlEnvelope,withXmlEnvelope,preserveSourceFormatting,TEXTURE_CACHE,textureCacheKey,samplerCacheKey,normalizeSamplerAddressMode,collectImageSamplerModes,annotateFilenameSamplerModes,bindDroppedTextures,loadExrTexture,loadHdrTexture,loadTifTexture,loadKtx2Texture,capKtx2MipLevels,runHeavyTextureDecode,loadBoundedBitmapTexture,resetTexturePerf,sceneTextureFastPathEnabled,readImageDimensions,boundDecodedTexture,collectMxUniforms,mxValueToThreeUniform,linToSrgb,srgbToLin,rgbToHex,hexToRgb,getFilenameDefaultTexture,rebindFilenameDefault,configureLoadedTexture,samplerHoldsDefault,prepGeometry,normalizeGeometry,buildPreviewGeometry,bindGeompropAttributes,loadCustomPreviewGeomFromFile,loadCustomPreviewGeomFromUrl,getCustomPreviewGeom,clearCustomPreviewGeom,getGlobalGeom,setGlobalGeom,getDisplayTransform,setDisplayTransform,getDisplayExposure,setDisplayExposure,displayExposureScale,applyThreeToneMappingChunk,getDisplayTransformValues,displayTransformId,sceneDisplayTransformGLSL:DISPLAY_TRANSFORM_SWITCH_GLSL,COLOR_VIEWABLE,resolveNodeKind,makeEnvTexture,getEnvironment,COLORSPACES,loadEnvironmentFromFile,loadEnvironmentFromBuffer,makeFlatEnvironment,setEnvOverride,getEnvOverride,getKeyLightEnabled,setKeyLightEnabled,prewarmShaderCompile,createMtlxRenderView,compileMtlxSceneMaterial,createMtlxSceneUniforms,bindEnvironmentSamplers,createLightTransportUniforms,generatePreviewSources,generatePreviewSourcesWithinBudget,evaluateDisplacement,generateDisplacementSourcesUnlocked,detectDisplacementMode,ensurePrefilteredEnv,getSpecularEnvMethod,ensureConvolvedIrradiance,envIrradianceForShading,getDiffuseEnvMethod,setDiffuseEnvMethod,getDummyTexWhite,getDummyTex3DWhite,SHADOW_FACE_SLOTS,SHADOW_LIGHT_SLOTS_MAX,SHADOW_NORMAL_OFFSET_TEXELS,SHADOW_DEPTH_BIAS_TEXELS,createPeelPipeline,createRgbtPeelPipeline,applyPeelMaterialMode,registerLiveView,unregisterLiveView,tryRefreshRenderView,prewarmPreviewTarget,checkTargetTransparency,EXPORT_TARGETS,generateTargetSources,fullscreenElement,toggleFullscreen,watchFullscreen});// Hands the render-session module (js/shared/render-session.js) the
 // engine internals it needs at call time; must run after every const
 // above is defined, so this stays the file's last line.
 MtlxRender.bindEngine({getDisplayTransform,applyThreeToneMappingChunk,displayExposureScale,clockTick});
