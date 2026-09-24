@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // scripts/gen-ktx2-loader.mjs
 //
-// One-off generator (not part of the vendor.mjs COPIES table, because it
+// One-off generator (not a scripts/vendor-deps.mjs entry, because it
 // transforms rather than verbatim-copies): inlines three@0.128.0's ES-module
 // KTX2Loader stack (jsm/loaders/KTX2Loader.js, jsm/loaders/BasisTextureLoader.js,
 // jsm/libs/ktx-parse.module.js, jsm/libs/zstddec.module.js) into a single plain

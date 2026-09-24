@@ -1,386 +1,532 @@
 {
   "generatedBy": "scripts/vendor.mjs",
-  "entries": [
+  "deps": [
     {
-      "path": "babel/babel.min.js",
-      "source": "@babel/standalone@7.26.10",
-      "sha256": "7acf405141ca9e611b6d40aeef52071432d5f387cf906fc3556fb9f0b1a28601",
-      "bytes": 3014882
+      "id": "babel",
+      "kind": "npm",
+      "version": "7.26.10"
     },
     {
+      "id": "basis-encoder",
+      "kind": "files",
+      "version": "99f52d63aa6799cbdaecfe977111dc5ec3b31d47"
+    },
+    {
+      "id": "dagre",
+      "kind": "npm",
+      "version": "0.8.5"
+    },
+    {
+      "id": "draco",
+      "kind": "files",
+      "version": "1.5.7"
+    },
+    {
+      "id": "highlightjs",
+      "kind": "npm",
+      "version": "11.9.0"
+    },
+    {
+      "id": "jszip",
+      "kind": "npm",
+      "version": "3.10.1"
+    },
+    {
+      "id": "katex",
+      "kind": "npm",
+      "version": "0.16.47"
+    },
+    {
+      "id": "pako",
+      "kind": "npm",
+      "version": "1.0.11"
+    },
+    {
+      "id": "react",
+      "kind": "npm",
+      "version": "18.3.1"
+    },
+    {
+      "id": "react-dom",
+      "kind": "npm",
+      "version": "18.3.1"
+    },
+    {
+      "id": "reactflow",
+      "kind": "npm",
+      "version": "11.11.4"
+    },
+    {
+      "id": "tailwind",
+      "kind": "files",
+      "version": "3.4.17"
+    },
+    {
+      "id": "three",
+      "kind": "npm",
+      "version": "0.128.0"
+    },
+    {
+      "id": "three-147",
+      "kind": "npm",
+      "version": "0.147.0"
+    },
+    {
+      "id": "usd-webview-bindings",
+      "kind": "files",
+      "version": "2026.9.1"
+    },
+    {
+      "id": "utif",
+      "kind": "npm",
+      "version": "3.1.0"
+    }
+  ],
+  "entries": [
+    {
       "path": "babel/LICENSE.txt",
+      "dep": "babel",
       "source": "@babel/standalone@7.26.10",
       "sha256": "117da2af0d4ce0fe1c8e19b5cff9dcd806adf973d328d27b11d4448c4ff24f76",
       "bytes": 1106
     },
     {
+      "path": "babel/babel.min.js",
+      "dep": "babel",
+      "source": "@babel/standalone@7.26.10",
+      "sha256": "7acf405141ca9e611b6d40aeef52071432d5f387cf906fc3556fb9f0b1a28601",
+      "bytes": 3014882
+    },
+    {
+      "path": "basis-encoder/LICENSE.txt",
+      "dep": "basis-encoder",
+      "source": "https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/LICENSE",
+      "sha256": "065fcf48d6af21c0b75e23be5ed5753aee75c892e1c2cf178fa6736305614a5c",
+      "bytes": 11347
+    },
+    {
       "path": "basis-encoder/basis_encoder.js",
+      "dep": "basis-encoder",
       "source": "https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/webgl/encoder/build/basis_encoder.js",
       "sha256": "d225ce1e7012609bcfbe338351c8778d95eb1c19d404314d513b2b2df94a6ffb",
       "bytes": 103878
     },
     {
       "path": "basis-encoder/basis_encoder.wasm",
+      "dep": "basis-encoder",
       "source": "https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/webgl/encoder/build/basis_encoder.wasm",
       "sha256": "48d4e39ccaa1e290a17d00c13b353a728227bb439108d5e6c944fe6ab80552db",
       "bytes": 3287321
     },
     {
-      "path": "basis-encoder/LICENSE.txt",
-      "source": "https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/LICENSE",
-      "sha256": "065fcf48d6af21c0b75e23be5ed5753aee75c892e1c2cf178fa6736305614a5c",
-      "bytes": 11347
-    },
-    {
-      "path": "dagre/dagre.min.js",
-      "source": "dagre@0.8.5",
-      "sha256": "62eb9787ccfdbdf4148d4d99d31dbf9ee4770eafee81e637d759b52aac22cd51",
-      "bytes": 283803
-    },
-    {
       "path": "dagre/LICENSE.txt",
+      "dep": "dagre",
       "source": "dagre@0.8.5",
       "sha256": "6a349742a6cb219d5a2fc8d0844f6d89a6efc62e20c664450d884fc7ff2d6015",
       "bytes": 1062
     },
     {
-      "path": "highlightjs/highlight.min.js",
-      "source": "@highlightjs/cdn-assets@11.9.0",
-      "sha256": "837a6fa5b0c736b52bbde2b2b6190f305da3fc9ed41681db5321507057b5c846",
-      "bytes": 121727
+      "path": "dagre/dagre.min.js",
+      "dep": "dagre",
+      "source": "dagre@0.8.5",
+      "sha256": "62eb9787ccfdbdf4148d4d99d31dbf9ee4770eafee81e637d759b52aac22cd51",
+      "bytes": 283803
     },
     {
       "path": "highlightjs/LICENSE.txt",
+      "dep": "highlightjs",
       "source": "@highlightjs/cdn-assets@11.9.0",
       "sha256": "6c081431591d9df696c82dc598fe1423765b8a299b200ed00b281afd0f64c490",
       "bytes": 1514
     },
     {
+      "path": "highlightjs/highlight.min.js",
+      "dep": "highlightjs",
+      "source": "@highlightjs/cdn-assets@11.9.0",
+      "sha256": "837a6fa5b0c736b52bbde2b2b6190f305da3fc9ed41681db5321507057b5c846",
+      "bytes": 121727
+    },
+    {
       "path": "highlightjs/xml.min.js",
+      "dep": "highlightjs",
       "source": "@highlightjs/cdn-assets@11.9.0",
       "sha256": "e6fb27c375179ecea98c78d374aaded766b431c07d5aa0657918879bb658eef3",
       "bytes": 2024
     },
     {
-      "path": "jszip/jszip.min.js",
-      "source": "jszip@3.10.1",
-      "sha256": "acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e",
-      "bytes": 97630
-    },
-    {
       "path": "jszip/LICENSE.markdown",
+      "dep": "jszip",
       "source": "jszip@3.10.1",
       "sha256": "566c953c6090b1218ca6217dd7359d45dde46581968586dc607d59a78af6a9c4",
       "bytes": 33753
     },
     {
+      "path": "jszip/jszip.min.js",
+      "dep": "jszip",
+      "source": "jszip@3.10.1",
+      "sha256": "acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e",
+      "bytes": 97630
+    },
+    {
+      "path": "katex/LICENSE.txt",
+      "dep": "katex",
+      "source": "katex@0.16.47",
+      "sha256": "766ccc1f306c885aa45542a9846bbd0a505b27a0374f146778171c2254ce18e3",
+      "bytes": 1107
+    },
+    {
       "path": "katex/fonts/KaTeX_AMS-Regular.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "0cdd387c9590a1a9f9794560022dbb59654a7d86f187aa0c81495ad42d3a7308",
       "bytes": 28076
     },
     {
       "path": "katex/fonts/KaTeX_Caligraphic-Bold.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "de7701e42cf1f4cf0b766c03fb27977207eee2f4fd5d76fa82188406da43ea4c",
       "bytes": 6912
     },
     {
       "path": "katex/fonts/KaTeX_Caligraphic-Regular.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "5d53e70ad607c2352162dec9e0923fb54ecdafaccbf604cd8dcf7d00facb989b",
       "bytes": 6908
     },
     {
       "path": "katex/fonts/KaTeX_Fraktur-Bold.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "74444efd593c005e3f4573b44524704c0af0a937fe911cca9e94068d0d140d3f",
       "bytes": 11348
     },
     {
       "path": "katex/fonts/KaTeX_Fraktur-Regular.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "51814d270d06ff0255dba0799994fa4d8c84d11f09951d47595f4abb1f3602dc",
       "bytes": 11316
     },
     {
       "path": "katex/fonts/KaTeX_Main-Bold.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "0f60d1b897938ec918c8ce073092411baf9438f6739465693ff18b0f9d20b021",
       "bytes": 25324
     },
     {
       "path": "katex/fonts/KaTeX_Main-BoldItalic.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "99cd42a3c072d918f2f44984a807cf7aa16e13545fd0875fc07c6c65f99e715b",
       "bytes": 16780
     },
     {
       "path": "katex/fonts/KaTeX_Main-Italic.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "97479ca6cce906abc961ecac96faa5f9ca2e61b8e7670d475826bcdee9a7c267",
       "bytes": 16988
     },
     {
       "path": "katex/fonts/KaTeX_Main-Regular.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "c2342cd8b869e01752a9321dc17213fc40d4d04c79688c1d43f2cf316abd7866",
       "bytes": 26272
     },
     {
       "path": "katex/fonts/KaTeX_Math-BoldItalic.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "dc47344dbb6cb5b655c8460d561f4df5f501b90c804ad3c6cec65fe322351ab1",
       "bytes": 16400
     },
     {
       "path": "katex/fonts/KaTeX_Math-Italic.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "7af58c5ec8f132a2ddde9027c6d7814decce4d3b822a11192a42a20e2e973264",
       "bytes": 16440
     },
     {
       "path": "katex/fonts/KaTeX_SansSerif-Bold.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "e99ae51144bf1232efcc1bfe5add36262c6866b0faab24fa75740e1b98577a62",
       "bytes": 12216
     },
     {
       "path": "katex/fonts/KaTeX_SansSerif-Italic.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "00b26ac825e2095056396e0553b8ac26d3f8ad158c3826e28b4c45b385c4714a",
       "bytes": 12028
     },
     {
       "path": "katex/fonts/KaTeX_SansSerif-Regular.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "68e8c73ef42afd3ccec58bf0fba302cce448938e7fc020a5e31f8a952eee1342",
       "bytes": 10344
     },
     {
       "path": "katex/fonts/KaTeX_Script-Regular.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "036d4e95149b69ff9bcc0cd55771efeb25ffa3947293e69acd78d5ac328c684b",
       "bytes": 9644
     },
     {
       "path": "katex/fonts/KaTeX_Size1-Regular.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "6b47c40166b6dbe21a5dfca7718413f2147fd2399be1ba605d8ad39cedf25dfe",
       "bytes": 5468
     },
     {
       "path": "katex/fonts/KaTeX_Size2-Regular.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "d04c54219f9eaec6d4d4fd42dfb28785975a4794d6b2fc71e566b9cd6db842dd",
       "bytes": 5208
     },
     {
       "path": "katex/fonts/KaTeX_Size3-Regular.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "73d591271b1604960cb10bb90fee021670af7297017e0e98480b332d11f51995",
       "bytes": 3624
     },
     {
       "path": "katex/fonts/KaTeX_Size4-Regular.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "a4af7d414440a1c1790825cfb700cf9cf43b0f2c4b04f0ebc523011ad9853ec0",
       "bytes": 4928
     },
     {
       "path": "katex/fonts/KaTeX_Typewriter-Regular.woff2",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "71d517d67827787cfabdf186914cc3358eda539e37931941f2b2fd4a21f68c0b",
       "bytes": 13568
     },
     {
       "path": "katex/katex.min.css",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "0289a02cf451a44dd73add683a09644252363871ac11713a647b732cee8b1ee3",
       "bytes": 23827
     },
     {
       "path": "katex/katex.min.js",
+      "dep": "katex",
       "source": "katex@0.16.47",
       "sha256": "a29d2961d3146de5949d78ac7c1a9d93ae54955bad22a6db4fbe836e88e8bf48",
       "bytes": 272537
     },
     {
-      "path": "katex/LICENSE.txt",
-      "source": "katex@0.16.47",
-      "sha256": "766ccc1f306c885aa45542a9846bbd0a505b27a0374f146778171c2254ce18e3",
-      "bytes": 1107
-    },
-    {
       "path": "pako/LICENSE.txt",
+      "dep": "pako",
       "source": "pako@1.0.11",
       "sha256": "a04665b3b2de56c66730c1f720f528175739e4104f79073614aa611da1e85539",
       "bytes": 1104
     },
     {
       "path": "pako/pako_inflate.min.js",
+      "dep": "pako",
       "source": "pako@1.0.11",
       "sha256": "2ca27e9a8dae569cdeac42752ed1aed1afeff7f19282d3cc12c0aaa54a08bc04",
       "bytes": 22682
     },
     {
       "path": "react/LICENSE.txt",
+      "dep": "react",
       "source": "react@18.3.1",
       "sha256": "52412d7bc7ce4157ea628bbaacb8829e0a9cb3c58f57f99176126bc8cf2bfc85",
       "bytes": 1086
     },
     {
       "path": "react/react-dom.production.min.js",
+      "dep": "react-dom",
       "source": "react-dom@18.3.1",
       "sha256": "35f4f974f4b2bcd44da73963347f8952e341f83909e4498227d4e26b98f66f0d",
       "bytes": 131835
     },
     {
       "path": "react/react.production.min.js",
+      "dep": "react",
       "source": "react@18.3.1",
       "sha256": "d949f1c3687aedadcedac85261865f29b17cd273997e7f6b2bfc53b2f9d4c4dd",
       "bytes": 10751
     },
     {
-      "path": "reactflow/index.js",
-      "source": "reactflow@11.11.4",
-      "sha256": "a914438458d38e79495825ddc407d9078e941b6d929f9a9fbf035b8b4edac7e3",
-      "bytes": 155188
-    },
-    {
       "path": "reactflow/LICENSE.txt",
+      "dep": "reactflow",
       "source": "reactflow@11.11.4",
       "sha256": "9f495bcaa7577b0aa3853402d6d7748987c754d3af9170a5bab1f325a90fc1ae",
       "bytes": 1073
     },
     {
+      "path": "reactflow/index.js",
+      "dep": "reactflow",
+      "source": "reactflow@11.11.4",
+      "sha256": "a914438458d38e79495825ddc407d9078e941b6d929f9a9fbf035b8b4edac7e3",
+      "bytes": 155188
+    },
+    {
       "path": "reactflow/style.css",
+      "dep": "reactflow",
       "source": "reactflow@11.11.4",
       "sha256": "8bb2def0f075030d4da2fc24570e12d0b8ddcb6cbc79566f8a5ff2c587a2b9b1",
       "bytes": 9214
     },
     {
       "path": "tailwind/LICENSE.txt",
+      "dep": "tailwind",
       "source": "https://raw.githubusercontent.com/tailwindlabs/tailwindcss/v3.4.17/LICENSE",
       "sha256": "60e0b68c0f35c078eef3a5d29419d0b03ff84ec1df9c3f9d6e39a519a5ae7985",
       "bytes": 1071
     },
     {
       "path": "tailwind/tailwind-play.min.js",
+      "dep": "tailwind",
       "source": "https://cdn.tailwindcss.com/3.4.17",
       "sha256": "176e894661aa9cdc9a5cba6c720044cbbf7b8bd80d1c9a142a7c24b1b6c50d15",
       "bytes": 407279
     },
     {
-      "path": "three/basis/basis_transcoder.js",
-      "source": "three@0.128.0",
-      "sha256": "b352d4fb1b2b5f66877a37c418d061693cee99245bdaf38e6b6ba17c9f34a964",
-      "bytes": 62997
-    },
-    {
-      "path": "three/basis/basis_transcoder.wasm",
-      "source": "three@0.128.0",
-      "sha256": "e7dcac729b9e38208a1382f17da3d64a3108a8390e95c912d24bd95b7bc2fb5b",
-      "bytes": 440267
-    },
-    {
-      "path": "three/draco/draco_decoder.wasm",
-      "source": "three@0.128.0",
-      "sha256": "32b19d590ca48d4478f74788170c7b713e0addf1f8dbab5cb07e3b2ad5f6e32e",
-      "bytes": 194983
-    },
-    {
-      "path": "three/draco/draco_wasm_wrapper.js",
-      "source": "three@0.128.0",
-      "sha256": "fc724571efc24138ffb7e430fb1c5c59a9760e64c1c3fdb98cc2503d110a3846",
-      "bytes": 53604
-    },
-    {
-      "path": "three/draco/LICENSE.txt",
-      "source": "https://raw.githubusercontent.com/google/draco/1.5.7/LICENSE",
-      "sha256": "d3709b0fb4b8a94bbb1d02b8a2e484f258b0d9c5c5a01f940391f3fe662cd1a4",
-      "bytes": 13898
-    },
-    {
       "path": "three/DRACOLoader.js",
+      "dep": "three",
       "source": "three@0.128.0",
       "sha256": "bbd4a1bb08f05d9c8df1b411644a1fc31a32fdcd36489e5bcdfe6c4fa2b8e4e9",
       "bytes": 13453
     },
     {
-      "path": "three/fflate.min.js",
-      "source": "three-147@0.147.0",
-      "sha256": "798b397d482f2ff743452362e880f1be4b683c43d7b2db3e8751f7412e7d5f4b",
-      "bytes": 30081
-    },
-    {
       "path": "three/GLTFLoader.js",
+      "dep": "three",
       "source": "three@0.128.0",
       "sha256": "5c15967ba830918a9caea6338712c994c354bccd4edc4569bde411c3ec06a3e6",
       "bytes": 96550
     },
     {
       "path": "three/LICENSE.txt",
+      "dep": "three",
       "source": "three@0.128.0",
       "sha256": "7dddf7c5b8fd10ee654db8857d75d104b5557889aa5a91fc4ca545ea7c07062f",
       "bytes": 1081
     },
     {
       "path": "three/OBJLoader.js",
+      "dep": "three",
       "source": "three@0.128.0",
       "sha256": "e3c4cf3a6b061b6956e8e8d5cc360cf95da456dcced32961f859c8be6849a579",
       "bytes": 21560
     },
     {
       "path": "three/OrbitControls.js",
+      "dep": "three",
       "source": "three@0.128.0",
       "sha256": "02bb4ade710f3e607329e37a21f098bc3ac70eb6e33daf8a65e79f4db785e7b2",
       "bytes": 26375
     },
     {
       "path": "three/RGBELoader.js",
+      "dep": "three",
       "source": "three@0.128.0",
       "sha256": "f6ba8cf5df528f1fd38b749d46cd7799a40b80d4eb1a5c5c072d31b1eae7f816",
       "bytes": 12572
     },
     {
+      "path": "three/basis/basis_transcoder.js",
+      "dep": "three",
+      "source": "three@0.128.0",
+      "sha256": "b352d4fb1b2b5f66877a37c418d061693cee99245bdaf38e6b6ba17c9f34a964",
+      "bytes": 62997
+    },
+    {
+      "path": "three/basis/basis_transcoder.wasm",
+      "dep": "three",
+      "source": "three@0.128.0",
+      "sha256": "e7dcac729b9e38208a1382f17da3d64a3108a8390e95c912d24bd95b7bc2fb5b",
+      "bytes": 440267
+    },
+    {
+      "path": "three/draco/LICENSE.txt",
+      "dep": "draco",
+      "source": "https://raw.githubusercontent.com/google/draco/1.5.7/LICENSE",
+      "sha256": "d3709b0fb4b8a94bbb1d02b8a2e484f258b0d9c5c5a01f940391f3fe662cd1a4",
+      "bytes": 13898
+    },
+    {
+      "path": "three/draco/draco_decoder.wasm",
+      "dep": "three",
+      "source": "three@0.128.0",
+      "sha256": "32b19d590ca48d4478f74788170c7b713e0addf1f8dbab5cb07e3b2ad5f6e32e",
+      "bytes": 194983
+    },
+    {
+      "path": "three/draco/draco_wasm_wrapper.js",
+      "dep": "three",
+      "source": "three@0.128.0",
+      "sha256": "fc724571efc24138ffb7e430fb1c5c59a9760e64c1c3fdb98cc2503d110a3846",
+      "bytes": 53604
+    },
+    {
+      "path": "three/fflate.min.js",
+      "dep": "three-147",
+      "source": "three-147@0.147.0",
+      "sha256": "798b397d482f2ff743452362e880f1be4b683c43d7b2db3e8751f7412e7d5f4b",
+      "bytes": 30081
+    },
+    {
       "path": "three/three.min.js",
+      "dep": "three",
       "source": "three@0.128.0",
       "sha256": "9274bbcec8d96168626c732b5d31c775aa8cfb7eaa0599bec0c175908a2c1ce2",
       "bytes": 603445
     },
     {
       "path": "usd-webview-bindings/LICENSE",
+      "dep": "usd-webview-bindings",
       "source": "https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/LICENSES.txt",
       "sha256": "95352acbcfcbc9c30805e702802fb4c8b98c58060ca84c5afa20c5a04ed83633",
       "bytes": 73957
     },
     {
       "path": "usd-webview-bindings/usdWebViewBindings.js",
+      "dep": "usd-webview-bindings",
       "source": "https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/usdWebViewBindings.js",
       "sha256": "1bd9d2349526e1fbb21a5f31ca2736efeeee04617c825e4e8f2c7094f9bcb6fc",
       "bytes": 9429
     },
     {
       "path": "usd-webview-bindings/usdWebViewBindingsModule.js",
+      "dep": "usd-webview-bindings",
       "source": "https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/usdWebViewBindingsModule.js",
       "sha256": "7fb66d2fe322135b34aa976229c8eaacc1a31cbd1e01ff98c1065e439ef62eaf",
       "bytes": 115376
     },
     {
       "path": "usd-webview-bindings/usdWebViewBindingsModule.wasm",
+      "dep": "usd-webview-bindings",
       "source": "https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/usdWebViewBindingsModule.wasm",
       "sha256": "f2662e51a687f1d4e2646731f60fdc6c59bcd605e34f2e5981e04488d02b80cd",
       "bytes": 19936729
     },
     {
       "path": "utif/LICENSE.txt",
+      "dep": "utif",
       "source": "utif@3.1.0",
       "sha256": "c1fb8861eca211bf5aea574358aba7039396c0c1824c2a1477cc126d398efd89",
       "bytes": 1065
     },
     {
       "path": "utif/UTIF.js",
+      "dep": "utif",
       "source": "utif@3.1.0",
       "sha256": "e3e76115f49571e39624c3316a76b3c4c5b2c5ca518dfec4b66a9f7af8c6d059",
       "bytes": 58271

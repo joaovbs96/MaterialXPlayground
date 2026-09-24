@@ -36,7 +36,7 @@
             }
         })();
     </script>
-    <script>window.__MTLX_BUILD = 'b43a283db0a0ebf9';</script>
+    <script>window.__MTLX_BUILD = 'fe2fb576f8000dba';</script>
     <!-- Build-id probe. Lives here, beside the stamp, deliberately: every
          other script (shell.jsx, mtlx-assets.js) is separately cached and
          may itself be the stale file this is meant to detect. -->
@@ -225,6 +225,10 @@
          import(), to CommonJS require(), which doesn't exist in the
          browser and throws "require is not defined" the first time
          getMxEnv() runs. -->
+    <!-- Vendor dependency metadata (generated from scripts/vendor-deps.mjs)
+         and MtlxVendor.url/load, used by the About dialog and on-demand vendor loads. -->
+    <script src="js/gen/vendor-deps.js"></script>
+    <script src="js/shared/vendor-runtime.js"></script>
     <!-- Shared UI commons (icon registry) — must precede the engine and every view script. -->
     <script src="js/shared/ui-commons.js"></script>
     <script src="js/shared/mesh-subdivision.js"></script>

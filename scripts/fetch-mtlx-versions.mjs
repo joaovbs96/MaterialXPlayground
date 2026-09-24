@@ -15,22 +15,16 @@
 //              check` still passes without js/materialx/1.39.4/ etc.
 //
 // The repo deliberately vendors everything and adds no archive npm
-// dependency, so this implements a minimal ZIP reader: locate the End
-// Of Central Directory record, walk central-directory entries for the
-// wanted names, then re-read each entry's OWN local header (its name/
-// extra-field lengths often differ from the central directory's copy)
-// to find where the compressed data actually starts. Supports STORED
-// (0) and DEFLATE (8, via node:zlib.inflateRawSync) and verifies the
-// CRC-32 of the inflated bytes against the central directory record —
-// the integrity check that catches a truncated/corrupt extraction.
+// dependency, so this uses the minimal ZIP reader in scripts/lib/zip.mjs
+// (shared with scripts/vendor.mjs's zip-source dependencies).
 
 import { writeFile, mkdir } from "node:fs/promises";
 import { existsSync, statSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
-import zlib from "node:zlib";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MTLX_VERSIONS, DEFAULT_MTLX_VERSION, mtlxVersionAssetUrl } from "./lib/mtlx-versions.mjs";
+import { extractFromZip } from "./lib/zip.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -60,122 +54,6 @@ function fetchableVersions() {
 
 function targetDir(entry) {
   return path.join(MATERIALX_ROOT, entry.version);
-}
-
-// ---------------------------------------------------------------------------
-// Minimal ZIP reader (STORED + DEFLATE only) — no archive dependency.
-// ---------------------------------------------------------------------------
-
-const EOCD_SIGNATURE = 0x06054b50;
-const CENTRAL_DIR_SIGNATURE = 0x02014b50;
-const LOCAL_HEADER_SIGNATURE = 0x04034b50;
-const EOCD_MIN_SIZE = 22;
-const MAX_COMMENT_LENGTH = 65535;
-
-/** CRC-32 (IEEE 802.3) lookup table, built once. */
-const CRC32_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) {
-      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    }
-    table[n] = c >>> 0;
-  }
-  return table;
-})();
-
-function crc32(buffer) {
-  let crc = 0xffffffff;
-  for (let i = 0; i < buffer.length; i++) {
-    crc = CRC32_TABLE[(crc ^ buffer[i]) & 0xff] ^ (crc >>> 8);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-/** Scans backward for the End Of Central Directory record. Its comment
- * field is variable-length (0-65535 bytes), so the record is NOT
- * reliably the last 22 bytes of the file — scan rather than assume. */
-function findEndOfCentralDirectory(zipBuf) {
-  const searchFloor = Math.max(0, zipBuf.length - (EOCD_MIN_SIZE + MAX_COMMENT_LENGTH));
-  for (let offset = zipBuf.length - EOCD_MIN_SIZE; offset >= searchFloor; offset--) {
-    if (zipBuf.readUInt32LE(offset) === EOCD_SIGNATURE) return offset;
-  }
-  throw new Error("not a valid ZIP: End Of Central Directory record not found");
-}
-
-/** Reads + decompresses one entry, starting from its LOCAL header (not
- * the central directory's): the local header's own name/extra-field
- * lengths are re-read here because they frequently differ from the
- * central directory's copy of the same fields — using the central
- * directory's lengths to locate the data is the classic bug. */
-function readZipEntryData(zipBuf, localHeaderOffset, compressionMethod, compressedSize, uncompressedSize) {
-  if (zipBuf.readUInt32LE(localHeaderOffset) !== LOCAL_HEADER_SIGNATURE) {
-    throw new Error(`not a valid ZIP: expected local file header signature at offset ${localHeaderOffset}`);
-  }
-  const localNameLength = zipBuf.readUInt16LE(localHeaderOffset + 26);
-  const localExtraLength = zipBuf.readUInt16LE(localHeaderOffset + 28);
-  const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
-  const compressed = zipBuf.subarray(dataStart, dataStart + compressedSize);
-
-  if (compressionMethod === 0) {
-    return Buffer.from(compressed);
-  }
-  if (compressionMethod === 8) {
-    const inflated = zlib.inflateRawSync(compressed);
-    if (inflated.length !== uncompressedSize) {
-      throw new Error(`inflated size (${inflated.length}) != uncompressed size in ZIP record (${uncompressedSize})`);
-    }
-    return inflated;
-  }
-  throw new Error(`unsupported ZIP compression method ${compressionMethod} (only STORED=0 and DEFLATE=8 are handled)`);
-}
-
-/** Extracts the given basenames out of an in-memory ZIP buffer, keyed
- * by basename -> Buffer. Only entries in `wantedNames` are inflated;
- * everything else in the archive is skipped untouched. */
-function extractFromZip(zipBuf, wantedNames) {
-  const eocdOffset = findEndOfCentralDirectory(zipBuf);
-  const entryCount = zipBuf.readUInt16LE(eocdOffset + 10);
-  const centralDirOffset = zipBuf.readUInt32LE(eocdOffset + 16);
-
-  const wanted = new Set(wantedNames);
-  const found = new Map();
-
-  let pos = centralDirOffset;
-  for (let i = 0; i < entryCount; i++) {
-    if (zipBuf.readUInt32LE(pos) !== CENTRAL_DIR_SIGNATURE) {
-      throw new Error(`not a valid ZIP: expected central directory signature at offset ${pos} (entry ${i + 1}/${entryCount})`);
-    }
-    const compressionMethod = zipBuf.readUInt16LE(pos + 10);
-    const expectedCrc32 = zipBuf.readUInt32LE(pos + 16);
-    const compressedSize = zipBuf.readUInt32LE(pos + 20);
-    const uncompressedSize = zipBuf.readUInt32LE(pos + 24);
-    const nameLength = zipBuf.readUInt16LE(pos + 28);
-    const extraLength = zipBuf.readUInt16LE(pos + 30);
-    const commentLength = zipBuf.readUInt16LE(pos + 32);
-    const localHeaderOffset = zipBuf.readUInt32LE(pos + 42);
-    const name = zipBuf.toString("utf8", pos + 46, pos + 46 + nameLength);
-
-    // Entries may carry a directory prefix inside the zip; match on the
-    // basename so e.g. "javascript/JsMaterialXGenShader.wasm" still
-    // resolves to the wanted "JsMaterialXGenShader.wasm".
-    const baseName = name.split("/").pop();
-    if (wanted.has(baseName) && !found.has(baseName)) {
-      const data = readZipEntryData(zipBuf, localHeaderOffset, compressionMethod, compressedSize, uncompressedSize);
-      const actualCrc32 = crc32(data);
-      if (actualCrc32 !== expectedCrc32) {
-        throw new Error(
-          `ZIP entry "${name}" failed CRC-32 verification (expected ${expectedCrc32.toString(16)}, got ${actualCrc32.toString(16)}) — the download may be truncated or corrupt`
-        );
-      }
-      found.set(baseName, data);
-    }
-
-    pos += 46 + nameLength + extraLength + commentLength;
-  }
-
-  return found;
 }
 
 // ---------------------------------------------------------------------------

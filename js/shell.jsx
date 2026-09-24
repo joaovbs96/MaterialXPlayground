@@ -844,75 +844,53 @@ function DesktopSettingsDialog() {
     );
 }
 
-// Curated display name + license URL per vendor-manifest.json `source`
-// string, deduped by name when rendered (several sources share a library).
-// License URLs are GitHub blob links pinned to HEAD, or to a commit/tag
-// when the source itself is pinned to one.
-const VENDOR_LIBRARY_MAP = {
-    '@babel/standalone@7.26.10': { name: 'Babel', licenseUrl: 'https://github.com/babel/babel/blob/HEAD/LICENSE' },
-    '@highlightjs/cdn-assets@11.9.0': { name: 'highlight.js', licenseUrl: 'https://github.com/highlightjs/highlight.js/blob/HEAD/LICENSE' },
-    'dagre@0.8.5': { name: 'Dagre', licenseUrl: 'https://github.com/dagrejs/dagre/blob/HEAD/LICENSE' },
-    'jszip@3.10.1': { name: 'JSZip', licenseUrl: 'https://github.com/Stuk/jszip/blob/HEAD/LICENSE.markdown' },
-    'katex@0.16.47': { name: 'KaTeX', licenseUrl: 'https://github.com/KaTeX/KaTeX/blob/HEAD/LICENSE' },
-    'pako@1.0.11': { name: 'pako', licenseUrl: 'https://github.com/nodeca/pako/blob/HEAD/LICENSE' },
-    'react@18.3.1': { name: 'React', licenseUrl: 'https://github.com/facebook/react/blob/HEAD/LICENSE' },
-    'react-dom@18.3.1': { name: 'React', licenseUrl: 'https://github.com/facebook/react/blob/HEAD/LICENSE' },
-    'reactflow@11.11.4': { name: 'React Flow', licenseUrl: 'https://github.com/xyflow/xyflow/blob/HEAD/LICENSE' },
-    'three@0.128.0': { name: 'three.js', licenseUrl: 'https://github.com/mrdoob/three.js/blob/HEAD/LICENSE' },
-    'three-147@0.147.0': { name: 'three.js', licenseUrl: 'https://github.com/mrdoob/three.js/blob/HEAD/LICENSE' },
-    'utif@3.1.0': { name: 'UTIF.js', licenseUrl: 'https://github.com/photopea/UTIF.js/blob/HEAD/LICENSE' },
-    'https://cdn.tailwindcss.com/3.4.17': { name: 'Tailwind CSS', licenseUrl: 'https://github.com/tailwindlabs/tailwindcss/blob/HEAD/LICENSE' },
-    'https://raw.githubusercontent.com/tailwindlabs/tailwindcss/v3.4.17/LICENSE': { name: 'Tailwind CSS', licenseUrl: 'https://github.com/tailwindlabs/tailwindcss/blob/HEAD/LICENSE' },
-    'https://raw.githubusercontent.com/google/draco/1.5.7/LICENSE': { name: 'Draco', licenseUrl: 'https://github.com/google/draco/blob/HEAD/LICENSE' },
-    'https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/webgl/encoder/build/basis_encoder.js': { name: 'Basis Universal', licenseUrl: 'https://github.com/BinomialLLC/basis_universal/blob/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/LICENSE' },
-    'https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/webgl/encoder/build/basis_encoder.wasm': { name: 'Basis Universal', licenseUrl: 'https://github.com/BinomialLLC/basis_universal/blob/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/LICENSE' },
-    'https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/LICENSE': { name: 'Basis Universal', licenseUrl: 'https://github.com/BinomialLLC/basis_universal/blob/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/LICENSE' },
-    'https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/LICENSES.txt': { name: 'OpenUSD WebView Bindings', licenseUrl: 'https://github.com/joaovbs96/USDBindings/releases/tag/v2026.9.1' },
-    'https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/usdWebViewBindings.js': { name: 'OpenUSD WebView Bindings', licenseUrl: 'https://github.com/joaovbs96/USDBindings/releases/tag/v2026.9.1' },
-    'https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/usdWebViewBindingsModule.js': { name: 'OpenUSD WebView Bindings', licenseUrl: 'https://github.com/joaovbs96/USDBindings/releases/tag/v2026.9.1' },
-    'https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/usdWebViewBindingsModule.wasm': { name: 'OpenUSD WebView Bindings', licenseUrl: 'https://github.com/joaovbs96/USDBindings/releases/tag/v2026.9.1' },
-};
-// MaterialX ships via vendor/materialx (gitignored, fetched separately by
-// `npm run vendor:offline`) so it never appears in vendor-manifest.json;
-// list it and other hand-vendored assets not in VENDOR_LIBRARY_MAP by hand.
+// Hand-vendored assets not in window.MTLX_VENDOR_DEPS (js/gen/vendor-deps.js,
+// generated from scripts/vendor-deps.mjs), listed here by hand.
 const MATERIALX_LIBRARY = { name: 'MaterialX', licenseUrl: 'https://github.com/AcademySoftwareFoundation/MaterialX/blob/HEAD/LICENSE' };
 const STATIC_LIBRARIES = [
     MATERIALX_LIBRARY,
     // Inlined as SVG paths in js/shared/ui-commons.js and js/site-header.js,
-    // not fetched at runtime, so it never appears in vendor-manifest.json.
+    // not fetched at runtime, so it never appears in vendor-deps.js.
     { name: 'Tabler Icons', licenseUrl: 'https://github.com/tabler/tabler-icons/blob/HEAD/LICENSE' },
     // js/vendor/EXRLoader.js: a patched copy of three.js's EXRLoader, see
     // js/vendor/VENDORED-CHANGES.md for the exact diff and provenance.
     { name: 'three.js EXRLoader (patched)', licenseUrl: 'https://github.com/mrdoob/three.js/blob/HEAD/LICENSE' },
     // images/materialx-logo.svg, used only to identify the MaterialX
-    // project (README.md "Trademarks"), not fetched from vendor-manifest.json.
+    // project (README.md "Trademarks"), not fetched from vendor-deps.js.
     { name: 'MaterialX logo (Academy Software Foundation)', licenseUrl: 'https://github.com/AcademySoftwareFoundation/artwork' },
 ];
 
-// Fallback for a manifest `source` string with no VENDOR_LIBRARY_MAP entry:
-// renders the raw package/repo name instead of silently dropping it, so a
-// newly vendored library can never go missing from this list unnoticed.
-function fallbackLibraryFor(source) {
-    const pkgMatch = /^([^@]+)@/.exec(source);
-    if (pkgMatch) return { name: pkgMatch[1], licenseUrl: null };
-    const ghMatch = /github(?:usercontent)?\.com\/([^/]+\/[^/]+)/.exec(source);
-    if (ghMatch) return { name: ghMatch[1], licenseUrl: null };
-    return { name: source, licenseUrl: null };
+// Credits list built synchronously from window.MTLX_VENDOR_DEPS plus the
+// hand-vendored STATIC_LIBRARIES above, deduped by name and sorted by name.
+function buildVendorEntries() {
+    const deps = window.MTLX_VENDOR_DEPS || {};
+    const libs = Object.keys(deps).map((id) => ({ name: deps[id].name, licenseUrl: deps[id].licenseUrl }));
+    libs.push(...STATIC_LIBRARIES);
+    const seen = new Set();
+    return libs.filter((lib) => {
+        if (seen.has(lib.name)) return false;
+        seen.add(lib.name);
+        return true;
+    }).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 // About dialog opened from the header help button, available in every
 // host now, and the only place the two disclaimer paragraphs render since
 // the footer strip is gone. Taller/wider than DesktopSettingsDialog to fit the license text.
 let __licenseCache = null;
-let __vendorEntriesCache = null;
-let __libVersionsCache = null;
 function AboutDialog() {
     const [open, setOpen] = React.useState(false);
     const [about, setAbout] = React.useState(null);
     const [license, setLicense] = React.useState(__licenseCache);
     const [licenseError, setLicenseError] = React.useState(false);
-    const [vendorEntries, setVendorEntries] = React.useState(__vendorEntriesCache);
-    const [libVersions, setLibVersions] = React.useState(__libVersionsCache);
+    const vendorEntries = React.useMemo(buildVendorEntries, []);
+    const libVersions = React.useMemo(() => {
+        const deps = window.MTLX_VENDOR_DEPS || {};
+        return {
+            three: deps.three ? deps.three.version : null,
+            react: deps.react ? deps.react.version : null,
+        };
+    }, []);
     const [webRelease, setWebRelease] = React.useState(undefined); // undefined = loading, null = none yet
     const panelRef = React.useRef(null);
 
@@ -934,39 +912,6 @@ function AboutDialog() {
                     .then((res) => { if (!res.ok) throw new Error('bad response'); return res.text(); })
                     .then((text) => { __licenseCache = text; setLicense(text); })
                     .catch(() => setLicenseError(true));
-            }
-            if (__vendorEntriesCache === null) {
-                fetch('vendor/vendor-manifest.json')
-                    .then((res) => { if (!res.ok) throw new Error('bad response'); return res.json(); })
-                    .then((manifest) => {
-                        const entries = manifest.entries || [];
-                        const libs = entries.map((e) => {
-                            const source = String(e.source);
-                            return VENDOR_LIBRARY_MAP[source] || fallbackLibraryFor(source);
-                        });
-                        libs.push(...STATIC_LIBRARIES);
-                        const seen = new Set();
-                        const unique = libs.filter((lib) => {
-                            if (seen.has(lib.name)) return false;
-                            seen.add(lib.name);
-                            return true;
-                        }).sort((a, b) => a.name.localeCompare(b.name));
-                        __vendorEntriesCache = unique;
-                        setVendorEntries(unique);
-
-                        // three.js + React versions for the version block
-                        // below, parsed straight off their manifest `source`
-                        // strings ("three@0.128.0" / "react@18.3.1").
-                        const threeEntry = entries.find((e) => /^three@/.test(String(e.source)));
-                        const reactEntry = entries.find((e) => /^react@/.test(String(e.source)));
-                        const versions = {
-                            three: threeEntry ? String(threeEntry.source).split('@')[1] : null,
-                            react: reactEntry ? String(reactEntry.source).split('@')[1] : null,
-                        };
-                        __libVersionsCache = versions;
-                        setLibVersions(versions);
-                    })
-                    .catch(() => { /* silently skip the third-party list */ });
             }
         };
         window.addEventListener('mtlx-about', onOpen);
