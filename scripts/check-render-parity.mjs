@@ -439,6 +439,7 @@ const EAGER_EMBED_FILES = [
   "js/shared/mesh-displacement.js",
   "js/shared/mtlx-turntable.js",
   "js/shared/render-settings.js",
+  "js/shared/render-environment.js",
   "embed/gen/embed-controls.js",
   "embed/gen/mtlx-engine.js",
   "embed/gen/mtlx-ui.js",
