@@ -8,13 +8,16 @@ import { fileURLToPath } from 'node:url';
 // js/shared/render-session.js must load with no THREE global at the top
 // level (see its own header comment): createSizer/createCaptureController
 // never touch THREE directly, so this vm has none at all.
-function loadRenderSession() {
+function loadRenderSessionWindow() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
   const source = fs.readFileSync(path.join(root, 'js', 'shared', 'render-session.js'), 'utf8');
   const sandbox = { window: { addEventListener: () => {}, removeEventListener: () => {} } };
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox, { filename: 'render-session.js' });
-  return sandbox.window.MtlxRender;
+  return sandbox.window;
+}
+function loadRenderSession() {
+  return loadRenderSessionWindow().MtlxRender;
 }
 
 // Fakes just enough of a canvas/2D context for the capture-controller
@@ -234,4 +237,108 @@ test('createCaptureController.endCapture restores pixel ratio and visibility, an
   assert.equal(pixelRatio, 2);
   capture.endCapture(); // idempotent
   assert.equal(pixelRatio, 2);
+});
+
+// --- Sticky linear toggler (S4) ---------------------------------------
+
+test('createLinearToggle only calls apply on a real transition, never a repeat', () => {
+  const MtlxRender = loadRenderSession();
+  const calls = [];
+  const toggle = MtlxRender.createLinearToggle((on) => calls.push(on));
+  assert.equal(toggle.isOn(), false);
+  assert.equal(toggle.sync(false), false); // already off, no-op
+  assert.deepEqual(calls, []);
+  assert.equal(toggle.sync(true), true);
+  assert.deepEqual(calls, [true]);
+  assert.equal(toggle.sync(true), false); // sticky: repeat is a no-op
+  assert.deepEqual(calls, [true]);
+  assert.equal(toggle.sync(false), true);
+  assert.deepEqual(calls, [true, false]);
+});
+
+test('createLinearToggle drives stub materials exactly like setSceneLinear', () => {
+  const MtlxRender = loadRenderSession();
+  const materials = [{ toneMapped: true }, { toneMapped: true }];
+  const setSceneLinear = (on) => materials.forEach((m) => { m.toneMapped = !on; });
+  const toggle = MtlxRender.createLinearToggle(setSceneLinear);
+  toggle.sync(true);
+  assert.deepEqual(materials.map((m) => m.toneMapped), [false, false]);
+  // A second frame wanting the same state must not re-touch the materials.
+  materials.forEach((m) => { m.needsUpdate = false; });
+  toggle.sync(true);
+  assert.deepEqual(materials.map((m) => m.needsUpdate), [false, false]);
+  toggle.sync(false);
+  assert.deepEqual(materials.map((m) => m.toneMapped), [true, true]);
+});
+
+// --- Compile diagnostics detection (S4) --------------------------------
+
+test('findBadProgram finds the first unrunnable program, ignoring clean ones', () => {
+  const MtlxRender = loadRenderSession();
+  const renderer = { info: { programs: [{ diagnostics: { runnable: true } }, { diagnostics: { runnable: false, programLog: 'bad' } }] } };
+  const bad = MtlxRender.findBadProgram(renderer);
+  assert.equal(bad.diagnostics.programLog, 'bad');
+  assert.equal(MtlxRender.findBadProgram({ info: { programs: [] } }), undefined);
+  assert.equal(MtlxRender.findBadProgram({ info: {} }), undefined);
+});
+
+// --- Sleep controller (S4, P3-DESIGN.md section 5) ---------------------
+
+test('computeAwake: awake only while explicitly active, not hidden, not context-lost', () => {
+  const MtlxRender = loadRenderSession();
+  assert.equal(MtlxRender.computeAwake({ explicitActive: true, hidden: false, contextLost: false }), true);
+  assert.equal(MtlxRender.computeAwake({ explicitActive: true, hidden: true, contextLost: false }), false);
+  assert.equal(MtlxRender.computeAwake({ explicitActive: true, hidden: false, contextLost: true }), false);
+  assert.equal(MtlxRender.computeAwake({ explicitActive: false, hidden: false, contextLost: false }), false);
+});
+
+test('sleepReason: context loss beats hidden beats explicit inactivity', () => {
+  const MtlxRender = loadRenderSession();
+  assert.equal(MtlxRender.sleepReason({ explicitActive: true, hidden: false, contextLost: true }), 'context-lost');
+  assert.equal(MtlxRender.sleepReason({ explicitActive: true, hidden: true, contextLost: true }), 'context-lost');
+  assert.equal(MtlxRender.sleepReason({ explicitActive: true, hidden: true, contextLost: false }), 'hidden');
+  assert.equal(MtlxRender.sleepReason({ explicitActive: false, hidden: false, contextLost: false }), 'inactive');
+  assert.equal(MtlxRender.sleepReason({ explicitActive: true, hidden: false, contextLost: false }), null);
+});
+
+test('createSleepGate calls onSleep/onWake exactly once per real transition', () => {
+  const MtlxRender = loadRenderSession();
+  const events = [];
+  const gate = MtlxRender.createSleepGate({
+    onSleep: (reason) => events.push('sleep:' + reason),
+    onWake: () => events.push('wake'),
+  });
+  assert.equal(gate.notify({ hidden: false }), false); // still awake, no-op
+  assert.deepEqual(events, []);
+  assert.equal(gate.notify({ hidden: true }), true);
+  assert.equal(gate.isAsleep(), true);
+  assert.equal(gate.getReason(), 'hidden');
+  assert.equal(gate.notify({ hidden: true }), false); // sticky: repeat is a no-op
+  assert.deepEqual(events, ['sleep:hidden']);
+  assert.equal(gate.notify({ hidden: false }), true);
+  assert.equal(gate.isAsleep(), false);
+  assert.deepEqual(events, ['sleep:hidden', 'wake']);
+});
+
+test('createSleepGate: window.__mtlxNoSleep keeps the view permanently awake', () => {
+  const win = loadRenderSessionWindow();
+  const events = [];
+  const gate = win.MtlxRender.createSleepGate({ onSleep: () => events.push('sleep'), onWake: () => events.push('wake') });
+  win.__mtlxNoSleep = true;
+  assert.equal(gate.notify({ hidden: true }), false);
+  assert.equal(gate.isAsleep(), false);
+  assert.deepEqual(events, []);
+});
+
+test('createSleepGate: context loss and explicit inactivity both drive sleep independently of hidden', () => {
+  const MtlxRender = loadRenderSession();
+  const gate = MtlxRender.createSleepGate({ onSleep: () => {}, onWake: () => {} });
+  gate.notify({ contextLost: true });
+  assert.equal(gate.isAsleep(), true);
+  assert.equal(gate.getReason(), 'context-lost');
+  gate.notify({ contextLost: false });
+  assert.equal(gate.isAsleep(), false);
+  gate.notify({ explicitActive: false });
+  assert.equal(gate.isAsleep(), true);
+  assert.equal(gate.getReason(), 'inactive');
 });

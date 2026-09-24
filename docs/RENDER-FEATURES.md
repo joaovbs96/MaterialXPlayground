@@ -27,7 +27,7 @@ One row per setting in `js/shared/render-settings.js`, one table per group. `yes
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Force Transparency | yes | yes | yes | yes | yes | yes | preview: `mtlxForceTransparency`<br>stage: `mtlxUsdSceneTransparency` (legacy: `mtlxForceTransparency`) |
 | Height-to-Normal Texel Space | yes | yes | yes | yes | yes | yes | preview: `mtlxHeightToNormalTexel`<br>stage: `mtlxHeightToNormalTexel` |
-| Diffuse Environment Method | planned (P3) | planned (P3) | planned (P3) | planned (P3) | planned (P3) | yes | preview: `mtlx_diffuse_env`<br>stage: `mtlx_diffuse_env` |
+| Diffuse Environment Method | yes | yes | yes | yes | yes | yes | preview: `mtlx_diffuse_env`<br>stage: `mtlx_diffuse_env` |
 | Compound compile | na (only the Graph Editor compiles compound taps) | na (only the Graph Editor compiles compound taps) | na (only the Graph Editor compiles compound taps) | yes | na (only the Graph Editor compiles compound taps) | na (only the Graph Editor compiles compound taps) | preview: `mtlx_graph_preview_compound` |
 | Ambient Occlusion | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_ao` |
 | One-Bounce Diffuse | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | yes | stage: `mtlx_scene_bounce` |

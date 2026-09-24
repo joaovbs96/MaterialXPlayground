@@ -187,7 +187,7 @@
                 preview: { storage: 'mtlx_diffuse_env', codec: 'enum', options: ['convolve', 'sh'], query: 'diffuseEnv', queryDecode: (raw) => (raw === 'sh' ? 'sh' : 'convolve'), setter: 'setDiffuseEnvMethod', levels: { performance: 'convolve', default: 'convolve', quality: 'convolve' } },
                 stage: { storage: 'mtlx_diffuse_env', codec: 'enum', options: ['convolve', 'sh'], levels: { performance: 'convolve', default: 'convolve', quality: 'convolve' } },
             },
-            surfaces: { viewer: PLANNED('P3'), compare: PLANNED('P3'), docs: PLANNED('P3'), graph: PLANNED('P3'), embed: PLANNED('P3'), scene: 'yes' },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
         {
             key: 'displayTransform', label: 'View Transform', group: 'display', order: 0, type: 'enum', options: ['srgb', 'aces', 'neutral', 'lin_rec709'], apply: 'uniform', ui: true,

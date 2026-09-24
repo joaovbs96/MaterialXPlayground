@@ -92,6 +92,60 @@
 
     const createRenderScene = () => new window.THREE.Scene();
 
+    // Filters ONE benign warning: on Windows, ANGLE's fxc backend emits
+    // "X4008 division by zero" for unrolled FIS/light loops (harmless,
+    // guarded by M_FLOAT_EPS), matched by exact signature; always restored.
+    // debugShaders (localStorage mtlxDebugShaders): when true, filtered
+    // warnings still reach console.debug instead of vanishing silently.
+    const compileFilteringDriverNoise = (renderer, scene, camera, debugShaders) => {
+        const origWarn = console.warn;
+        console.warn = function (...args) {
+            const isProgLog = typeof args[0] === 'string' &&
+                args[0].indexOf('THREE.WebGLProgram: gl.getProgramInfoLog()') === 0;
+            const text = args.join(' ');
+            // Anchored on the exact fxc signature (X4008 + "division by
+            // zero"), not the generic word "warning", any OTHER warning
+            // in the log must still reach the real console.warn.
+            const isKnownDriverNoise = isProgLog && /\bX4008\b/.test(text) &&
+                /division by zero/i.test(text) && !/error/i.test(text);
+            if (isKnownDriverNoise) {
+                if (debugShaders) console.debug('[mtlx] driver warnings (benign, filtered):', ...args);
+                return;
+            }
+            return origWarn.apply(console, args);
+        };
+        try {
+            renderer.compile(scene, camera);
+        } finally {
+            console.warn = origWarn;
+        }
+    };
+
+    // Detection-only half of the compile-diagnostics check: finds the first
+    // program three's WebGLProgram flagged unrunnable. The rollback (restore
+    // old material/uniforms, dispose the bad one, throw a styled Error)
+    // stays content-side (js/mtlx-engine.js's applyMaterialInternal).
+    const findBadProgram = (renderer) =>
+        (renderer.info.programs || []).find((p) => p.diagnostics && p.diagnostics.runnable === false);
+
+    // Sticky linear-pass toggler: the linear-peel opaque pass only flips
+    // scene built-ins' toneMapped state ON TRANSITIONS, never every frame
+    // (design: "the linear pass stays STICKY"). `apply(on)` is the caller's
+    // side effect (setSceneLinear); sync() is idempotent when unchanged.
+    const createLinearToggle = (apply) => {
+        let on = false;
+        return {
+            isOn: () => on,
+            sync: (wantOn) => {
+                const next = !!wantOn;
+                if (next === on) return false;
+                apply(next);
+                on = next;
+                return true;
+            },
+        };
+    };
+
     // Default camera + pose: PerspectiveCamera 45/0.1/100 at the classic
     // three-quarter framing, or the fixed OrthographicCamera for flat2d.
     // fullScene GLB camera adoption stays a content-side hook that runs
@@ -242,8 +296,15 @@
     // hook (camera aspect / quad refit -- content-owned, see P3-DESIGN.md
     // section 1), shared by the ResizeObserver path (syncSize) and the
     // fixed-resolution capture path (createCaptureController's beginCapture).
-    const createSizer = ({ canvas, renderer, fallbackWidth, fallbackHeight, layout }) => {
+    // onVisibility (optional, P3-DESIGN.md section 5): called with the new
+    // hidden flag (canvas.getClientRects().length === 0) on every real
+    // transition, from this SAME ResizeObserver callback (not a separate
+    // IntersectionObserver). The caller (sleep gate) owns what happens next;
+    // this sizer just skips its own resize while hidden and lets a wake's
+    // forceSync() (below) drive the resize back once the caller is ready.
+    const createSizer = ({ canvas, renderer, fallbackWidth, fallbackHeight, layout, onVisibility }) => {
         let suspended = false;
+        let wasHidden = false;
         const applySize = (w, h) => {
             renderer.setSize(w, h, false);
             layout(w, h);
@@ -255,6 +316,15 @@
         // it to the CSS box instead.
         const syncSize = () => {
             if (suspended) return;
+            if (onVisibility) {
+                const hidden = canvas.getClientRects().length === 0;
+                if (hidden !== wasHidden) {
+                    wasHidden = hidden;
+                    onVisibility(hidden); // sleep/wake owns this transition
+                    return;
+                }
+                if (hidden) return;
+            }
             const w = canvas.clientWidth || fallbackWidth;
             const h = canvas.clientHeight || fallbackHeight;
             applySize(w, h);
@@ -267,6 +337,10 @@
         return {
             applySize,
             syncSize,
+            // Bypasses the hidden gate: used by a wake, and by explicit
+            // renders (snapshot/renderNow/snapshotPixels/beginCapture) that
+            // must restore the real layout size before drawing anything.
+            forceSync: () => applySize(canvas.clientWidth || fallbackWidth, canvas.clientHeight || fallbackHeight),
             getResizeSuspended: () => suspended,
             // Pane drags: suspend buffer reallocation so the existing
             // frame just scales, then resync once on release.
@@ -282,7 +356,7 @@
     // The snapshot/snapshotPixels/renderNow/beginCapture/captureFrame/
     // endCapture trio: cached-canvas readback plus the capture-mode
     // resize suspension, shared by the turntable recorder and Compare.
-    const createCaptureController = ({ renderer, canvas, sizer, renderFrame, setUniforms }) => {
+    const createCaptureController = ({ renderer, canvas, sizer, renderFrame, setUniforms, ensureAwake }) => {
         let captureState = null;
         let snapshotCanvas = null, snapshotCtx = null;
         let captureCanvas = null, captureCtx = null;
@@ -295,11 +369,15 @@
             ctx.drawImage(renderer.domElement, 0, 0, w, h);
             return ctx.getImageData(0, 0, w, h);
         };
+        // Explicit renders must restore the real layout size FIRST (design
+        // section 5): a no-op unless the caller supplied a sleep gate.
+        const wake = () => { if (ensureAwake) ensureAwake(); };
         return {
             // PNG snapshot of the CURRENT view. The drawing buffer isn't
             // preserved between frames (preserveDrawingBuffer:false), so
             // render synchronously right before reading it back.
             snapshot: () => {
+                wake();
                 setUniforms();
                 renderFrame();
                 return renderer.domElement.toDataURL('image/png');
@@ -308,6 +386,7 @@
             // a render first, then resamples through a cached 2D canvas so
             // two compare views can be read at identical sizes.
             snapshotPixels: (w, h) => {
+                wake();
                 setUniforms();
                 renderFrame();
                 if (!snapshotCanvas) {
@@ -319,12 +398,13 @@
             // Cheap same-frame render (no readback), used by camera sync to
             // remove one-frame lag between two mirrored views. Optional ts:
             // pass the driving rAF timestamp so several views read one tick.
-            renderNow: (ts) => { ENGINE.clockTick(ts); setUniforms(); renderFrame(); },
+            renderNow: (ts) => { wake(); ENGINE.clockTick(ts); setUniforms(); renderFrame(); },
             // Fixed-resolution capture mode for the turntable recorder:
             // the sizer's buffer pinned to width x height, canvas hidden.
             // Returns false if a capture is already active.
             beginCapture: ({ width, height }) => {
                 if (captureState) return false;
+                wake();
                 captureState = {
                     prevPixelRatio: renderer.getPixelRatio(),
                     prevVisibility: canvas.style.visibility,
@@ -361,6 +441,51 @@
         };
     };
 
+    // Pure composite: a view is awake only while explicitly active, not
+    // hidden (canvas.getClientRects().length === 0, evaluated by the
+    // caller in its ResizeObserver callback) and not context-lost. See
+    // P3-DESIGN.md section 5. window.__mtlxNoSleep is the kill switch,
+    // checked by the caller before ever reporting hidden/lost as true.
+    const computeAwake = ({ explicitActive, hidden, contextLost }) =>
+        !!explicitActive && !hidden && !contextLost;
+
+    // Reason precedence when asleep, for getSleepState()/diagnostics:
+    // context loss and hidden both starve the loop; explicit inactivity
+    // (setActive(false), e.g. Compare's non-diff pane) is the fallback.
+    const sleepReason = ({ explicitActive, hidden, contextLost }) => {
+        if (contextLost) return 'context-lost';
+        if (hidden) return 'hidden';
+        if (!explicitActive) return 'inactive';
+        return null;
+    };
+
+    // Stateful gate: feed it the three raw inputs on every change (resize,
+    // setActive, gl-context event); it calls onSleep/onWake exactly once
+    // per real transition, never on a no-op re-notify. The kill switch
+    // window.__mtlxNoSleep short-circuits to permanently awake.
+    const createSleepGate = ({ onSleep, onWake }) => {
+        let asleep = false;
+        let reason = null;
+        let last = { explicitActive: true, hidden: false, contextLost: false };
+        const notify = (partial) => {
+            const next = Object.assign({}, last, partial);
+            last = next;
+            const noSleep = typeof window !== 'undefined' && window.__mtlxNoSleep;
+            const wantAwake = noSleep ? true : computeAwake(next);
+            const wantAsleep = !wantAwake;
+            if (wantAsleep === asleep) return false;
+            asleep = wantAsleep;
+            reason = asleep ? sleepReason(next) : null;
+            if (asleep) { if (onSleep) onSleep(reason); } else if (onWake) onWake();
+            return true;
+        };
+        return {
+            notify,
+            isAsleep: () => asleep,
+            getReason: () => reason,
+        };
+    };
+
     // Removes the gl-context listeners and disposes the renderer; called
     // from disposePartial alongside sizer.dispose() and controls.dispose().
     const disposeRendererCore = ({ canvas, onGlLost, onGlRestored, renderer }) => {
@@ -369,6 +494,19 @@
             canvas.removeEventListener('webglcontextrestored', onGlRestored);
         }
         if (renderer) renderer.dispose();
+    };
+
+    // Subscribes to setDiffuseEnvMethod's broadcast (js/mtlx-engine.js
+    // dispatches window 'mtlx-settings-changed' with key 'diffuseEnvMethod'
+    // on every convolve/SH switch). Each live preview view reuses its OWN
+    // setEnvironment(currentEnv) path to rebind, no shader rebuild needed.
+    // Returns an unsubscribe function.
+    const onDiffuseEnvMethodChange = (callback) => {
+        const handler = (e) => {
+            if (e && e.detail && e.detail.key === 'diffuseEnvMethod') callback(e.detail.value);
+        };
+        window.addEventListener('mtlx-settings-changed', handler);
+        return () => window.removeEventListener('mtlx-settings-changed', handler);
     };
 
     window.MtlxRender = Object.assign(window.MtlxRender || {}, {
@@ -386,5 +524,12 @@
         createSizer,
         createCaptureController,
         disposeRendererCore,
+        compileFilteringDriverNoise,
+        findBadProgram,
+        createLinearToggle,
+        computeAwake,
+        sleepReason,
+        createSleepGate,
+        onDiffuseEnvMethodChange,
     });
 })();

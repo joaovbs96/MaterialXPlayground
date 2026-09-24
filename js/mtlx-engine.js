@@ -647,32 +647,11 @@ const getDummyTex3DWhite = () => {
     return MTLX_DUMMY_TEX3D_WHITE;
 };
 
-// Filters ONE benign warning: on Windows, ANGLE's fxc backend emits
-// "X4008 division by zero" for unrolled FIS/light loops (harmless,
-// guarded by M_FLOAT_EPS), matched by exact signature; always restored.
-const compileFilteringDriverNoise = (renderer, scene, camera) => {
-    const origWarn = console.warn;
-    console.warn = function (...args) {
-        const isProgLog = typeof args[0] === 'string' &&
-            args[0].indexOf('THREE.WebGLProgram: gl.getProgramInfoLog()') === 0;
-        const text = args.join(' ');
-        // Anchored on the exact fxc signature (X4008 + "division by
-        // zero"), not the generic word "warning", any OTHER warning
-        // in the log must still reach the real console.warn.
-        const isKnownDriverNoise = isProgLog && /\bX4008\b/.test(text) &&
-            /division by zero/i.test(text) && !/error/i.test(text);
-        if (isKnownDriverNoise) {
-            if (DEBUG_SHADERS) console.debug('[mtlx] driver warnings (benign, filtered):', ...args);
-            return;
-        }
-        return origWarn.apply(console, args);
-    };
-    try {
-        renderer.compile(scene, camera);
-    } finally {
-        console.warn = origWarn;
-    }
-};
+// Driver-noise filter moved to MtlxRender.compileFilteringDriverNoise
+// (js/shared/render-session.js); lazy alias so prewarmPreviewTarget and
+// every applyMaterialInternal call site below keep working unchanged.
+const compileFilteringDriverNoise = (renderer, scene, camera) =>
+    MtlxRender.compileFilteringDriverNoise(renderer, scene, camera, DEBUG_SHADERS);
 
 // Shared u_time/u_frame clock, MaterialXView semantics: wall seconds since
 // first frame, per-frame counter (uint32 wrap). float32 in the shader, so
@@ -10093,6 +10072,13 @@ const createMtlxRenderView = async ({
     let captureController = null;
     let controls = null;
     let stopped = false;
+    // Sleep gate (P3-DESIGN.md section 5), built once the renderer/scene/
+    // previewBackdrop exist below; declared here so disposePartial can
+    // read getSleepState()'s resident bits without a TDZ error on an
+    // early bail.
+    let sleepGate = null;
+    let onContextLostSleep = null, onContextRestoredWake = null;
+    let unsubDiffuseEnv = null;
     // Shell-level material/geometry/uniforms state, reassigned by
     // applyMaterialInternal() on every swap so one shell backs many edits.
     // `uniforms` MUST be `let`: every closure below shares this binding.
@@ -10129,9 +10115,6 @@ const createMtlxRenderView = async ({
     // handle.isTransparent yet, so it reads this instead. Kept in sync
     // with handle.isTransparent at every point that field is set.
     let viewIsTransparent = false;
-    // Tracks whether the scene's built-in materials are currently
-    // detoned for the linear-peel opaque pass (see setSceneLinear below).
-    let sceneLinearOn = false;
     // Outer-scope binding for the createPeelPipeline instance (created
     // deep inside the try block below, out of disposePartial's reach):
     // every call site resolves this instead, assigned once it's built.
@@ -10170,6 +10153,11 @@ const createMtlxRenderView = async ({
     // apply) since env textures never change across a document edit.
     // bindMaterialUniforms() reads these on every apply.
     let envRadiance = null, envIrradiance = null, envMips = 0, envExposure = 1.0;
+    // The full env object last applied (fetch, setEnvironment or
+    // setEnvMap), kept ONLY so a diffuseEnv method switch can rebind this
+    // view's irradiance sampler via handle.setEnvironment(currentEnvRef)
+    // without a shader rebuild (P3-DESIGN.md section 4 S4).
+    let currentEnvRef = null;
     // envHasFile/envPrefilteredIrr: used only by the DEBUG_SHADERS log
     // in bindMaterialUniforms, to reproduce the old descriptive message
     // now that `env` no longer lives past the one-time shell-level fetch.
@@ -10184,19 +10172,11 @@ const createMtlxRenderView = async ({
     const rigCount = (lightData && lightData.length) || 0;
     // Per-view state for the handle's setEnvMap(url): the textures from
     // the last URL this view privately fetched, never shared with other
-    // views, so a later swap or teardown can free them safely.
-    let fetchedEnvMap = null;
-    let envMapCallId = 0; // guards latest-call-wins in setEnvMap()
-    // Frees a privately-fetched env's textures. Never call this on the
-    // shared default/override env from getEnvironment()/envOverride.
-    const disposeFetchedEnv = (env) => {
-        if (!env) return;
-        try { if (env.radiance) env.radiance.dispose(); } catch (e) { /* already disposed/invalid */ }
-        try { if (env.irradiance && env.irradiance !== env.radiance) env.irradiance.dispose(); } catch (e) { /* ditto */ }
-        try { if (env.irradianceConvolved && env.irradianceConvolved !== env.irradiance && env.irradianceConvolved !== env.radiance) env.irradianceConvolved.dispose(); } catch (e) { /* ditto */ }
-        try { if (env.radiancePrefiltered) env.radiancePrefiltered.dispose(); } catch (e) { /* ditto */ }
-        try { if (env.background) env.background.dispose(); } catch (e) { /* ditto */ }
-    };
+    // views, so a later swap or teardown can free them safely. Gate and
+    // disposeFetchedEnv moved to MtlxRender.createEnvMapGate/disposeFetchedEnv
+    // (js/shared/render-environment.js).
+    const envMapGate = MtlxRender.createEnvMapGate();
+    const disposeFetchedEnv = MtlxRender.disposeFetchedEnv;
     // No-OrbitControls fallback only (script blocked): mirrors the
     // autoRotate state so the fallback spin can be toggled too.
     let fallbackSpin = !!autoRotate;
@@ -10249,7 +10229,7 @@ const createMtlxRenderView = async ({
         try { if (pmremRT) pmremRT.dispose(); } catch (e) { /* already disposed/invalid */ }
         // setEnvMap()'s privately-fetched env, if any: this view's own
         // textures (unlike bgMesh.material.map above), safe to dispose.
-        try { if (fetchedEnvMap) disposeFetchedEnv(fetchedEnvMap); } catch (e) { /* already disposed/invalid */ }
+        try { envMapGate.disposeAll(); } catch (e) { /* already disposed/invalid */ }
         // Depth-peel render targets/quad materials, owned by the
         // createPeelPipeline instance, this view's OWN GPU resources,
         // same disposal rationale as pmremRT immediately above.
@@ -10261,6 +10241,10 @@ const createMtlxRenderView = async ({
         // SAME canvas ref. Forcing context loss would leave that reused
         // canvas's context stuck lost until an async restore, breaking the
         // very next build; the canvas is never actually discarded here.
+        try {
+            if (canvas && onContextLostSleep) canvas.removeEventListener('webglcontextlost', onContextLostSleep);
+            if (canvas && onContextRestoredWake) canvas.removeEventListener('webglcontextrestored', onContextRestoredWake);
+        } catch (e) { /* already disposed/invalid */ }
         MtlxRender.disposeRendererCore({ canvas, onGlLost, onGlRestored, renderer });
     };
     // [mtlx-perf] whole-function total, from shader generation through
@@ -10560,13 +10544,54 @@ const createMtlxRenderView = async ({
                         recomputeCameraFov();
                         camera.updateProjectionMatrix();
                     },
+                    // hidden = display:none (getClientRects, NOT visibility/
+                    // IntersectionObserver, see P3-DESIGN.md section 5).
+                    onVisibility: (hidden) => { if (sleepGate) sleepGate.notify({ hidden }); },
                 });
+
+                // Sleep gate: awake = explicitActive (isActive()) && !hidden
+                // && !contextLost. Sleep frees the peel targets and the
+                // studio spot's shadow map, then parks the drawing buffer
+                // (largest per-view GPU allocation); wake restores the
+                // layout size and resumes the rAF loop with one synchronous
+                // frame. window.__mtlxNoSleep (checked inside the gate)
+                // keeps every view permanently awake.
+                // explicitActive: the handle's OWN setActive(v), independent
+                // of the per-frame isActive() callback above (Compare's
+                // paint gate, unrelated -- see P3-DESIGN.md section 5's
+                // "isActive() stays a per-frame render gate"). Defaults
+                // true, so no caller opting out of setActive ever sleeps
+                // for this reason.
+                let explicitActive = true;
+                let drawingBufferParked = false;
+                sleepGate = MtlxRender.createSleepGate({
+                    onSleep: () => {
+                        if (reqId) { cancelAnimationFrame(reqId); reqId = null; }
+                        if (peelPipeline) peelPipeline.dispose();
+                        previewBackdrop.disposeShadowMap();
+                        renderer.setSize(1, 1, false);
+                        drawingBufferParked = true;
+                    },
+                    onWake: () => {
+                        drawingBufferParked = false;
+                        sizer.forceSync();
+                        if (!stopped && aliveFn()) animate();
+                    },
+                });
+                // Feeds the SAME gate, alongside the mtlx-gl-context dispatch
+                // acquireRenderer already wired (kept unchanged for external
+                // rebuild listeners, see S6's recovery hook).
+                onContextLostSleep = () => sleepGate.notify({ contextLost: true });
+                onContextRestoredWake = () => sleepGate.notify({ contextLost: false });
+                canvas.addEventListener('webglcontextlost', onContextLostSleep);
+                canvas.addEventListener('webglcontextrestored', onContextRestoredWake);
 
                 // Image-based lighting for lit surfaces/BSDFs AND/OR
                 // scene-mode's glTF meshes (always lit via PMREM, even
                 // under an unlit material). Fetched ONCE at shell level.
                 if (needsLighting || sceneInst) {
                     const env = envOverride || await getEnvironment();
+                    currentEnvRef = env || null;
                     if (!isMounted()) { disposePartial(); return null; }
                     // Independent of envRadiance/etc. below: scene-mode's
                     // PMREM further down needs A radiance source even
@@ -10604,7 +10629,7 @@ const createMtlxRenderView = async ({
                         // three's equirectUv puts +Y at v=1, opposite
                         // MaterialX's v=0, so reading the same texture
                         // v-mirrors scene reflections vs the surface (ok for now).
-                        pmremRT = new THREE.PMREMGenerator(renderer).fromEquirectangular(radianceSrc);
+                        pmremRT = MtlxRender.buildScenePmrem(renderer, radianceSrc, THREE);
                         scene.environment = pmremRT.texture;
                     }
                 }
@@ -10642,6 +10667,12 @@ const createMtlxRenderView = async ({
                     });
                     previewBackdrop.setStudioLinearOut(on);
                 };
+                // Sticky toggler (MtlxRender.createLinearToggle,
+                // js/shared/render-session.js): flips setSceneLinear only on
+                // a real transition, never every frame; shared by
+                // syncMeshMaterialMode and renderFrame below, the two call
+                // sites that used to hand-roll this compare-and-set.
+                const linearToggle = MtlxRender.createLinearToggle(setSceneLinear);
 
                 // Selected preview geometry. Scene mode pre-assigns the
                 // shell's `mesh`/`geometry` to material_surface, so the
@@ -11244,7 +11275,7 @@ const createMtlxRenderView = async ({
                     // Idempotent transition (renderFrame's own check below is
                     // the other call site), flips scene built-ins' toneMapped.
                     const wantLinear = peelOn && peelLinearOk;
-                    if (sceneLinearOn !== wantLinear) { setSceneLinear(wantLinear); sceneLinearOn = wantLinear; }
+                    linearToggle.sync(wantLinear);
                     applyPeelMaterialMode(material, peelOn);
                 };
 
@@ -11318,9 +11349,11 @@ const createMtlxRenderView = async ({
                         console.log('[mtlx-perf] GL compile: '
                             + (performance.now() - __compilePerfStart).toFixed(1) + 'ms (target: ' + applyLabel + ')');
                     }
-                    const badProg = (renderer.info.programs || []).find(
-                        (p) => p.diagnostics && p.diagnostics.runnable === false
-                    );
+                    // Detection moved to MtlxRender.findBadProgram
+                    // (js/shared/render-session.js); the rollback below
+                    // (restore old material, dispose the bad one, throw)
+                    // stays content-side.
+                    const badProg = MtlxRender.findBadProgram(renderer);
                     if (badProg) {
                         // LOAD-BEARING ORDER: restore OLD material/uniforms
                         // FIRST, then dispose the BAD one, reordering this
@@ -11390,7 +11423,7 @@ const createMtlxRenderView = async ({
                     // Idempotent transition (syncMeshMaterialMode is the
                     // other call site), flips scene built-ins' toneMapped.
                     const wantLinear = peelActive && peelLinearOk;
-                    if (sceneLinearOn !== wantLinear) { setSceneLinear(wantLinear); sceneLinearOn = wantLinear; }
+                    linearToggle.sync(wantLinear);
                     if (!peelActive) { renderer.render(scene, camera); return; } // byte-identical to the old path
                     peelPipeline.render(scene, camera, [mesh]);
                 };
@@ -11433,7 +11466,10 @@ const createMtlxRenderView = async ({
                 // snapshot/snapshotPixels/renderNow/beginCapture/captureFrame/
                 // endCapture, moved to MtlxRender.createCaptureController
                 // (js/shared/render-session.js); handle methods below delegate.
-                captureController = MtlxRender.createCaptureController({ renderer, canvas, sizer, renderFrame, setUniforms });
+                captureController = MtlxRender.createCaptureController({
+                    renderer, canvas, sizer, renderFrame, setUniforms,
+                    ensureAwake: () => { if (sleepGate.isAsleep()) sleepGate.notify({ explicitActive: true, hidden: false, contextLost: false }); },
+                });
 
                 // Handle's camera methods, moved to
                 // MtlxRender.createCameraHandleMethods (js/shared/render-session.js).
@@ -11450,6 +11486,21 @@ const createMtlxRenderView = async ({
             // produced couldn't append here yet, fold it in now.
             notices: (materialNotices = notices || []).concat(currentDispNotices()),
             isTransparent: !!transparent,
+            // Sleep model (P3-DESIGN.md section 5): explicit long-term
+            // activity, independent of the per-frame isActive() callback.
+            setActive: (v) => {
+                explicitActive = !!v;
+                sleepGate.notify({ explicitActive });
+            },
+            getSleepState: () => ({
+                asleep: sleepGate.isAsleep(),
+                reason: sleepGate.getReason(),
+                resident: {
+                    peel: !!(peelPipeline && peelPipeline.debug && peelPipeline.debug().opaque),
+                    studioShadow: previewBackdrop.hasShadowMap(),
+                    drawingBuffer: !drawingBufferParked,
+                },
+            }),
             // Live auto-orbit toggle (no regen needed). No-op in
             // full-scene mode by contract: every caller hides the rotate
             // button there, and fallbackSpin would rotate the authored scene.
@@ -11581,6 +11632,7 @@ const createMtlxRenderView = async ({
             // scene-mode's PMREM. No-op on views with no lighting/env.
             setEnvironment: (env) => {
                 if (!env) return;
+                currentEnvRef = env;
                 ensurePrefilteredEnv(renderer, env);
                 ensureConvolvedIrradiance(renderer, env);
                 if (envRadSamplerName && uniforms[envRadSamplerName]) uniforms[envRadSamplerName].value = envRadianceForShading(env);
@@ -11614,7 +11666,7 @@ const createMtlxRenderView = async ({
                         // Fresh PMREMGenerator, never disposed, disposing
                         // one would break every other PMREMGenerator
                         // (r128 shares LOD-plane state module-wide).
-                        pmremRT = new THREE.PMREMGenerator(renderer).fromEquirectangular(env.radiance);
+                        pmremRT = MtlxRender.buildScenePmrem(renderer, env.radiance, THREE);
                         scene.environment = pmremRT.texture;
                         // The OLD render target IS this view's own,
                         // ordinary GPU resource, safe to dispose once
@@ -11629,18 +11681,17 @@ const createMtlxRenderView = async ({
             // chosen by extension, same pipeline as HDR import). Falsy
             // url restores the default; latest call always wins.
             setEnvMap: (url) => {
-                const callId = ++envMapCallId;
+                const callId = envMapGate.begin();
                 // Applies env to this view via setEnvironment() (rotation/
                 // exposure/background all persist there already), then
                 // frees whatever WE previously fetched, if superseded.
                 const swapIn = (env, owned) => {
-                    if (callId !== envMapCallId) return; // a newer call already won
+                    if (!envMapGate.isLatest(callId)) return; // a newer call already won
                     handle.setEnvironment(env);
-                    if (fetchedEnvMap) disposeFetchedEnv(fetchedEnvMap);
-                    fetchedEnvMap = owned ? env : null;
+                    envMapGate.swap(env, owned);
                 };
                 if (!url) {
-                    if (!fetchedEnvMap) return Promise.resolve(true); // already default
+                    if (!envMapGate.hasFetched()) return Promise.resolve(true); // already default
                     return getEnvironment().then((def) => {
                         if (def) swapIn(def, false);
                         return true;
@@ -11816,6 +11867,7 @@ const createMtlxRenderView = async ({
             // setEnvOverride's broadcast could touch a torn-down view.
             dispose: () => {
                 LIVE_VIEWS.delete(handle);
+                if (unsubDiffuseEnv) unsubDiffuseEnv();
                 disposePartial();
             },
             // Debug hook: raw GPU state for a headed diagnosis harness.
@@ -11823,6 +11875,15 @@ const createMtlxRenderView = async ({
             __debug: () => ({ renderer, scene, camera, material: mesh ? mesh.material : material, mesh, geometry }),
         };
         LIVE_VIEWS.add(handle);
+        // Diffuse-environment method: setDiffuseEnvMethod broadcasts
+        // 'mtlx-settings-changed' (key 'diffuseEnvMethod'); rebind via this
+        // view's OWN setEnvironment(currentEnvRef), no shader rebuild.
+        // needsLighting-only: unlit/2D shells have no env sampler to rebind.
+        if (needsLighting) {
+            unsubDiffuseEnv = MtlxRender.onDiffuseEnvMethodChange(() => {
+                if (currentEnvRef) handle.setEnvironment(currentEnvRef);
+            });
+        }
         return handle;
     } catch (err) {
         disposePartial();

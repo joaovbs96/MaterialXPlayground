@@ -610,6 +610,11 @@ void main() {
             refreshStudioShader,
             builtinMaterials,
             setStudioLinearOut,
+            // Sleep support (P3-DESIGN.md section 5): frees the spot's own
+            // VSM render target, three lazily recreates it on the next
+            // shadow pass. hasShadowMap reports getSleepState()'s resident bit.
+            disposeShadowMap: () => { if (studioLight && studioLight.shadow) studioLight.shadow.dispose(); },
+            hasShadowMap: () => !!(studioLight && studioLight.shadow && studioLight.shadow.map),
             // bgMesh: dispose its own geometry/material and drop it from the
             // scene. Do NOT dispose bgMesh.material.map (envBgTexture): env
             // textures are shared/cached across every live view. studioGroup:
@@ -902,6 +907,46 @@ void main() {
         STUDIO_SHADOW_OPACITY_DARK,
     });
 
+    // Frees a privately-fetched env's textures. Never call on the shared
+    // default/override env from getEnvironment()/envOverride: those are
+    // cached module-wide, not owned by any one view.
+    const disposeFetchedEnv = (env) => {
+        if (!env) return;
+        try { if (env.radiance) env.radiance.dispose(); } catch (e) { /* already disposed/invalid */ }
+        try { if (env.irradiance && env.irradiance !== env.radiance) env.irradiance.dispose(); } catch (e) { /* ditto */ }
+        try { if (env.irradianceConvolved && env.irradianceConvolved !== env.irradiance && env.irradianceConvolved !== env.radiance) env.irradianceConvolved.dispose(); } catch (e) { /* ditto */ }
+        try { if (env.radiancePrefiltered) env.radiancePrefiltered.dispose(); } catch (e) { /* ditto */ }
+        try { if (env.background) env.background.dispose(); } catch (e) { /* ditto */ }
+    };
+
+    // setEnvMap()'s latest-call-wins guard, pure bookkeeping split out of
+    // the fetch/parse pipeline (which stays content-side): each call gets
+    // an id, and only the id issued LAST may ever apply its result.
+    const createEnvMapGate = () => {
+        let callId = 0;
+        let fetched = null;
+        return {
+            begin: () => ++callId,
+            isLatest: (id) => id === callId,
+            hasFetched: () => !!fetched,
+            // Applies `env` as this view's privately-fetched one (owned=true)
+            // or clears the private slot (owned=false, e.g. reverting to the
+            // shared default), disposing whatever was fetched before.
+            swap: (env, owned) => {
+                const prev = fetched;
+                fetched = owned ? env : null;
+                if (prev) disposeFetchedEnv(prev);
+            },
+            disposeAll: () => { if (fetched) disposeFetchedEnv(fetched); fetched = null; },
+        };
+    };
+
+    // Scene-mode's PMREM bake, shared by the two identical call sites (first
+    // build and setEnvironment's regen): never dispose the PMREMGenerator
+    // itself, r128 shares its LOD-plane geometries at module scope.
+    const buildScenePmrem = (renderer, radianceSrc, THREE = window.THREE) =>
+        new THREE.PMREMGenerator(renderer).fromEquirectangular(radianceSrc);
+
     window.MtlxRender = Object.assign(window.MtlxRender || {}, {
         keyLightRotationMatrix,
         createPreviewBackdrop,
@@ -909,5 +954,8 @@ void main() {
         studioFloorPolarLimit,
         studioCatcherVisible,
         STUDIO_GRADIENT_FRAGMENT_SHADER,
+        disposeFetchedEnv,
+        createEnvMapGate,
+        buildScenePmrem,
     });
 })();
