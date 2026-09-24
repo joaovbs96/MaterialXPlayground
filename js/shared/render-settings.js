@@ -1,6 +1,5 @@
-// render-settings.js: single store for every render/quality setting that
-// today lives as scattered localStorage reads across the engine, the Scene
-// renderer/app and the tool apps. Plain JS, one IIFE, no THREE dependency.
+// Single store for every render/quality setting that used to be scattered
+// localStorage reads across the engine, the Scene, and the tool apps.
 // Exports window.MtlxRenderSettings. Load before mtlx-engine.js.
 (function () {
     'use strict';
@@ -126,10 +125,9 @@
         }
     };
 
-    // ---- Manifest ----
-    // P = { storage, field?, codec, legacy?, query?, options?, min?, max?, levels }
-    // Row = { key, label, group, type, options?, min?, max?, apply, ui,
-    //         experimental?, profiles: { preview?, stage? }, surfaces, embed?, legacyEvent? }
+    // Manifest. P = { storage, field?, codec, legacy?, query?, options?,
+    // min?, max?, levels }. Row = { key, label, group, type, apply, ui,
+    // profiles: { preview?, stage? }, surfaces, embed?, legacyEvent?, ... }
     const NA = (reason) => ({ na: reason });
     const PLANNED = (phase) => ({ planned: phase });
 

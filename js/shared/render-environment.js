@@ -1,34 +1,22 @@
-// js/shared/render-environment.js: studio backdrop + skybox rig shared by
-// the material viewer preview and the USD Scene Viewer, plus the Scene's
-// own environment bridge. Plain JS, no Babel transform, loaded after
-// js/mtlx-engine.js (index.html/embed/viewer.html script order).
-//
-// One IIFE, no top-level THREE/engine access: everything that touches
-// THREE lives inside a function body, called later by the caller, so this
-// file also loads (for its pure/string-returning pieces) in a Node vm with
-// no THREE global (see tests/unit/render-environment.test.mjs).
+// Studio backdrop + skybox rig shared by the material viewer preview
+// and the USD Scene Viewer, plus the Scene's own environment bridge.
+// One IIFE; pure/string-returning pieces also load in a Node vm with no THREE global (tests/unit/render-environment.test.mjs).
 (() => {
     // Rotates the extracted key light to track env rotation (rig lights are
     // historically fixed, only this one rotates). RotY(-rad): env content
     // shifts by +rad, so the light direction shifts by -rad to match.
     const keyLightRotationMatrix = (rad) => new window.THREE.Matrix4().makeRotationY(-rad);
 
-    // Skybox <-> IBL rotation calibration, read at shell init (rotation 0
-    // there) and by setEnvRotation(). Derivation: u_envMatrix rotates env
-    // queries by RotationY(PI/2 + rad), and MaterialX's longitude is
-    // atan2(x,-z)/2PI + 0.5, so the IBL shows data column U at world angle
-    // 2PI*U - PI + rad; the mirrored sphere (phi = 2PI*uv.x) rotated by b
-    // shows column U at 2PI*U - b. Matching gives rotation.y = PI - rad.
-    // If the backdrop is 180 degrees out of phase, adjust BG_BASE; if it counter-rotates, flip BG_SIGN.
+    // Skybox <-> IBL rotation calibration, derived from u_envMatrix and
+    // MaterialX's longitude convention: rotation.y = PI - rad matches
+    // them. If the backdrop is out of phase, adjust BG_BASE; if it counter-rotates, flip BG_SIGN.
     const BG_BASE = Math.PI;
     const BG_SIGN = -1;
     const bgMeshRotationY = (rad) => BG_BASE + BG_SIGN * rad;
 
-    // ------------------------------------------------------------------
     // Studio backdrop: procedural cyclorama (light or dark) + contact
     // shadow, the third mode of the background switch alongside bgMesh's
     // 'environment'/'none'. Tunables gathered here for one-place tuning.
-    // ------------------------------------------------------------------
     const STUDIO_MAX_ORBIT_DISTANCE = 9; // OrbitControls.maxDistance in studio mode
     const STUDIO_WALL_R = 16; // must exceed STUDIO_MAX_ORBIT_DISTANCE
     const STUDIO_WALL_H = 10; // must clear the top of frame at the polar clamp
@@ -48,12 +36,9 @@
     // studioLight's radius/bias for the actual softness knobs.
     const STUDIO_SHADOW_MAP_SIZE = 1024;
 
-    // Procedural gradient shader, replacing a baked canvas texture: pixel-
-    // perfect, no 8-bit banding from a rasterized ramp. Stop/hotspot values
-    // are the exact sRGB byte-space colors the old canvas gradient used;
-    // raw gl_FragColor output matches the old toneMapped:false + sRGB-texture path.
-    // Plain {x,y,z} objects (not THREE.Vector3): THREE.Vector3.copy() only
-    // reads x/y/z, and this keeps the module loadable with no THREE global.
+    // Procedural gradient shader, pixel-perfect vs. a baked canvas
+    // texture. Plain {x,y,z} objects, not THREE.Vector3: .copy() only
+    // reads x/y/z, keeping this module loadable with no THREE global.
     const hexToVec3 = (hex) => {
         const n = parseInt(hex.slice(1), 16);
         return { x: ((n >> 16) & 255) / 255, y: ((n >> 8) & 255) / 255, z: (n & 255) / 255 };
@@ -80,11 +65,8 @@ void main() {
 `;
 
     // Studio backdrop's inverse of ACES_SRGB_GLSL for the given mode: undoes
-    // finalMat's forward transform so the backdrop's authored color survives
-    // the peel composite's real pass unchanged. 'srgb' has no tone mapping to undo, so its inverse is just srgbToLinear.
-    // lin_rec709's forward transform is identity (no OETF, no tone map), so
-    // its exact inverse is identity too: the round trip must hand back the
-    // authored color unchanged, not a linearized one.
+    // finalMat's forward transform so the authored color survives the peel
+    // composite unchanged. lin_rec709 is identity; srgb inverts to srgbToLinear.
     const studioInverseAcesSrgbGlsl = (mode) => {
         if (mode === 'lin_rec709') return 'vec3 inverseAcesSrgb(vec3 col) { return col; }\n';
         if (mode === 'srgb') return 'vec3 inverseAcesSrgb(vec3 col) { return srgbToLinear(col); }\n';
@@ -285,11 +267,9 @@ void main() {
         return studioBackdropLatheGeometry;
     };
 
-    // Small public bridge for the USD scene view. The scene renderer must use the
-    // same cyclorama profile, gradient stops, and display-transform shader as the
-    // material viewer, but it owns a clone of the cached geometry and its
-    // material lifetime. Kept beside the source helpers so the two views cannot
-    // drift into subtly different studio backgrounds.
+    // Small public bridge for the USD scene view: same cyclorama profile
+    // and shader as the material viewer, but its own geometry clone and
+    // material lifetime, kept beside the source helpers to avoid drift.
     const createUsdSceneStudioMaterial = (dark = false, mode) => {
         const THREE = window.THREE;
         const resolvedMode = mode !== undefined ? mode : (typeof getDisplayTransform === 'function' ? getDisplayTransform() : 'srgb');
@@ -352,9 +332,8 @@ void main() {
         return { light, target };
     };
     // Mirrors createPreviewBackdrop's placeStudioLight but relative to an
-    // arbitrary floor center/scale instead of the viewer's fixed origin
-    // bowl. `direction` uses the same convention as createStageEnvironment's
-    // rotatedEnvDirection(): it points from the light toward the target.
+    // arbitrary floor center/scale. `direction` points from the light
+    // toward the target, same convention as rotatedEnvDirection().
     const placeUsdSceneStudioLight = (light, center, direction, scale = 1) => {
         if (!light) return;
         const toLightDir = direction.clone().negate();
@@ -376,9 +355,8 @@ void main() {
     };
 
     // Polar angle (radians from +Y) at which the eye touches the floor
-    // plane, given the orbit target's height above it. Pure, numerically
-    // identical to the Scene's own copy (js/usd-scene-renderer.js). See
-    // tests/unit/usd-scene-floor-clamp.test.mjs and render-environment.test.mjs.
+    // plane. Pure, numerically identical to the Scene's own copy
+    // (js/usd-scene-renderer.js); see tests/unit/usd-scene-floor-clamp.test.mjs.
     const studioFloorPolarLimit = (maxPolar, floorY, clearance, targetY, distance) => {
         if (!Number.isFinite(floorY) || !Number.isFinite(targetY)) return maxPolar;
         if (!Number.isFinite(distance) || distance <= 1e-3) return maxPolar;
@@ -386,18 +364,14 @@ void main() {
         return Math.min(maxPolar, Math.acos(Math.max(-1, Math.min(1, rel / distance))));
     };
 
-    // The ShadowMaterial catcher reads as fully shadowed wherever the spot's
-    // shadow map is missing, painting its frustum as a grey quad, so it only
-    // shows once three has actually drawn one. Pure: see
-    // tests/unit/usd-scene-studio-catcher.test.mjs.
+    // The ShadowMaterial catcher paints a grey quad wherever the spot's
+    // shadow map is missing, so it only shows once three has actually
+    // drawn one. Pure: see tests/unit/usd-scene-studio-catcher.test.mjs.
     const studioCatcherVisible = (studio, hasShadowMap) => !!(studio && hasShadowMap);
 
     // The preview's shell-owned skybox mesh + procedural studio cyclorama
-    // and contact shadow: createMtlxRenderView builds one per view and
-    // drives it through these methods instead of holding this state
-    // itself. envKeyLight/envSoftKeyDir/envRotationRad stay engine-owned
-    // (fetched env state, moved in a later slice) and are passed in at
-    // call time rather than closed over.
+    // and contact shadow. envKeyLight/envSoftKeyDir/envRotationRad stay
+    // engine-owned and are passed in at call time, not closed over.
     const createPreviewBackdrop = ({ scene, getDisplayTransform: getMode, THREE = window.THREE }) => {
         let bgMesh = null;
         let studioGroup = null, studioMesh = null, studioCatcher = null, studioLight = null;
@@ -556,9 +530,8 @@ void main() {
         };
 
         // Rotates the visible backdrop mesh to match the IBL rotation (a
-        // real geometry rotation, not a texture-offset, see buildBgMesh's
-        // comment for why offset.x never worked on r128), and re-aims the
-        // studio spotlight along the same rotated key-light direction.
+        // real geometry rotation, not a texture-offset, see buildBgMesh),
+        // and re-aims the studio spotlight along the same direction.
         const setEnvRotationBackdrop = (rad, envKeyLight, envSoftKeyDir) => {
             if (bgMesh) bgMesh.rotation.y = bgMeshRotationY(rad);
             placeStudioLight(envKeyLight, envSoftKeyDir, rad);
@@ -615,12 +588,9 @@ void main() {
             // shadow pass. hasShadowMap reports getSleepState()'s resident bit.
             disposeShadowMap: () => { if (studioLight && studioLight.shadow) studioLight.shadow.dispose(); },
             hasShadowMap: () => !!(studioLight && studioLight.shadow && studioLight.shadow.map),
-            // bgMesh: dispose its own geometry/material and drop it from the
-            // scene. Do NOT dispose bgMesh.material.map (envBgTexture): env
-            // textures are shared/cached across every live view. studioGroup:
-            // drop it, dispose its two per-view MATERIALS and the spotlight's
-            // own shadow render target. Do NOT dispose the two lathe
-            // geometries (reused everywhere).
+            // Do NOT dispose bgMesh.material.map (envBgTexture, shared
+            // across views) or the two lathe geometries (reused
+            // everywhere); dispose everything else this backdrop owns.
             dispose: () => {
                 try {
                     if (bgMesh) {
@@ -641,10 +611,9 @@ void main() {
         };
     };
 
-    // USD scene environment bridge, verbatim from js/usd-scene-environment.js
-    // (now a thin adapter calling this). getDisplayTransform (optional): the
-    // Scene's own () => mode getter for the studio inverse; unset, the
-    // engine's global transform is used as before.
+    // USD scene environment bridge (js/usd-scene-environment.js is now a
+    // thin adapter calling this). getDisplayTransform (optional): the
+    // Scene's own mode getter; unset, the engine's global transform is used.
     const createStageEnvironment = ({ scene, renderer, camera, contentRoot, THREE = window.THREE, getDisplayTransform } = {}) => {
         if (!scene || !renderer || !THREE) throw new Error('USD scene environment requires a Three.js scene and renderer.');
         const studio = window.MtlxStudio;
@@ -771,9 +740,8 @@ void main() {
             updateLight();
             skyMaterial.map = env.background || env.radiance || null;
             skyMaterial.needsUpdate = true;
-            // Do not assign the shared equirect to scene.environment: r128's
-            // WebGLCubeMaps uploads it via fromEquirectangularTexture, which
-            // swaps minFilter to LinearFilter for that first upload and never
+            // Do not assign the shared equirect to scene.environment: r128
+            // swaps minFilter to LinearFilter on first upload and never
             // re-uploads, permanently stripping the mip chain FIS needs.
             applyVisibility();
             return true;

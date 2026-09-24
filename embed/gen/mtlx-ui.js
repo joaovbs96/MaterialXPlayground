@@ -1512,6 +1512,55 @@ const useWindowFileDrop = ({
   }, []);
 };
 
+// Shown when a preview surface's WebGL context is lost while visible.
+const RENDER_CONTEXT_LOST_MESSAGE = 'The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.';
+
+// Tracks mtlx-gl-context lost/restored per group of canvas refs, one
+// epoch counter per group. A restore while `isHidden()` is true is
+// stashed and flushed on the next hashchange (a tick later, via rAF,
+// since hashchange fires around the shell's display:none flip).
+const useRenderContextRecovery = ({
+  groups,
+  isHidden,
+  onLost
+}) => {
+  const groupsRef = React.useRef(groups);
+  groupsRef.current = groups;
+  const isHiddenRef = React.useRef(isHidden);
+  isHiddenRef.current = isHidden;
+  const onLostRef = React.useRef(onLost);
+  onLostRef.current = onLost;
+  const [epochs, setEpochs] = React.useState(() => groups.map(() => 0));
+  const pendingRef = React.useRef(new Set());
+  const bump = i => setEpochs(prev => prev.map((v, idx) => idx === i ? v + 1 : v));
+  React.useEffect(() => {
+    const onGlContext = e => {
+      const d = e.detail || {};
+      const idx = groupsRef.current.findIndex(refs => refs.some(r => r && r.current === d.canvas));
+      if (idx === -1) return;
+      if (d.state === 'lost') {
+        if (!isHiddenRef.current() && onLostRef.current) onLostRef.current(idx);
+      } else if (d.state === 'restored') {
+        if (isHiddenRef.current()) pendingRef.current.add(idx);else bump(idx);
+      }
+    };
+    window.addEventListener('mtlx-gl-context', onGlContext);
+    return () => window.removeEventListener('mtlx-gl-context', onGlContext);
+  }, []);
+  React.useEffect(() => {
+    const flush = () => {
+      requestAnimationFrame(() => {
+        if (isHiddenRef.current()) return;
+        pendingRef.current.forEach(i => bump(i));
+        pendingRef.current.clear();
+      });
+    };
+    window.addEventListener('hashchange', flush);
+    return () => window.removeEventListener('hashchange', flush);
+  }, []);
+  return epochs;
+};
+
 // Absolute loading overlay shown over a viewport while (re)generating.
 // Defaults match node-preview.jsx's markup; viewer-app.jsx overrides
 // className/labelClassName/barWidthClass to reproduce its own markup.
@@ -4196,6 +4245,8 @@ Object.assign(window, {
   useWindowFileDrop,
   LoadingOverlay,
   ViewportControls,
+  RENDER_CONTEXT_LOST_MESSAGE,
+  useRenderContextRecovery,
   ColorSwatch,
   MtlxSelect,
   MtlxMenu,

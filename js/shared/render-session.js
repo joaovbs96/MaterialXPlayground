@@ -1,13 +1,6 @@
-// js/shared/render-session.js: renderer-core pieces shared out of
-// createMtlxRenderView (js/mtlx-engine.js) -- WebGL2 acquisition and
-// display setup, scene creation, sizing (ResizeObserver + resize
-// suspension), and the snapshot/renderNow/capture trio. Plain JS, no
-// Babel transform, loaded after js/shared/render-environment.js
-// (index.html/embed/viewer.html script order).
-//
-// One IIFE, no top-level THREE/engine access: engine internals (the
-// display-transform helpers) arrive via bindEngine, called from
-// js/mtlx-engine.js's own last line, never read from window at load time.
+// Renderer-core pieces shared out of createMtlxRenderView: WebGL2
+// acquisition/display setup, scene creation, sizing, and the
+// snapshot/renderNow/capture trio. One IIFE; engine internals arrive via bindEngine, never read from window at load time.
 (() => {
     // Every dependency createMtlxRenderView's engine-side callers must
     // hand to bindEngine below; a missing one throws immediately instead
@@ -57,13 +50,9 @@
         resize: () => {},
     });
 
-    // Composes the final handle object from a session (renderer-core,
-    // camera, capture...) and a content (material/geometry-specific)
-    // description. Plain object, own enumerable function properties only,
-    // so useViewToggle/compare's fan-out Proxy can enumerate/call by name.
-    // content directly supplies core-contract overrides (e.g.
-    // setEnvironment); content.extras are ADDITIONAL names, checked against
-    // the reserved set so a typo can't silently shadow a core method.
+    // Composes the final handle from a session and a content description.
+    // Own enumerable function properties only, so the compare fan-out
+    // Proxy can enumerate/call by name; content.extras are checked against the reserved set so a typo cannot shadow a core method.
     const buildHandle = (session, content) => {
         const handle = {};
         const reserved = HANDLE_CONTRACT.concat(HANDLE_ALIASES);
@@ -85,9 +74,8 @@
             const fn = pick(name);
             if (fn) handle[name] = fn;
         });
-        // Writable data fields (uniforms, introspected, vs, fs, renderer,
-        // controls, notices, ...): tryRefreshRenderView mutates these
-        // directly on the handle afterward, so they must be own, plain,
+        // Writable data fields: tryRefreshRenderView mutates these
+        // directly on the handle afterward, so they must be own, plain
         // assignable properties, not getters.
         const fields = Object.assign({}, session && session.fields, content && content.fields);
         Object.keys(fields).forEach((k) => {
@@ -107,11 +95,9 @@
         return handle;
     };
 
-    // Acquires the WebGL2 context and configures the renderer's display
-    // transform, exactly the sequence createMtlxRenderView ran inline:
-    // same context options, same order (shadow map before size/pixel
-    // ratio, display transform last), so program state and the PMREM
-    // bake downstream stay byte-identical.
+    // Acquires the WebGL2 context and sets up display transform, in
+    // the same order createMtlxRenderView ran inline, so program state
+    // and the PMREM bake downstream stay byte-identical.
     const acquireRenderer = ({ canvas, wantsStudio, maxPixelRatio, width, height }) => {
         const THREE = window.THREE;
         // Acquire WebGL2 ourselves and pass it via `context`, so three
@@ -148,10 +134,8 @@
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxPixelRatio));
         renderer.debug.checkShaderErrors = true;
         // No-ops for the RawShaderMaterial surface (encodeDisplay bakes
-        // its transform in); set here for the ordinary three materials in
-        // the scene (skybox, backplanes, neutral glTF parts), kept in
-        // step with getDisplayTransform() so both match; a fresh
-        // renderer/materials each build means no needsUpdate is needed.
+        // its transform in); set here for the ordinary three materials
+        // (skybox, backplanes, neutral glTF parts) so both agree.
         const displayMode = ENGINE.getDisplayTransform();
         // CustomToneMapping carries our own chunk (applyThreeToneMappingChunk),
         // so these materials run the SAME curve and exposure as the
@@ -170,11 +154,9 @@
 
     const createRenderScene = () => new window.THREE.Scene();
 
-    // Filters ONE benign warning: on Windows, ANGLE's fxc backend emits
-    // "X4008 division by zero" for unrolled FIS/light loops (harmless,
-    // guarded by M_FLOAT_EPS), matched by exact signature; always restored.
-    // debugShaders (localStorage mtlxDebugShaders): when true, filtered
-    // warnings still reach console.debug instead of vanishing silently.
+    // Filters ONE benign Windows ANGLE warning (X4008 division by zero,
+    // harmless), matched by exact signature. debugShaders sends filtered
+    // warnings to console.debug instead of vanishing them silently.
     const compileFilteringDriverNoise = (renderer, scene, camera, debugShaders) => {
         const origWarn = console.warn;
         console.warn = function (...args) {
@@ -199,17 +181,15 @@
         }
     };
 
-    // Detection-only half of the compile-diagnostics check: finds the first
-    // program three's WebGLProgram flagged unrunnable. The rollback (restore
-    // old material/uniforms, dispose the bad one, throw a styled Error)
-    // stays content-side (js/mtlx-engine.js's applyMaterialInternal).
+    // Detection-only half of the compile-diagnostics check: finds the
+    // first program flagged unrunnable. The rollback stays content-side
+    // (js/mtlx-engine.js's applyMaterialInternal).
     const findBadProgram = (renderer) =>
         (renderer.info.programs || []).find((p) => p.diagnostics && p.diagnostics.runnable === false);
 
-    // Sticky linear-pass toggler: the linear-peel opaque pass only flips
-    // scene built-ins' toneMapped state ON TRANSITIONS, never every frame
-    // (design: "the linear pass stays STICKY"). `apply(on)` is the caller's
-    // side effect (setSceneLinear); sync() is idempotent when unchanged.
+    // Sticky linear-pass toggler: flips toneMapped state only on
+    // transitions, never every frame. `apply(on)` is the caller's side
+    // effect; sync() is idempotent when unchanged.
     const createLinearToggle = (apply) => {
         let on = false;
         return {
@@ -224,10 +204,9 @@
         };
     };
 
-    // Default camera + pose: PerspectiveCamera 45/0.1/100 at the classic
-    // three-quarter framing, or the fixed OrthographicCamera for flat2d.
-    // fullScene GLB camera adoption stays a content-side hook that runs
-    // AFTER this returns (P3-DESIGN.md section 1(b)).
+    // Default camera + pose: three-quarter perspective, or the fixed
+    // OrthographicCamera for flat2d. fullScene GLB camera adoption is a
+    // content-side hook that runs AFTER this returns.
     const createDefaultCamera = ({ flat2d, width, height, cameraDistance }) => {
         const THREE = window.THREE;
         const camera = flat2d
@@ -370,16 +349,9 @@
         },
     });
 
-    // Drives renderer.setSize plus a caller-supplied `layout(w, h)` frame
-    // hook (camera aspect / quad refit -- content-owned, see P3-DESIGN.md
-    // section 1), shared by the ResizeObserver path (syncSize) and the
-    // fixed-resolution capture path (createCaptureController's beginCapture).
-    // onVisibility (optional, P3-DESIGN.md section 5): called with the new
-    // hidden flag (canvas.getClientRects().length === 0) on every real
-    // transition, from this SAME ResizeObserver callback (not a separate
-    // IntersectionObserver). The caller (sleep gate) owns what happens next;
-    // this sizer just skips its own resize while hidden and lets a wake's
-    // forceSync() (below) drive the resize back once the caller is ready.
+    // Drives renderer.setSize plus a caller-supplied `layout(w, h)` hook,
+    // shared by the ResizeObserver path and the fixed-resolution capture
+    // path. onVisibility reports hidden transitions from the same callback; the caller owns what happens next, this sizer just skips its own resize.
     const createSizer = ({ canvas, renderer, fallbackWidth, fallbackHeight, layout, onVisibility }) => {
         let suspended = false;
         let wasHidden = false;
@@ -387,11 +359,9 @@
             renderer.setSize(w, h, false);
             layout(w, h);
         };
-        // Keeps the drawing buffer + aspect in sync with layout (panel
-        // reflow, mobile rotation/resize), without this the mesh stretches
-        // on any reflow. While suspended (a pane drag in progress), the
-        // canvas keeps its current drawing buffer and the browser scales
-        // it to the CSS box instead.
+        // Keeps the drawing buffer + aspect in sync with layout, or the
+        // mesh stretches on reflow. While suspended (a pane drag), the
+        // browser scales the current buffer to the CSS box instead.
         const syncSize = () => {
             if (suspended) return;
             if (onVisibility) {
@@ -520,10 +490,8 @@
     };
 
     // Pure composite: a view is awake only while explicitly active, not
-    // hidden (canvas.getClientRects().length === 0, evaluated by the
-    // caller in its ResizeObserver callback) and not context-lost. See
-    // P3-DESIGN.md section 5. window.__mtlxNoSleep is the kill switch,
-    // checked by the caller before ever reporting hidden/lost as true.
+    // hidden and not context-lost. window.__mtlxNoSleep is the kill
+    // switch, checked by the caller before reporting hidden/lost true.
     const computeAwake = ({ explicitActive, hidden, contextLost }) =>
         !!explicitActive && !hidden && !contextLost;
 
@@ -537,10 +505,9 @@
         return null;
     };
 
-    // Stateful gate: feed it the three raw inputs on every change (resize,
-    // setActive, gl-context event); it calls onSleep/onWake exactly once
-    // per real transition, never on a no-op re-notify. The kill switch
-    // window.__mtlxNoSleep short-circuits to permanently awake.
+    // Stateful gate: feed it the raw inputs on every change; it calls
+    // onSleep/onWake exactly once per real transition, never on a no-op
+    // re-notify. window.__mtlxNoSleep short-circuits to permanently awake.
     const createSleepGate = ({ onSleep, onWake }) => {
         let asleep = false;
         let reason = null;
@@ -574,11 +541,9 @@
         if (renderer) renderer.dispose();
     };
 
-    // Subscribes to setDiffuseEnvMethod's broadcast (js/mtlx-engine.js
-    // dispatches window 'mtlx-settings-changed' with key 'diffuseEnvMethod'
-    // on every convolve/SH switch). Each live preview view reuses its OWN
-    // setEnvironment(currentEnv) path to rebind, no shader rebuild needed.
-    // Returns an unsubscribe function.
+    // Subscribes to setDiffuseEnvMethod's broadcast. Each live preview
+    // view reuses its OWN setEnvironment(currentEnv) path to rebind, no
+    // shader rebuild needed. Returns an unsubscribe function.
     const onDiffuseEnvMethodChange = (callback) => {
         const handler = (e) => {
             if (e && e.detail && e.detail.key === 'diffuseEnvMethod') callback(e.detail.value);

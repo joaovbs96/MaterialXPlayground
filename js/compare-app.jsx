@@ -635,14 +635,7 @@ function MaterialCompareApp({ active = true } = {}) {
 
     const slotA = useCompareSlot();
     const slotB = useCompareSlot();
-    // Bumped when a lost-then-restored GL context needs a full dispose+
-    // rebuild (render-target contents like PMREM/VSM never come back on
-    // their own); see the mtlx-gl-context subscription below.
-    const [glEpochA, setGlEpochA] = React.useState(0);
-    const [glEpochB, setGlEpochB] = React.useState(0);
     const pendingCustomGeomRef = React.useRef(false);
-    const pendingGlRestoredARef = React.useRef(false);
-    const pendingGlRestoredBRef = React.useRef(false);
     const pendingGlobalGeomRef = React.useRef(false);
     const pendingDisplayTransformRef = React.useRef(false);
     function surfaceHidden() {
@@ -661,37 +654,16 @@ function MaterialCompareApp({ active = true } = {}) {
     // on screen) should rebuild either slot; imports made while some OTHER
     // geom is selected must not, so this stays 0 unless geom is 'custom'.
     const customKey = geom === 'custom' && customGeom ? customGeom.epoch : 0;
-    useCompareRenderEffect(slotA, 'A', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotB.viewRef, swipeDiffPosRef, customKey, glEpochA, displayTransform);
-    useCompareRenderEffect(slotB, 'B', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotA.viewRef, swipeDiffPosRef, customKey, glEpochB, displayTransform);
-
     // Restore re-inits GL state but not render-target contents, so a
     // glEpoch bump forces that slot's build effect to dispose and fully
     // rebuild (fresh PMREM bake, shadow map, etc).
-    React.useEffect(() => {
-        const onGlContext = (e) => {
-            const d = e.detail || {};
-            let which = null;
-            if (d.canvas === slotA.canvasRef.current) which = 'A';
-            else if (d.canvas === slotB.canvasRef.current) which = 'B';
-            if (!which) return;
-            const slot = which === 'A' ? slotA : slotB;
-            if (d.state === 'lost') {
-                if (!surfaceHidden()) {
-                    slot.setError('The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.');
-                }
-            } else if (d.state === 'restored') {
-                if (surfaceHidden()) {
-                    if (which === 'A') pendingGlRestoredARef.current = true; else pendingGlRestoredBRef.current = true;
-                } else if (which === 'A') {
-                    setGlEpochA((n) => n + 1);
-                } else {
-                    setGlEpochB((n) => n + 1);
-                }
-            }
-        };
-        window.addEventListener('mtlx-gl-context', onGlContext);
-        return () => window.removeEventListener('mtlx-gl-context', onGlContext);
-    }, []);
+    const [glEpochA, glEpochB] = useRenderContextRecovery({
+        groups: [[slotA.canvasRef], [slotB.canvasRef]],
+        isHidden: surfaceHidden,
+        onLost: (i) => (i === 0 ? slotA : slotB).setError(RENDER_CONTEXT_LOST_MESSAGE),
+    });
+    useCompareRenderEffect(slotA, 'A', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotB.viewRef, swipeDiffPosRef, customKey, glEpochA, displayTransform);
+    useCompareRenderEffect(slotB, 'B', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotA.viewRef, swipeDiffPosRef, customKey, glEpochB, displayTransform);
 
     // hashchange fires before/around the shell's display:none class flip,
     // so re-check visibility a tick later before flushing stashed work.
@@ -700,8 +672,6 @@ function MaterialCompareApp({ active = true } = {}) {
             requestAnimationFrame(() => {
                 if (surfaceHidden()) return;
                 if (pendingCustomGeomRef.current) { pendingCustomGeomRef.current = false; applyCustomGeom(); }
-                if (pendingGlRestoredARef.current) { pendingGlRestoredARef.current = false; setGlEpochA((n) => n + 1); }
-                if (pendingGlRestoredBRef.current) { pendingGlRestoredBRef.current = false; setGlEpochB((n) => n + 1); }
                 if (pendingGlobalGeomRef.current) { pendingGlobalGeomRef.current = false; applyGlobalGeom(); }
                 if (pendingDisplayTransformRef.current) { pendingDisplayTransformRef.current = false; applyDisplayTransform(); }
             });

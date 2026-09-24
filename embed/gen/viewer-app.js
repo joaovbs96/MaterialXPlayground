@@ -281,10 +281,6 @@ function MaterialViewerApp({
     } : null);
     if (!c && geomRef.current === 'custom') setGeom('shaderball-scene');
   };
-  // Bumped to force the view-build effect to dispose and fully
-  // rebuild after a WebGL context restore (PMREM bake, shadow
-  // map contents are lost even though GL state itself recovers).
-  const [glEpoch, setGlEpoch] = React.useState(0);
   // Global display transform ('srgb'|'aces'|'lin_rec709', js/mtlx-engine.js).
   // encodeDisplay bakes it into shader source, so it's a
   // dependency of the view-build effect below, same as geom: a change forces a full dispose+regenerate, not a live tweak.
@@ -294,7 +290,6 @@ function MaterialViewerApp({
   // Work stashed while this surface is hidden (shell display:none),
   // flushed by the hashchange effect below once visible again.
   const pendingCustomGeomRef = React.useRef(false);
-  const pendingGlRestoredRef = React.useRef(false);
   const pendingGlobalGeomRef = React.useRef(false);
   const pendingDisplayTransformRef = React.useRef(false);
   // A hidden ancestor (the shell's display:none wrapper) makes
@@ -374,21 +369,11 @@ function MaterialViewerApp({
   // Restore re-inits GL state but not render-target contents
   // (PMREM bake, shadow map), so a glEpoch bump forces the build
   // effect to dispose and fully rebuild.
-  React.useEffect(() => {
-    const onGlContext = e => {
-      const d = e.detail || {};
-      if (d.canvas !== canvasRef.current) return;
-      if (d.state === 'lost') {
-        if (!surfaceHidden()) {
-          notify('The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.');
-        }
-      } else if (d.state === 'restored') {
-        if (surfaceHidden()) pendingGlRestoredRef.current = true;else setGlEpoch(n => n + 1);
-      }
-    };
-    window.addEventListener('mtlx-gl-context', onGlContext);
-    return () => window.removeEventListener('mtlx-gl-context', onGlContext);
-  }, []);
+  const [glEpoch] = useRenderContextRecovery({
+    groups: [[canvasRef]],
+    isHidden: surfaceHidden,
+    onLost: () => notify(RENDER_CONTEXT_LOST_MESSAGE)
+  });
   React.useEffect(() => {
     const flush = () => {
       // hashchange fires before/around the shell's display:none class
@@ -398,10 +383,6 @@ function MaterialViewerApp({
         if (pendingCustomGeomRef.current) {
           pendingCustomGeomRef.current = false;
           applyCustomGeom();
-        }
-        if (pendingGlRestoredRef.current) {
-          pendingGlRestoredRef.current = false;
-          setGlEpoch(n => n + 1);
         }
         if (pendingGlobalGeomRef.current) {
           pendingGlobalGeomRef.current = false;

@@ -189,9 +189,7 @@
                 const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
                 return c ? { epoch: c.epoch, name: c.name } : null;
             });
-            const [glEpoch, setGlEpoch] = React.useState(0);
             const pendingCustomGeomRef = React.useRef(false);
-            const pendingGlRestoredRef = React.useRef(false);
             const pendingGlobalGeomRef = React.useRef(false);
             // canvasRef (target) is always mounted, unlike sourceCanvasRef
             // which only exists in compare mode, so it's the right check.
@@ -235,22 +233,11 @@
             // Restore re-inits GL state but not render-target contents, so a
             // glEpoch bump forces the build effect to dispose and fully
             // rebuild both views.
-            React.useEffect(() => {
-                const onGlContext = (e) => {
-                    const d = e.detail || {};
-                    if (d.canvas !== canvasRef.current && d.canvas !== sourceCanvasRef.current) return;
-                    if (d.state === 'lost') {
-                        if (!surfaceHidden()) {
-                            setNotice('The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.');
-                        }
-                    } else if (d.state === 'restored') {
-                        if (surfaceHidden()) pendingGlRestoredRef.current = true;
-                        else setGlEpoch((n) => n + 1);
-                    }
-                };
-                window.addEventListener('mtlx-gl-context', onGlContext);
-                return () => window.removeEventListener('mtlx-gl-context', onGlContext);
-            }, []);
+            const [glEpoch] = useRenderContextRecovery({
+                groups: [[canvasRef, sourceCanvasRef]],
+                isHidden: surfaceHidden,
+                onLost: () => setNotice(RENDER_CONTEXT_LOST_MESSAGE),
+            });
             React.useEffect(() => {
                 const flush = () => {
                     // hashchange fires before/around the shell's display:none class
@@ -258,7 +245,6 @@
                     requestAnimationFrame(() => {
                         if (surfaceHidden()) return;
                         if (pendingCustomGeomRef.current) { pendingCustomGeomRef.current = false; applyCustomGeom(); }
-                        if (pendingGlRestoredRef.current) { pendingGlRestoredRef.current = false; setGlEpoch((n) => n + 1); }
                         if (pendingGlobalGeomRef.current) { pendingGlobalGeomRef.current = false; applyGlobalGeom(); }
                     });
                 };
