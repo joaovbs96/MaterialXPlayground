@@ -413,10 +413,10 @@ function checkRenderFeaturesDoc() {
 // ---------------------------------------------------------------------
 // (f) embed build/runtime consistency
 // ---------------------------------------------------------------------
-// Current eager embed payload (bytes) is ~1,331,221; budget is that plus
-// 3%. Raise deliberately (with a comment on why) if the eager payload
-// grows for a good reason (it is the embed's cold-load cost).
-const EMBED_PAYLOAD_BUDGET = 1371158;
+// Current eager embed payload (bytes), now including embed/gen/*.js and
+// embed/embed-boot.js, is ~2,215,311; budget is that measured total x 1.03.
+// Raise deliberately (with a comment on why) if the payload grows further.
+const EMBED_PAYLOAD_BUDGET = 2281771;
 
 const EAGER_EMBED_FILES = [
   "vendor/react/react.production.min.js",
@@ -439,6 +439,11 @@ const EAGER_EMBED_FILES = [
   "js/shared/mesh-displacement.js",
   "js/shared/mtlx-turntable.js",
   "js/shared/render-settings.js",
+  "embed/gen/embed-controls.js",
+  "embed/gen/mtlx-engine.js",
+  "embed/gen/mtlx-ui.js",
+  "embed/gen/viewer-app.js",
+  "embed/embed-boot.js",
 ];
 
 function checkEmbedConsistency() {

@@ -10,5 +10,44 @@
   "/tests/embed/fixtures/glass.mtlx": {
     "vs": "3f33f1fde1fbfdf81c1bae68274e462397f82e57e44203f36d74868ff62f88a1",
     "fs": "def2b24f51e0184e930996553044287be09812de658d5c20556b8719ce8e4cee"
+  },
+  "fingerprint": {
+    "renderer": {
+      "toneMapping": 5,
+      "outputEncoding": 3001,
+      "toneMappingExposure": 1,
+      "shadowMapEnabled": true,
+      "shadowMapType": 3,
+      "pixelRatio": 1
+    },
+    "camera": {
+      "fov": 45,
+      "near": 0.1,
+      "far": 100,
+      "position": [
+        0,
+        0.4999999999999999,
+        3.6
+      ]
+    },
+    "controls": {
+      "minDistance": 1.4,
+      "maxDistance": 9,
+      "enablePan": false,
+      "dampingFactor": 0.08,
+      "autoRotateSpeed": 1.5
+    },
+    "scene": {
+      "childCount": 3,
+      "bgMeshRenderOrder": -1000,
+      "bgMeshRotationY": 3.141592653589793,
+      "bgMeshVisible": false,
+      "studioMeshRenderOrder": -900,
+      "studioCatcherRenderOrder": -800,
+      "studioCatcherOpacity": 0.28,
+      "studioLightAngle": 0.5880026035475675,
+      "studioLightPenumbra": 0.5
+    },
+    "backdrop": "studio"
   }
 }

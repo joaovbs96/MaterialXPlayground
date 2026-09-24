@@ -111,6 +111,61 @@ test('@smoke render baseline: generated shader sources match the committed hashe
   const errors = await page.evaluate((j) => window.__viewers[j].__events.filter((e) => e.type === 'mtlx-error'), idx);
   expect(errors).toEqual([]);
 
+  // Render fingerprint (P3 S0): renderer/camera/controls/scene state that
+  // must not drift while the render session is extracted in later slices.
+  // Read off the plain material's handle, default backdrop (studio).
+  results.fingerprint = await iframe.evaluate(() => {
+    const h = window.__mtlxViewerHandle;
+    const { renderer, scene, camera } = h.__debug();
+    const controls = h.controls;
+    const bgMesh = scene.children.find((c) => c.renderOrder === -1000);
+    const studioGroup = scene.children.find((c) => c.children
+      && c.children.some((cc) => cc.renderOrder === -900));
+    let studioMesh = null, studioCatcher = null, studioLight = null;
+    if (studioGroup) {
+      for (const c of studioGroup.children) {
+        if (c.renderOrder === -900) studioMesh = c;
+        else if (c.renderOrder === -800) studioCatcher = c;
+        else if (c.isSpotLight) studioLight = c;
+      }
+    }
+    return {
+      renderer: {
+        toneMapping: renderer.toneMapping,
+        outputEncoding: renderer.outputEncoding,
+        toneMappingExposure: renderer.toneMappingExposure,
+        shadowMapEnabled: renderer.shadowMap.enabled,
+        shadowMapType: renderer.shadowMap.type,
+        pixelRatio: renderer.getPixelRatio(),
+      },
+      camera: {
+        fov: camera.fov,
+        near: camera.near,
+        far: camera.far,
+        position: [camera.position.x, camera.position.y, camera.position.z],
+      },
+      controls: {
+        minDistance: controls.minDistance,
+        maxDistance: controls.maxDistance,
+        enablePan: controls.enablePan,
+        dampingFactor: controls.dampingFactor,
+        autoRotateSpeed: controls.autoRotateSpeed,
+      },
+      scene: {
+        childCount: scene.children.length,
+        bgMeshRenderOrder: bgMesh ? bgMesh.renderOrder : null,
+        bgMeshRotationY: bgMesh ? bgMesh.rotation.y : null,
+        bgMeshVisible: bgMesh ? bgMesh.visible : null,
+        studioMeshRenderOrder: studioMesh ? studioMesh.renderOrder : null,
+        studioCatcherRenderOrder: studioCatcher ? studioCatcher.renderOrder : null,
+        studioCatcherOpacity: studioCatcher ? studioCatcher.material.opacity : null,
+        studioLightAngle: studioLight ? studioLight.angle : null,
+        studioLightPenumbra: studioLight ? studioLight.penumbra : null,
+      },
+      backdrop: h.getBackdrop(),
+    };
+  });
+
   if (process.env.RENDER_BASELINE_UPDATE === '1') {
     fs.writeFileSync(BASELINE_PATH, JSON.stringify(results, null, 2) + '\n');
     return;
