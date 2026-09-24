@@ -24,9 +24,11 @@ test('standalone displacement generation inherits surface safety and sampler sem
 test('preview displacement preserves geomprops and cancels stale evaluations', () => {
   assert.match(source, /geomprops = Object\.keys\(nonIndexed\.attributes\)/);
   assert.match(source, /for \(const stream of welded\.geomprops \|\| \[\]\)/);
-  assert.match(source, /bindDisplacementGeomprops\(\);\s*const token = \+\+dispToken/);
-  assert.match(source, /cancelDisplacementRun\(\);\s*if \(dispState !== 'off'\)/);
-  assert.match(source, /dispToken\+\+;\s*dispRunInFlight = false;[\s\S]{0,140}dispSettleResolve\(\)/);
+  // P4d stage 1: the token/state/settle bookkeeping moved into
+  // createDisplacementRunner; the preview delegates through dispRunner.
+  assert.match(source, /bindDisplacementGeomprops\(\);\s*await dispRunner\.evaluate\(\)/);
+  assert.match(source, /dispRunner\.cancel\(\);\s*if \(dispRunner\.getState\(\)\.state !== 'off'\)/);
+  assert.match(source, /token\+\+;\s*debounceGen\+\+;\s*runInFlight = false;[\s\S]{0,140}settleResolve\(\)/);
 });
 
 test('scene compile identity includes selected displacement', () => {

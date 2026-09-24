@@ -9365,6 +9365,332 @@ const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMat
 };
 
 // ------------------------------------------------------------------
+// createTriangleBudget / prepareDisplacementBase / buildDisplacedGeometry /
+// createDisplacementRunner: displacement pipeline pieces shared out of the
+// preview's createMtlxRenderView (P4d stage 1). Stateless helpers first,
+// the stateful runner last; a future per-tile evaluate (UDIM, P4d stage 2)
+// and the Scene (P6) reuse these instead of their own copies.
+// ------------------------------------------------------------------
+
+// Highest level <= requestedLevel keeping baseTriangles*4^level inside a
+// per-mesh cap AND a running whole-scene total (mirrors the Scene's
+// resolveDisplacementLevel, js/usd-scene-renderer.js ~4006-4022); the
+// preview passes total: Infinity, so only perMesh applies. reset() clears
+// the running total between rebuilds (a fresh preview or a fresh stage).
+const createTriangleBudget = ({ perMesh = PREVIEW_TRIANGLE_BUDGET, total = Infinity, enabled = true } = {}) => {
+    let used = 0;
+    const pick = (baseTriangles, requestedLevel) => {
+        if (!enabled) return pickSubdivisionLevel(baseTriangles, requestedLevel, Infinity);
+        const budget = Math.min(perMesh, total - used);
+        const result = pickSubdivisionLevel(baseTriangles, requestedLevel, budget);
+        if (result.allowed) used += result.triangles;
+        return result;
+    };
+    const reset = () => { used = 0; };
+    return { pick, reset, perMesh };
+};
+
+// Loop-subdivides `source` (a BufferGeometry: non-indexed corners then
+// welded back into an indexed one; other attributes are dropped, reported
+// in `dropped`) or a plain { positions, normals, uvs, geomprops } arrays
+// object (per-tile UDIM use), at `level`. Returns { geometry, dropped } /
+// { arrays, dropped }, or null when there is no position data.
+const prepareDisplacementBase = (source, level, { creaseByNormals = true } = {}) => {
+    const isGeom = !!(source && typeof source.getAttribute === 'function');
+    let meshIn, sourceAttrNames;
+    if (isGeom) {
+        const nonIndexed = source.index ? source.toNonIndexed() : source;
+        const posAttr = nonIndexed.getAttribute('position');
+        const normAttr = nonIndexed.getAttribute('normal');
+        const uvAttr = nonIndexed.getAttribute('uv');
+        const toArr = (attr) => (attr
+            ? (attr.array instanceof Float32Array ? attr.array : Float32Array.from(attr.array))
+            : null);
+        const geomprops = Object.keys(nonIndexed.attributes)
+            .filter((name) => name.startsWith('i_geomprop_'))
+            .map((name) => ({
+                name: name.slice('i_geomprop_'.length),
+                itemSize: nonIndexed.getAttribute(name).itemSize,
+                data: toArr(nonIndexed.getAttribute(name)),
+            }));
+        meshIn = { positions: toArr(posAttr), normals: toArr(normAttr), uvs: toArr(uvAttr), geomprops };
+        if (nonIndexed !== source) nonIndexed.dispose();
+        sourceAttrNames = Object.keys(source.attributes);
+    } else {
+        meshIn = source;
+        sourceAttrNames = Object.keys((source && source.attributes) || {});
+    }
+    if (!meshIn.positions) return null;
+    const subdivided = MtlxMeshSubdivision.subdivideMesh(meshIn, level, { creaseByNormals });
+    if (!subdivided) return null;
+    const welded = MtlxMeshSubdivision.weldMesh(subdivided);
+    if (!isGeom) return { arrays: welded, dropped: [] };
+    const out = new THREE.BufferGeometry();
+    out.setAttribute('position', new THREE.BufferAttribute(welded.positions, 3));
+    out.setAttribute('normal', new THREE.BufferAttribute(welded.normals, 3));
+    if (welded.uvs) out.setAttribute('uv', new THREE.BufferAttribute(welded.uvs, 2));
+    for (const stream of welded.geomprops || []) {
+        out.setAttribute('i_geomprop_' + stream.name, new THREE.BufferAttribute(stream.data, stream.itemSize));
+    }
+    out.setIndex(new THREE.BufferAttribute(welded.indices, 1));
+    prepGeometry(out);
+    // prepGeometry, aliasUvGeomprops and computeTangents rebuild these on
+    // the subdivided mesh, so only genuinely lost attributes are reported.
+    const rebuilt = new Set(['position', 'normal', 'uv', 'i_position', 'i_normal', 'i_texcoord_0', 'tangent', 'i_tangent', 'i_bitangent', ...UV_GEOMPROP_ALIASES,
+        ...(welded.geomprops || []).map((stream) => 'i_geomprop_' + stream.name)]);
+    const dropped = sourceAttrNames.filter((n) => !rebuilt.has(n));
+    return { geometry: out, dropped };
+};
+
+// Computes displaced positions/normals from `base` (an undisplaced,
+// subdivided geometry) and an evaluateDisplacement() result, cloning them
+// into a fresh geometry; null with no position data.
+const buildDisplacedGeometry = (base, result) => {
+    const posAttr = base.getAttribute('position');
+    if (!posAttr) return null;
+    const normAttr = base.getAttribute('normal');
+    const tanAttr = base.getAttribute('i_tangent');
+    const bitanAttr = base.getAttribute('i_bitangent');
+    const idxAttr = base.getIndex();
+    const computed = MtlxMeshDisplacement.computeDisplacedAttributes({
+        positions: posAttr.array,
+        normals: normAttr ? normAttr.array : null,
+        tangents: tanAttr ? tanAttr.array : null,
+        bitangents: bitanAttr ? bitanAttr.array : null,
+        indices: idxAttr ? idxAttr.array : null,
+        offsets: result.offsets,
+        mode: result.mode,
+        offsetsTangent: result.offsetsTangent || null,
+        offsetsBitangent: result.offsetsBitangent || null,
+        analyticFrame: result.analyticFrame || null,
+        displacementNormals: getDisplacementNormalsMode(),
+    });
+    const out = base.clone();
+    out.setAttribute('position', new THREE.BufferAttribute(computed.positions, 3));
+    out.setAttribute('normal', new THREE.BufferAttribute(computed.normals, 3));
+    out.deleteAttribute('i_position');
+    out.deleteAttribute('i_normal');
+    out.deleteAttribute('i_tangent');
+    out.deleteAttribute('i_bitangent');
+    out.deleteAttribute('i_texcoord_0');
+    prepGeometry(out);
+    out.computeBoundingBox();
+    out.computeBoundingSphere();
+    return out;
+};
+
+// Stateful displacement pipeline: subdivide-to-budget (build), evaluate the
+// displacement program and land a displaced geometry (evaluate), with the
+// same token/debounce/settle bookkeeping the preview used inline before.
+// cacheKey(level) -> BASE_GEOM_CACHE key string, matching baseGeomCacheKey.
+// onGeometry(builtGeometryOrNull) lands the result (null = fall back to the
+// caller's original geometry); onStatus(state, notices) mirrors the old
+// dispDispatchStatus/syncHandleNotices pair. Name the settle method
+// `settled`, not `whenSettled`: that name is a HANDLE_CONTRACT reserved
+// word (guard (g) in scripts/check-render-parity.mjs).
+const createDisplacementRunner = ({
+    renderer, isAlive, budget, textureSession, cacheKey,
+    creaseByNormals = true, firstBuildTimeoutMs = 4000, debounceMs = 150,
+    onGeometry, onStatus, getWorldMatrix,
+} = {}) => {
+    let source = null, sourceKey = null, fileMap = null;
+    let baseGeometry = null, subdivLevel = null, triangles = 0, withinBudget = true;
+    let cappedNotice = null, droppedNotice = null, evalNotices = [];
+    let token = 0, state = 'none', runInFlight = false;
+    let settlePromise = null, settleResolve = null;
+    let debounceGen = 0;
+
+    const currentNotices = () => [cappedNotice, droppedNotice].filter(Boolean).concat(evalNotices);
+    const emitStatus = () => { if (onStatus) onStatus(state, currentNotices()); };
+    const alive = (t) => (typeof isAlive !== 'function' || isAlive()) && t === token;
+
+    const cancel = () => {
+        token++;
+        debounceGen++;
+        runInFlight = false;
+        if (settleResolve) { settleResolve(); settleResolve = null; settlePromise = null; }
+    };
+
+    // Direct state writes, bypassing evaluate: the 'off'/'none' teardown
+    // paths the preview drives from its own settings toggles.
+    const setState = (s) => { state = s; };
+    const reset = () => { state = 'none'; sourceKey = null; evalNotices = []; };
+    const pushNotice = (text) => { if (!evalNotices.includes(text)) evalNotices.push(text); };
+
+    // Ensures baseGeometry reflects `requestedLevel` capped to `budget`,
+    // rebuilding (or pulling from BASE_GEOM_CACHE) only when the resolved
+    // level changed.
+    const build = (originalGeometry, requestedLevel) => {
+        const posAttr = originalGeometry.getAttribute('position');
+        const idx = originalGeometry.getIndex();
+        const baseTriangleCount = Math.max(1, Math.round((idx ? idx.count : (posAttr ? posAttr.count : 3)) / 3));
+        const overrideBudget = typeof window !== 'undefined' ? window.__mtlxTriangleBudgetOverride : undefined;
+        const appliedBudget = Number.isFinite(overrideBudget) ? overrideBudget : budget.perMesh;
+        const { level, capped, triangles: t, allowed } = Number.isFinite(overrideBudget)
+            ? pickSubdivisionLevel(baseTriangleCount, requestedLevel, overrideBudget)
+            : budget.pick(baseTriangleCount, requestedLevel);
+        if (subdivLevel === level && baseGeometry) return { level, capped, triangles: t, allowed };
+        let built = originalGeometry;
+        let dropped = [];
+        if (level > 0) {
+            const key = cacheKey(level);
+            const cached = baseGeomCacheGet(key);
+            if (cached) {
+                built = cached.clone();
+            } else {
+                const result = prepareDisplacementBase(originalGeometry, level, { creaseByNormals });
+                if (result) {
+                    dropped = result.dropped;
+                    baseGeomCacheSet(key, result.geometry);
+                    built = result.geometry.clone();
+                }
+            }
+        }
+        if (baseGeometry && baseGeometry !== originalGeometry) {
+            try { baseGeometry.dispose(); } catch (e) { /* already disposed/invalid */ }
+        }
+        baseGeometry = built;
+        subdivLevel = level;
+        triangles = t;
+        withinBudget = allowed;
+        cappedNotice = !allowed
+            ? 'Displacement skipped: base mesh has ' + t + ' triangles, above the ' + appliedBudget + ' triangle budget'
+            : (capped ? 'Subdivision capped at level ' + level + ' (' + t + ' triangles) to stay under the budget' : null);
+        droppedNotice = dropped.length ? 'Subdivision dropped extra vertex attributes: ' + dropped.join(', ') : null;
+        return { level, capped, triangles: t, allowed };
+    };
+
+    // Lands one evaluateDisplacement() result: a superseded token stops
+    // without swapping; a null/failed result falls all the way back to
+    // the caller's original geometry (onGeometry(null)), never a partial one.
+    const land = (evalToken, result, failState) => {
+        if (evalToken !== token || (typeof isAlive === 'function' && !isAlive())) return;
+        runInFlight = false;
+        if (settleResolve) { settleResolve(); settleResolve = null; settlePromise = null; }
+        evalNotices = (result && result.notices) || [];
+        if (!result || !result.offsets) {
+            state = failState || 'failed';
+            if (onGeometry) onGeometry(null);
+            emitStatus();
+            return;
+        }
+        const built = baseGeometry ? buildDisplacedGeometry(baseGeometry, result) : null;
+        if (!built) {
+            state = 'failed';
+            if (onGeometry) onGeometry(null);
+            emitStatus();
+            return;
+        }
+        state = 'applied';
+        if (onGeometry) onGeometry(built);
+        emitStatus();
+    };
+
+    // Evaluates the current source/baseGeometry and lands the result;
+    // shared by settings toggles, a material debounce and an arriving file map.
+    const evaluate = async () => {
+        if (!source || !baseGeometry) return;
+        const evalToken = ++token;
+        if (!withinBudget) {
+            land(evalToken, { offsets: null, notices: [cappedNotice] }, 'skipped');
+            return;
+        }
+        state = 'pending';
+        runInFlight = true;
+        if (!settlePromise) settlePromise = new Promise((res) => { settleResolve = res; });
+        emitStatus();
+        const posAttr = baseGeometry.getAttribute('position');
+        if (!posAttr || posAttr.count < 3) {
+            land(evalToken, { offsets: null, notices: ['Displacement skipped: geometry has too few vertices'] }, 'skipped');
+            return;
+        }
+        let result = null;
+        try {
+            result = await evaluateDisplacement({
+                renderer, displacement: source, geometry: baseGeometry,
+                worldMatrix: getWorldMatrix ? getWorldMatrix() : new THREE.Matrix4(),
+                fileMap, textureCache: undefined, textureSession,
+                isAlive: () => alive(evalToken),
+            });
+        } catch (e) {
+            result = { offsets: null, notices: ['Displacement evaluation failed: ' + (e && e.message ? e.message : String(e))] };
+        }
+        land(evalToken, result, 'failed');
+    };
+
+    // First build only: evaluate before the first apply so the first frame
+    // shows the final geometry; a filename-driven or slow (> firstBuildTimeoutMs)
+    // program lands later instead, in the background.
+    const runFirstBuild = async () => {
+        if (!source || !baseGeometry) return;
+        if (!withinBudget) {
+            const t = ++token;
+            land(t, { offsets: null, notices: [cappedNotice] }, 'skipped');
+            return;
+        }
+        if (hasDisplacementFileRef(source)) return; // filename-driven, wait for setFileMap
+        const t = ++token;
+        state = 'pending';
+        runInFlight = true;
+        if (!settlePromise) settlePromise = new Promise((res) => { settleResolve = res; });
+        const evalPromise = evaluateDisplacement({
+            renderer, displacement: source, geometry: baseGeometry,
+            worldMatrix: getWorldMatrix ? getWorldMatrix() : new THREE.Matrix4(),
+            fileMap, textureCache: undefined, textureSession,
+            isAlive: () => alive(t),
+        }).catch((e) => ({ offsets: null, notices: ['Displacement evaluation failed: ' + (e && e.message ? e.message : String(e))] }));
+        const timedOut = Symbol('mtlx-disp-timeout');
+        const raced = await Promise.race([
+            evalPromise,
+            new Promise((resolve) => setTimeout(() => resolve(timedOut), firstBuildTimeoutMs)),
+        ]);
+        if (raced === timedOut) {
+            // Keep waiting in the background; the caller's own setup is
+            // synchronous, so mesh/handle both exist well before this resolves.
+            evalPromise.then((result) => land(t, result, 'failed'));
+        } else {
+            land(t, raced, 'failed');
+        }
+    };
+
+    // Debounced evaluate: used when the displacement PROGRAM changes (a
+    // material swap), so a rapid regeneration burst does not re-evaluate
+    // every intermediate value. `prepare` runs just before evaluate, once
+    // this call is still the latest debounced call, and may return false
+    // to skip the evaluate (e.g. displacement got disabled meanwhile).
+    const debouncedEvaluate = (prepare) => {
+        const gen = ++debounceGen;
+        return new Promise((resolve) => {
+            setTimeout(() => {
+                if (gen !== debounceGen) { resolve(); return; }
+                const proceed = prepare ? prepare() : true;
+                if (proceed === false) { resolve(); return; }
+                Promise.resolve(evaluate()).then(resolve);
+            }, debounceMs);
+        });
+    };
+
+    return {
+        setSource: (newSource) => { source = newSource || null; sourceKey = source ? source.key : null; },
+        getSourceKey: () => sourceKey,
+        setFileMap: (map) => { fileMap = map || null; },
+        setState, reset, off: () => setState('off'), pushNotice,
+        build,
+        getBaseGeometry: () => baseGeometry,
+        evaluate,
+        runFirstBuild,
+        debouncedEvaluate,
+        cancel,
+        getState: () => ({
+            state, mode: source ? source.mode : null, level: subdivLevel || 0,
+            capped: !!cappedNotice, triangles, notices: currentNotices(),
+        }),
+        settled: () => (runInFlight ? (settlePromise || Promise.resolve()) : Promise.resolve()),
+        dispose: () => { cancel(); },
+    };
+};
+
+// ------------------------------------------------------------------
 // tryRefreshRenderView, attempts a cheap in-place refresh of an
 // existing view instead of a full rebuild: regenerates sources and, if
 // byte-identical to the live view's, re-uploads only uniform defaults.
@@ -10539,15 +10865,11 @@ const createMtlxRenderView = async ({
     // teardown), baseGeometry subdivided-but-undisplaced, displacedGeometry
     // the CPU-displaced result on `mesh` (null when nothing is displaced).
     let originalGeometry = null, baseGeometry = null, displacedGeometry = null;
-    let displacementSources = null, dispKey = null, dispToken = 0;
-    // dispState: 'none' | 'pending' | 'applied' | 'skipped' | 'failed' | 'off'.
-    let dispState = 'none', dispSubdivLevel = null, dispTriangles = 0;
-    let dispWithinBudget = true;
-    let dispCappedNotice = null, dispDroppedNotice = null, dispEvalNotices = [];
+    let displacementSources = null;
     let materialNotices = [];
-    let dispFileMap = null, dispRunInFlight = false;
-    let dispSettlePromise = null, dispSettleResolve = null;
-    let applyDispDebounceToken = 0;
+    // P4d stage 1: owns dispToken/dispState/dispSettlePromise/notices/
+    // debounce, assigned once the renderer/textureSession exist below.
+    let dispRunner = null;
     // Reassigned once, below, to the real handle object literal; declared
     // here (with the rest of this shell's state) so displacement closures
     // defined ahead of it can still dispatch { view: handle } once it exists.
@@ -10648,9 +10970,7 @@ const createMtlxRenderView = async ({
     const wheelHint = MtlxRender.createWheelHint(canvas);
     const disposePartial = () => {
         stopped = true;
-        dispToken++;
-        dispRunInFlight = false;
-        if (dispSettleResolve) { dispSettleResolve(); dispSettleResolve = null; dispSettlePromise = null; }
+        if (dispRunner) dispRunner.cancel();
         if (reqId) cancelAnimationFrame(reqId);
         if (sizer) sizer.dispose();
         if (controls) controls.dispose();
@@ -10766,6 +11086,23 @@ const createMtlxRenderView = async ({
                         if (detail && detail.key === 'textureAnisotropy' && textureSession) textureSession.setAnisotropy(detail.value);
                     })
                     : null;
+                // P4d stage 1: onGeometry/onStatus close over swapMeshGeometry/
+                // syncHandleNotices/dispDispatchStatus/updateStudioFloor, all
+                // defined further below; safe, since dispRunner is only used
+                // (never called) before those consts run (same TDZ-safe
+                // pattern this file already uses for `handle`).
+                dispRunner = createDisplacementRunner({
+                    renderer, isAlive: () => !stopped,
+                    budget: createTriangleBudget({ perMesh: triangleBudget, total: Infinity, enabled: true }),
+                    textureSession,
+                    cacheKey: (level) => baseGeomCacheKey(geomName, sceneMode, level),
+                    creaseByNormals: true,
+                    firstBuildTimeoutMs: 4000,
+                    debounceMs: 150,
+                    onGeometry: (built) => swapMeshGeometry(built || originalGeometry),
+                    onStatus: () => { syncHandleNotices(); dispDispatchStatus(); },
+                    getWorldMatrix: () => (mesh ? mesh.matrixWorld : new THREE.Matrix4()),
+                });
                 // Hoisted once renderer exists: gates u_peelLinear binding,
                 // peel-layer/accum half-float storage, and finalMat's shader
                 // choice, all from this one extension check (see allocPeel).
@@ -11181,9 +11518,9 @@ const createMtlxRenderView = async ({
 
                 // Current, complete set of displacement-derived notices
                 // (subdivision cap/drop, plus the latest evaluation run's
-                // own notices), for getDisplacementState() and the status event.
-                const currentDispNotices = () =>
-                    [dispCappedNotice, dispDroppedNotice].filter(Boolean).concat(dispEvalNotices);
+                // own notices), for getDisplacementState() and the status
+                // event; owned by dispRunner (P4d stage 1).
+                const currentDispNotices = () => dispRunner.getState().notices;
                 // Rebuilt, never appended, so re-runs cannot stack stale copies.
                 const syncHandleNotices = () => {
                     if (handle) handle.notices = materialNotices.concat(currentDispNotices());
@@ -11192,7 +11529,7 @@ const createMtlxRenderView = async ({
                     if (!handle) return;
                     try {
                         window.dispatchEvent(new CustomEvent('mtlx-displacement-status', {
-                            detail: { view: handle, state: dispState, notices: currentDispNotices() },
+                            detail: { view: handle, state: dispRunner.getState().state, notices: currentDispNotices() },
                         }));
                     } catch (e) { /* best-effort */ }
                 };
@@ -11200,6 +11537,8 @@ const createMtlxRenderView = async ({
                 // Sets `mesh.geometry`/`geometry` to `g`; a genuine
                 // displaced result is disposed on the NEXT swap, the base/
                 // original is left alone. Safe pre-`mesh` too (first build).
+                // dispRunner's onGeometry calls this with the built geometry
+                // (or null, meaning "fall back to originalGeometry").
                 const swapMeshGeometry = (g) => {
                     const prevDisplaced = displacedGeometry;
                     displacedGeometry = (g !== originalGeometry && g !== baseGeometry) ? g : null;
@@ -11213,165 +11552,23 @@ const createMtlxRenderView = async ({
                     }
                 };
 
-                // Non-indexed corners, Loop-subdivided (creases at authored
-                // normal breaks) then welded back into an indexed geometry;
-                // other attributes are dropped (reported by the caller).
-                const subdivideSourceGeometry = (source, level) => {
-                    const nonIndexed = source.index ? source.toNonIndexed() : source;
-                    const posAttr = nonIndexed.getAttribute('position');
-                    const normAttr = nonIndexed.getAttribute('normal');
-                    const uvAttr = nonIndexed.getAttribute('uv');
-                    const toArr = (attr) => (attr
-                        ? (attr.array instanceof Float32Array ? attr.array : Float32Array.from(attr.array))
-                        : null);
-                    const geomprops = Object.keys(nonIndexed.attributes)
-                        .filter((name) => name.startsWith('i_geomprop_'))
-                        .map((name) => ({
-                            name: name.slice('i_geomprop_'.length),
-                            itemSize: nonIndexed.getAttribute(name).itemSize,
-                            data: toArr(nonIndexed.getAttribute(name)),
-                        }));
-                    const meshIn = { positions: toArr(posAttr), normals: toArr(normAttr), uvs: toArr(uvAttr), geomprops };
-                    if (nonIndexed !== source) nonIndexed.dispose();
-                    if (!meshIn.positions) return null;
-                    const subdivided = MtlxMeshSubdivision.subdivideMesh(meshIn, level, { creaseByNormals: true });
-                    if (!subdivided) return null;
-                    const welded = MtlxMeshSubdivision.weldMesh(subdivided);
-                    const out = new THREE.BufferGeometry();
-                    out.setAttribute('position', new THREE.BufferAttribute(welded.positions, 3));
-                    out.setAttribute('normal', new THREE.BufferAttribute(welded.normals, 3));
-                    if (welded.uvs) out.setAttribute('uv', new THREE.BufferAttribute(welded.uvs, 2));
-                    for (const stream of welded.geomprops || []) {
-                        out.setAttribute('i_geomprop_' + stream.name, new THREE.BufferAttribute(stream.data, stream.itemSize));
-                    }
-                    out.setIndex(new THREE.BufferAttribute(welded.indices, 1));
-                    prepGeometry(out);
-                    // prepGeometry, aliasUvGeomprops and computeTangents rebuild these on
-                    // the subdivided mesh, so only genuinely lost attributes are reported.
-                    const rebuilt = new Set(['position', 'normal', 'uv', 'i_position', 'i_normal', 'i_texcoord_0', 'tangent', 'i_tangent', 'i_bitangent', ...UV_GEOMPROP_ALIASES,
-                        ...(welded.geomprops || []).map((stream) => 'i_geomprop_' + stream.name)]);
-                    const dropped = Object.keys(source.attributes).filter((n) => !rebuilt.has(n));
-                    return { geometry: out, dropped };
+                const bindDisplacementGeomprops = () => {
+                    if (!baseGeometry || !displacementSources || !displacementSources.geomprops) return;
+                    bindGeompropAttributes(baseGeometry, displacementSources.geomprops, (text) => {
+                        dispRunner.pushNotice(text);
+                    });
                 };
 
                 // Ensures baseGeometry reflects the current preview
                 // subdivision setting (capped to the triangle budget),
-                // rebuilding only when the resolved level changed.
+                // rebuilding only when the resolved level changed; delegates
+                // to dispRunner.build (BASE_GEOM_CACHE lookup, subdivision
+                // via prepareDisplacementBase, notice strings).
                 const ensureBaseGeometry = () => {
-                    const posAttr = originalGeometry.getAttribute('position');
-                    const idx = originalGeometry.getIndex();
-                    const baseTriangleCount = Math.max(1, Math.round((idx ? idx.count : (posAttr ? posAttr.count : 3)) / 3));
-                    const overrideBudget = window.__mtlxTriangleBudgetOverride;
-                    const budget = Number.isFinite(overrideBudget) ? overrideBudget : triangleBudget;
-                    const { level, capped, triangles, allowed } = pickSubdivisionLevel(baseTriangleCount, getPreviewSubdivisionLevel(), budget);
-                    if (dispSubdivLevel === level && baseGeometry) return { level, capped, triangles, allowed };
-                    let built = originalGeometry;
-                    let dropped = [];
-                    if (level > 0) {
-                        const cacheKey = baseGeomCacheKey(geomName, sceneMode, level);
-                        const cached = baseGeomCacheGet(cacheKey);
-                        if (cached) {
-                            built = cached.clone();
-                        } else {
-                            const result = subdivideSourceGeometry(originalGeometry, level);
-                            if (result) {
-                                dropped = result.dropped;
-                                baseGeomCacheSet(cacheKey, result.geometry);
-                                built = result.geometry.clone();
-                            }
-                        }
-                    }
-                    if (baseGeometry && baseGeometry !== originalGeometry) {
-                        try { baseGeometry.dispose(); } catch (e) { /* already disposed/invalid */ }
-                    }
-                    baseGeometry = built;
-                    dispSubdivLevel = level;
-                    dispTriangles = triangles;
-                    dispWithinBudget = allowed;
-                    dispCappedNotice = !allowed
-                        ? 'Displacement skipped: base mesh has ' + triangles + ' triangles, above the ' + budget + ' triangle budget'
-                        : (capped ? 'Subdivision capped at level ' + level + ' (' + triangles + ' triangles) to stay under the budget' : null);
-                    dispDroppedNotice = dropped.length
-                        ? 'Subdivision dropped extra vertex attributes: ' + dropped.join(', ')
-                        : null;
+                    const result = dispRunner.build(originalGeometry, getPreviewSubdivisionLevel());
+                    baseGeometry = dispRunner.getBaseGeometry();
                     syncHandleNotices();
-                    return { level, capped, triangles, allowed };
-                };
-
-                const bindDisplacementGeomprops = () => {
-                    if (!baseGeometry || !displacementSources || !displacementSources.geomprops) return;
-                    bindGeompropAttributes(baseGeometry, displacementSources.geomprops, (text) => {
-                        if (!dispEvalNotices.includes(text)) dispEvalNotices.push(text);
-                    });
-                };
-
-                // Computes displaced positions/normals from `base` and
-                // clones them into a fresh geometry; null with no position data.
-                const buildDisplacedGeometry = (base, result) => {
-                    const posAttr = base.getAttribute('position');
-                    if (!posAttr) return null;
-                    const normAttr = base.getAttribute('normal');
-                    const tanAttr = base.getAttribute('i_tangent');
-                    const bitanAttr = base.getAttribute('i_bitangent');
-                    const idxAttr = base.getIndex();
-                    const computed = MtlxMeshDisplacement.computeDisplacedAttributes({
-                        positions: posAttr.array,
-                        normals: normAttr ? normAttr.array : null,
-                        tangents: tanAttr ? tanAttr.array : null,
-                        bitangents: bitanAttr ? bitanAttr.array : null,
-                        indices: idxAttr ? idxAttr.array : null,
-                        offsets: result.offsets,
-                        mode: result.mode,
-                        offsetsTangent: result.offsetsTangent || null,
-                        offsetsBitangent: result.offsetsBitangent || null,
-                        analyticFrame: result.analyticFrame || null,
-                        displacementNormals: getDisplacementNormalsMode(),
-                    });
-                    const out = base.clone();
-                    out.setAttribute('position', new THREE.BufferAttribute(computed.positions, 3));
-                    out.setAttribute('normal', new THREE.BufferAttribute(computed.normals, 3));
-                    out.deleteAttribute('i_position');
-                    out.deleteAttribute('i_normal');
-                    out.deleteAttribute('i_tangent');
-                    out.deleteAttribute('i_bitangent');
-                    out.deleteAttribute('i_texcoord_0');
-                    prepGeometry(out);
-                    out.computeBoundingBox();
-                    out.computeBoundingSphere();
-                    return out;
-                };
-
-                // Lands one evaluateDisplacement() result: a superseded
-                // token stops without swapping; a null/failed result falls
-                // all the way back to originalGeometry, never a partial one.
-                const landDisplacementResult = (token, result, failState) => {
-                    if (token !== dispToken || stopped) return;
-                    dispRunInFlight = false;
-                    if (dispSettleResolve) { dispSettleResolve(); dispSettleResolve = null; dispSettlePromise = null; }
-                    dispEvalNotices = (result && result.notices) || [];
-                    syncHandleNotices();
-                    if (!result || !result.offsets) {
-                        dispState = failState || 'failed';
-                        swapMeshGeometry(originalGeometry);
-                        dispDispatchStatus();
-                        return;
-                    }
-                    const built = buildDisplacedGeometry(baseGeometry, result);
-                    if (!built) {
-                        dispState = 'failed';
-                        swapMeshGeometry(originalGeometry);
-                        dispDispatchStatus();
-                        return;
-                    }
-                    swapMeshGeometry(built);
-                    dispState = 'applied';
-                    dispDispatchStatus();
-                };
-
-                const cancelDisplacementRun = () => {
-                    dispToken++;
-                    dispRunInFlight = false;
-                    if (dispSettleResolve) { dispSettleResolve(); dispSettleResolve = null; dispSettlePromise = null; }
+                    return result;
                 };
 
                 // Evaluates the current displacementSources/baseGeometry
@@ -11380,75 +11577,24 @@ const createMtlxRenderView = async ({
                 const runDisplacement = async () => {
                     if (stopped || flat2d || !displacementSources || !baseGeometry) return;
                     bindDisplacementGeomprops();
-                    const token = ++dispToken;
-                    if (!dispWithinBudget) {
-                        landDisplacementResult(token, { offsets: null, notices: [dispCappedNotice] }, 'skipped');
-                        return;
-                    }
-                    dispState = 'pending';
-                    dispRunInFlight = true;
-                    if (!dispSettlePromise) dispSettlePromise = new Promise((res) => { dispSettleResolve = res; });
-                    dispDispatchStatus();
-                    const posAttr = baseGeometry.getAttribute('position');
-                    if (!posAttr || posAttr.count < 3) {
-                        landDisplacementResult(token, { offsets: null, notices: ['Displacement skipped: geometry has too few vertices'] }, 'skipped');
-                        return;
-                    }
-                    let result = null;
-                    try {
-                        result = await evaluateDisplacement({
-                            renderer, displacement: displacementSources, geometry: baseGeometry,
-                            worldMatrix: mesh ? mesh.matrixWorld : new THREE.Matrix4(),
-                            fileMap: dispFileMap, textureCache: undefined, textureSession,
-                            isAlive: () => !stopped && token === dispToken,
-                        });
-                    } catch (e) {
-                        result = { offsets: null, notices: ['Displacement evaluation failed: ' + (e && e.message ? e.message : String(e))] };
-                    }
-                    landDisplacementResult(token, result, 'failed');
+                    await dispRunner.evaluate();
                 };
 
                 // First build: subdivide + evaluate before the first apply
                 // so the first frame shows the final geometry; a filename-
-                // driven or slow (>4s) program lands later instead.
+                // driven or slow (>4s) program lands later instead
+                // (dispRunner.runFirstBuild, the 4s race extracted verbatim).
                 displacementSources = __srcs.displacement;
-                dispKey = displacementSources ? displacementSources.key : null;
+                dispRunner.setSource(displacementSources);
                 if (!flat2d && displacementSources && getDisplacementEnabled()) {
                     ensureBaseGeometry();
                     bindDisplacementGeomprops();
                     geometry = baseGeometry;
                     if (mesh) mesh.geometry = baseGeometry;
-                    // See hasDisplacementFileRef's header comment above.
-                    if (!dispWithinBudget) {
-                        const token = ++dispToken;
-                        landDisplacementResult(token, { offsets: null, notices: [dispCappedNotice] }, 'skipped');
-                    } else if (!hasDisplacementFileRef(displacementSources)) {
-                        const token = ++dispToken;
-                        dispState = 'pending';
-                        dispRunInFlight = true;
-                        if (!dispSettlePromise) dispSettlePromise = new Promise((res) => { dispSettleResolve = res; });
-                        const evalPromise = evaluateDisplacement({
-                            renderer, displacement: displacementSources, geometry: baseGeometry,
-                            worldMatrix: mesh ? mesh.matrixWorld : new THREE.Matrix4(),
-                            fileMap: dispFileMap, textureCache: undefined, textureSession,
-                            isAlive: () => !stopped && token === dispToken,
-                        }).catch((e) => ({ offsets: null, notices: ['Displacement evaluation failed: ' + (e && e.message ? e.message : String(e))] }));
-                        const FIRST_BUILD_DISPLACEMENT_TIMEOUT_MS = 4000;
-                        const timedOut = Symbol('mtlx-disp-timeout');
-                        const raced = await Promise.race([
-                            evalPromise,
-                            new Promise((resolve) => setTimeout(() => resolve(timedOut), FIRST_BUILD_DISPLACEMENT_TIMEOUT_MS)),
-                        ]);
-                        if (raced === timedOut) {
-                            // Keep waiting in the background; the rest of
-                            // this function is synchronous, so `mesh`/`handle`
-                            // both exist well before this resolves.
-                            evalPromise.then((result) => landDisplacementResult(token, result, 'failed'));
-                        } else {
-                            landDisplacementResult(token, raced, 'failed');
-                        }
-                    }
-                    // else: filename-driven, wait for onDisplacementFileMap.
+                    // See hasDisplacementFileRef's header comment above;
+                    // runFirstBuild no-ops (waits for setFileMap) when the
+                    // program is filename-driven.
+                    await dispRunner.runFirstBuild();
                 }
 
                 if (fullScene && sceneOrbit && controls) {
@@ -12089,19 +12235,18 @@ const createMtlxRenderView = async ({
             refreshDisplacement: () => {
                 if (flat2d || !displacementSources) return;
                 if (!getDisplacementEnabled()) {
-                    applyDispDebounceToken++;
-                    cancelDisplacementRun();
-                    if (dispState !== 'off') {
+                    dispRunner.cancel();
+                    if (dispRunner.getState().state !== 'off') {
                         swapMeshGeometry(originalGeometry);
-                        dispState = 'off';
+                        dispRunner.off();
                         dispDispatchStatus();
                     }
                     return;
                 }
-                const prevLevel = dispSubdivLevel;
-                const wasOff = dispState === 'off' || dispState === 'none';
+                const prevLevel = dispRunner.getState().level;
+                const wasOff = dispRunner.getState().state === 'off' || dispRunner.getState().state === 'none';
                 ensureBaseGeometry();
-                if (wasOff || prevLevel !== dispSubdivLevel) runDisplacement();
+                if (wasOff || prevLevel !== dispRunner.getState().level) runDisplacement();
             },
             extras: {
             // Texture session stats (wrapper/source counts, reserved bytes,
@@ -12167,28 +12312,29 @@ const createMtlxRenderView = async ({
                 if (stopped) return;
                 displacementSources = newDisplacement || null;
                 if (!displacementSources) {
-                    applyDispDebounceToken++;
-                    cancelDisplacementRun();
-                    if (dispState !== 'none') {
+                    dispRunner.cancel();
+                    if (dispRunner.getState().state !== 'none') {
                         swapMeshGeometry(originalGeometry);
-                        dispState = 'none';
-                        dispKey = null;
-                        dispEvalNotices = [];
+                        dispRunner.setSource(null);
+                        dispRunner.reset();
                         syncHandleNotices();
                         dispDispatchStatus();
                     }
                     return;
                 }
-                if (displacementSources.key === dispKey) return;
-                cancelDisplacementRun();
-                dispKey = displacementSources.key;
-                const debounceToken = ++applyDispDebounceToken;
-                setTimeout(() => {
-                    if (debounceToken !== applyDispDebounceToken || stopped) return;
-                    if (flat2d || !getDisplacementEnabled()) return;
+                if (displacementSources.key === dispRunner.getSourceKey()) return;
+                dispRunner.cancel();
+                dispRunner.setSource(displacementSources);
+                // 150ms debounce so a slider-driven regeneration burst
+                // doesn't re-evaluate every intermediate value; mirrors the
+                // old inline setTimeout's guard order exactly.
+                dispRunner.debouncedEvaluate(() => {
+                    if (stopped) return false;
+                    if (flat2d || !getDisplacementEnabled()) return false;
                     if (!baseGeometry) ensureBaseGeometry();
-                    runDisplacement();
-                }, 150);
+                    bindDisplacementGeomprops();
+                    return true;
+                });
             },
             // Reads the live `uniforms` closure binding (same one setUniforms
             // uses), so a material swap is reflected without a stale copy.
@@ -12196,22 +12342,15 @@ const createMtlxRenderView = async ({
             // Status snapshot: level/triangles/capped describe the current
             // baseGeometry (0 until one is built); notices merges the
             // subdivision and latest-evaluation notices.
-            getDisplacementState: () => ({
-                state: dispState,
-                mode: displacementSources ? displacementSources.mode : null,
-                level: dispSubdivLevel || 0,
-                capped: !!dispCappedNotice,
-                triangles: dispTriangles,
-                notices: currentDispNotices(),
-            }),
+            getDisplacementState: () => dispRunner.getState(),
             // Resolves once no evaluation is actively in flight (merely
             // waiting on a file map does NOT count, that could hang forever).
-            whenDisplacementSettled: () => (dispRunInFlight ? (dispSettlePromise || Promise.resolve()) : Promise.resolve()),
+            whenDisplacementSettled: () => dispRunner.settled(),
             // bindDroppedTextures calls this once per drop for every live
             // view (see its header comment below); re-runs only when the
             // displacement program actually samples a file.
             onDisplacementFileMap: (fileMap) => {
-                dispFileMap = fileMap;
+                dispRunner.setFileMap(fileMap);
                 if (!flat2d && getDisplacementEnabled() && hasDisplacementFileRef(displacementSources)) {
                     runDisplacement();
                 }
