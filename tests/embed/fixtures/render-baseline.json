@@ -1,15 +1,15 @@
 {
   "/tests/embed/fixtures/multi-material.mtlx": {
     "vs": "3f33f1fde1fbfdf81c1bae68274e462397f82e57e44203f36d74868ff62f88a1",
-    "fs": "1fd59d8f7c6649a6b8e376ab31c409bcebdc43e5d6fd715be61dd2957e35b056"
+    "fs": "e90c1bdead660d0fdf187fa2b85952ee35d0819890b17f9114ae1fbe537f0265"
   },
   "/tests/embed/fixtures/textured.mtlx": {
     "vs": "d11b9613d769977816cf85d299c87973ab0fc8d3bb4fb2831f459fdd158888b3",
-    "fs": "16bd1472914c773f2b7d73777494ec6cb4155b5dec6a91c61e41a797dd81229c"
+    "fs": "80dd85a590fb194477c13b660d8c218a5638ff69ca44398aa287023bab531648"
   },
   "/tests/embed/fixtures/glass.mtlx": {
     "vs": "3f33f1fde1fbfdf81c1bae68274e462397f82e57e44203f36d74868ff62f88a1",
-    "fs": "def2b24f51e0184e930996553044287be09812de658d5c20556b8719ce8e4cee"
+    "fs": "42e011ac40d68187e4215e0251480659a62340b3fe9701aa4977ef1c68eef425"
   },
   "fingerprint": {
     "renderer": {

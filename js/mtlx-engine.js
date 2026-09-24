@@ -69,7 +69,9 @@ const readFeatureGated = () => {
 // Features no preview tool can ever turn on: the Viewer, Compare, docs and
 // Graph previews and the embeds bind white shadow moments and a zero-strength
 // occlusion volume, so generating either costs compile time for a no-op.
-const PREVIEW_FEATURE_OPTIONS = { skipShadowMap: true, skipOcclusion: true };
+// skipLocalEnv/skipBounce are inert here too (no local reflection probe or
+// baked bounce volume in preview), so gating them off frees two samplers.
+const PREVIEW_FEATURE_OPTIONS = { skipShadowMap: true, skipOcclusion: true, skipLocalEnv: true, skipBounce: true };
 // Smallest tier that still covers `count`; anything unknown or over the
 // ceiling falls back to the full reservation.
 const chooseStageLightTier = (count) => {
@@ -7920,6 +7922,10 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
         occlusion: skipOcclusion,
         skyVis: skipOcclusion || skipSkyVis,
         aoVolume: skipOcclusion || skipSkyVis || skipAoVolume,
+        // Diagnostics only: bindEnvironmentSamplers/createMtlxSceneUniforms
+        // still gate on declared uniforms, not these two.
+        localEnv: skipLocalEnv,
+        bounce: skipBounce,
     };
     return { vs, fs, introspected, transparent, vertexInputs, geomprops, notices, payloadSupported, lightTransportSupported, displacement, maxLights, constInputs, featureSkips };
 };
@@ -8157,28 +8163,37 @@ const samplerBudgetNotice = ({ needed, limit, effects, plural }) => 'needs ' + n
 const generatePreviewSourcesWithinBudget = async (args) => {
     const overrideBudget = typeof window !== 'undefined' ? window.__mtlxSamplerBudgetOverride : undefined;
     const budget = Number.isFinite(overrideBudget) ? overrideBudget : DEFAULT_SAMPLER_BUDGET;
+    const baseFeatureOptions = args.sceneFeatureOptions || null;
+    // A key the caller already gated off (e.g. PREVIEW_FEATURE_OPTIONS'
+    // skipLocalEnv/skipBounce) is a no-op drop here: trying it again wastes
+    // a regeneration and would name a feature the preview never had.
+    const candidates = SAMPLER_BUDGET_DROP_ORDER.filter((d) => !(baseFeatureOptions && baseFeatureOptions[d.key]));
+    const appliedOptions = Object.assign({}, baseFeatureOptions);
+    let srcs = await generatePreviewSources(Object.assign({}, args, { sceneFeatureOptions: appliedOptions }));
+    if (!srcs) return null;
+    let info = countFragmentSamplers(srcs.fs);
+    const neededInfo = info; // the full-feature count, what the notice reports
     const dropped = [];
-    let srcs = null;
-    let neededInfo = null; // the full-feature count, what the notice reports
-    for (let attempt = 0; ; attempt++) {
-        // The caller's feature gating is the base; budget drops add to it.
-        const sceneFeatureOptions = Object.assign({}, args.sceneFeatureOptions || null);
-        for (const d of dropped) sceneFeatureOptions[d.key] = true;
-        srcs = await generatePreviewSources(Object.assign({}, args, { sceneFeatureOptions }));
-        if (!srcs) return null;
-        const info = countFragmentSamplers(srcs.fs);
-        if (!neededInfo) neededInfo = info;
-        if (info.count <= budget) break;
-        if (attempt >= SAMPLER_BUDGET_DROP_ORDER.length) break;
-        dropped.push(SAMPLER_BUDGET_DROP_ORDER[attempt]);
+    for (let i = 0; info.count > budget && i < candidates.length; i++) {
+        const trialOptions = Object.assign({}, appliedOptions, { [candidates[i].key]: true });
+        const trialSrcs = await generatePreviewSources(Object.assign({}, args, { sceneFeatureOptions: trialOptions }));
+        if (!trialSrcs) return null;
+        const trialInfo = countFragmentSamplers(trialSrcs.fs);
+        // Keep and record this drop only when it actually shrank the
+        // sampler count; an inert key never enters the notice.
+        if (trialInfo.count < info.count) {
+            dropped.push(candidates[i]);
+            appliedOptions[candidates[i].key] = true;
+            srcs = trialSrcs;
+            info = trialInfo;
+        }
     }
     if (dropped.length) {
-        const info = countFragmentSamplers(srcs.fs);
         const effects = joinWithAnd(dropped.map((d) => d.userLabel));
-        const needed = samplerBudgetNotice({ needed: neededInfo || info, limit: budget, effects, plural: dropped.length > 1 });
+        const needed = samplerBudgetNotice({ needed: neededInfo, limit: budget, effects, plural: dropped.length > 1 });
         srcs.notices = (srcs.notices || []).concat(['Texture slots: this material ' + needed]);
         srcs.samplerBudget = { limit: budget, count: info.count, material: info.material, scene: info.scene,
-            needed: (neededInfo || info).count, notice: needed,
+            needed: neededInfo.count, notice: needed,
             dropped: dropped.map((d) => d.label), droppedLabels: dropped.map((d) => d.userLabel) };
     }
     return srcs;
