@@ -23,6 +23,7 @@ import { existsSync, statSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { MTLX_VERSIONS, DEFAULT_MTLX_VERSION, mtlxVersionAssetUrl } from "./lib/mtlx-versions.mjs";
 import { extractFromZip } from "./lib/zip.mjs";
 
@@ -30,8 +31,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, "..");
 const MATERIALX_ROOT = path.join(REPO_ROOT, "js", "materialx");
-
-const CHECK_MODE = process.argv.includes("--check");
 
 function log(...args) {
   console.log(...args);
@@ -99,7 +98,7 @@ async function downloadVersion(entry) {
   const wantedNames = Object.keys(entry.files);
   let extracted;
   try {
-    extracted = extractFromZip(zipData, wantedNames);
+    extracted = await extractFromZip(zipData, wantedNames);
   } catch (err) {
     fail(`error: failed to unzip ${url}: ${err.message}`);
   }
@@ -195,7 +194,14 @@ function isEntryModule() {
 }
 
 if (isEntryModule()) {
-  if (CHECK_MODE) {
+  let values;
+  try {
+    ({ values } = parseArgs({ args: process.argv.slice(2), options: { check: { type: "boolean" } }, strict: true }));
+  } catch (err) {
+    fail(`error: ${err.message}`);
+  }
+
+  if (values.check) {
     await runCheck();
   } else {
     await runFetch();

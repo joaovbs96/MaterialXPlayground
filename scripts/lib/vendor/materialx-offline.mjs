@@ -56,20 +56,8 @@ function gitBlobSha1(buffer) {
 
 /** Recursively list files under `dir` (absolute path), returning paths relative to `dir`. */
 async function listFilesRecursive(dir) {
-  const out = [];
-  async function walk(current, relPrefix) {
-    const entries = await readdir(current, { withFileTypes: true });
-    for (const entry of entries) {
-      const abs = path.join(current, entry.name);
-      const rel = relPrefix ? path.join(relPrefix, entry.name) : entry.name;
-      if (entry.isDirectory()) {
-        await walk(abs, rel);
-      } else if (entry.isFile()) {
-        out.push(rel);
-      }
-    }
-  }
-  await walk(dir, "");
+  const entries = await readdir(dir, { recursive: true, withFileTypes: true });
+  const out = entries.filter((e) => e.isFile()).map((e) => path.join(e.parentPath ?? e.path, e.name).slice(dir.length + 1));
   return out.sort();
 }
 

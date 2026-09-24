@@ -5,11 +5,10 @@
 // under the glob's static directory prefix, landing at dest + its path
 // relative to that prefix.
 
-import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { existsSync, globSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { globToRegExp, globStaticPrefix } from "../glob.mjs";
 
 function sha256Of(buffer) {
   return createHash("sha256").update(buffer).digest("hex");
@@ -18,19 +17,13 @@ function toPosix(p) {
   return p.split(path.sep).join("/");
 }
 
-async function listFilesRecursive(dir) {
-  const out = [];
-  async function walk(current, relPrefix) {
-    const entries = await readdir(current, { withFileTypes: true });
-    for (const entry of entries) {
-      const abs = path.join(current, entry.name);
-      const rel = relPrefix ? path.join(relPrefix, entry.name) : entry.name;
-      if (entry.isDirectory()) await walk(abs, rel);
-      else if (entry.isFile()) out.push(rel);
-    }
-  }
-  await walk(dir, "");
-  return out.sort();
+/** The literal path prefix before the first wildcard, up to and
+ * including the last "/" (used to resolve a glob's destination dir). */
+function globStaticPrefix(pattern) {
+  const starIndex = pattern.search(/\*/);
+  const prefix = starIndex === -1 ? pattern : pattern.slice(0, starIndex);
+  const lastSlash = prefix.lastIndexOf("/");
+  return lastSlash === -1 ? "" : prefix.slice(0, lastSlash + 1);
 }
 
 /** Expands a dep's npm file map into { srcAbs, destRel } pairs (dest
@@ -53,22 +46,15 @@ export async function expandNpmEntries(dep, nodeModulesDir) {
     }
 
     const staticPrefix = globStaticPrefix(srcPattern);
-    const searchRoot = path.join(pkgDir, staticPrefix);
-    const re = globToRegExp(srcPattern);
-    if (!existsSync(searchRoot)) {
-      missing.push(`node_modules/${dep.source.npm}/${staticPrefix} (needed for ${dep.id} glob "${srcPattern}")`);
+    const matches = existsSync(path.join(pkgDir, staticPrefix)) ? globSync(srcPattern, { cwd: pkgDir }) : [];
+    if (matches.length === 0) {
+      missing.push(`node_modules/${dep.source.npm}/${srcPattern} matched no files (needed for ${dep.id})`);
       continue;
     }
-    const files = await listFilesRecursive(searchRoot);
-    let matched = 0;
-    for (const relFile of files) {
-      const fullSrcRel = toPosix(path.join(staticPrefix, relFile));
-      if (!re.test(fullSrcRel)) continue;
-      matched++;
-      entries.push({ srcAbs: path.join(searchRoot, relFile), destRel: path.join(dep.dir, destPattern, relFile) });
-    }
-    if (matched === 0) {
-      missing.push(`node_modules/${dep.source.npm}/${srcPattern} matched no files (needed for ${dep.id})`);
+    for (const match of matches.sort()) {
+      const matchPosix = toPosix(match);
+      const relFromPrefix = matchPosix.slice(staticPrefix.length);
+      entries.push({ srcAbs: path.join(pkgDir, match), destRel: path.join(dep.dir, destPattern, relFromPrefix) });
     }
   }
   return { entries, missing };

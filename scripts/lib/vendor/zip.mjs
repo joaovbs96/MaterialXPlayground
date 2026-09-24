@@ -34,7 +34,7 @@ export async function collectZipDep(dep, vendorRoot) {
     );
   }
 
-  const { files } = extractZipTree(zipData, { include: dep.source.include });
+  const { files } = await extractZipTree(zipData, { include: dep.source.include });
   const manifestEntries = [];
   for (const file of files) {
     const destRel = path.join(dep.dir, ...file.path.split("/"));

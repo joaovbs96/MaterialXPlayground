@@ -74,7 +74,7 @@ Build MaterialX node graphs visually.
 
 ## Running locally
 
-Requires Node 22.12 or newer (20.19 or newer also works).
+Requires Node 24.8 or newer.
 
 A fresh clone runs with one setup pass, then serve the folder with any static file server:
 

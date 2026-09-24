@@ -11,6 +11,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { readVersionMeta, checkStamps } from "./lib/version.mjs";
 import { loadResolvedDeps } from "./lib/vendor/registry.mjs";
 import { expandNpmEntries, collectNpmDep, readPkgVersion } from "./lib/vendor/npm.mjs";
@@ -32,11 +33,6 @@ const GITIGNORE_PATH = path.join(REPO_ROOT, ".gitignore");
 const VSCODEIGNORE_PATH = path.join(REPO_ROOT, ".vscodeignore");
 const VENDOR_DEPS_JS_PATH = path.join(REPO_ROOT, "js", "gen", "vendor-deps.js");
 const MATERIALX_DIR_NAME = "materialx";
-
-const args = process.argv.slice(2);
-const CHECK_MODE = args.includes("--check");
-const WITH_MATERIALX = args.includes("--with-materialx");
-const HASH_INDEX = args.indexOf("--hash");
 
 function log(...a) {
   console.log(...a);
@@ -356,7 +352,7 @@ async function runHash(url) {
   if (isZip) {
     let files, strippedPrefix;
     try {
-      ({ files, strippedPrefix } = extractZipTree(data));
+      ({ files, strippedPrefix } = await extractZipTree(data));
     } catch (err) {
       fail(`error: ${err.message}`);
       return;
@@ -388,15 +384,28 @@ function isEntryModule() {
 }
 
 if (isEntryModule()) {
-  if (HASH_INDEX !== -1) {
-    const url = args[HASH_INDEX + 1];
-    if (!url) fail("error: --hash requires a URL argument");
-    await runHash(url);
-  } else if (CHECK_MODE) {
+  let values;
+  try {
+    ({ values } = parseArgs({
+      args: process.argv.slice(2),
+      options: {
+        check: { type: "boolean" },
+        "with-materialx": { type: "boolean" },
+        hash: { type: "string" },
+      },
+      strict: true,
+    }));
+  } catch (err) {
+    fail(`error: ${err.message}`);
+  }
+
+  if (values.hash !== undefined) {
+    await runHash(values.hash);
+  } else if (values.check) {
     await runCheck();
   } else {
     await runCollect();
-    if (WITH_MATERIALX) {
+    if (values["with-materialx"]) {
       await runMaterialx();
     }
   }
