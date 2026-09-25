@@ -57,7 +57,7 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 - [done] **Preset picker**: one dialog, backed by the gallery, to pick a starting material in the Viewer, Compare and Graph Editor.
 - [done] **Custom preview models**: load OBJ, GLB and multi-file glTF models, including Draco compressed meshes.
 - [idea] **More backdrop options**: something similar to the backdrop of the Standard Shaderball.
-- [idea] **Support for ShadingLanguageX (SLX) viewing**: via SLX WASM bindings, support for directly rendering a .slx file.
+- [done] **Support for ShadingLanguageX (SLX) viewing**: open .mxsl files in the Material Viewer; they are compiled to MaterialX by the ShadingLanguageX WASM bindings and rendered like any .mtlx document.
 
 ## Node Graph and Tools
 
@@ -68,8 +68,8 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 - [done] **Texture formats**: TIFF textures, and an option to convert every texture in a zip export to PNG, JPEG or EXR.
 - [idea] **Recipes for common node tree patterns**: ability to insert commonly used sequences of nodes from a "gallery" of node patterns - e.g. a texcoord, connected to a place2d, connected to an image.
 - [idea] **Support for a ShadingLanguageX (SLX) node**: via SLX WASM bindings, support for a 'scripted' ShadingLanguageX node, which for export/rendering would be compiled down to actual MaterialX syntax
-- [idea] **Support for ShadingLanguageX (SLX) import**: via SLX WASM bindings, support for importing a .slx as a node graph.
-- [idea] **Support for ShadingLanguageX (SLX) export**: via SLX WASM bindings, support for exporting a node graph as a .slx file.
+- [done] **Support for ShadingLanguageX (SLX) import**: open .mxsl files in the Node Graph Editor, compiled to MaterialX and shown as a node graph.
+- [done] **Support for ShadingLanguageX (SLX) export**: export the current graph as ShadingLanguageX source from Export Shader Code, alongside the original .mxsl when the document came from one. Very large graphs decompile slowly.
 
 ## Node Documentation
 
@@ -99,4 +99,5 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 ## VSCode Extension
 
 - [done] **Auto-complete on VSCode**: snippets for common material patterns plus auto-complete for node names, node inputs, and reference attributes (type, node name, node graph, output, interface name, color space, node definition) while editing `.mtlx` files directly.
+- [idea] **ShadingLanguageX (SLX) in the VSCode extension**: open .mxsl files in the extension, compiled to MaterialX and shown in the viewer and graph editor as view-only documents, with the ShadingLanguageX export target available there too.
 - [in progress] **Officially Releasing extension on VSCode Extensions**: publish the extension on the VS Code Marketplace so it is easier to find, install and update. The publishing pipeline is being set up.

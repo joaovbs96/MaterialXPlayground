@@ -18,8 +18,8 @@
 // hand-rolled binary image decoder.
 //
 // Encoder: the Basis Universal encoder wasm vendored at
-// vendor/basis-encoder/basis_encoder.js (see scripts/vendor.mjs DOWNLOADS),
-// which runs directly under plain Node (no DOM dependency).
+// vendor/basis-encoder/basis_encoder.js (see the basis-encoder entry in
+// scripts/vendor-deps.mjs), which runs directly under plain Node (no DOM).
 
 import { readFile, writeFile, readdir, stat, mkdtemp, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";

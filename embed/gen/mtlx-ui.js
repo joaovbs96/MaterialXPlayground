@@ -976,6 +976,67 @@ const copyTextToClipboard = async text => {
   return ok;
 };
 
+// ShadingLanguageX needs js/mxslc-engine.js, never loaded by the embed
+// bundle, and its vendored compiler, never packaged in the .vsix.
+const slxTargetAvailable = () => typeof window.slxExportStages === 'function' && !window.__MTLX_VSCODE__;
+
+// "Decompilation took Xs" formatting for the ShadingLanguageX target: one
+// decimal under 10s, whole seconds under a minute, "Ymin Xs" past that.
+const formatDecompileDuration = ms => {
+  const totalSec = ms / 1000;
+  if (totalSec < 0.1) return 'less than 0.1s';
+  if (totalSec < 10) return totalSec.toFixed(1) + 's';
+  const wholeSec = Math.round(totalSec);
+  if (wholeSec < 60) return wholeSec + 's';
+  return Math.floor(wholeSec / 60) + 'min ' + wholeSec % 60 + 's';
+};
+
+// Body of ShaderExportDialog's code pane for one stage. A plain stage
+// (`code`) just renders it; a lazy stage (`load`) shows a spinner with
+// Cancel while loading, "Cancelled" with Retry after an abort, the error
+// with Retry on failure, or the resolved code once ready.
+function renderStageBody(stage, loadState, startStageLoad) {
+  if (!stage.load) {
+    return /*#__PURE__*/React.createElement("pre", {
+      className: "flex-1 min-h-0 overflow-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-gray-300 px-4 py-3 whitespace-pre"
+    }, stage.code);
+  }
+  const retryBtn = /*#__PURE__*/React.createElement("button", {
+    onClick: () => startStageLoad(stage),
+    className: "h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
+  }, "Retry");
+  const status = loadState ? loadState.status : 'loading';
+  if (status === 'cancelled') {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-4 py-6 text-[12px]"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-gray-400"
+    }, "Cancelled"), retryBtn);
+  }
+  if (status === 'error') {
+    return /*#__PURE__*/React.createElement("div", {
+      className: "px-4 py-3 flex flex-col gap-2"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "bg-red-900/40 border border-red-700 text-red-200 rounded px-3 py-2 text-[12px]"
+    }, loadState.error), /*#__PURE__*/React.createElement("div", null, retryBtn));
+  }
+  if (status === 'ready') {
+    return /*#__PURE__*/React.createElement("pre", {
+      className: "flex-1 min-h-0 overflow-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-gray-300 px-4 py-3 whitespace-pre"
+    }, loadState.code);
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-4 py-6 text-[12px]"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "w-4 h-4 rounded-full border-2 border-gray-500 border-t-blue-400 animate-spin"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "text-gray-400"
+  }, "Decompiling..."), /*#__PURE__*/React.createElement("button", {
+    onClick: () => loadState && loadState.controller && loadState.controller.abort(),
+    className: "h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
+  }, "Cancel"));
+}
+
 // Shader source export dialog. `generate()` (caller-supplied) does the
 // codegen; `runRef` is a monotonic id so a stale generate() resolving
 // after the user switched targets can't clobber the newer result.
@@ -987,7 +1048,8 @@ function ShaderExportDialog({
   generate,
   overlayClassName
 }) {
-  const [targetKey, setTargetKey] = React.useState(() => EXPORT_TARGETS[0] && EXPORT_TARGETS[0].key || '');
+  const exportTargets = React.useMemo(() => EXPORT_TARGETS.filter(t => t.key !== 'slx' || slxTargetAvailable()), []);
+  const [targetKey, setTargetKey] = React.useState(() => exportTargets[0] && exportTargets[0].key || '');
   const [matIndex, setMatIndex] = React.useState(0);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(null);
@@ -996,6 +1058,16 @@ function ShaderExportDialog({
   const [copied, setCopied] = React.useState(false);
   const copyTimerRef = React.useRef(null);
   const runRef = React.useRef(0);
+  // Per-stage lazy-load state for stages with `load` instead of `code`
+  // (currently only ShadingLanguageX's Decompiled stage): id -> { status:
+  // 'loading'|'ready'|'cancelled'|'error', code, ms, error, controller }.
+  // `ms` (decompile time in milliseconds) is only set for a load() that
+  // resolves { code, ms } instead of a bare code string.
+  const [stageLoads, setStageLoads] = React.useState({});
+  const stageLoadsRef = React.useRef(stageLoads);
+  React.useEffect(() => {
+    stageLoadsRef.current = stageLoads;
+  }, [stageLoads]);
   useEscapeToClose(onClose, open);
   React.useEffect(() => () => {
     if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
@@ -1006,7 +1078,7 @@ function ShaderExportDialog({
   // dialog has no unsaved input to preserve across a stray re-render).
   React.useEffect(() => {
     if (!open) return;
-    setTargetKey(EXPORT_TARGETS[0] && EXPORT_TARGETS[0].key || '');
+    setTargetKey(exportTargets[0] && exportTargets[0].key || '');
     setMatIndex(Math.max(0, Math.min(initialIndex, renderables.length - 1)));
     setStages(null);
     setError(null);
@@ -1014,6 +1086,83 @@ function ShaderExportDialog({
     setStageIdx(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // Closing the dialog aborts any in-flight lazy stage load; it stays
+  // aborted until the dialog reopens and regenerates stages.
+  React.useEffect(() => {
+    if (open) return;
+    Object.values(stageLoadsRef.current).forEach(entry => {
+      if (entry && entry.controller) entry.controller.abort();
+    });
+  }, [open]);
+
+  // A fresh `stages` array (new target/material, i.e. a new generate()
+  // run) drops any lazy-load state from the previous one and aborts
+  // whatever it had in flight.
+  React.useEffect(() => {
+    setStageLoads({});
+    return () => {
+      Object.values(stageLoadsRef.current).forEach(entry => {
+        if (entry && entry.controller) entry.controller.abort();
+      });
+    };
+  }, [stages]);
+  const startStageLoad = React.useCallback(stage => {
+    const controller = new AbortController();
+    setStageLoads(prev => ({
+      ...prev,
+      [stage.id]: {
+        status: 'loading',
+        controller
+      }
+    }));
+    stage.load(controller.signal).then(result => {
+      // A load() may resolve a bare code string or { code, ms }
+      // (ShadingLanguageX's Decompiled stage, ms = decompile time).
+      const hasMs = result && typeof result === 'object' && 'code' in result;
+      const code = hasMs ? result.code : result;
+      const ms = hasMs ? result.ms : undefined;
+      setStageLoads(prev => {
+        const cur = prev[stage.id];
+        if (!cur || cur.controller !== controller) return prev; // superseded
+        return {
+          ...prev,
+          [stage.id]: {
+            status: 'ready',
+            code,
+            ms
+          }
+        };
+      });
+    }).catch(e => {
+      setStageLoads(prev => {
+        const cur = prev[stage.id];
+        if (!cur || cur.controller !== controller) return prev; // superseded
+        if (e && e.name === 'AbortError') return {
+          ...prev,
+          [stage.id]: {
+            status: 'cancelled'
+          }
+        };
+        return {
+          ...prev,
+          [stage.id]: {
+            status: 'error',
+            error: errMsg(e)
+          }
+        };
+      });
+    });
+  }, []);
+
+  // Start loading the currently shown lazy stage, once, the first time
+  // it's shown (switching to it, or the dialog opening on it directly).
+  React.useEffect(() => {
+    if (!open || !stages) return;
+    const stage = stages[stageIdx];
+    if (!stage || !stage.load || stageLoads[stage.id]) return;
+    startStageLoad(stage);
+  }, [open, stages, stageIdx, stageLoads, startStageLoad]);
 
   // (Re)generate whenever the open dialog's target or material
   // selection changes. See the header comment above for the
@@ -1043,9 +1192,19 @@ function ShaderExportDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, targetKey, matIndex]);
   if (!open) return null;
+
+  // A stage's code: inline for a plain stage, or the resolved result of
+  // a lazy stage's load() once it's ready: null while loading, errored,
+  // cancelled, or not started yet.
+  const codeOf = st => {
+    if (!st.load) return st.code;
+    const ld = stageLoads[st.id];
+    return ld && ld.status === 'ready' ? ld.code : null;
+  };
+  const currentCode = stages ? codeOf(stages[stageIdx]) : null;
   const handleCopy = async () => {
-    if (!stages) return;
-    const ok = await copyTextToClipboard(stages[stageIdx].code);
+    if (currentCode == null) return;
+    const ok = await copyTextToClipboard(currentCode);
     if (!ok) return;
     setCopied(true);
     if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
@@ -1053,11 +1212,15 @@ function ShaderExportDialog({
   };
   const handleDownload = async () => {
     if (!stages) return;
-    const target = EXPORT_TARGETS.find(t => t.key === targetKey);
+    const target = exportTargets.find(t => t.key === targetKey);
     const matName = renderables[matIndex] && renderables[matIndex].name || 'material';
     const base = (matName + '_' + targetKey).replace(/[^\w.-]+/g, '_');
+    if (stages.some(st => codeOf(st) == null)) {
+      setError('Export failed: wait for every stage to finish loading before downloading.');
+      return;
+    }
     if (stages.length === 1) {
-      downloadBlob(new Blob([stages[0].code], {
+      downloadBlob(new Blob([codeOf(stages[0])], {
         type: 'text/plain'
       }), base + (target.ext[stages[0].id] || '.txt'));
       return;
@@ -1067,7 +1230,7 @@ function ShaderExportDialog({
       return;
     }
     const zip = new JSZip();
-    stages.forEach(st => zip.file(base + (target.ext[st.id] || '.txt'), st.code));
+    stages.forEach(st => zip.file(base + (target.ext[st.id] || '.txt'), codeOf(st)));
     let blob;
     try {
       blob = await zip.generateAsync({
@@ -1087,7 +1250,7 @@ function ShaderExportDialog({
     panelClassName: "bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[44rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col",
     headerRight: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
       onClick: handleCopy,
-      disabled: busy || !!error || !stages,
+      disabled: busy || !!error || !stages || currentCode == null,
       title: "Copy the current stage's code to the clipboard",
       className: 'h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors disabled:opacity-40 ' + (copied ? 'bg-green-600/70 border-green-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')
     }, /*#__PURE__*/React.createElement(MtlxIcon, {
@@ -1110,7 +1273,7 @@ function ShaderExportDialog({
     className: "flex items-center gap-1.5 text-[11px] text-gray-400"
   }, /*#__PURE__*/React.createElement("span", null, "Target"), /*#__PURE__*/React.createElement(MtlxSelect, {
     value: targetKey,
-    options: EXPORT_TARGETS.map(t => ({
+    options: exportTargets.map(t => ({
       value: t.key,
       label: t.label
     })),
@@ -1134,7 +1297,28 @@ function ShaderExportDialog({
     variant: "toolbar",
     font: "mono",
     className: "max-w-full truncate"
-  }))), stages && stages.length > 1 && /*#__PURE__*/React.createElement("div", {
+  })), targetKey === 'slx' && stageLoads.decompiled && stageLoads.decompiled.status === 'ready' && stageLoads.decompiled.ms != null && /*#__PURE__*/React.createElement("span", {
+    className: "ml-auto text-[11px] text-gray-500"
+  }, "Decompilation took ", formatDecompileDuration(stageLoads.decompiled.ms))), targetKey === 'slx' && /*#__PURE__*/React.createElement("div", {
+    className: "mx-4 mb-2 flex items-center gap-2 rounded border border-gray-600/60 bg-gray-900/40 px-3 py-2 text-[11px] text-gray-400"
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: "info-circle",
+    className: "w-3.5 h-3.5 flex-shrink-0 text-gray-500"
+  }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", null, "ShadingLanguageX shader code is generated by the MXSLC ShadingLanguageX WASM bindings."), stages && stages.length > 1 && /*#__PURE__*/React.createElement("p", null, "\"Original\" is the .mxsl file as loaded; \"Decompiled\" is your current graph converted back to ShadingLanguageX."), /*#__PURE__*/React.createElement("p", {
+    className: "pt-1"
+  }, /*#__PURE__*/React.createElement("a", {
+    href: "https://github.com/jakethorn/ShadingLanguageX",
+    target: "_blank",
+    rel: "noopener noreferrer",
+    className: PILL_ACTION_SM
+  }, /*#__PURE__*/React.createElement("svg", {
+    viewBox: "0 0 16 16",
+    fill: "currentColor",
+    className: "w-3.5 h-3.5",
+    "aria-hidden": "true"
+  }, /*#__PURE__*/React.createElement("path", {
+    d: "M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"
+  })), "ShadingLanguageX on GitHub")))), stages && stages.length > 1 && /*#__PURE__*/React.createElement("div", {
     className: "px-4 pb-2 flex items-center gap-1.5"
   }, stages.map((st, i) => /*#__PURE__*/React.createElement("button", {
     key: st.id,
@@ -1146,9 +1330,7 @@ function ShaderExportDialog({
     className: "bg-red-900/40 border border-red-700 text-red-200 rounded px-3 py-2 text-[12px]"
   }, error)) : busy ? /*#__PURE__*/React.createElement("div", {
     className: "text-gray-400 animate-pulse px-4 py-3 text-[12px]"
-  }, 'Generating…') : stages ? /*#__PURE__*/React.createElement("pre", {
-    className: "flex-1 min-h-0 overflow-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-gray-300 px-4 py-3 whitespace-pre"
-  }, stages[stageIdx].code) : null));
+  }, 'Generating…') : stages ? renderStageBody(stages[stageIdx], stageLoads[stages[stageIdx].id], startStageLoad) : null));
   const fsEl = fullscreenElement();
   return fsEl ? ReactDOM.createPortal(frame, fsEl) : frame;
 }

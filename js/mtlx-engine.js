@@ -8606,6 +8606,7 @@ const EXPORT_TARGETS = [
     { key: 'slang',  label: 'Slang',                       className: 'SlangShaderGenerator', isHw: true,  ext: { vertex: '.vert.slang', pixel: '.frag.slang' } },
     { key: 'osl',    label: 'OSL (Open Shading Language)', className: 'OslShaderGenerator',   isHw: false, ext: { pixel: '.osl' } },
     { key: 'mdl',    label: 'MDL (NVIDIA)',                className: 'MdlShaderGenerator',   isHw: false, ext: { pixel: '.mdl' } },
+    { key: 'slx',    label: 'ShadingLanguageX',                                                            ext: { original: '.mxsl', decompiled: '.decompiled.mxsl' } },
 ];
 
 // Per-target { gen, ctx } cache, building a GenContext + loading

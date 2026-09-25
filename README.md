@@ -74,7 +74,7 @@ Build MaterialX node graphs visually.
 
 ## Running locally
 
-Requires Node 22.12 or newer (20.19 or newer also works).
+Requires Node 24.8 or newer.
 
 A fresh clone runs with one setup pass, then serve the folder with any static file server:
 
@@ -90,7 +90,7 @@ python -m http.server 8000
 npx serve .
 ```
 
-`npm run vendor` needs network access once; it also fetches the ~20 MB OpenUSD Scene Viewer runtime into `vendor/usd-webview-bindings/`, which only USD stages need: the Scene Viewer also opens glTF, GLB and OBJ files, with their materials converted to MaterialX. If your clone lives inside a OneDrive-synced folder, `npm run vendor` can fail with `EPERM`; clone outside synced folders instead.
+`npm run vendor` needs network access once; it also fetches the ~20 MB OpenUSD Scene Viewer runtime into `vendor/usd-webview-bindings/`, which only USD stages need (the Scene Viewer also opens glTF, GLB and OBJ files, with their materials converted to MaterialX), and the ShadingLanguageX (`.mxsl`) compiler into `vendor/mxslc/`. If your clone lives inside a OneDrive-synced folder, `npm run vendor` can fail with `EPERM`; clone outside synced folders instead.
 
 Then open <http://localhost:8000/>. Serving over HTTP is required; opening `index.html` via `file://` won't work, because the app fetches its `.jsx`, WASM, and library files.
 

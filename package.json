@@ -14,7 +14,7 @@
   },
   "engines": {
     "vscode": "^1.100.0",
-    "node": ">=22.12"
+    "node": ">=24.8"
   },
   "main": "vscode_extension/src/extension.js",
   "repository": {

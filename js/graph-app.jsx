@@ -385,6 +385,17 @@
             const [docReadOnlySource, setDocReadOnlySource] = React.useState('');
             const docReadOnlyRef = React.useRef(false);
             docReadOnlyRef.current = docReadOnly;
+            // .mxsl provenance for the file map: {compiledMtlxKey: {source,
+            // filename}}, populated by expandMxsl() in ingest() (see
+            // mxslc-engine.js). filename is the as-dropped .mxsl path
+            // (before it was re-keyed to compiledMtlxKey). mxslOriginFor()
+            // looks one path up; mxslOriginal mirrors it for the CURRENTLY
+            // loaded document (set only at loadDocument()'s choke point),
+            // which the ShadingLanguageX export target's "Original" reads.
+            const mxslOriginalsRef = React.useRef({});
+            const mxslOriginFor = (path) => (path && Object.prototype.hasOwnProperty.call(mxslOriginalsRef.current, path)
+                ? { path, ...mxslOriginalsRef.current[path] } : null);
+            const [mxslOriginal, setMxslOriginal] = React.useState(null); // { path, source, filename } | null
             const [scope, setScope] = React.useState('');     // '' = document root
             const [flow, setFlow] = React.useState({ nodes: [], edges: [] });
             // Live mirror, so a rebuild triggered from a ref-held handler
@@ -1344,7 +1355,10 @@
                     // matching what VS Code's own tier-2 validator checks.
                     noteDocXml(raw);
                     const p = await parseMtlxDocument(resolved);
-                    p.label = path;
+                    // A document compiled from .mxsl is labelled with its
+                    // original .mxsl name.
+                    const mxslOrigin = mxslOriginFor(path);
+                    p.label = mxslOrigin ? mxslOrigin.filename : path;
                     setParsed(p);
                     // Consume the view-only handoff flag here, the single
                     // point where a newly loaded document actually becomes
@@ -1354,6 +1368,7 @@
                     pendingReadOnlyRef.current = null;
                     setDocReadOnly(!!ro);
                     setDocReadOnlySource(ro ? ro.source : '');
+                    setMxslOriginal(mxslOrigin);
                     setScope('');
                     // Same default-target reset as opening a document fresh:
                     // a stale selection/pin from a PREVIOUS document (multi-
@@ -1401,6 +1416,8 @@
                     pendingReadOnlyRef.current = null;
                     setDocReadOnly(false);
                     setDocReadOnlySource('');
+                    mxslOriginalsRef.current = {};
+                    setMxslOriginal(null);
                     setParsed(p);
                     setScope('');
                     setStatus(null);
@@ -1429,12 +1446,25 @@
             // one the host itself sent, see hostDocRef above.
             const ingest = async (map, rootKey, additive, fromHost) => {
                 setError(null);
+                const mxslOrigins = {}; // populated below, merged into mxslOriginalsRef after the replace/merge decision
+                const mxslFailures = []; // {rootKey, message} for .mxsl roots that failed to compile
                 try {
                     await expandZips(map);
+                    // Compile any ShadingLanguageX (.mxsl) files to MaterialX
+                    // XML and re-key them as .mtlx, so everything below (root-
+                    // document detection, xi:include resolution, texture
+                    // binding) treats them exactly like an authored .mtlx.
+                    await expandMxsl(map, mxslOrigins, mxslFailures);
                 } catch (e) {
                     setError(errMsg(e));
                     return;
                 }
+                // Some .mxsl roots may have compiled while others failed,
+                // appended to whichever status message this ingest shows.
+                const mxslWarn = mxslFailures.length
+                    ? ' (' + mxslFailures.map((f) => f.rootKey + ': ' + f.message).join('; ') + ')'
+                    : '';
+                let loadPromise = null;
                 const droppedMtlx = Object.keys(map).filter((k) => /\.mtlx$/i.test(k));
                 // Same session semantics as the material viewer: a .mtlx
                 // drop replaces the session (unless none existed yet, or
@@ -1443,6 +1473,10 @@
                 let merged;
                 if (droppedMtlx.length && hadSession && !additive) {
                     merged = Object.assign({}, map);
+                    // Same replace-not-merge semantics as fileMapRef right
+                    // below: a stale Original from the OLD session must not
+                    // survive into the new one.
+                    mxslOriginalsRef.current = mxslOrigins;
                     setParsed(null);
                     setScope('');
                     setFlow({ nodes: [], edges: [] });
@@ -1457,13 +1491,14 @@
                     }
                 } else {
                     merged = Object.assign({}, fileMapRef.current, map);
+                    mxslOriginalsRef.current = Object.assign({}, mxslOriginalsRef.current, mxslOrigins);
                 }
                 fileMapRef.current = merged;
                 setFileMap(merged);
                 const mtlx = Object.keys(merged).filter((k) => /\.mtlx$/i.test(k));
                 setMtlxPaths(mtlx);
                 if (!mtlx.length) {
-                    setStatus('Files received — now drop the .mtlx document itself.');
+                    setStatus('Files received — now drop the .mtlx or .mxsl document itself.' + mxslWarn);
                     return;
                 }
                 if (droppedMtlx.length) {
@@ -1471,19 +1506,24 @@
                         // Added, not loaded: the existing multi-document
                         // dropdown (mtlxPaths) is how the user reaches them.
                         setStatus('Added ' + droppedMtlx.length + ' .mtlx document'
-                            + (droppedMtlx.length === 1 ? '' : 's') + ' to the session, pick one below to switch.');
+                            + (droppedMtlx.length === 1 ? '' : 's') + ' to the session, pick one below to switch.' + mxslWarn);
                         return;
                     }
                     const pick = (rootKey && mtlx.indexOf(rootKey) !== -1)
                         ? rootKey : (mtlx.length === 1 ? mtlx[0] : null);
                     setChosenMtlx(pick);
                     hostDocRef.current = !!fromHost;
-                    if (pick) loadDocument(pick, merged);
-                    else setStatus('This drop contains several .mtlx files — pick one below.');
+                    if (pick) loadPromise = loadDocument(pick, merged);
+                    else setStatus('This drop contains several .mtlx files — pick one below.' + mxslWarn);
                 } else if (chosenMtlx) {
-                    loadDocument(chosenMtlx, merged); // includes may now resolve
+                    loadPromise = loadDocument(chosenMtlx, merged); // includes may now resolve
                 } else {
-                    setStatus('Files added — pick a .mtlx below.');
+                    setStatus('Files added — pick a .mtlx below.' + mxslWarn);
+                }
+                // loadDocument clears status/error on success, surface a
+                // partial .mxsl compile failure after it settles.
+                if (mxslFailures.length) {
+                    Promise.resolve(loadPromise).then(() => setError('Some .mxsl files did not compile' + mxslWarn));
                 }
             };
 
@@ -1620,7 +1660,9 @@
             const closeConfirm = () => { pendingActionRef.current = null; setConfirmCloseOpen(false); };
             useEscapeToClose(closeConfirm, confirmCloseOpen);
             const guardedIngest = (map) => {
-                const hasMtlx = Object.keys(map).some((k) => /\.mtlx$/i.test(k));
+                // .mxsl becomes .mtlx once ingest() runs expandMxsl(), so it
+                // must be treated as a replacing document here too.
+                const hasMtlx = Object.keys(map).some((k) => /\.(mtlx|mxsl)$/i.test(k));
                 confirmReplace(hasMtlx, () => ingest(map));
             };
             // Kept current every render for the [] -dep drag-drop effect
@@ -1830,7 +1872,7 @@
                         const hasSession = Object.keys(fileMapRef.current)
                             .some((k) => /\.mtlx$/i.test(k));
                         if (!hasSession && !draftPendingRef.current && !IN_VSCODE) {
-                            setStatus("Couldn't reach GitHub for the default document — drop a .mtlx anywhere, use Open, or pick a Preset (top left).");
+                            setStatus("Couldn't reach GitHub for the default document — drop a .mtlx or .mxsl anywhere, use Open, or pick a Preset (top left).");
                         }
                     });
             }, []);
@@ -2204,7 +2246,7 @@
                     },
                     exportForUser: () => {
                         const p = parsedRef.current;
-                        const name = String((p && p.label) || 'document').split('/').pop().replace(/\.mtlx$/i, '');
+                        const name = String((p && p.label) || 'document').split('/').pop().replace(/\.(mtlx|mxsl)$/i, '');
                         const resolved = scanExportTexturesRef.current().resolved;
                         exportZipRef.current(name, resolved);
                     },
@@ -3198,7 +3240,7 @@
             // Derives the default export base name (no extension) from
             // the parsed document's label — shared by exportMtlx and the
             // Export dialog's prefilled filename field.
-            const defaultExportBase = () => String((parsed && parsed.label) || 'document').split('/').pop().replace(/\.mtlx$/i, '');
+            const defaultExportBase = () => String((parsed && parsed.label) || 'document').split('/').pop().replace(/\.(mtlx|mxsl)$/i, '');
 
             // Hand the current document off to the material viewer (item
             // F2.2's "Send to Viewer"). Serializes through the same
@@ -3647,6 +3689,22 @@
                 }
                 setShaderExport({ renderables: rs });
             };
+
+            // ShaderExportDialog's `generate()` for the ShadingLanguageX
+            // target: unlike the shadergen targets, this is whole-document
+            // (no `renderable` scoping — mxslc's decompiler has no concept
+            // of "just this material") and runs against the SEPARATE mxsl
+            // WASM module (js/mxslc-engine.js), never `parsed.mx`. "Original"
+            // is the as-authored .mxsl source IF this document was compiled
+            // from one (mxslOriginal, set in loadDocument()); "Decompiled"
+            // re-decompiles the CURRENT (possibly hand-edited) document via
+            // resolveDocXml(), the same serializer Export/Document XML use.
+            const generateSlxExportStages = async () => {
+                const { xml, error } = await resolveDocXml();
+                if (xml == null) throw new Error('Could not build the document XML: ' + error);
+                return slxExportStages(xml, mxslOriginal && mxslOriginal.source);
+            };
+
             // Export dialog's onExport: routes to .mtlx/.zip through the
             // same exportBusyRef-guarded wrappers as the toolbar. Errors
             // thrown here are caught by ExportDialog, keeping it open to retry.
@@ -6984,7 +7042,7 @@
                 !IN_VSCODE && {
                     label: 'Open…', icon: 'file-upload',
                     onSelect: () => { if (openInputRef.current) openInputRef.current.click(); },
-                    title: 'Open a .mtlx or .zip, replacing the current session (drag and drop works anywhere on the page)',
+                    title: 'Open a .mtlx, .mxsl, or .zip, replacing the current session (drag and drop works anywhere on the page)',
                 },
                 IN_ELECTRON && {
                     label: 'Open Recent…', icon: 'history',
@@ -6997,7 +7055,7 @@
                 !IN_VSCODE && {
                     label: 'Import…', icon: 'file-import',
                     onSelect: () => { if (importInputRef.current) importInputRef.current.click(); },
-                    title: 'Add textures or more .mtlx documents to the session without replacing it',
+                    title: 'Add textures, or more .mtlx documents or .mxsl files to the session without replacing it',
                 },
                 !IN_VSCODE && {
                     label: 'Presets…', icon: 'presets', onSelect: () => setPresetPickerOpen(true),
@@ -7273,7 +7331,7 @@
                                     ref={openInputRef}
                                     type="file"
                                     multiple
-                                    accept=".mtlx,.zip"
+                                    accept=".mtlx,.mxsl,.zip"
                                     className="hidden"
                                     onChange={onPickFiles}
                                 />
@@ -7283,7 +7341,7 @@
                                     ref={importInputRef}
                                     type="file"
                                     multiple
-                                    accept=".mtlx,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
+                                    accept=".mtlx,.mxsl,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
                                     className="hidden"
                                     onChange={onPickImportFiles}
                                 />
@@ -8237,7 +8295,9 @@
                             renderables={shaderExport.renderables}
                             initialIndex={0}
                             generate={({ renderable, label, targetKey }) =>
-                                generateTargetSources({ mx: parsed.mx, renderable, label, targetKey })}
+                                targetKey === "slx"
+                                    ? generateSlxExportStages()
+                                    : generateTargetSources({ mx: parsed.mx, renderable, label, targetKey })}
                             overlayClassName="absolute inset-0 z-[55] flex items-center justify-center bg-gray-950/70"
                         />
                     )}
