@@ -17,6 +17,9 @@
     "node": ">=24.8"
   },
   "main": "vscode_extension/src/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/joaovbs96/MaterialXPlayground"

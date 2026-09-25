@@ -46,11 +46,23 @@ vm.createContext(sandbox);
 vm.runInContext(
     extractFunction(extSrc, 'isMtlxAutoOpenTarget') + '\n' +
     extractFunction(extSrc, 'isSceneAutoOpenTarget') + '\n' +
+    extractFunction(extSrc, 'isWorkspaceTrustEditorTab') + '\n' +
     'this.isMtlxAutoOpenTarget = isMtlxAutoOpenTarget;\n' +
-    'this.isSceneAutoOpenTarget = isSceneAutoOpenTarget;\n',
+    'this.isSceneAutoOpenTarget = isSceneAutoOpenTarget;\n' +
+    'this.isWorkspaceTrustEditorTab = isWorkspaceTrustEditorTab;\n',
     sandbox
 );
-const { isMtlxAutoOpenTarget, isSceneAutoOpenTarget } = sandbox;
+const { isMtlxAutoOpenTarget, isSceneAutoOpenTarget, isWorkspaceTrustEditorTab } = sandbox;
+
+test('isWorkspaceTrustEditorTab: matches the Workspace Trust editor tab (no TabInput, fixed label)', () => {
+    assert.equal(isWorkspaceTrustEditorTab({ input: undefined, label: 'Workspace Trust' }), true);
+});
+
+test('isWorkspaceTrustEditorTab: rejects real editor tabs and null', () => {
+    assert.equal(isWorkspaceTrustEditorTab({ input: { uri: {} }, label: 'trust1.mtlx' }), false);
+    assert.equal(isWorkspaceTrustEditorTab({ input: undefined, label: 'trust1.mtlx' }), false);
+    assert.equal(isWorkspaceTrustEditorTab(null), false);
+});
 
 function doc(uriStr, languageId) {
     return { uri: { scheme: uriStr.split(':')[0], toString: () => uriStr }, languageId };

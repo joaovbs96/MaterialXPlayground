@@ -35,6 +35,21 @@ test('a genuine mismatched closing tag unrelated to any malformed tag still repo
   assert.match(errors[0].message, /Mismatched closing tag: expected <\/a> but found <\/b>/);
 });
 
+test('a missing ">" on a CLOSING tag reports one diagnostic, not a cascade', () => {
+  const xml = '<materialx><nodegraph name="ng"><input name="in" type="float"/>'
+    + '<output name="out" type="float" nodename="n"/></nodegraph</materialx>';
+  const errors = scanXml(xml);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /Unterminated tag <\/nodegraph>/);
+});
+
+test('a missing ">" on the final CLOSING tag at EOF reports one diagnostic', () => {
+  const xml = '<materialx></materialx';
+  const errors = scanXml(xml);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /Unterminated tag <\/materialx>/);
+});
+
 test('unclosed tags at EOF are still reported one per remaining entry', () => {
   const xml = '<materialx><nodegraph name="ng">';
   const errors = scanXml(xml);

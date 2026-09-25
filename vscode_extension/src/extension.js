@@ -165,6 +165,14 @@ function isSceneAutoOpenTarget(doc, alreadyOpenedSceneUris, isSceneUri) {
         && !alreadyOpenedSceneUris.has(doc.uri.toString());
 }
 
+// rescanAutoOpenAfterTrust companion: identifies the built-in Workspace
+// Trust editor tab (the one the user just clicked "Trust" in). It has no
+// vscode.TabInput at all (unlike every other editor kind this extension
+// deals with), so it's told apart by that plus its fixed label.
+function isWorkspaceTrustEditorTab(tab) {
+    return !!tab && !tab.input && tab.label === 'Workspace Trust';
+}
+
 function activate(context) {
     // Before anything else, so semantic (tier 2) validation is ready as
     // soon as the first .mtlx document is opened. Runs in its own
@@ -493,7 +501,19 @@ function activate(context) {
     // isSceneAutoOpenTarget (and maybeAutoOpenSceneTab's own uri check)
     // already guard autoOpenedUris/autoOpenedSceneUris, so re-running this
     // over documents/tabs already auto-opened is a no-op, never a duplicate.
-    const rescanAutoOpenAfterTrust = () => {
+    // Closes the Workspace Trust editor tab first: it's still open (and
+    // still holds the group's "active" slot) at this exact moment, so the
+    // splitRight column math below (openBesideTextEditor, which splits
+    // beside whichever group holds the text tab) would otherwise land the
+    // playground as a SECOND tab in the Trust editor's own group instead
+    // of beside the text, closing it makes this rescan see exactly the
+    // same tab layout a normal (non-trust) auto-open would.
+    const rescanAutoOpenAfterTrust = async () => {
+        for (const group of vscode.window.tabGroups.all) {
+            for (const tab of group.tabs) {
+                if (isWorkspaceTrustEditorTab(tab)) await vscode.window.tabGroups.close(tab);
+            }
+        }
         for (const doc of vscode.workspace.textDocuments) {
             const editor = { document: doc };
             maybeAutoOpen(editor);

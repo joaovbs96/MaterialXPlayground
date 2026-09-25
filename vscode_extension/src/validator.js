@@ -195,7 +195,14 @@ function scanXml(text) {
             const afterWs = skipWs(nameEnd);
             if (text[afterWs] !== '>') {
                 addError(lt, nameEnd, 'Unterminated tag </' + name + '>');
-                break outer;
+                // Recover in place instead of aborting the whole scan: a
+                // closing tag has nothing after its name to skip past, so
+                // resume right where the missing '>' would have been and
+                // best-effort pop the stack, so one missing '>' yields one
+                // diagnostic instead of an "Unclosed tag" per ancestor.
+                cursor = afterWs;
+                if (stack.length) stack.pop();
+                continue;
             }
             cursor = afterWs + 1;
             if (stack.length === 0) {

@@ -1,19 +1,19 @@
-// docs-app.jsx — the App component for the MaterialX node documentation
+// docs-app.jsx, the App component for the MaterialX node documentation
 // browser (index.html), extracted from its inline text/babel script.
 // Uses index.html's literal \uXXXX escape-text convention (e.g. {'↗'})
-// in some string literals — same as node-graph.html; preserve exactly.
+// in some string literals, same as node-graph.html; preserve exactly.
 // Loaded as text/babel after js/mtlx-engine.js and js/docs/*.jsx, which
 // it depends on via window globals; reads window.__MTLX_EMBED (set by
 // index.html's early <head> script) for embed-mode behavior. Node data
-// comes from prebuilt js/gen/nodelib*.json — docs browsing is WASM-free;
+// comes from prebuilt js/gen/nodelib*.json, docs browsing is WASM-free;
 // the MaterialX engine loads only for 3D previews.
 
         // Given nodeVersionGroups and a sig hint ({out, ins}, from a VS Code
-        // hover link's `?sig=` — see doc-links.jsx's parseSigHint), returns
+        // hover link's `?sig=`, see doc-links.jsx's parseSigHint), returns
         // the group index to pre-select (-1 if none), disambiguating via hint.ins.
         // Stable empty fallbacks: inline `[]`/`{}` literals get a new
         // identity every render, defeating React.memo on consumers like
-        // PortTable — kept module-level so identity never changes.
+        // PortTable, kept module-level so identity never changes.
         const EMPTY_TABLES = [];
         const EMPTY_COLUMNS = [];
 
@@ -45,6 +45,23 @@
             return candidates[0];
         };
 
+        // Computes the next pendingSigRef value for a freshly resolved
+        // selection `sel` ({name, sigHint?}), given the CURRENT pending
+        // hint (or null). A hint-less sel for the SAME node the pending
+        // hint already targets is left alone instead of clearing it: the
+        // URL-sync effect canonicalizes the hash (stripping `?sig=`),
+        // which, via a VS Code webview's location.hash fallback, or an
+        // echoed popstate/hashchange in general, re-runs this resolution
+        // on that canonical, hint-less hash before the match effect below
+        // has had a chance to consume the pending hint. Any OTHER sel
+        // (different node, or one that carries its own hint) still wins
+        // outright, same as before.
+        const nextPendingSig = (current, sel) => {
+            if (sel.sigHint) return { name: sel.name, hint: sel.sigHint };
+            if (current && current.name === sel.name) return current;
+            return null;
+        };
+
         // Which table(s) to render: narrows multi-table documented nodes to
         // the ONE table matching the selected version, or its output type
         // when no version matches. Keep `sigCount > 1` in sync with below.
@@ -66,13 +83,13 @@
             const out = selectedGroup.type;
             // '+'-joined multi-output signature, or the literal
             // 'multioutput' string nodedef.getType() returns: no single
-            // output type to gate on — deferred to the previewer instead.
+            // output type to gate on, deferred to the previewer instead.
             if (!out || out.indexOf('+') !== -1 || out === 'multioutput') return null;
             const inTypes = Object.values(selectedVersion.inputTypes || {});
             const hasClosureInput = inTypes.some((t) => CLOSURE.indexOf(t) !== -1);
             // A surfaceshader with unbound closure (BSDF/EDF) inputs passes
             // the VIEWABLE-ish gate below but renders as a meaningless black
-            // ball — catch it before the generic previewable check.
+            // ball, catch it before the generic previewable check.
             if (out === 'surfaceshader' && hasClosureInput) {
                 return `No preview for "${selectedNode.name}" — its closure inputs (BSDF/EDF) are unbound in an isolated preview; open it in the node graph editor and wire it up to see a result.`;
             }
@@ -90,7 +107,7 @@
 
         function App({ active = true, inline = false, initialHash } = {}) {
             // Embed mode: focused single-node view, iframed by the graph
-            // editor (index.html?embed=1#/<lib>/<group>/<name>) — flag is
+            // editor (index.html?embed=1#/<lib>/<group>/<name>), flag is
             // set synchronously in <head> before first paint.
             const EMBED = !!window.__MTLX_EMBED;
             // inline: mounted in the graph editor's docs dialog, wanting
@@ -109,7 +126,7 @@
             // active value without re-subscribing.
             const activeRef = React.useRef(active);
             activeRef.current = active;
-            // The hash the page LANDED on — read once, before the async spec-DB
+            // The hash the page LANDED on, read once, before the async spec-DB
             // load can race with the user switching shell views (which rewrites
             // location.hash to a '#!' route and would lose a docs deep link).
             const initialHashRef = React.useRef(window.location.hash);
@@ -119,17 +136,27 @@
             const pendingSigRef = React.useRef(null);
             // Companion to pendingSigRef for `?ver=`: the nodedef version to
             // land on once the signature's version list is known. Only ever
-            // SET from a hash, never cleared there — selecting a node
+            // SET from a hash, never cleared there, selecting a node
             // rewrites the URL without the query, so a second pass over the
             // hash would wipe a hint it can no longer see. Consumption
             // clears it, and matching is guarded by node name.
             const pendingVerRef = React.useRef(null);
             const [jsonData, setJsonData] = React.useState(null);
             const [selectedNode, setSelectedNode] = React.useState(null);
-            // Which signature (port table) of the selected node is shown —
+            // Which signature (port table) of the selected node is shown:
             // and previewed. Reset on every selection change.
             const [sigIndex, setSigIndex] = React.useState(0);
+            // Name of the previously selected node, so a redundant
+            // reselection of the SAME node (the URL-sync effect below
+            // canonicalizes the hash, which, via the VS Code webview's
+            // location.hash fallback, or an echoed hashchange in general:
+            // re-fires onNav on that same hash with the sig hint already
+            // stripped) doesn't stomp a just-applied sigIndex back to 0.
+            const prevSelNameRef = React.useRef(null);
             React.useEffect(() => {
+                const sameNode = selectedNode && prevSelNameRef.current === selectedNode.name;
+                prevSelNameRef.current = selectedNode && selectedNode.name;
+                if (sameNode) return;
                 setSigIndex(0);
                 // A pending sig hint targets ONE specific node by name;
                 // if this selection is for a different node (e.g. a
@@ -165,7 +192,7 @@
                     if (hit) {
                         setSelectedNode(hit);
                         // Inline: the dialog owns its own scroll container,
-                        // not the page — and there's no ref to the detail
+                        // not the page, and there's no ref to the detail
                         // pane to scroll instead, so just skip scrolling.
                         if (!inline) window.scrollTo({ top: 0, behavior: 'smooth' });
                     } else if (e.detail.url) {
@@ -197,7 +224,7 @@
 
                 // A permalink (#/lib/group/name) wins over the default first
                 // node. A '#!...' hash means a view switch raced the spec-DB
-                // load — fall back to the landed hash; inline uses initialHash.
+                // load, fall back to the landed hash; inline uses initialHash.
                 let hashForSel;
                 if (inline) {
                     hashForSel = initialHash || '';
@@ -209,17 +236,17 @@
                 if (fromHash) {
                     setExpandedLibs({ [fromHash.lib]: true });
                     setExpandedGroups({ [`${fromHash.lib}-${fromHash.group}`]: true });
-                    // A `?sig=` hint (VS Code hover deep link only — see
+                    // A `?sig=` hint (VS Code hover deep link only, see
                     // doc-links.jsx's parseSigHint) is set right before
                     // setSelectedNode, so the sigIndex-reset effect above sees it.
-                    pendingSigRef.current = fromHash.sigHint ? { name: fromHash.name, hint: fromHash.sigHint } : null;
+                    pendingSigRef.current = nextPendingSig(pendingSigRef.current, fromHash);
                     if (fromHash.verHint) pendingVerRef.current = { name: fromHash.name, version: fromHash.verHint };
                     setSelectedNode(fromHash);
                     return;
                 }
 
                 // Default landing node: OpenPBR's surface shader when
-                // present — a far better first impression (and a
+                // present, a far better first impression (and a
                 // parameter-rich preview) than whatever sorts first.
                 let def = null;
                 for (const lib of Object.keys(parsedData)) {
@@ -251,11 +278,11 @@
             };
 
             // Keeps the address bar in sync via replaceState (no history
-            // entry, no hashchange feedback loop) — one Back exits docs
+            // entry, no hashchange feedback loop), one Back exits docs
             // entirely. Only writes while VISIBLE (skips stomping other views).
             React.useEffect(() => {
                 // An inline instance (mounted inside the graph editor's docs
-                // dialog) must NEVER touch the parent page's URL/history —
+                // dialog) must NEVER touch the parent page's URL/history:
                 // that hash belongs to the graph view's own routing.
                 if (inline) return;
                 if (!selectedNode || !active) return;
@@ -263,7 +290,7 @@
                 if (window.location.hash !== h) {
                     // replaceState resolves h against <base>; under the VS
                     // Code webview that base is a different origin, so it
-                    // throws — fall back to a plain fragment assignment,
+                    // throws, fall back to a plain fragment assignment,
                     // which never leaves the document (at the cost of a
                     // hashchange the onNav listener below re-resolves,
                     // idempotently, to the already-selected node).
@@ -272,7 +299,7 @@
             }, [selectedNode, active]);
             React.useEffect(() => {
                 // The parent page's hash belongs to the graph view when
-                // inline — an inline instance must not react to it.
+                // inline, an inline instance must not react to it.
                 if (inline || !jsonData) return undefined;
                 const onNav = () => {
                     const sel = hashToSel(jsonData, window.location.hash);
@@ -280,8 +307,8 @@
                         setExpandedLibs((p) => Object.assign({}, p, { [sel.lib]: true }));
                         setExpandedGroups((p) => Object.assign({}, p, { [`${sel.lib}-${sel.group}`]: true }));
                         // Same pending-hint queuing as applyData's
-                        // fromHash branch above — see its comment.
-                        pendingSigRef.current = sel.sigHint ? { name: sel.name, hint: sel.sigHint } : null;
+                        // fromHash branch above, see its comment.
+                        pendingSigRef.current = nextPendingSig(pendingSigRef.current, sel);
                         if (sel.verHint) pendingVerRef.current = { name: sel.name, version: sel.verHint };
                         setSelectedNode(sel);
                     }
@@ -312,7 +339,7 @@
 
             // Loads the pregenerated node docs JSON: nodelib.json (Layer 1)
             // + nodelib-index.json (Layer 2, feeds genData below). Both are
-            // committed — a failure here means a hosting/path bug.
+            // committed, a failure here means a hosting/path bug.
             const [autoLoad, setAutoLoad] = React.useState('loading'); // loading | done | failed
             const [dataSource, setDataSource] = React.useState(null);
             const [genData, setGenData] = React.useState(null);
@@ -334,7 +361,7 @@
             }, []);
 
             // Auto-generated port tables (nodes with no spec docs): read
-            // straight off genData, the pregenerated Layer-2 index — no
+            // straight off genData, the pregenerated Layer-2 index, no
             // live WASM read.
             const autoDoc = React.useMemo(() => {
                 if (!selectedNode || !genData) return null;
@@ -345,7 +372,7 @@
             }, [selectedNode, genData]);
 
             // VERSION metadata for EVERY selection, read off
-            // genData.nodes[name].sigGroups — intentionally UNFILTERED
+            // genData.nodes[name].sigGroups, intentionally UNFILTERED
             // (e.g. 'multiply' lists every signature); previewer hides the rest.
             const nodeVersionGroups = React.useMemo(() => {
                 if (!genData || !selectedNode) return null;
@@ -364,7 +391,7 @@
                 if (idx > 0) setSigIndex(idx);
             }, [nodeVersionGroups, selectedNode]);
             // Which VERSION is selected within the resolved signature
-            // group — reset on selection/signature change, since a
+            // group, reset on selection/signature change, since a
             // different signature may resolve to a different default.
             const [versionIndex, setVersionIndex] = React.useState(0);
             // Two effects, ordered: the reset stands aside while a hint is
@@ -483,7 +510,7 @@
             }, [genData, searchTokens]);
             // Global 3D-preview switch, persisted across sessions so slow
             // machines stay preview-free. localStorage is best-effort
-            // (private mode etc. throws) — default is ON.
+            // (private mode etc. throws), default is ON.
             const [showPreviews, setShowPreviews] = React.useState(() => {
                 if (chromeless) return true;
                 try { return localStorage.getItem('mtlx_show_previews') !== '0'; } catch (e) { return true; }
@@ -495,7 +522,7 @@
             });
             // Warms the MaterialX module so the header's version badge
             // resolves and the first preview skips the WASM download.
-            // Docs browsing itself is WASM-free — only warm once previews are enabled.
+            // Docs browsing itself is WASM-free, only warm once previews are enabled.
             React.useEffect(() => {
                 if (!showPreviews) return;
                 getMxEnv().catch(() => {});
@@ -596,7 +623,7 @@
 
             // Memoized so portTables/columns/typesOverride/refs keep a
             // stable identity for React.memo'd PortTable/MathText/RichBlocks
-            // — an inline recompute would defeat the memo on unrelated re-renders.
+            //, an inline recompute would defeat the memo on unrelated re-renders.
             const portTables = React.useMemo(
                 () => selectedNode ? getPortTables(selectedNode.info) : EMPTY_TABLES,
                 [selectedNode]
@@ -608,7 +635,7 @@
             const effectiveTables = portTables.length > 0 ? portTables
                 : (isAutoTable ? autoDoc.tables : EMPTY_TABLES);
             // Signature selection is driven by live nodedef VERSION GROUPS,
-            // not by counting markdown tables — fractal3d has ELEVEN
+            // not by counting markdown tables, fractal3d has ELEVEN
             // nodedefs collapsed into ONE table, invisible to effectiveTables.length.
             const sigGroups = nodeVersionGroups || [];
             const sigCount = sigGroups.length;
@@ -643,7 +670,7 @@
             const versionIdx = selectedGroup
                 ? Math.min(versionIndex, Math.max(selectedGroup.versions.length - 1, 0)) : 0;
             const selectedVersion = selectedGroup ? selectedGroup.versions[versionIdx] : null;
-            // Which table(s) to render — see resolveDisplayTables above
+            // Which table(s) to render, see resolveDisplayTables above
             // for the full selection rules.
             const displayTables = React.useMemo(
                 () => resolveDisplayTables(portTables, sigCount, selectedGroup, selectedVersion, autoDoc, sig, effectiveTables),
@@ -670,18 +697,18 @@
                 [sigCount, selectedVersion, portTables]
             );
             // Already a stable reference (selectedVersion.defaults, straight
-            // off the pregenerated data — no new object built here); no
+            // off the pregenerated data, no new object built here); no
             // memo needed.
             const defaultsOverride = selectedVersion && (sigCount > 1 || !selectedVersion.isDefaultVersion)
                 ? selectedVersion.defaults : null;
             // Previewability decided HERE, where the selected signature's exact
-            // types are known, and passed down — see resolvePreviewDisabled
+            // types are known, and passed down, see resolvePreviewDisabled
             // above for the type-gating rules.
             const previewDisabled = resolvePreviewDisabled(selectedGroup, selectedVersion, selectedNode);
             // "View implementation" button: only when the selected
             // signature's impl row (matched by .key, same shape
             // ImplTargetMatrix reads) says a library nodegraph implements it.
-            // Not gated on IN_VSCODE any more — it now just toggles the
+            // Not gated on IN_VSCODE any more, it now just toggles the
             // self-contained inline panel below (js/docs/impl-preview.jsx),
             // which works fine in the docs-only vscode webview too; only
             // the panel's own "View in Graph Editor" button (a real handoff)
