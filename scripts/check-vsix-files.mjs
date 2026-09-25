@@ -9,6 +9,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_MTLX_VERSION, MTLX_VERSIONS } from "./lib/mtlx-versions.mjs";
 import { VSCE_VERSION } from "./lib/vsce.mjs";
+import { VENDOR_DEPS } from "./vendor-deps.mjs";
+import { resolveDeps } from "./lib/vendor/registry.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -117,10 +119,6 @@ const RUNTIME_ASSETS = [
   "models/shaderball_mtlx.glb",
   "models/cloth_base_mesh.glb",
   "env_maps/standard_shader_ball_env_512.exr",
-  "vendor/three/draco/draco_decoder.wasm",
-  "vendor/three/draco/draco_wasm_wrapper.js",
-  "vendor/three/basis/basis_transcoder.js",
-  "vendor/three/basis/basis_transcoder.wasm",
   "images/materialx-logo.svg",
   "js/gen/nodelib.json",
   "js/gen/nodelib-index.json",
@@ -136,11 +134,15 @@ const RUNTIME_ASSETS = [
   "js/usd/gltf-stage-loader.js",
   "js/usd/obj-stage-loader.js",
   "js/usd/mtlx-material-docs.js",
-  "vendor/usd-webview-bindings/LICENSE",
-  "vendor/usd-webview-bindings/usdWebViewBindings.js",
-  "vendor/usd-webview-bindings/usdWebViewBindingsModule.js",
-  "vendor/usd-webview-bindings/usdWebViewBindingsModule.wasm",
 ];
+
+// Vendored files come from the registry (scripts/vendor-deps.mjs): every manifest
+// file of a dep that ships is required; the dir of every `vscode: false` dep is forbidden.
+const RESOLVED_DEPS = resolveDeps(VENDOR_DEPS);
+const SHIPPED_DEP_IDS = new Set(RESOLVED_DEPS.filter((d) => d.vscode !== false).map((d) => d.id));
+const VENDOR_REQUIRED = JSON.parse(readRepoFile("vendor/vendor-manifest.json")).entries
+  .filter((e) => SHIPPED_DEP_IDS.has(e.dep)).map((e) => "vendor/" + e.path);
+const VENDOR_FORBIDDEN = RESOLVED_DEPS.filter((d) => d.vscode === false).map((d) => "vendor/" + d.dir + "/");
 
 // Prefixes (directory, trailing slash) and exact files that must NEVER
 // appear in the vsix - dev tooling, other build targets, or repo-only docs
@@ -155,7 +157,7 @@ const FORBIDDEN_PREFIXES = [
   "gallery/",
   ".github/",
   ".claude/",
-  "vendor/basis-encoder/",
+  ...VENDOR_FORBIDDEN,
   ...MTLX_VERSIONS.map((v) => v.version)
     .filter((v) => v !== DEFAULT_MTLX_VERSION)
     .map((v) => `js/materialx/${v}/`),
@@ -197,6 +199,7 @@ function collectRequiredFiles() {
   const required = new Set();
 
   for (const p of RUNTIME_ASSETS) required.add(p);
+  for (const p of VENDOR_REQUIRED) required.add(p);
   for (const p of collectManifestFiles()) required.add(p);
 
   // Only require the trimmed MaterialX snapshot when it's actually on disk:

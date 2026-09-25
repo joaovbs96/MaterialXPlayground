@@ -865,7 +865,9 @@ const STATIC_LIBRARIES = [
 // hand-vendored STATIC_LIBRARIES above, deduped by name and sorted by name.
 function buildVendorEntries() {
     const deps = window.MTLX_VENDOR_DEPS || {};
-    const libs = Object.keys(deps).map((id) => ({ name: deps[id].name, licenseUrl: deps[id].licenseUrl }));
+    // The .vsix leaves out `vscode: false` deps, so the extension does not credit them.
+    const libs = Object.keys(deps).filter((id) => !(window.__MTLX_VSCODE__ && deps[id].vscode === false))
+        .map((id) => ({ name: deps[id].name, licenseUrl: deps[id].licenseUrl }));
     libs.push(...STATIC_LIBRARIES);
     const seen = new Set();
     return libs.filter((lib) => {

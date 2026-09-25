@@ -372,7 +372,9 @@ jobs:
           echo "$L" | grep -q 'extension/changelog.md' || { echo "::error::changelog missing, --changelog-path did not apply"; exit 1; }
           echo "$L" | grep -q 'extension/LICENSE.txt' || { echo "::error::LICENSE missing"; exit 1; }
           echo "$L" | grep -q 'extension/vendor/vendor-manifest.json' || { echo "::error::vendor/vendor-manifest.json missing"; exit 1; }
-          if echo "$L" | grep -qE 'extension/(node_modules|scripts|tests|electron|docs|embed|gallery|\.github|vendor/basis-encoder)/'; then echo "::error::ignored dirs leaked into the vsix"; exit 1; fi
+          # Vendor dirs that must not ship come from the registry (deps with vscode: false).
+          NOSHIP="$(node -e 'globalThis.window={};require(require("path").resolve("js/gen/vendor-deps.js"));console.log(Object.values(window.MTLX_VENDOR_DEPS).filter((d)=>d.vscode===false).map((d)=>d.dir).join("|"))')"
+          if echo "$L" | grep -qE "extension/(node_modules|scripts|tests|electron|docs|embed|gallery|\\.github|vendor/($NOSHIP))/"; then echo "::error::ignored dirs leaked into the vsix"; exit 1; fi
           # Negative: only the six-file keep-list ships from vendor/materialx/ (scripts/check-vsix-files.mjs's
           # MATERIALX_KEEP_LIST). The full upstream snapshot, especially resources/Images/, must not leak in.
           if echo "$L" | grep -q 'extension/vendor/materialx/resources/Images/'; then echo "::error::vendor/materialx/resources/Images leaked into the vsix"; exit 1; fi

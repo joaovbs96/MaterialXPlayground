@@ -47,6 +47,7 @@ jobs:
           sparse-checkout: |
             /package.json
             /js/gen/build-id.json
+            /js/gen/vendor-deps.js
             /js/gen/mtlx-version.json
             /vscode_extension/src/
             /vscode_extension/MARKETPLACE.md
@@ -105,7 +106,9 @@ jobs:
                    "extension/js/materialx/$MTLX/JsMaterialXGenShader.data"; do
             grep -qxF "$F" <<<"$FILES" || { echo "::error::$F is missing from $NAME"; exit 1; }
           done
-          if grep -qE '^extension/(node_modules|scripts|tests|electron|docs|embed|gallery|\.github|vendor/basis-encoder)/' <<<"$FILES"; then
+          # Vendor dirs that must not ship come from the registry (deps with vscode: false).
+          NOSHIP="$(node -e 'globalThis.window={};require(require("path").resolve("js/gen/vendor-deps.js"));console.log(Object.values(window.MTLX_VENDOR_DEPS).filter((d)=>d.vscode===false).map((d)=>d.dir).join("|"))')"
+          if grep -qE "^extension/(node_modules|scripts|tests|electron|docs|embed|gallery|\\.github|vendor/($NOSHIP))/" <<<"$FILES"; then
             echo "::error::$NAME ships directories that must never ship"; exit 1
           fi
           # Negative: only the six-file keep-list (scripts/check-vsix-files.mjs's MATERIALX_KEEP_LIST) ships

@@ -113,7 +113,7 @@ Release zip, fetched at build time only, never committed:
 
 A dependency with `module` loads on demand: `await MtlxVendor.load("example-wasm")` (`js/shared/vendor-runtime.js`).
 
-The diff after `npm run build` touches `scripts/vendor-deps.mjs`, `vendor/vendor-manifest.json`, `vendor/<dir>/**` (unless `fetchOnly`), `js/gen/vendor-deps.js`, `.gitignore` (only when `fetchOnly`), `.vscodeignore` (a new allow line unless `vscode: false`), the build-id stamp, `vscode_extension/media/webview.html`, and `package.json`/`package-lock.json` (npm deps only).
+The diff after `npm run build` touches `scripts/vendor-deps.mjs`, `vendor/vendor-manifest.json`, `vendor/<dir>/**` (unless `fetchOnly`), `js/gen/vendor-deps.js`, `.gitignore` (only when `fetchOnly`), `.vscodeignore` (a new allow line unless `vscode: false`), the build-id stamp, `vscode_extension/media/webview.html`, and `package.json`/`package-lock.json` (npm deps only). The extension packaging checks (`scripts/check-vsix-files.mjs` and the vsix checks in `release.yml`/`publish-marketplace.yml`) read the registry too, so they need no edit: every manifest file of a shipped dep is required, and the folder of every `vscode: false` dep is forbidden.
 
 ## MaterialX WASM modules
 
