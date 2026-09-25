@@ -277,3 +277,48 @@ test('unknown attribute values and non-completion positions yield no items', () 
     assert.deepEqual(complete('<materialx version="1.39" unknownattr="|" />\n'), []);
     assert.deepEqual(complete('<materialx version="1.39">plain text|</materialx>\n'), []);
 });
+
+test('<input name="..."> value completion also inserts the input\'s declared type=', () => {
+    // Issue 1: picking "in1" inside a color3 multiply must also insert
+    // type="color3", the same way the tag-context "<input .../>" snippet
+    // already does, not just the bare name.
+    const text = '<materialx version="1.39">\n  <multiply name="m1" type="color3">\n    <input name="|" />\n  </multiply>\n</materialx>\n';
+    const items = complete(text);
+    const in1 = items.find((i) => i.label === 'in1');
+    assert.ok(in1, 'expected an "in1" input-name candidate');
+    assert.equal(in1.insertText, 'in1" type="color3');
+    assert.equal(in1.isSnippet, false);
+});
+
+test('<input name="..."> value completion does not duplicate type= when already present', () => {
+    const text = '<materialx version="1.39">\n  <multiply name="m1" type="color3">\n    <input type="color3" name="|" />\n  </multiply>\n</materialx>\n';
+    const items = complete(text);
+    const in1 = items.find((i) => i.label === 'in1');
+    assert.ok(in1);
+    assert.equal(in1.insertText, 'in1', 'type= is already present on this <input, do not append another');
+});
+
+test('<input type="..."> value ordering: declared type sorts first even while type= is half-typed', () => {
+    // Issue 2: resolveElementType must ignore the attribute currently
+    // being completed (its own half-typed, often empty, value), not
+    // "resolve" the type to that empty string and fall through to a
+    // plain alphabetical MTLX_TYPES list.
+    const text = '<materialx version="1.39">\n  <multiply name="m1" type="color3">\n    <input name="in1" type="|" />\n  </multiply>\n</materialx>\n';
+    const ls = labels(complete(text));
+    assert.equal(ls[0], 'color3', 'in1\'s library-declared type should sort first');
+});
+
+test('Ctrl+Space right after a partial attribute name (no trailing space) offers attributes', () => {
+    // Issue 4: "<multiply n" with the cursor right after 'n' (no space
+    // yet) must still offer attribute-name completions, replacing just
+    // the partial "n".
+    const text = '<materialx version="1.39">\n  <multiply n|\n</materialx>\n';
+    const items = complete(text);
+    const ls = labels(items);
+    assert.ok(ls.includes('name'));
+    assert.ok(ls.includes('type'));
+    const offset = text.indexOf('|');
+    const name = items.find((i) => i.label === 'name');
+    assert.equal(name.replaceStart, offset - 1, 'replace range covers just the partial "n"');
+    assert.equal(name.replaceEnd, offset);
+});

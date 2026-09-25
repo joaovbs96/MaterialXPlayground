@@ -104,9 +104,13 @@ function attr(name, opts) {
 const NUMERIC_UI_TYPES = new Set(['integer', 'float', 'color3', 'color4', 'vector2', 'vector3', 'vector4']);
 const UNIT_ELIGIBLE_TYPES = new Set(['float', 'vector2', 'vector3', 'vector4', 'filename']);
 const COLORSPACE_TYPES = new Set(['color3', 'color4', 'filename']);
+// defaultgeomprop only ever supplies a vector2/vector3 default (e.g. Nworld,
+// Tworld, UV0), not a color3/float one (spec: "Geometric Properties").
+const GEOMPROP_ELIGIBLE_TYPES = new Set(['vector2', 'vector3']);
 const isNumericUi = (t) => NUMERIC_UI_TYPES.has(t);
 const isUnitEligible = (t) => UNIT_ELIGIBLE_TYPES.has(t);
 const isColorspaceEligible = (t) => COLORSPACE_TYPES.has(t);
+const isGeompropEligible = (t) => GEOMPROP_ELIGIBLE_TYPES.has(t);
 
 // ---------------------------------------------------------------------
 // Attribute lists per element "kind". `required: true` sorts an attribute
@@ -195,7 +199,7 @@ const ATTRS_BY_KIND = {
     'nodedef-input': [
         attr('name', { required: true }), attr('type', { required: true }),
         attr('value'), attr('uniform'),
-        attr('defaultgeomprop'), attr('enum'), attr('enumvalues'),
+        attr('defaultgeomprop', { typeGate: isGeompropEligible }), attr('enum'), attr('enumvalues'),
         attr('colorspace', { typeGate: isColorspaceEligible }),
         attr('unittype', { typeGate: isUnitEligible }), attr('unit', { typeGate: isUnitEligible }),
         attr('hint'), attr('target'), attr('doc'),
@@ -462,4 +466,5 @@ module.exports = {
     isNumericUi,
     isUnitEligible,
     isColorspaceEligible,
+    isGeompropEligible,
 };

@@ -1506,7 +1506,7 @@
                         // Added, not loaded: the existing multi-document
                         // dropdown (mtlxPaths) is how the user reaches them.
                         setStatus('Added ' + droppedMtlx.length + ' .mtlx document'
-                            + (droppedMtlx.length === 1 ? '' : 's') + ' to the session, pick one below to switch.' + mxslWarn);
+                            + (droppedMtlx.length === 1 ? '' : 's') + ' to the session: use the document picker at the top right to switch.' + mxslWarn);
                         return;
                     }
                     const pick = (rootKey && mtlx.indexOf(rootKey) !== -1)
@@ -1514,7 +1514,7 @@
                     setChosenMtlx(pick);
                     hostDocRef.current = !!fromHost;
                     if (pick) loadPromise = loadDocument(pick, merged);
-                    else setStatus('This drop contains several .mtlx files — pick one below.' + mxslWarn);
+                    else setStatus('This drop contains several .mtlx files: pick one from the document picker at the top right.' + mxslWarn);
                 } else if (chosenMtlx) {
                     loadPromise = loadDocument(chosenMtlx, merged); // includes may now resolve
                 } else {
@@ -1710,7 +1710,16 @@
                     // handoff sets this explicitly, null included, so a
                     // later unflagged import always clears a stale lock.
                     pendingReadOnlyRef.current = payload.readOnly ? { source: payload.readOnlySource || '' } : null;
-                    const safeName = (payload.name || 'material').replace(/[^a-z0-9_\-]+/gi, '_') || 'material';
+                    // Scene Viewer view-only handoffs name the document after
+                    // its internal id (e.g. '__inline_mtlx_gold'); swap in the
+                    // material's own name so the header/tab/export default
+                    // don't leak that id. Falls back to the id with its
+                    // internal prefix stripped when materialName is absent.
+                    const rawHandoffName = payload.name || 'material';
+                    const displayHandoffName = /^__(?:inline|usdshade|usdpreview)_/.test(rawHandoffName)
+                        ? (payload.materialName || rawHandoffName.replace(/^__(?:inline|usdshade|usdpreview)_/, ''))
+                        : rawHandoffName;
+                    const safeName = (displayHandoffName || 'material').replace(/[^a-z0-9_\-]+/gi, '_') || 'material';
                     const map = Object.assign({}, payload.files || {}, {
                         [safeName + '.mtlx']: new Blob([payload.xml], { type: 'application/xml' }),
                     });
@@ -3404,14 +3413,23 @@
                 }
                 const zip = new JSZip();
                 let keptNote = null;
+                // Relocates refs that would otherwise escape the zip root
+                // (e.g. '../textures/foo.png') under textures/, collision-safe.
+                const zipPathByRef = assignZipTexturePaths((resolvedTextures || []).map((t) => t.ref));
+                const zipPathOf = (ref) => {
+                    const entry = zipPathByRef[String(ref || '').replace(/\\/g, '/')];
+                    return entry ? entry.zipPath : '';
+                };
 
                 if (!convertTo || convertTo === 'keep') {
-                    zip.file(name + '.mtlx', attribution ? await attributeExportedXml(xml) : xml);
-                    const seenPaths = new Set();
+                    const rewrittenXml = rewriteFilenameRefs(xml, zipPathByRef, null);
+                    zip.file(name + '.mtlx', attribution ? await attributeExportedXml(rewrittenXml) : rewrittenXml);
+                    const seenRefs = new Set();
                     for (const t of (resolvedTextures || [])) {
-                        const zipPath = String(t.ref || '').replace(/\\/g, '/').replace(/^\.?\/+/, '');
-                        if (!zipPath || seenPaths.has(zipPath)) continue;
-                        seenPaths.add(zipPath);
+                        if (seenRefs.has(t.ref)) continue;
+                        seenRefs.add(t.ref);
+                        const zipPath = zipPathOf(t.ref);
+                        if (!zipPath) continue;
                         const blob = fileMapRef.current[t.key];
                         if (blob) zip.file(zipPath, blob);
                     }
@@ -3420,14 +3438,15 @@
                     // Pass 1 converts each source; pass 2 writes kept/failed
                     // originals first, then converted files, falling back to
                     // the original path+bytes on a collision with one of those.
-                    const seenPaths = new Set();
+                    const seenRefs = new Set();
                     const convertedByRef = {};
                     const kept = [];
                     const entries = [];
                     for (const t of (resolvedTextures || [])) {
-                        const zipPath = String(t.ref || '').replace(/\\/g, '/').replace(/^\.?\/+/, '');
-                        if (!zipPath || seenPaths.has(zipPath)) continue;
-                        seenPaths.add(zipPath);
+                        if (seenRefs.has(t.ref)) continue;
+                        seenRefs.add(t.ref);
+                        const zipPath = zipPathOf(t.ref);
+                        if (!zipPath) continue;
                         const blob = fileMapRef.current[t.key];
                         if (!blob) continue;
                         const srcExt = (t.key.split('.').pop() || t.ref.split('.').pop() || '').toLowerCase();
@@ -3454,7 +3473,7 @@
                         writtenPaths.add(swappedPath);
                         convertedByRef[zipPath] = result.ext;
                     }
-                    const convertedXml = rewriteFilenameRefs(xml, (ref) => convertedByRef[ref]);
+                    const convertedXml = rewriteFilenameRefs(xml, zipPathByRef, (zipPath) => convertedByRef[zipPath]);
                     zip.file(name + '.mtlx', attribution ? await attributeExportedXml(convertedXml) : convertedXml);
                     if (kept.length > 0) {
                         keptNote = kept.length + ' texture(s) could not be converted and were packaged unchanged.';

@@ -212,7 +212,12 @@
         // Rewrites <input type="filename" value="..."> refs across the doc.
         // Reuses mtlx-ui.jsx's extractFilenameRefs scope-split (root and
         // per-nodegraph fileprefix) but splices tags into byte-identical xml.
-        const rewriteFilenameRefs = (xml, mapRef) => {
+        // `refToZipPath` (js/graph/zip-export-paths.js's assignZipTexturePaths
+        // output) drives relocation of refs that escaped the zip root; a ref
+        // with no entry, or whose zipPath matches its resolved value, is left
+        // untouched. `mapExt(zipPath)` optionally swaps the extension too
+        // (texture format conversion).
+        const rewriteFilenameRefs = (xml, refToZipPath, mapExt) => {
             const rootAttrs = (/<materialx\b([^>]*)>/.exec(xml) || [])[1] || '';
             const rootPrefix = (/\bfileprefix\s*=\s*"([^"]*)"/.exec(rootAttrs) || [])[1] || '';
 
@@ -221,10 +226,21 @@
                 const m = /\bvalue(\s*=\s*)"([^"]*)"/.exec(tag);
                 const raw = m && m[2];
                 if (!raw) return tag;
-                const resolved = (prefix + raw).replace(/\\/g, '/').replace(/^\.?\/+/, '');
-                const newExt = mapRef(resolved);
-                if (!newExt) return tag; // not converted: byte-identical tag
-                const newValue = raw.replace(/\.[A-Za-z0-9]+$/, '.' + newExt);
+                const normPrefix = prefix.replace(/\\/g, '/');
+                const resolved = (normPrefix + raw).replace(/\\/g, '/');
+                const entry = refToZipPath && refToZipPath[resolved];
+                const zipPath = entry ? entry.zipPath : resolved.replace(/^\.?\/+/, '');
+                const relocated = !!(entry && entry.relocated);
+                const newExt = mapExt ? mapExt(zipPath) : null;
+                if (!relocated && !newExt) return tag; // byte-identical tag
+                let newValue;
+                if (relocated) {
+                    const depth = normPrefix.split('/').filter(Boolean).length;
+                    newValue = '../'.repeat(depth) + zipPath;
+                } else {
+                    newValue = raw;
+                }
+                if (newExt) newValue = newValue.replace(/\.[A-Za-z0-9]+$/, '.' + newExt);
                 return tag.slice(0, m.index) + 'value' + m[1] + '"' + newValue + '"' + tag.slice(m.index + m[0].length);
             });
 

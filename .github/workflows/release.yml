@@ -390,7 +390,7 @@ jobs:
           if grep -q 'Id="Microsoft.VisualStudio.Code.PreRelease" Value="true"' <<<"$MANIFEST"; then PRE=true; else PRE=false; fi
           WANT_PRE=$([ "$PRERELEASE" = "true" ] && echo true || echo false)
           [ "$PRE" = "$WANT_PRE" ] || { echo "::error::.vsix pre-release=$PRE but the release's prerelease flag is $PRERELEASE"; exit 1; }
-          echo "channel: $([ "$PRE" = true ] && echo pre-release || echo release)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Marketplace channel: $([ "$PRE" = true ] && echo pre-release || echo release)" | tee -a "$GITHUB_STEP_SUMMARY"
 
           # Positive: the default version's WASM path just moved under
           # js/materialx/<version>/ — a silent miss here would ship a

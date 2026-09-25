@@ -6,8 +6,9 @@
 // (xi:include, textures), glTF (.gltf: buffers[].uri, images[].uri), GLB
 // (.glb: same, from its JSON chunk, external refs only), and OBJ (mtllib ->
 // .mtl -> map_* texture statements). Binary USD crates (.usdc, binary .usd)
-// are not scanned for references here: their refs surface later, through
-// the host's missing-reference round trip (createSession().resolveMissing,
+// contribute every path-like token of their TOKENS section, resolved against
+// the crate's own folder; anything still missing surfaces later through the
+// host's missing-reference round trip (createSession().resolveMissing,
 // driven by sceneProvider.js). Everything is confined exactly like
 // docScanner.js (refPolicy, realpath).
 //
@@ -16,6 +17,7 @@
 // folder holding every file, so `..` references resolve inside the set.
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 const docScanner = require('./docScanner');
 const refPolicy = require('./refPolicy');
@@ -29,6 +31,8 @@ const SCAN_CONCURRENCY = 8; // files read for references at once
 const RESOLVE_CONCURRENCY = 16; // realpath + stat calls at once, per scanned file
 const MAX_MISSING_PER_REQUEST = 512;
 const MAX_MISSING_ROUNDS = 5; // on-demand rounds per session (one open or reload)
+const MAX_CRATE_TOKEN_BYTES = 64 * 1024 * 1024; // a crate's TOKENS section, compressed or not
+const MAX_CRATE_TOKEN_LENGTH = 1024;
 
 const ASSET_PATH_RE = /@([^@\n]+)@/g;
 const XI_INCLUDE_HREF_RE = /<xi:include\b[^>]*?href\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
@@ -115,7 +119,7 @@ function extractMtlxRefs(xml) {
 
 function isScannable(p) {
     const ext = extOf(p);
-    return ext === 'usda' || ext === 'usd' || ext === 'mtlx'
+    return ext === 'usda' || ext === 'usd' || ext === 'usdc' || ext === 'mtlx'
         || ext === 'gltf' || ext === 'glb' || ext === 'obj' || ext === 'mtl';
 }
 
@@ -226,6 +230,128 @@ function extractMtlTextureRefs(text) {
         if (p) out.push(p.replace(/\\/g, '/'));
     }
     return out;
+}
+
+// USD crate (.usdc) reading: the bootstrap header, the table of contents
+// it points at, and the TOKENS section, which holds every string of the
+// layer (asset paths included) as NUL-separated text.
+const CRATE_MAGIC = 'PXR-USDC';
+
+// One LZ4 block into `out` starting at `start`; returns the end offset.
+function lz4DecodeBlock(src, out, start) {
+    let s = 0;
+    let d = start;
+    const fail = () => { throw new Error('malformed LZ4 block'); };
+    while (s < src.length) {
+        const token = src[s++];
+        let literals = token >> 4;
+        if (literals === 15) { let b; do { if (s >= src.length) fail(); b = src[s++]; literals += b; } while (b === 255); }
+        if (s + literals > src.length || d + literals > out.length) fail();
+        src.copy(out, d, s, s + literals);
+        s += literals;
+        d += literals;
+        if (s >= src.length) break;
+        if (s + 2 > src.length) fail();
+        const offset = src[s] | (src[s + 1] << 8);
+        s += 2;
+        let match = token & 15;
+        if (match === 15) { let b; do { if (s >= src.length) fail(); b = src[s++]; match += b; } while (b === 255); }
+        match += 4;
+        if (!offset || offset > d - start || d + match > out.length) fail();
+        for (let i = 0; i < match; i++, d++) out[d] = out[d - offset];
+    }
+    return d;
+}
+
+// TfFastCompression buffer: a chunk count byte (0 = one LZ4 block), then
+// for chunked data an int32 size before each block.
+function tfDecompress(src, size) {
+    const out = Buffer.alloc(size);
+    const chunks = src[0];
+    if (!chunks) { lz4DecodeBlock(src.subarray(1), out, 0); return out; }
+    let s = 1;
+    let d = 0;
+    for (let i = 0; i < chunks; i++) {
+        if (s + 4 > src.length) throw new Error('malformed compressed tokens');
+        const len = src.readInt32LE(s);
+        s += 4;
+        if (len < 0 || s + len > src.length) throw new Error('malformed compressed tokens');
+        d = lz4DecodeBlock(src.subarray(s, s + len), out, d);
+        s += len;
+    }
+    return out;
+}
+
+// Path-like tokens: a file extension and no line breaks. Policy and
+// containment still apply when each one is resolved.
+function crateTokenRefs(tokens) {
+    const out = new Set();
+    for (const token of tokens) {
+        if (!token || token.length > MAX_CRATE_TOKEN_LENGTH || /[\n\r\0]/.test(token)) continue;
+        const ref = cleanAssetPath(token);
+        if (ref && /[^/.]\.[A-Za-z][A-Za-z0-9]{0,7}$/.test(ref)) out.add(ref);
+    }
+    return Array.from(out);
+}
+
+// Bytes [offset, offset + length) of a file, without reading the rest.
+async function readRange(deps, uri, offset, length) {
+    if (deps.readRange) return deps.readRange(uri, offset, length);
+    if (uri.scheme !== 'file') return !offset && deps.readHead ? deps.readHead(uri, length) : null;
+    const handle = await fs.promises.open(uri.fsPath, 'r');
+    try {
+        const buf = Buffer.alloc(length);
+        const { bytesRead } = await handle.read(buf, 0, length, offset);
+        return buf.subarray(0, bytesRead);
+    } finally {
+        await handle.close();
+    }
+}
+
+// { tokens, bytes } of a USD crate, reading only its header, TOC and TOKENS
+// section; null when the file is not a crate. Throws on a malformed crate.
+async function readCrateTokens(deps, uri, maxBytes) {
+    const header = await readRange(deps, uri, 0, 24);
+    if (!header || header.length < 24 || Buffer.from(header).toString('latin1', 0, 8) !== CRATE_MAGIC) return null;
+    const head = Buffer.from(header);
+    const oldTokens = head[8] === 0 && head[9] < 4; // before 0.4.0 tokens are stored uncompressed
+    const tocOffset = Number(head.readBigInt64LE(16));
+    const countBuf = await readRange(deps, uri, tocOffset, 8);
+    if (!countBuf || countBuf.length < 8) throw new Error('truncated crate');
+    const sections = Number(Buffer.from(countBuf).readBigUInt64LE(0));
+    if (sections > 64) throw new Error('malformed crate');
+    const toc = Buffer.from(await readRange(deps, uri, tocOffset + 8, sections * 32));
+    for (let i = 0; i + 1 <= sections && (i + 1) * 32 <= toc.length; i++) {
+        const o = i * 32;
+        if (toc.toString('latin1', o, o + 16).replace(/\0[\s\S]*$/, '') !== 'TOKENS') continue;
+        const start = Number(toc.readBigInt64LE(o + 16));
+        const size = Number(toc.readBigInt64LE(o + 24));
+        if (size > maxBytes) return { tokens: [], bytes: 0 };
+        const section = Buffer.from(await readRange(deps, uri, start, size));
+        let chars;
+        if (oldTokens) {
+            chars = section.subarray(16, 16 + Number(section.readBigUInt64LE(8)));
+        } else {
+            const uncompressed = Number(section.readBigUInt64LE(8));
+            const compressed = Number(section.readBigUInt64LE(16));
+            if (uncompressed > maxBytes || 24 + compressed > section.length) throw new Error('malformed crate tokens');
+            chars = tfDecompress(section.subarray(24, 24 + compressed), uncompressed);
+        }
+        return { tokens: chars.toString('utf8').split('\0'), bytes: size };
+    }
+    return { tokens: [], bytes: 0 };
+}
+
+// 'text', 'binary' or 'unknown' for a scene file. Decided by extension; a
+// .usd needs its first bytes (`head`): '#usda' is text, a crate is binary.
+function sceneFileKind(p, head) {
+    const ext = extOf(p);
+    if (ext === 'usda' || ext === 'gltf' || ext === 'obj') return 'text';
+    if (ext === 'usdc' || ext === 'usdz' || ext === 'glb') return 'binary';
+    if (ext !== 'usd' || !head) return 'unknown';
+    const magic = Buffer.from(head).toString('latin1', 0, 8);
+    if (magic.startsWith('#usda')) return 'text';
+    return magic === CRATE_MAGIC ? 'binary' : 'unknown';
 }
 
 // A set-relative path as the webview reports it (a VFS layer identifier such
@@ -365,12 +491,32 @@ class SceneFileSession {
     }
 
     async scanOne(item) {
-        if (item.size > MAX_SCAN_BYTES || this.scanBytes + item.size > MAX_SCAN_TOTAL_BYTES) return;
         this.checkCancelled();
         const deps = this.deps;
         const ext = extOf(item.uri.path);
-        // A binary crate named .usd is recognized from its first bytes, so
-        // it is never read in full just to learn it has no text refs.
+        const dirUri = deps.Uri.joinPath(item.uri, '..');
+        // A crate (.usdc, or a .usd with the crate header) is read in ranges:
+        // header, table of contents and TOKENS section, never in full.
+        if (ext === 'usdc' || ext === 'usd') {
+            let crate;
+            try {
+                crate = await readCrateTokens(deps, item.uri, Math.min(MAX_CRATE_TOKEN_BYTES, MAX_SCAN_TOTAL_BYTES - this.scanBytes));
+            } catch (e) {
+                crate = { tokens: [], bytes: 0 };
+            }
+            this.checkCancelled();
+            if (crate) {
+                this.scanBytes += crate.bytes;
+                // Tokens also hold doc strings and custom data: misses stay silent.
+                await mapLimit(crateTokenRefs(crate.tokens), RESOLVE_CONCURRENCY, (ref) => (hasTileToken(ref)
+                    ? this.addTiles(dirUri, ref, false)
+                    : this.resolveRef(dirUri, ref, false)));
+                return;
+            }
+            if (ext === 'usdc') return;
+        }
+        if (item.size > MAX_SCAN_BYTES || this.scanBytes + item.size > MAX_SCAN_TOTAL_BYTES) return;
+        // A .usd that is not a crate is read in full only when it is text.
         if (ext === 'usd' && deps.readHead) {
             let head = null;
             try { head = await deps.readHead(item.uri, 5); } catch (e) { head = null; }
@@ -380,7 +526,6 @@ class SceneFileSession {
         let bytes;
         try { bytes = await deps.fs.readFile(item.uri); } catch (e) { return; }
         this.checkCancelled();
-        const dirUri = deps.Uri.joinPath(item.uri, '..');
         let refs;
         if (ext === 'glb') {
             refs = extractGlbRefs(bytes);
@@ -391,7 +536,7 @@ class SceneFileSession {
             else if (ext === 'obj') refs = extractObjMtllibRefs(text);
             else if (ext === 'mtl') refs = extractMtlTextureRefs(text);
             else if (text.startsWith('#usda')) refs = extractAssetRefs(text);
-            else return; // binary USD crate: not scanned
+            else return; // not a text layer
         }
         await mapLimit(refs, RESOLVE_CONCURRENCY, (ref) => (hasTileToken(ref)
             ? this.addTiles(dirUri, ref, true)
@@ -516,6 +661,6 @@ async function collect(rootLayerUri, options) {
 module.exports = {
     collect, _collectWith, createSession, extractAssetRefs, extractMtlxRefs, cleanAssetPath,
     extractGltfJsonRefs, extractGlbRefs, extractObjMtllibRefs, extractMtlTextureRefs,
-    normalizeSetPath, tileNameRegex,
+    normalizeSetPath, tileNameRegex, readCrateTokens, crateTokenRefs, sceneFileKind,
     MAX_FILES, MAX_TOTAL_BYTES, MAX_MISSING_PER_REQUEST, MAX_MISSING_ROUNDS,
 };

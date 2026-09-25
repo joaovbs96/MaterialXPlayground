@@ -189,6 +189,8 @@ const VIEW_DEPS = {
             'embed/mtlx-viewer.js',
             // Decodes .ktx2 compressed textures (loadKtx2Texture, js/mtlx-engine.js).
             'vendor/three/KTX2Loader.js',
+            // Plain JS (no JSX), shared with tests/unit via a direct Node eval.
+            'js/graph/zip-export-paths.js',
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',

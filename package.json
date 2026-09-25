@@ -274,6 +274,18 @@
         },
         {
           "command": "materialxPlayground.newFromExample"
+        },
+        {
+          "command": "materialxPlayground.saveGraph",
+          "when": "false"
+        },
+        {
+          "command": "materialxPlayground.undoGraph",
+          "when": "false"
+        },
+        {
+          "command": "materialxPlayground.redoGraph",
+          "when": "false"
         }
       ],
       "explorer/context": [

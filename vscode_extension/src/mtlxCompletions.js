@@ -97,8 +97,13 @@ const UNITS_BY_TYPE = {
 };
 
 // "Geometric Properties" section (spec lines 468-484): the standard
-// geomprop names valid for defaultgeomprop/geomprop attribute values.
+// geomprop names valid for a <geomprop> element's own geomprop= value.
 const GEOMPROP_NAMES = ['position', 'normal', 'tangent', 'bitangent', 'texcoord', 'geomcolor'];
+
+// defaultgeomprop only ever supplies a vector2/vector3 default: geomcolor
+// (color3/4) is never a legal defaultgeomprop value, mirrors
+// mtlxAttributeSchema.js's isGeompropEligible typeGate.
+const DEFAULTGEOMPROP_NAMES = GEOMPROP_NAMES.filter((g) => g !== 'geomcolor');
 
 // ---------------------------------------------------------------------
 // Library index: lazy, memoized per repoRoot (only ever one repoRoot per
@@ -358,6 +363,19 @@ function getCompletions({ text, offset, repoRoot }) {
         if (el) return attributeNameItems(index, el).map((it, i) => withRange(withOrder(it, i), offset, offset));
     }
 
+    // Context: a PARTIAL attribute name already typed (e.g. "<multiply n",
+    // cursor right after 'n'): inAttributeWhitespace above only fires with
+    // whitespace directly before the cursor, so a half-typed name (no
+    // trailing space yet) falls through it. attributeNamePrefixAt finds
+    // the same "inside an open tag's attribute region" context one word
+    // back, so Ctrl+Space mid-word still offers attributes, replacing the
+    // partial word instead of inserting beside it.
+    const attrNameHit = attributeNamePrefixAt(text, offset);
+    if (attrNameHit) {
+        const el = elementContaining(root);
+        if (el) return attributeNameItems(index, el).map((it, i) => withRange(withOrder(it, i), attrNameHit.start, attrNameHit.end));
+    }
+
     return [];
 }
 
@@ -401,6 +419,27 @@ function inAttributeWhitespace(text, offset) {
     if (lastLt === -1 || lastLt <= lastGt) return false; // no open tag, or already closed
     // Not a closing tag, and there's at least a tag-name char right after '<'.
     return segment[lastLt + 1] !== '/' && isTagNameChar(segment[lastLt + 1]);
+}
+
+// Same char class validator.js/mtlxSymbols.js use for an attribute name
+// token (word chars plus ':.-').
+const ATTR_NAME_CHAR_RE = /[\w:.\-]/;
+function isAttrNameChar(ch) {
+    return ch !== undefined && ATTR_NAME_CHAR_RE.test(ch);
+}
+
+// Is `offset` right after a PARTIAL attribute name, itself preceded by
+// whitespace inside an open tag's attribute region (e.g. "<multiply n|",
+// or "<input name=\"x\" ty|")? Backs up over the already-typed name chars,
+// then reuses inAttributeWhitespace at that earlier position (it already
+// requires whitespace immediately before it and an enclosing open tag).
+// Returns the replace range for the partial word, or null.
+function attributeNamePrefixAt(text, offset) {
+    let start = offset;
+    while (start > 0 && isAttrNameChar(text[start - 1])) start--;
+    if (start === offset) return null; // nothing typed right before the cursor
+    if (!inAttributeWhitespace(text, start)) return null;
+    return { start, end: offset };
 }
 
 // ---------------------------------------------------------------------
@@ -457,8 +496,12 @@ function findNamedChildren(scope, tag) {
 // that category's nodedef(s), narrowed by the parent node's own `type=`
 // when it has one (mirrors inputsForCategory's own narrowing, and the
 // "name" value-completion case a few lines below it).
-function resolveElementType(index, el) {
-    if (el.attrs && el.attrs.type) return el.attrs.type.value;
+// `ignoreAttr`: when the caller is itself completing `el`'s own `type=`
+// value, that attribute already exists in the tree as a half-typed (often
+// empty-string) value  -  skip it rather than "resolving" the type to the
+// very thing being typed, and fall through to the nodedef-derived type.
+function resolveElementType(index, el, ignoreAttr) {
+    if (el.attrs && el.attrs.type && ignoreAttr !== 'type') return el.attrs.type.value;
     if (el.tag === 'input' && el.parent && el.parent.tag && index.categories.has(el.parent.tag)) {
         const parent = el.parent;
         const wantType = parent.attrs.type ? parent.attrs.type.value : null;
@@ -483,7 +526,7 @@ function valueItemsFor(root, index, hit) {
         if (element.tag && index.categories.has(element.tag)) {
             ordered.push(...index.categories.get(element.tag).outputTypes);
         } else if (element.tag === 'input' && element.parent && element.parent.tag && index.categories.has(element.parent.tag)) {
-            const t = resolveElementType(index, element);
+            const t = resolveElementType(index, element, 'type');
             if (t) ordered.push(t);
         }
         for (const t of MTLX_TYPES) if (ordered.indexOf(t) === -1) ordered.push(t);
@@ -509,7 +552,10 @@ function valueItemsFor(root, index, hit) {
             : UNITTYPES.reduce((acc, t) => acc.concat(UNITS_BY_TYPE[t]), []);
         return units.map((u) => ({ kind: 'unit', label: u, detail: wantType || '', insertText: u, isSnippet: false }));
     }
-    if (attrName === 'defaultgeomprop' || attrName === 'geomprop') {
+    if (attrName === 'defaultgeomprop') {
+        return DEFAULTGEOMPROP_NAMES.map((g) => ({ kind: 'geomprop', label: g, detail: '', insertText: g, isSnippet: false }));
+    }
+    if (attrName === 'geomprop') {
         return GEOMPROP_NAMES.map((g) => ({ kind: 'geomprop', label: g, detail: '', insertText: g, isSnippet: false }));
     }
     if (attrName === 'target') {
@@ -563,8 +609,22 @@ function valueItemsFor(root, index, hit) {
         const parent = element.parent;
         if (index.categories.has(parent.tag)) {
             const wantType = parent.attrs.type ? parent.attrs.type.value : null;
+            const hasType = !!(element.attrs && element.attrs.type);
             return inputsForCategory(index, parent.tag, wantType)
-                .map((inp) => ({ kind: 'input-name', label: inp.name, detail: inp.type, insertText: inp.name, isSnippet: false }));
+                .map((inp) => ({
+                    kind: 'input-name',
+                    label: inp.name,
+                    detail: inp.type,
+                    // The replace range only covers the partial NAME text
+                    // (inside the already-open quote); appending
+                    // `" type="<type>` here closes that quote and reopens
+                    // one for type=, reusing the closing quote the user
+                    // already has right after the cursor  -  same trick the
+                    // tag-context "<input name=... type=... />" snippet a
+                    // few lines up uses, just without a snippet.
+                    insertText: hasType ? inp.name : inp.name + '" type="' + inp.type,
+                    isSnippet: false,
+                }));
         }
     }
     return [];

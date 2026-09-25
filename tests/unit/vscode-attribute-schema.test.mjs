@@ -162,6 +162,52 @@ test('attribute-name: the first required item is preselected', () => {
     assert.ok(!type.preselect, 'only the very first required item is preselected');
 });
 
+test('attribute-name: defaultgeomprop offered on vector3 nodedef inputs, not on float/color3', () => {
+    // Issue 3: defaultgeomprop only ever supplies a vector2/vector3
+    // default; it must not be offered on a float or color3 nodedef input.
+    const vec3 = [
+        '<materialx version="1.39">',
+        '  <nodedef name="ND1" node="foo">',
+        '    <input name="in1" type="vector3" |/>',
+        '  </nodedef>',
+        '</materialx>',
+        '',
+    ].join('\n');
+    const floatText = [
+        '<materialx version="1.39">',
+        '  <nodedef name="ND1" node="foo">',
+        '    <input name="in1" type="float" |/>',
+        '  </nodedef>',
+        '</materialx>',
+        '',
+    ].join('\n');
+    const colorText = [
+        '<materialx version="1.39">',
+        '  <nodedef name="ND1" node="foo">',
+        '    <input name="in1" type="color3" |/>',
+        '  </nodedef>',
+        '</materialx>',
+        '',
+    ].join('\n');
+    assert.ok(labels(complete(vec3)).includes('defaultgeomprop'));
+    assert.ok(!labels(complete(floatText)).includes('defaultgeomprop'));
+    assert.ok(!labels(complete(colorText)).includes('defaultgeomprop'));
+});
+
+test('isGeompropEligible: only vector2/vector3', () => {
+    assert.equal(schema.isGeompropEligible('vector2'), true);
+    assert.equal(schema.isGeompropEligible('vector3'), true);
+    assert.equal(schema.isGeompropEligible('float'), false);
+    assert.equal(schema.isGeompropEligible('color3'), false);
+});
+
+test('defaultgeomprop="..." value completion excludes geomcolor (color-typed)', () => {
+    const text = '<materialx version="1.39">\n  <nodedef name="ND1" node="foo">\n    <input name="in1" type="vector3" defaultgeomprop="|" />\n  </nodedef>\n</materialx>\n';
+    const ls = labels(complete(text));
+    assert.ok(ls.includes('normal'));
+    assert.ok(!ls.includes('geomcolor'), 'geomcolor is color-typed, not a legal defaultgeomprop value');
+});
+
 function every(items, pred) {
     for (const i of items) assert.ok(pred(i));
 }

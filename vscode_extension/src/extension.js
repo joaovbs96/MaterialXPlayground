@@ -19,6 +19,8 @@ const symbolProviders = require('./symbolProviders');
 const completionProvider = require('./completionProvider');
 const newFromExample = require('./newFromExample');
 const sceneProvider = require('./sceneProvider');
+const usdFileSet = require('./usdFileSet');
+const docScanner = require('./docScanner');
 const { errMsg } = require('./util');
 const { getSetting } = require('./settingsHost');
 
@@ -424,15 +426,10 @@ function activate(context) {
     };
 
     // materialxPlayground.autoOpenSceneViewer companion, BINARY half: a
-    // scene file VS Code shows as a plain editor tab that is NOT backed by
-    // a real TextDocument (checked via vscode.workspace.textDocuments,
-    // rather than assuming a specific TabInput subclass for the
-    // "binary/unsupported encoding" placeholder, that placeholder's tab
-    // input was verified empirically against real VS Code before writing
-    // this check). Such a tab gets REPLACED in place by the scene viewer,
-    // in the same tab group, rather than opened beside it: there is no
-    // usable text editor to split against, and leaving the placeholder tab
-    // open beside the viewer would just be dead weight.
+    // binary scene file (by extension, a .usd by its first bytes) shows a
+    // placeholder tab, which gets REPLACED in place by the scene viewer.
+    // Text files are never replaced: an Explorer or Quick Open tab event
+    // fires before its TextDocument is registered, so that is no signal.
     const maybeAutoOpenSceneTab = (tab) => {
         if (!vscode.workspace.isTrusted) return;
         if (!getSetting('autoOpenSceneViewer')) return;
@@ -444,14 +441,19 @@ function activate(context) {
         // Already the scene viewer, or some other custom editor entirely,
         // either way, not ours to touch.
         if (input instanceof vscode.TabInputCustom) return;
-        // Backed by a real TextDocument somewhere: that's the TEXT half's
-        // job (maybeAutoOpenSceneText, above), not this one.
         const uriStr = uri.toString();
-        if (vscode.workspace.textDocuments.some((d) => d.uri.toString() === uriStr)) return;
         if (autoOpenedSceneUris.has(uriStr)) return;
-        autoOpenedSceneUris.add(uriStr);
         (async () => {
             try {
+                let head = null;
+                if (path.extname(uri.path).toLowerCase() === '.usd') {
+                    try { head = await docScanner.defaultDeps().readHead(uri, 8); } catch (e) { head = null; }
+                }
+                // Text scene files are the TEXT half's job (maybeAutoOpenSceneText).
+                if (usdFileSet.sceneFileKind(uri.path, head) !== 'binary') return;
+                if (vscode.workspace.textDocuments.some((d) => d.uri.toString() === uriStr)) return;
+                if (autoOpenedSceneUris.has(uriStr)) return;
+                autoOpenedSceneUris.add(uriStr);
                 const viewColumn = tab.group ? tab.group.viewColumn : undefined;
                 await vscode.commands.executeCommand(
                     'vscode.openWith', uri, sceneProvider.VIEW_TYPE,

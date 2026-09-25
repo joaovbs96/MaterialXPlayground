@@ -12,7 +12,7 @@ const require = createRequire(import.meta.url);
 const {
   _collectWith, createSession, extractAssetRefs, extractMtlxRefs, normalizeSetPath, tileNameRegex,
   extractGltfJsonRefs, extractGlbRefs, extractObjMtllibRefs, extractMtlTextureRefs,
-  MAX_MISSING_ROUNDS,
+  MAX_MISSING_ROUNDS, readCrateTokens, crateTokenRefs, sceneFileKind,
 } = require('../../vscode_extension/src/usdFileSet.js');
 
 const FileType = { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 };
@@ -412,4 +412,136 @@ test('a cancelled session stops scanning', async () => {
   } finally {
     await fsp.rm(outer, { recursive: true, force: true });
   }
+});
+
+// A minimal USD crate: bootstrap header, TOKENS section, TOC. Version 0.8.0
+// stores the tokens as one LZ4 block (literals only, which is valid LZ4);
+// version 0.3.0 stores them raw.
+const u64 = (n) => { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(n)); return b; };
+function crateWithSection(section, minor) {
+  const header = Buffer.alloc(88);
+  header.write('PXR-USDC', 0, 'latin1');
+  header[8] = 0; header[9] = minor; header[10] = 0;
+  header.writeBigInt64LE(BigInt(88 + section.length), 16);
+  const entry = Buffer.alloc(32);
+  entry.write('TOKENS', 0, 'latin1');
+  entry.writeBigInt64LE(88n, 16);
+  entry.writeBigInt64LE(BigInt(section.length), 24);
+  return Buffer.concat([header, section, u64(1), entry]);
+}
+function makeCrate(tokens, { minor = 8 } = {}) {
+  const chars = Buffer.from(tokens.join('\0') + '\0', 'utf8');
+  if (minor < 4) return crateWithSection(Buffer.concat([u64(tokens.length), u64(chars.length), chars]), minor);
+  const lens = [];
+  for (let n = chars.length - 15; ; n -= 255) { if (n < 255) { lens.push(n); break; } lens.push(255); }
+  const compressed = Buffer.concat([Buffer.from([0, 0xf0]), Buffer.from(lens), chars]);
+  return crateWithSection(Buffer.concat([u64(tokens.length), u64(chars.length), u64(compressed.length), compressed]), minor);
+}
+
+test('crate tokens: compressed and raw TOKENS sections, path-like tokens only', async () => {
+  const outer = await fsp.mkdtemp(path.join(os.tmpdir(), 'mxpt-usdset-crate-'));
+  try {
+    const tokens = ['', 'Material', 'inputs:file', './textures/gold.exr', 'a doc string\nwith file.png', '1.5', 'tex/wood.<UDIM>.png', 'b.usda:SDF_FORMAT_ARGS:x=1'];
+    await write(path.join(outer, 'new.usdc'), makeCrate(tokens));
+    await write(path.join(outer, 'old.usdc'), makeCrate(tokens, { minor: 3 }));
+    const deps = makeDeps(outer);
+    for (const name of ['new.usdc', 'old.usdc']) {
+      const crate = await readCrateTokens(deps, uriOf(path.join(outer, name)), 1 << 20);
+      assert.deepEqual(crate.tokens.slice(0, tokens.length), tokens, name);
+      assert.deepEqual(crateTokenRefs(crate.tokens), ['./textures/gold.exr', 'tex/wood.<UDIM>.png', 'b.usda'], name);
+    }
+    await write(path.join(outer, 'text.usd'), '#usda 1.0\n');
+    assert.equal(await readCrateTokens(deps, uriOf(path.join(outer, 'text.usd')), 1 << 20), null);
+  } finally {
+    await fsp.rm(outer, { recursive: true, force: true });
+  }
+});
+
+test('crate tokens: an LZ4 match sequence decodes', async () => {
+  const outer = await fsp.mkdtemp(path.join(os.tmpdir(), 'mxpt-usdset-crate-'));
+  try {
+    // "abc", a 6-byte match at offset 3, then the literals "d.png" and NUL.
+    const block = Buffer.concat([Buffer.from([0x32]), Buffer.from('abc'), Buffer.from([3, 0, 0x60]), Buffer.from('d.png\0')]);
+    const compressed = Buffer.concat([Buffer.from([0]), block]);
+    await write(path.join(outer, 'm.usdc'), crateWithSection(Buffer.concat([u64(1), u64(15), u64(compressed.length), compressed]), 8));
+    const result = await readCrateTokens(makeDeps(outer), uriOf(path.join(outer, 'm.usdc')), 1 << 20);
+    assert.deepEqual(result.tokens, ['abcabcabcd.png', '']);
+  } finally {
+    await fsp.rm(outer, { recursive: true, force: true });
+  }
+});
+
+test('a texture next to a nested binary layer is found, relative to that layer, without reading crates in full', async () => {
+  const outer = await fsp.mkdtemp(path.join(os.tmpdir(), 'mxpt-usdset-crate-'));
+  const ws = path.join(outer, 'ws');
+  try {
+    // MaterialEggs layout: egg.usda -> assets/egg/payload.usdc -> ./mtl.usdc -> ./textures/gold.exr.
+    await write(path.join(ws, 'usd', 'egg.usda'), '#usda 1.0\ndef "Egg" ( payload = @./assets/egg/payload.usdc@ ) {}\n');
+    await write(path.join(ws, 'usd', 'assets', 'egg', 'payload.usdc'), makeCrate(['Egg', './mtl.usdc', './geo.usdc']));
+    await write(path.join(ws, 'usd', 'assets', 'egg', 'geo.usdc'), makeCrate(['Mesh', 'points']));
+    await write(path.join(ws, 'usd', 'assets', 'egg', 'mtl.usdc'),
+      makeCrate(['Gold', 'inputs:file', './textures/gold.exr', 'notes about thumb.png', '../../../../../outside.png', 'C:/abs/tex.png']));
+    await write(path.join(ws, 'usd', 'assets', 'egg', 'textures', 'gold.exr'), 'exr');
+    // Same name next to the root: must not be the one picked.
+    await write(path.join(ws, 'usd', 'textures', 'gold.exr'), 'decoy');
+    const deps = makeDeps(ws);
+    const readFile = deps.fs.readFile;
+    const fullReads = [];
+    deps.fs.readFile = (uri) => { fullReads.push(path.posix.basename(uri.path)); return readFile(uri); };
+    const set = await _collectWith(deps, uriOf(path.join(ws, 'usd', 'egg.usda')));
+    assert.deepEqual(set.files.map((f) => f.rel), [
+      'assets/egg/geo.usdc', 'assets/egg/mtl.usdc', 'assets/egg/payload.usdc', 'assets/egg/textures/gold.exr', 'egg.usda',
+    ]);
+    assert.deepEqual(set.warnings, [], 'token misses stay silent');
+    assert.deepEqual(fullReads, ['egg.usda']);
+  } finally {
+    await fsp.rm(outer, { recursive: true, force: true });
+  }
+});
+
+test('a sublayer path relative to a binary root layer is found, with `..` and its own refs', async () => {
+  const outer = await fsp.mkdtemp(path.join(os.tmpdir(), 'mxpt-usdset-crate-'));
+  const ws = path.join(outer, 'ws');
+  try {
+    await write(path.join(ws, 'usdps', 'scene', 'binroot.usdc'), makeCrate(['../layers/geo.usda']));
+    await write(path.join(ws, 'usdps', 'scene', 'bingeo.usd'), makeCrate(['../textures/logo.png'], { minor: 3 }));
+    await write(path.join(ws, 'usdps', 'layers', 'geo.usda'), '#usda 1.0\ndef "A" { asset t = @../textures/logo.png@ }\n');
+    await write(path.join(ws, 'usdps', 'textures', 'logo.png'), 'png');
+    const root = await _collectWith(makeDeps(ws), uriOf(path.join(ws, 'usdps', 'scene', 'binroot.usdc')));
+    assert.deepEqual(root.files.map((f) => f.rel), ['layers/geo.usda', 'scene/binroot.usdc', 'textures/logo.png']);
+    assert.equal(root.root, 'scene/binroot.usdc');
+    // A crate named .usd is recognized by its header.
+    const geo = await _collectWith(makeDeps(ws), uriOf(path.join(ws, 'usdps', 'scene', 'bingeo.usd')));
+    assert.deepEqual(geo.files.map((f) => f.rel), ['scene/bingeo.usd', 'textures/logo.png']);
+  } finally {
+    await fsp.rm(outer, { recursive: true, force: true });
+  }
+});
+
+test('a malformed crate yields no refs and does not fail the set', async () => {
+  const outer = await fsp.mkdtemp(path.join(os.tmpdir(), 'mxpt-usdset-crate-'));
+  try {
+    const crate = makeCrate(['./a.png']);
+    await write(path.join(outer, 'a.png'), 'png');
+    await write(path.join(outer, 'cut.usdc'), crate.subarray(0, crate.length - 20));
+    const bad = Buffer.from(crate);
+    bad[88 + 24 + 1] = 0x0f; // the LZ4 token now asks for a match the output cannot hold
+    await write(path.join(outer, 'bad.usdc'), bad);
+    for (const name of ['cut.usdc', 'bad.usdc']) {
+      const set = await _collectWith(makeDeps(outer), uriOf(path.join(outer, name)));
+      assert.deepEqual(set.files.map((f) => f.rel), [name]);
+    }
+  } finally {
+    await fsp.rm(outer, { recursive: true, force: true });
+  }
+});
+
+test('auto-open classification: text scene files are never binary placeholders', () => {
+  for (const p of ['/w/a.usda', '/w/A.USDA', '/w/b.gltf', '/w/c.obj']) assert.equal(sceneFileKind(p, null), 'text', p);
+  for (const p of ['/w/a.usdc', '/w/b.usdz', '/w/c.glb']) assert.equal(sceneFileKind(p, null), 'binary', p);
+  assert.equal(sceneFileKind('/w/a.usd', Buffer.from('#usda 1.0')), 'text');
+  assert.equal(sceneFileKind('/w/a.usd', Buffer.from('PXR-USDC')), 'binary');
+  assert.equal(sceneFileKind('/w/a.usd', null), 'unknown');
+  assert.equal(sceneFileKind('/w/a.usd', Buffer.from('')), 'unknown');
+  assert.equal(sceneFileKind('/w/a.mtlx', null), 'unknown');
 });

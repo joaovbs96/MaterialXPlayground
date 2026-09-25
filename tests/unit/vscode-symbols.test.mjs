@@ -137,6 +137,58 @@ test('buildDocumentSymbols: top-level node, nodegraph (nodes+outputs), nodedef (
   assert.equal(byName.M1.detail, 'surfacematerial : material');
 });
 
+test('resolveReference: interfacename inside a functional nodegraph resolves to its nodedef\'s own input', () => {
+  // Issue 5: a functional <nodegraph nodedef="ND_...">'s content has no
+  // interface <input> children of its own (spec: "may not itself specify
+  // any direct child input elements"), so interfacename there must fall
+  // back to the referenced nodedef's <input name="...">, same document.
+  const text = [
+    '<materialx version="1.39">',
+    '  <nodedef name="ND_custom" node="custom">',
+    '    <input name="amount" type="float" value="0.5" />',
+    '  </nodedef>',
+    '  <nodegraph name="NG1" nodedef="ND_custom">',
+    '    <mix name="mixnode" type="color3">',
+    '      <input name="bg" type="color3" interfacename="amount" />',
+    '    </mix>',
+    '  </nodegraph>',
+    '</materialx>',
+    '',
+  ].join('\n');
+  const { root } = mtlxSymbols.scanElements(text);
+  const ng = mtlxSymbols.materialxRoot(root).children.find((c) => c.tag === 'nodegraph');
+  const mix = ng.children.find((c) => c.tag === 'mix');
+  const bgInput = mix.children.find((c) => c.tag === 'input' && c.attrs.name.value === 'bg');
+  const resolved = mtlxSymbols.resolveReference(root, bgInput, 'interfacename', 'amount');
+  assert.ok(resolved, 'expected interfacename to resolve via the nodegraph\'s nodedef=');
+  assert.equal(resolved.tag, 'input');
+  assert.equal(resolved.parent.tag, 'nodedef');
+  assert.equal(resolved.attrs.name.value, 'amount');
+});
+
+test('resolveReference: interfacename prefers a local compound-nodegraph interface input over the nodedef fallback', () => {
+  const text = [
+    '<materialx version="1.39">',
+    '  <nodedef name="ND_custom" node="custom">',
+    '    <input name="amount" type="float" value="0.9" />',
+    '  </nodedef>',
+    '  <nodegraph name="NG1" nodedef="ND_custom">',
+    '    <input name="amount" type="float" value="0.5" />',
+    '    <mix name="mixnode" type="color3">',
+    '      <input name="bg" type="color3" interfacename="amount" />',
+    '    </mix>',
+    '  </nodegraph>',
+    '</materialx>',
+    '',
+  ].join('\n');
+  const { root } = mtlxSymbols.scanElements(text);
+  const ng = mtlxSymbols.materialxRoot(root).children.find((c) => c.tag === 'nodegraph');
+  const mix = ng.children.find((c) => c.tag === 'mix');
+  const bgInput = mix.children.find((c) => c.tag === 'input' && c.attrs.name.value === 'bg');
+  const resolved = mtlxSymbols.resolveReference(root, bgInput, 'interfacename', 'amount');
+  assert.equal(resolved.parent.tag, 'nodegraph', 'the local NG1 interface input wins over the nodedef fallback');
+});
+
 test('buildDocumentSymbols: selectionRange targets the name attribute value, contained in range', () => {
   const { root } = mtlxSymbols.scanElements(FIXTURE);
   const symbols = mtlxSymbols.buildDocumentSymbols(root);

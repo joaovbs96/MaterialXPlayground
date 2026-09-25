@@ -285,7 +285,18 @@ function resolveReference(root, element, attrName, value) {
         }
         case 'interfacename': {
             const scope = nearestAncestor(element, 'nodegraph');
-            return scope ? findNamedChild(scope, value, (tag) => tag === 'input') : null;
+            if (!scope) return null;
+            const local = findNamedChild(scope, value, (tag) => tag === 'input');
+            if (local) return local;
+            // Not a compound nodegraph interface input: when the nodegraph
+            // is functional (has its own nodedef=), interfacename resolves
+            // to that nodedef's own <input> instead (spec: interfacename
+            // references "the enclosing nodegraph/nodedef interface").
+            if (scope.attrs.nodedef) {
+                const nodedefEl = findNamedChild(materialxRoot(root), scope.attrs.nodedef.value, (tag) => tag === 'nodedef');
+                if (nodedefEl) return findNamedChild(nodedefEl, value, (tag) => tag === 'input');
+            }
+            return null;
         }
         case 'output': {
             let scope;

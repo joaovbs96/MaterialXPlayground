@@ -315,7 +315,13 @@ function scanXml(text) {
 
             cursor = i;
             if (malformed) {
-                // Not well-formed — don't push onto the stack.
+                // Still push the tag onto the stack as a best-effort
+                // recovery: the malformed-attribute error above already
+                // reports this exact tag, so leaving it off the stack only
+                // makes its own closing tag (and its ancestors' closing
+                // tags) look mismatched/orphaned too; one broken tag
+                // producing three diagnostics instead of one.
+                stack.push({ name, start: nameStart, end: nameEnd });
                 continue;
             }
             if (!selfClosing) {

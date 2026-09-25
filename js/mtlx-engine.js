@@ -4123,11 +4123,57 @@ const preserveSourceFormatting = (sourceText, writtenXml, { maxD = 3000, maxLeng
 // same dropped file after a view rebuild reuses the decoded THREE.Texture
 // instead of a fresh async load, which let the default color flash.
 const TEXTURE_CACHE = new Map();
+// True for a real File (or a Blob with the same identity fields glued on),
+// where name+size+lastModified already uniquely identify the bytes.
+const hasBlobIdentity = (blob) => !!(blob && blob.name != null && blob.size != null && blob.lastModified != null);
 const textureCacheKey = (blob, fallback) => {
-    if (blob && blob.name != null && blob.size != null && blob.lastModified != null) {
+    if (hasBlobIdentity(blob)) {
         return blob.name + '|' + blob.size + '|' + blob.lastModified;
     }
     return fallback; // e.g. the fileMap key, when identity fields are missing
+};
+// Cheap FNV-1a over a Uint8Array, used only to fingerprint sampled texture
+// bytes below; not cryptographic, just enough to tell "changed" from "same".
+// (A same-named string variant exists further down for displacement keys;
+// kept separate since bytes vs. char codes are different inputs.)
+const fnv1aBytesHex = (bytes) => {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < bytes.length; i++) {
+        h ^= bytes[i];
+        h = Math.imul(h, 0x01000193);
+    }
+    return (h >>> 0).toString(16);
+};
+// Nameless Blobs (e.g. the VS Code webview's fetched texture Blobs carry no
+// File identity) hash to the same key across a file replaced on disk unless
+// their bytes are sampled. Hashes a handful of small chunks (start/middle/
+// end) instead of the whole buffer, so even multi-hundred-MB textures are
+// cheap to fingerprint, and memoizes per Blob object since the same Blob is
+// often looked up for several sampler uniforms in one bindDroppedTextures call.
+const BLOB_FINGERPRINT = new WeakMap();
+const fingerprintBlob = (blob) => {
+    const size = blob.size || 0;
+    const chunk = 4096;
+    const offsets = size <= chunk * 3 ? [0] : [0, Math.floor(size / 2), Math.max(0, size - chunk)];
+    return Promise.all(offsets.map((off) => blob.slice(off, off + chunk).arrayBuffer()))
+        .then((buffers) => buffers.map((b) => fnv1aBytesHex(new Uint8Array(b))).join('-'))
+        .catch(() => 'unhashed');
+};
+// Async counterpart of textureCacheKey: resolves immediately (still a real
+// string, wrapped in a Promise) for identity-bearing blobs, and to a
+// size+content-fingerprint key otherwise, so a texture replaced on disk with
+// the same path gets a different key once its bytes actually differ.
+const textureCacheKeyAsync = (blob, fallback) => {
+    if (hasBlobIdentity(blob)) return Promise.resolve(textureCacheKey(blob, fallback));
+    if (!blob || typeof blob.slice !== 'function' || typeof blob.arrayBuffer !== 'function') {
+        return Promise.resolve(fallback);
+    }
+    let fp = BLOB_FINGERPRINT.get(blob);
+    if (!fp) {
+        fp = fingerprintBlob(blob).then((hash) => fallback + '|' + blob.size + '|' + hash);
+        BLOB_FINGERPRINT.set(blob, fp);
+    }
+    return fp;
 };
 // MaterialX image nodes carry sampler address modes independently of the
 // image file. Keep the authored spelling on uniform metadata so one source
@@ -4711,14 +4757,19 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
         if (hit.substituted) ktx2Substituted += 1;
         const blob = fileMap[hit.key];
         const samplerModes = u.samplerModes || null;
-        const cacheKey = samplerCacheKey(textureCacheKey(blob, hit.key), samplerModes);
-        const cached = cache.get(cacheKey);
-        if (cached) {
-            if (isAlive()) {
-                if (view.uniforms[u.name]) view.uniforms[u.name].value = cached;
-                if (onBound) onBound();
+        // Cache check + load for one uniform, given its resolved raw key.
+        // Returns the in-flight load promise, or null when it was a cache
+        // hit (nothing to await) so callers only add real work to `pending`.
+        const bindWithRawKey = (rawKey) => {
+            const cacheKey = samplerCacheKey(rawKey, samplerModes);
+            const cached = cache.get(cacheKey);
+            if (cached) {
+                if (isAlive()) {
+                    if (view.uniforms[u.name]) view.uniforms[u.name].value = cached;
+                    if (onBound) onBound();
+                }
+                return null;
             }
-        } else {
             const ext = (hit.key.split('.').pop() || ref.split('.').pop() || '').toLowerCase();
             if (ext === 'ktx2') {
                 const bindTex = (tex) => {
@@ -4729,7 +4780,7 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
                     if (view.uniforms[u.name]) view.uniforms[u.name].value = tex;
                     if (onBound) onBound();
                 };
-                const pendingLoad = loadKtx2Texture(blob, view, hit.key).then(bindTex, (error) => {
+                return loadKtx2Texture(blob, view, hit.key).then(bindTex, (error) => {
                     if (error && error.ktx2InvalidBaseLevel && originalHit.key !== hit.key) {
                         const notice = `KTX2 texture ${hit.key} is not a multiple of 4; falling back to ${originalHit.key}`;
                         if (view.notices) view.notices.push(notice);
@@ -4737,11 +4788,10 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
                     }
                     return { error };
                 });
-                pending.push(pendingLoad);
             } else if (ext === 'exr' || ext === 'hdr' || ext === 'tif' || ext === 'tiff') {
                 const startDecode = () => ext === 'exr' ? loadExrTexture(blob) : ext === 'hdr' ? loadHdrTexture(blob) : loadTifTexture(blob, hit.key);
                 const parsePromise = runHeavyTextureDecode(startDecode);
-                const pendingLoad = parsePromise.then((tex) => {
+                return parsePromise.then((tex) => {
                     if (!tex) return; // unsupported/corrupt, the node default color stands
                     configureLoadedTexture(tex, samplerModes);
                     if (!isAlive()) { tex.dispose && tex.dispose(); return; }
@@ -4753,7 +4803,6 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
                     missing.push(ref);
                     return { error };
                 });
-                pending.push(pendingLoad);
             } else if (view.maxTextureSize) {
                 const startBoundedLoad = () => {
                     if (!isAlive()) return Promise.resolve(null);
@@ -4780,16 +4829,16 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
                     boundedLoad = previous.catch(() => {}).then(startBoundedLoad);
                     view.textureQueue.tail = boundedLoad;
                 } else boundedLoad = startBoundedLoad();
-                pending.push(boundedLoad.then((tex) => {
+                return boundedLoad.then((tex) => {
                     if (!tex) return;
                     if (!isAlive()) { tex.dispose && tex.dispose(); if (tex.image && tex.image.close) tex.image.close(); return; }
                     cache.set(cacheKey, tex);
                     if (view.uniforms[u.name]) view.uniforms[u.name].value = tex;
                     if (onBound) onBound();
-                }, (error) => ({ error })));
+                }, (error) => ({ error }));
             } else {
                 const url = URL.createObjectURL(blob);
-                pending.push(new Promise((resolve) => {
+                return new Promise((resolve) => {
                     new THREE.TextureLoader().load(url, (tex) => {
                         configureLoadedTexture(tex, samplerModes);
                         if (!isAlive()) { tex.dispose && tex.dispose(); URL.revokeObjectURL(url); resolve(); return; }
@@ -4799,8 +4848,18 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
                         if (onBound) onBound();
                         resolve();
                     }, undefined, (error) => { URL.revokeObjectURL(url); resolve({ error }); });
-                }));
+                });
             }
+        };
+        // Identity-bearing blobs (dragged/dropped Files) resolve the key
+        // synchronously, unchanged from before. Nameless Blobs (e.g. the VS
+        // Code webview's fetched texture Blobs) need their bytes sampled
+        // first, so the whole bind is deferred one microtask via `pending`.
+        if (hasBlobIdentity(blob)) {
+            const loadPromise = bindWithRawKey(textureCacheKey(blob, hit.key));
+            if (loadPromise) pending.push(loadPromise);
+        } else {
+            pending.push(textureCacheKeyAsync(blob, hit.key).then(bindWithRawKey));
         }
         bound.push(ref + '  →  ' + hit.key);
     }
@@ -12846,7 +12905,7 @@ Object.assign(window, {
     listDocRenderables,
     normPath, readDroppedItems, expandZips, isHiddenSideFile, findFileForRef, findFilesForRef, preferKtx2Sibling, resolveIncludes, readMtlxText, readMtlxXml,
     isExportAttribution, splitXmlEnvelope, withXmlEnvelope, preserveSourceFormatting,
-    TEXTURE_CACHE, textureCacheKey, samplerCacheKey, normalizeSamplerAddressMode, collectImageSamplerModes, annotateFilenameSamplerModes, bindDroppedTextures,
+    TEXTURE_CACHE, textureCacheKey, textureCacheKeyAsync, hasBlobIdentity, samplerCacheKey, normalizeSamplerAddressMode, collectImageSamplerModes, annotateFilenameSamplerModes, bindDroppedTextures,
     loadExrTexture, loadHdrTexture, loadTifTexture, loadKtx2Texture, capKtx2MipLevels,
     runHeavyTextureDecode,
     loadBoundedBitmapTexture,

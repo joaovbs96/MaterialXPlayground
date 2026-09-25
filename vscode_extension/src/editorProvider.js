@@ -761,19 +761,27 @@ class MaterialXEditorProvider {
                 }
                 if (msg.type === 'mtlx-save') {
                     const xml = typeof msg.xml === 'string' ? msg.xml : '';
+                    // Skip the WorkspaceEdit entirely when the text is
+                    // already identical (as 'mtlx-sync' does below):
+                    // applying a full-range no-op edit still pushes an
+                    // empty entry onto VS Code's undo stack, so the first
+                    // Ctrl+Z after a save does nothing visible.
+                    const needsEdit = xml !== document.getText();
                     try {
-                        const fullRange = document.validateRange(new vscode.Range(0, 0, document.lineCount, 0));
-                        const edit = new vscode.WorkspaceEdit();
-                        edit.replace(document.uri, fullRange, xml);
-                        // Incremented BEFORE applyEdit: applyEdit
-                        // synchronously fires onDidChangeTextDocument
-                        // (changeSub below), so the counter has to already
-                        // be incremented by the time that listener runs, or
-                        // the echo-suppression check there would miss it.
-                        hostEditDepth++;
-                        const applied = await vscode.workspace.applyEdit(edit);
-                        if (!applied) {
-                            throw new Error('edit was not applied (document may have changed concurrently)');
+                        if (needsEdit) {
+                            const fullRange = document.validateRange(new vscode.Range(0, 0, document.lineCount, 0));
+                            const edit = new vscode.WorkspaceEdit();
+                            edit.replace(document.uri, fullRange, xml);
+                            // Incremented BEFORE applyEdit: applyEdit
+                            // synchronously fires onDidChangeTextDocument
+                            // (changeSub below), so the counter has to already
+                            // be incremented by the time that listener runs, or
+                            // the echo-suppression check there would miss it.
+                            hostEditDepth++;
+                            const applied = await vscode.workspace.applyEdit(edit);
+                            if (!applied) {
+                                throw new Error('edit was not applied (document may have changed concurrently)');
+                            }
                         }
                         await document.save();
                         webviewPanel.webview.postMessage({ type: 'mtlx-save-result', ok: true });
@@ -785,13 +793,14 @@ class MaterialXEditorProvider {
                         webviewPanel.webview.postMessage({ type: 'mtlx-save-result', ok: false, error: message });
                     } finally {
                         // Always decremented once the save settles, success
-                        // or failure. Safe to decrement here: save
+                        // or failure, but only if we actually incremented
+                        // it (needsEdit) above. Safe to decrement here: save
                         // participants' change events all fire before
                         // document.save() resolves, so by the time this
                         // finally runs, every change event this save could
                         // produce has already been (correctly) suppressed
                         // by changeSub below.
-                        hostEditDepth--;
+                        if (needsEdit) hostEditDepth--;
                     }
                     return;
                 }

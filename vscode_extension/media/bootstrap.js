@@ -205,9 +205,16 @@
             vscodeApi.postMessage({ type: 'mtlx-test-error', text: truncated });
         }
     }
+    // Benign browser noise, not an actual bug: these ResizeObserver
+    // messages fire on ordinary layout churn and carry no useful signal,
+    // so they're dropped instead of spamming the Output channel on every
+    // webview open.
+    var BENIGN_ERROR_RE = /^ResizeObserver loop (completed with undelivered notifications|limit exceeded)/;
     window.addEventListener('error', function (event) {
+        var message = (event && event.message) || 'Unknown error';
+        if (BENIGN_ERROR_RE.test(message)) return;
         var where = event && event.filename ? ' (' + event.filename + ':' + event.lineno + ')' : '';
-        postError(((event && event.message) || 'Unknown error') + where);
+        postError(message + where);
     });
     window.addEventListener('unhandledrejection', function (event) {
         postError('Unhandled rejection: ' + String(event && event.reason));
