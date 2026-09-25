@@ -68,6 +68,7 @@ Build MaterialX node graphs visually.
 - **Document colorspace picker**, setting the working colorspace of the document.
 - **Non-destructive disconnects.** Removing a connection or deleting an upstream node restores the input's previous value, or the definition default.
 - **Document view** to inspect the generated MaterialX XML with syntax highlighting, and copy it.
+- **ShadingLanguageX code view.** Read and edit the document as [ShadingLanguageX](https://github.com/jakethorn/ShadingLanguageX) code beside the graph: Compile rebuilds the node graph from the code (undoable), and Decompile refreshes the code from the graph.
 - **Validate** the current document and see errors and warnings.
 - **Import/export** `.mtlx`, with a `.zip` export option that bundles the textures used. Start from an empty document, a curated official example, or a material handed off from the docs pages or the Material Viewer.
 - **Cross-links.** Open the current material in the Material Viewer, or jump from any node to its documentation page.

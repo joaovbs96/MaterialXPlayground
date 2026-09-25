@@ -193,12 +193,14 @@ const stripCommonFolderPrefix = (keys) => {
 // expandZips in ingest(), so a .mxsl shipped inside a .zip is also caught.
 //
 // `origins`, if given, is a plain object this function populates with
-// {compiledMtlxKey: {source, filename}} for every root it successfully
-// compiles — graph-app.jsx and viewer-app.jsx use this to know, once a
-// specific .mtlx path is actually loaded as the active document, whether
-// it has .mxsl provenance, what its as-authored source looked like (the
-// "Original" button in the ShadingLanguageX export target) and what it was
-// originally named (rootKey, before it was re-keyed to compiledMtlxKey).
+// {compiledMtlxKey: {source, filename, files}} for every root it
+// successfully compiles — graph-app.jsx and viewer-app.jsx use this to
+// know, once a specific .mtlx path is actually loaded as the active
+// document, whether it has .mxsl provenance, what its as-authored source
+// looked like (the "Original" button in the ShadingLanguageX export target,
+// and the graph editor's code view) and what it was originally named
+// (rootKey, before it was re-keyed to compiledMtlxKey). `files` is the
+// sibling map it was compiled with, so the code view can recompile it.
 // Omit it to just expand.
 //
 // `failures`, if given, is a plain array this function pushes
@@ -255,7 +257,7 @@ const expandMxsl = async (map, origins, failures) => {
         }
         try {
             const xml = await compileMxslcSource(rootSource, files, rootKey);
-            compiled.push({ rootKey, xml, source: rootSource });
+            compiled.push({ rootKey, xml, source: rootSource, files });
         } catch (e) {
             // Not every root candidate necessarily compiles on its own
             // (e.g. the heuristic above can admit a genuine include as a
@@ -273,13 +275,13 @@ const expandMxsl = async (map, origins, failures) => {
         throw lastError || new Error('No .mxsl file in this drop compiled successfully.');
     }
 
-    for (const { rootKey, xml, source } of compiled) {
+    for (const { rootKey, xml, source, files } of compiled) {
         const mtlxKey = rootKey.replace(/\.mxsl$/i, '.mtlx');
         if (Object.prototype.hasOwnProperty.call(map, mtlxKey)) {
             console.warn('expandMxsl: ' + mtlxKey + ' was already present in this drop — overwriting it with the document compiled from ' + rootKey);
         }
         map[mtlxKey] = new Blob([xml], { type: 'application/xml' });
-        if (origins) origins[mtlxKey] = { source, filename: rootKey };
+        if (origins) origins[mtlxKey] = { source, filename: rootKey, files };
     }
     return map;
 };
