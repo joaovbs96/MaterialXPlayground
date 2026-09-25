@@ -551,6 +551,27 @@
     };
     window.usdSceneClampPanelRect = clampPanelRect;
 
+    // The USD prim's own name (a composed alias, "Red") and the renderer's
+    // cached hint can both differ from the actual MaterialX element name
+    // inside the referenced document ("red_material"). Scan the resolved
+    // xml for type="material" elements and prefer one that matches the
+    // hint; with no match, a single material element is unambiguous.
+    const resolveDocMaterialName = (xml, hintName) => {
+        if (!xml) return hintName || null;
+        const materials = [];
+        const tagRe = /<[a-zA-Z_][\w.]*\s+[^>]*>/g;
+        let tagMatch;
+        while ((tagMatch = tagRe.exec(xml)) !== null) {
+            const tag = tagMatch[0];
+            if (!/\btype\s*=\s*"material"/.test(tag)) continue;
+            const nameMatch = /\bname\s*=\s*"([^"]*)"/.exec(tag);
+            if (nameMatch && nameMatch[1]) materials.push(nameMatch[1]);
+        }
+        if (!materials.length) return hintName || null;
+        if (hintName && materials.indexOf(hintName) >= 0) return hintName;
+        return materials.length === 1 ? materials[0] : (hintName || materials[0]);
+    };
+
     // Scene outliner model built from the neutral stage payload (USD, glTF or OBJ): four
     // fixed groups, Scene (the object tree), Materials, Cameras and Lights. Scene rows key
     // on their path, every other row on a prefixed id. Pure: tests/unit/usd-scene-tree.test.mjs.
@@ -1683,7 +1704,11 @@
             const same = previewOpenRef.current && !!current && current.previewMaterialPath === info.materialPath;
             if (mode === 'swap' && (!previewOpenRef.current || same)) return false;
             if (!same) {
-                const payload = Object.assign({ primPath: info.primPath, materialName: info.materialName == null ? null : info.materialName }, doc, { previewMaterialPath: info.materialPath });
+                // doc.materialName (the renderer's cache) and info.materialName
+                // (the USD prim leaf) are both only hints; resolve against the
+                // resolved document's own material element names.
+                const materialName = resolveDocMaterialName((doc && doc.xml) || null, (doc && doc.materialName) || info.materialName || null);
+                const payload = Object.assign({ primPath: info.primPath }, doc, { materialName, previewMaterialPath: info.materialPath });
                 previewPayloadRef.current = payload;
                 setPreviewPayload(payload);
             }
@@ -3624,10 +3649,14 @@
                     <MtlxIcon name={topSeverity ? SEVERITY_STYLE[topSeverity].icon : 'check'} className="w-3.5 h-3.5" />
                 </span>
                 Diagnostics
-                {warnings.length ? (
+                {/* The worst severity's own count: with a warning/error
+                    present this matches the Warnings statistic (info never
+                    inflates it); with info only (no warning/error) this is
+                    the info count, so the badge still shows a number. */}
+                {topSeverity && grouped[topSeverity].length ? (
                     <span data-testid="usd-scene-diagnostics-count"
                         className={'text-[10px] font-mono font-normal tabular-nums bg-gray-900/60 border border-gray-700 rounded-full px-1.5 ' + severityTone}>
-                        {warnings.length.toLocaleString()}
+                        {grouped[topSeverity].length.toLocaleString()}
                     </span>
                 ) : null}
             </button>
@@ -4305,11 +4334,15 @@
                         only holds a Look library) would otherwise render an
                         empty viewport with just an [info] note in Diagnostics;
                         say so plainly, the Materials group still lists them. */}
-                    {handle && status === 'rendered' && meshes.length === 0 && materials.length > 0 && (
+                    {handle && status === 'rendered' && meshes.length === 0 && (sceneTree ? sceneTree.materialCount : materials.length) > 0 && (
                         <div data-testid="usd-scene-empty-geometry" className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center px-6 pointer-events-none">
                             <MtlxIcon name="info-circle" className="w-5 h-5 text-gray-500" />
                             <div className="text-gray-400 text-sm max-w-sm">
-                                This file has materials but no geometry ({materials.length.toLocaleString()} material{materials.length === 1 ? '' : 's'})
+                                {/* materials.length only counts stage.materials (mesh-bound,
+                                    resolved documents); an unbound Material prim only shows
+                                    up in sceneTree via stage.materialPrims, so use the same
+                                    count as the Statistics row. */}
+                                This file has materials but no geometry ({(sceneTree ? sceneTree.materialCount : materials.length).toLocaleString()} material{(sceneTree ? sceneTree.materialCount : materials.length) === 1 ? '' : 's'})
                             </div>
                         </div>
                     )}

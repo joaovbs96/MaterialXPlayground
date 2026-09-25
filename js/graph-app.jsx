@@ -7145,7 +7145,7 @@
                 { separator: true },
                 {
                     label: 'Copy', icon: 'copy', keys: 'Ctrl+C', onSelect: () => copySelectionRef.current(),
-                    disabled: !parsed || !selectedIds.length,
+                    disabled: !parsed || !selectedIds.length || scopeLocked,
                     title: 'Copy the selected nodes to the in-page clipboard',
                 },
                 {
