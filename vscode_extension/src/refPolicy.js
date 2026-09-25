@@ -28,10 +28,11 @@ const TEXTURE_EXTENSIONS = new Set([
     'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'exr', 'hdr', 'tif', 'tiff', 'ktx2'
 ]);
 
-// USD scene file sets (usdFileSet.js): layers, MaterialX documents and every
-// image type the Scene Viewer's texture loaders decode.
+// Scene file sets (usdFileSet.js): USD layers, glTF/GLB/OBJ roots and their
+// side files (buffers, materials), MaterialX documents, and every image type
+// the Scene Viewer's texture loaders decode.
 const SCENE_EXTENSIONS = new Set([
-    'usd', 'usda', 'usdc', 'usdz', 'mtlx', 'tga', ...TEXTURE_EXTENSIONS
+    'usd', 'usda', 'usdc', 'usdz', 'gltf', 'glb', 'obj', 'bin', 'mtl', 'mtlx', 'tga', ...TEXTURE_EXTENSIONS
 ]);
 
 function extOf(ref) {

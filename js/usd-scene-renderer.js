@@ -1716,11 +1716,18 @@ const createMtlxSceneView = async ({
         pendingPrewarms.length = 0;
     };
     const warnings = Array.isArray(stage.warnings) ? stage.warnings.slice() : [];
+    // Texture paths (file-set relative, UDIM patterns kept) no file matched;
+    // the VS Code host looks them up on demand (handle.missingFiles).
+    const missingFiles = new Set();
     const prepassWarnings = new Set();
     let displayTransformListener = null;
     let sceneTransparencyRefresh = null;
     let sceneTransparencyListener = null;
     let queueDisplayRebuild = null;
+    // handle.onRebuild listeners, told when a material or geometry rebuild
+    // starts so the page can drop UI tied to the old programs.
+    const rebuildListeners = new Set();
+    const notifyRebuild = (kind) => { rebuildListeners.forEach((fn) => { try { fn(kind); } catch (e) {} }); };
     let displayRebuildPromise = null;
     let displayDirty = false;
     let displayRevision = 0;
@@ -1802,10 +1809,20 @@ const createMtlxSceneView = async ({
     // Radius of the stage's world bounding sphere, refreshed by frameAll()
     // and applyCamera(); the dolly bounds below are derived from it.
     let stageBoundsRadius = 0;
-    let floorLiftNoticed = false;
     // null = the Default (auto framing) entry; otherwise a stage.cameras
     // primPath. resetCamera() re-applies whichever of these is selected.
     let selectedCameraPath = null;
+    // Authored lens of the applied scene camera, or null for the Default
+    // camera's plain 45 degree fov; camera.updateProjectionMatrix reads it.
+    let sceneCameraLens = null;
+    // True while the view is exactly the applied scene camera: nothing moves it
+    // until the first orbit input, which starts the orbit from that exact pose.
+    let sceneCameraPinned = false;
+    // Floor clamp: always on for the Default camera; an orbit that leaves a scene
+    // camera gets it once its pose clears the floor, so it never snaps.
+    let orbitFloorClamp = true;
+    // An authored roll, re-applied after OrbitControls' levelling lookAt.
+    let orbitRoll = null;
     // Dolly bounds from the stage's world bounding-sphere radius, applied to
     // every camera source. In studio mode the far bound also stays inside the
     // closed cyclorama so its rim never comes into view. Pure: see
@@ -1823,12 +1840,35 @@ const createMtlxSceneView = async ({
         maxDistance = Math.max(maxDistance, frame * 1.05, minDistance * 2);
         return { minDistance, maxDistance };
     };
-    // The eye height an authored camera has to be lifted to when it sits under
-    // the studio floor, or null when it is already clear of it. Pure.
-    const studioFloorLiftY = (eyeY, floorY, clearance) => {
-        if (!Number.isFinite(eyeY) || !Number.isFinite(floorY)) return null;
-        const minY = floorY + (Number(clearance) || 0);
-        return eyeY < minY ? minY : null;
+    // Frustum window at unit distance for a scene camera lens, usdview's fit
+    // conform: the whole authored aperture stays in view, centred on its offset, and
+    // the viewport extends it (aspectFromViewport: height kept, width from the viewport). Pure.
+    const sceneCameraWindow = (lens, aspect) => {
+        const focal = Number(lens && lens.focalLength) > 0 ? Number(lens.focalLength) : 50;
+        let width = Number(lens && lens.horizontalAperture) > 0 ? Number(lens.horizontalAperture) : 20.955;
+        let height = Number(lens && lens.verticalAperture) > 0 ? Number(lens.verticalAperture) : 15.2908;
+        const viewAspect = Number(aspect) > 0 ? Number(aspect) : width / height;
+        if ((lens && lens.aspectFromViewport) || viewAspect > width / height) width = height * viewAspect;
+        else height = width / viewAspect;
+        const x = Number(lens && lens.horizontalApertureOffset) || 0;
+        const y = Number(lens && lens.verticalApertureOffset) || 0;
+        return {
+            left: (x - width / 2) / focal, right: (x + width / 2) / focal,
+            bottom: (y - height / 2) / focal, top: (y + height / 2) / focal,
+        };
+    };
+    // Authored clipping range in world units. Only an unusable range changes: a
+    // near plane under 1e-4 of the stage radius (depth precision) or an inverted one. Pure.
+    const sceneCameraClip = (clippingRange, metersPerUnit, stageRadius) => {
+        const meters = Number(metersPerUnit) > 0 ? Number(metersPerUnit) : 1;
+        const range = Array.isArray(clippingRange) ? clippingRange : [];
+        let near = Number(range[0]) * meters;
+        let far = Number(range[1]) * meters;
+        if (!(near > 0)) near = meters; // USD's default near plane, 1 unit
+        const radius = Number(stageRadius) > 0 ? Number(stageRadius) : 0;
+        near = Math.max(near, radius * 1e-4);
+        if (!(far > near)) far = Math.max(1000000 * meters, near * 2);
+        return { near, far };
     };
     // Polar angle (radians from +Y) at which the eye touches the floor
     // plane, given the orbit target's height above it. Pure: see
@@ -1842,8 +1882,8 @@ const createMtlxSceneView = async ({
     // Mirrors the material viewer's applyStudioPolarClamp (js/mtlx-
     // engine.js:4804-4819): the orbit target sits above the floor, so a
     // fixed dip below the horizon drops the eye through the floor once the
-    // distance grows. Re-derived per frame from that distance, for every
-    // camera source: an authored camera gets no exception.
+    // distance grows. Re-derived per frame from that distance. An orbit that
+    // left a scene camera latches it only once its pose is inside the limit.
     const applyStudioPolarClamp = () => {
         if (!controls) return;
         const studio = window.MtlxStudio;
@@ -1856,7 +1896,16 @@ const createMtlxSceneView = async ({
         if (floorY == null) return;
         const clearance = environmentBridge.getFloorClearance ? environmentBridge.getFloorClearance() : 0;
         const dist = camera.position.distanceTo(controls.target);
-        controls.maxPolarAngle = studioFloorPolarLimit(maxPolar, floorY, clearance, controls.target.y, dist);
+        const limit = studioFloorPolarLimit(maxPolar, floorY, clearance, controls.target.y, dist);
+        if (!orbitFloorClamp) {
+            const cosPolar = dist > 1e-9 ? (camera.position.y - controls.target.y) / dist : 1;
+            if (Math.acos(Math.max(-1, Math.min(1, cosPolar))) > limit + 1e-9) {
+                if (studioPolarApplied) { controls.maxPolarAngle = Math.PI; studioPolarApplied = false; }
+                return;
+            }
+            orbitFloorClamp = true;
+        }
+        controls.maxPolarAngle = limit;
         studioPolarApplied = true;
     };
     // Wheel/pinch dolly bounds. In studio mode the far bound keeps the eye
@@ -1872,20 +1921,6 @@ const createMtlxSceneView = async ({
             studio && Number(studio.studioMaxOrbitDistance), isStudio);
         controls.minDistance = limits.minDistance;
         controls.maxDistance = limits.maxDistance;
-    };
-    // An authored camera under the studio floor is lifted onto it, keeping
-    // its target, so the floor clamp applies to it like any other view.
-    const liftCameraAboveStudioFloor = () => {
-        if (!environmentBridge || !environmentBridge.isStudio || !environmentBridge.isStudio()) return;
-        const floorY = environmentBridge.getFloorY ? environmentBridge.getFloorY() : null;
-        if (floorY == null) return;
-        const clearance = environmentBridge.getFloorClearance ? environmentBridge.getFloorClearance() : 0;
-        const lifted = studioFloorLiftY(camera.position.y, floorY, clearance);
-        if (lifted == null) return;
-        camera.position.y = lifted;
-        if (floorLiftNoticed) return;
-        floorLiftNoticed = true;
-        warnings.push('[info] Scene camera: an authored camera sat below the studio floor and was lifted onto it.');
     };
     const applyOrbitLimits = () => { applyStudioPolarClamp(); applyOrbitDistanceLimits(); };
     // Turntable/GIF capture state: while true, resize() is a no-op so the
@@ -1927,6 +1962,14 @@ const createMtlxSceneView = async ({
     const textureQueue = { tails: Array.from({ length: TEXTURE_DECODE_CONCURRENCY }, () => Promise.resolve()), next: 0 };
     const documents = new Set();
     const prims = [];
+    // Outliner state keyed by userData.primPath: hidden prims (object.visible,
+    // so every pass and pickAt skip them) and the outlined selection.
+    const hiddenPrimPaths = new Set();
+    const selectionState = {
+        paths: new Set(), dirty: false, revision: -1, key: '',
+        target: null, scene: null, maskMaterial: null, quadScene: null, quadCamera: null, quadMaterial: null,
+        outlineTarget: null, compositeMaterial: null, quad: null, rect: null, perf: null,
+    };
     let rebuildingProvisional = null;
     const scene = new THREE.Scene();
     // One shadow caster only: MaterialX's generated `occlusion` is a single
@@ -2257,15 +2300,27 @@ const createMtlxSceneView = async ({
         if (shadowTransmittanceMaterial) { shadowTransmittanceMaterial.dispose(); shadowTransmittanceMaterial = null; }
         shadowTransmittanceInfo = [];
     };
-    // Applies the sidebar toggle and EV multiplier without rebuilding the
-    // converted list, so both are live controls.
+    // Applies the sidebar toggle, the outliner's hidden lights (by source prim
+    // path, so every sample of a split light goes) and the EV multiplier
+    // without rebuilding the converted list, so all three are live controls.
     const activeStageLights = () => {
         if (!stageLightsEnabled || !stageLights.length) return null;
         const gain = Math.pow(2, stageLightsEv);
-        return stageLights.map((light) => Object.assign({}, light, { intensity: light.intensity * gain }));
+        const shown = hiddenLightPaths.size ? stageLights.filter((light) => !hiddenLightPaths.has((light.emitter || light).primPath)) : stageLights;
+        return shown.length ? shown.map((light) => Object.assign({}, light, { intensity: light.intensity * gain })) : null;
     };
     const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 10000);
     camera.position.set(0, 0, 4);
+    // A scene camera's lens replaces the symmetric fov frustum, so every resize
+    // or capture re-fits the authored aperture; fov keeps the fitted vertical extent.
+    camera.updateProjectionMatrix = function () {
+        if (!sceneCameraLens) { THREE.PerspectiveCamera.prototype.updateProjectionMatrix.call(this); return; }
+        const frame = sceneCameraWindow(sceneCameraLens, this.aspect);
+        this.fov = THREE.MathUtils.radToDeg(Math.atan(frame.top) - Math.atan(frame.bottom));
+        const n = this.near;
+        this.projectionMatrix.makePerspective(frame.left * n, frame.right * n, frame.top * n, frame.bottom * n, n, this.far);
+        this.projectionMatrixInverse.copy(this.projectionMatrix).invert();
+    };
     let env = null;
     let mxEnv = null;
     let domeLight = null;
@@ -2279,6 +2334,12 @@ const createMtlxSceneView = async ({
     const stageLightSlotHint = () => (stageLightsConverted ? stageLights.length : SCENE_STAGE_LIGHT_LIMIT);
     let stageLightsEnabled = storedSceneStageLights();
     let stageLightsEv = storedSceneStageLightsEv();
+    // Outliner visibility for stage lights (source prim paths). Per view, never
+    // persisted, kept across rebuilds like hiddenPrimPaths.
+    const hiddenLightPaths = new Set();
+    // Outliner eye on the environment row: off zeroes the environment's lighting
+    // (IBL and its key light) in applyMaterialEnvironment only. Per view, never persisted.
+    let environmentLightingEnabled = true;
     // Scratch-only direct-light diagnostic state. It is never read from or
     // written to storage, and null is the normal production lighting path.
     let shadowDiagnostic = null;
@@ -2777,6 +2838,10 @@ const sceneAttrValueRange = (el, attr) => {
     return [start, start + match[1].length];
 };
 
+// Whether every typed input of an element matches what the nodedef declares.
+const sceneInputsFitDef = (def, el) => el.children.every((child) => child.tag !== 'input' || !child.a.name
+    || !child.a.type || !def.inputs.has(child.a.name) || def.inputs.get(child.a.name) === child.a.type);
+
 // USD may preserve color-style output names after an inline separate node is
 // repaired to a vector nodedef. MaterialX vector separates use x/y/z/w names.
 const sceneVectorSeparateOutput = (category, inputType, output) => {
@@ -2862,7 +2927,14 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             // nodedef attribute so no later rule can retype it.
             let pinned = el.a.nodedef ? index.byName.get(el.a.nodedef) : null;
             if (!pinned && !index.categories.has(category)) {
-                const direct = index.byName.get('ND_' + category);
+                // The runtime drops a second type suffix (ND_mix_color3_color3
+                // arrives as mix_color3): when the authored inputs do not fit the
+                // short id, pin the longer id of the same category they all fit.
+                const shortDef = index.byName.get('ND_' + category);
+                const direct = shortDef && !sceneInputsFitDef(shortDef, el)
+                    ? index.defs.find((d) => d.category === shortDef.category
+                        && d.name.startsWith('ND_' + category + '_') && sceneInputsFitDef(d, el)) || shortDef
+                    : shortDef;
                 let target = direct ? direct.category : null;
                 if (!target) {
                     let base = category;
@@ -3481,6 +3553,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 if (u.type !== 'filename' || u.data == null) continue;
                 if (/<UDIM>/i.test(String(u.data))) {
                     const tiles = sceneUdimTiles(u.data, fileMap);
+                    if (!tiles.size) missingFiles.add(String(u.data));
                     tiles.forEach((tile) => { if (tile.substituted) textureStats.ktx2Substituted += 1; });
                     udimRefs.push({ uniform: u, tiles });
                     continue;
@@ -3490,7 +3563,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 // basename or parent prefix: that can bind a duplicate file
                 // from an unrelated layer.
                 const hit = sceneExactFile(fileMap, u.data, '');
-                if (!hit) { warnings.push('Texture file unavailable for ' + label + ': ' + u.data); continue; }
+                if (!hit) { warnings.push('Texture file unavailable for ' + label + ': ' + u.data); missingFiles.add(String(u.data)); continue; }
                 if (hit.substituted) textureStats.ktx2Substituted += 1;
                 const extension = String(hit.path).split('.').pop().toLowerCase();
                 if (UNBOUNDED_TEXTURE_EXTENSIONS.includes(extension)) {
@@ -3713,6 +3786,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             }
             const tileHits = info.udimRefs.map((entry) => entry.tiles.get(code) || null);
             if (tileHits.some((hit) => !hit)) {
+                info.udimRefs.forEach((entry, index) => { if (!tileHits[index]) missingFiles.add(String(entry.uniform.data)); });
                 const warning = 'Missing UDIM tile ' + code + ' for ' + label;
                 if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
                 const fallback = sceneNeutralMaterial(label + ' missing UDIM ' + code);
@@ -6469,7 +6543,9 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             localEnvMap: localEnvEnabled ? localEnvTexture : null, localEnvMips, localEnvStrength, localEnvProbe, localEnvBoxMin, localEnvBoxMax, localEnvParallax,
                     envTilt,
                     thicknessScale, refractionTwoSided: true, sceneRadius,
-                    envRotationRad, envExposure,
+                    // The one environment-lighting switch: u_envLightIntensity and the
+                    // extracted key light both scale by this exposure.
+                    envRotationRad, envExposure: environmentLightingEnabled ? envExposure : 0,
                     environmentIndirectScale: shadowDiagnostic ? shadowDiagnostic.environmentIndirectScale : 1,
                     environmentKeyScale: shadowDiagnostic ? shadowDiagnostic.environmentKeyScale : 1,
                     lightScales: diagnosticLightScales(),
@@ -6651,10 +6727,63 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             linearComposite: true, sceneRgbt: true,
             opaqueOutput: true,
         }) : null;
+        let rawOrbitUpdate = null;
         if (THREE.OrbitControls) {
             controls = new THREE.OrbitControls(camera, canvas);
             controls.enableDamping = true;
+            rawOrbitUpdate = controls.update;
+            // Its input handlers and the frame loop call update(): the first call on a
+            // scene camera releases it, and an authored roll survives the levelling lookAt.
+            controls.update = () => {
+                if (sceneCameraPinned) releaseSceneCameraPin();
+                const changed = rawOrbitUpdate();
+                if (orbitRoll) camera.quaternion.multiply(orbitRoll);
+                return changed;
+            };
         }
+        // Consumes leftover damping so the last orbit's inertia never nudges a newly
+        // applied camera; the caller sets the pose afterwards.
+        const flushOrbitInertia = () => {
+            if (!controls || !rawOrbitUpdate) return;
+            const damping = controls.enableDamping;
+            controls.enableDamping = false;
+            rawOrbitUpdate();
+            controls.enableDamping = damping;
+        };
+        // Exact scene camera clipping: the authored range, with the far plane pushed
+        // out to the studio room while that backdrop shows (the room is not stage content).
+        const applySceneCameraClip = () => {
+            if (!sceneCameraLens) return;
+            const studioScale = environmentBridge && environmentBridge.isStudio && environmentBridge.isStudio()
+                && environmentBridge.getStudioScale ? environmentBridge.getStudioScale() : 0;
+            camera.near = sceneCameraLens.near;
+            camera.far = Math.max(sceneCameraLens.far, studioScale * 36);
+            camera.updateProjectionMatrix();
+        };
+        // Free-orbit clipping once the view leaves a scene camera: the near plane
+        // stays under the dolly-in bound, the far plane reaches the studio room.
+        const applyOrbitClip = () => {
+            const radius = stageBoundsRadius || 1;
+            const studioScale = environmentBridge && environmentBridge.getStudioScale ? environmentBridge.getStudioScale() : 0;
+            camera.near = Math.max(Math.min(camera.near, radius * 0.025), radius / 1000, 0.001);
+            camera.far = Math.max(camera.far, camera.near + 1, lastFrameDistance + radius * 4, studioScale * 36);
+            camera.updateProjectionMatrix();
+        };
+        // First orbit input on a scene camera: the orbit starts from that exact pose,
+        // keeps its roll, and gets the floor clamp once the pose clears the floor.
+        const releaseSceneCameraPin = () => {
+            if (!sceneCameraPinned) return;
+            sceneCameraPinned = false;
+            if (!controls) return;
+            const level = new THREE.PerspectiveCamera();
+            level.up.copy(camera.up);
+            level.position.copy(camera.position);
+            level.lookAt(controls.target);
+            const roll = level.quaternion.invert().multiply(camera.quaternion);
+            orbitRoll = Math.abs(roll.w) < 1 - 1e-12 ? roll : null;
+            applyOrbitClip();
+            applyOrbitLimits();
+        };
         const sceneRoot = new THREE.Group();
         const upAxis = String(stage.upAxis || 'Y').toUpperCase();
         if (upAxis === 'Z') sceneRoot.rotation.x = -Math.PI / 2;
@@ -6676,6 +6805,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
         const buildSceneMeshes = async () => {
             prims.forEach((object) => sceneRoot.remove(object));
             prims.length = 0;
+            selectionState.dirty = true; // outline proxies point at the old geometry
             geometries.forEach((g) => { try { g.dispose(); } catch (e) {} });
             geometries.clear();
             displacementStageTriangleTotal = 0;
@@ -6789,6 +6919,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                         object.userData.primPath = String(record.instanceOwnerPath || record.primPath || '');
                         object.userData.geometryPath = String(record.primPath || '');
                         object.userData.instanceIndex = instanceMatrix ? instanceIndex : undefined;
+                        object.visible = !hiddenPrimPaths.has(object.userData.primPath);
                         object.userData.materialPath = String(record.materialPath || '');
                         object.userData.castsShadow = record.castsShadow !== false;
                         // Fallback albedo source for the diffuse bounce bake
@@ -6909,11 +7040,15 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
         };
         const frameAll = () => {
             // Backdrops/skyboxes are deliberately excluded from framing.
-            // A USD camera may have left a non-default fov/aperture-derived
-            // fov behind; the auto-framing entry always uses the plain 45.
+            // A USD camera may have left its lens behind; the auto-framing
+            // entry always uses the plain 45 and the full orbit clamps.
+            sceneCameraLens = null;
+            sceneCameraPinned = false;
+            orbitRoll = null;
+            orbitFloorClamp = true;
             camera.fov = 45;
             const box = framingBox();
-            if (box.isEmpty()) return;
+            if (box.isEmpty()) { camera.updateProjectionMatrix(); return; }
             const center = box.getCenter(new THREE.Vector3());
             const size = box.getSize(new THREE.Vector3());
             const radius = size.length() * 0.5 || 1;
@@ -6954,10 +7089,10 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             name: String(record.name || record.primPath || ''),
             type: String(record.type || ''),
         }));
-        // Positions the camera/controls rig at a USD camera prim's composed
-        // world pose. Fov is set directly from the aperture/focal length
-        // ratio (setFocalLength assumes the aperture aspect matches the
-        // viewport, which is not true here).
+        // Views through a USD or glTF camera prim exactly: its composed world pose,
+        // the authored aperture, offsets and focal length (fit to the viewport by
+        // camera.updateProjectionMatrix) and its clipping range. Nothing lifts or
+        // clamps it; the orbit target on its view axis only serves a later orbit.
         const applyCamera = (primPath) => {
             selectedCameraPath = primPath || null;
             if (!primPath) { frameAll(); return true; }
@@ -6968,8 +7103,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             const world = new THREE.Matrix4().multiplyMatrices(sceneRoot.matrixWorld, local);
             const position = new THREE.Vector3();
             const quaternion = new THREE.Quaternion();
-            const scale = new THREE.Vector3();
-            world.decompose(position, quaternion, scale);
+            world.decompose(position, quaternion, new THREE.Vector3());
             const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(quaternion).normalize();
             const meters = Number.isFinite(Number(stage.metersPerUnit)) && Number(stage.metersPerUnit) > 0
                 ? Number(stage.metersPerUnit) : 1;
@@ -6984,34 +7118,26 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 distance = Number.isFinite(projected) && projected > 0 ? projected : boxRadius;
             }
             const target = position.clone().add(forward.multiplyScalar(distance));
-            const verticalAperture = Number(record.verticalAperture) || 24;
-            const focalLength = Number(record.focalLength) || 50;
-            camera.fov = 2 * Math.atan(verticalAperture / (2 * focalLength)) * 180 / Math.PI;
-            const clip = Array.isArray(record.clippingRange) ? record.clippingRange : [0.1, 100000];
             if (boxRadius > 0) stageBoundsRadius = boxRadius;
-            const authoredStudioScale = environmentBridge && environmentBridge.getStudioScale
-                ? environmentBridge.getStudioScale() : 0;
-            // An authored near plane can sit past the whole stage (glTF often
-            // exports znear 1 for a metre-scale model), which cuts a hard hole
-            // in the floor at a grazing angle; hold it under the near dolly bound.
-            camera.near = Math.max(Math.min(Number(clip[0]) * meters, boxRadius * 0.025),
-                boxRadius / 1000, 0.001);
-            // The authored far plane may stop short of the studio room, which
-            // the bounded dolly can now pull fully into frame.
-            camera.far = Math.max(Number(clip[1]) * meters, camera.near + 1,
-                distance + boxRadius * 4, authoredStudioScale * 36);
+            const clip = sceneCameraClip(record.clippingRange, meters, boxRadius);
+            sceneCameraLens = {
+                focalLength: Number(record.focalLength),
+                horizontalAperture: Number(record.horizontalAperture),
+                verticalAperture: Number(record.verticalAperture),
+                horizontalApertureOffset: Number(record.horizontalApertureOffset) || 0,
+                verticalApertureOffset: Number(record.verticalApertureOffset) || 0,
+                aspectFromViewport: record.aspectFromViewport === true,
+                near: clip.near, far: clip.far,
+            };
+            orbitRoll = null;
+            orbitFloorClamp = false;
+            flushOrbitInertia();
             camera.position.copy(position);
             camera.quaternion.copy(quaternion);
-            camera.updateProjectionMatrix();
-            if (controls) {
-                controls.target.copy(target);
-                liftCameraAboveStudioFloor();
-                lastFrameDistance = camera.position.distanceTo(controls.target);
-                applyOrbitLimits();
-                controls.update();
-            } else {
-                lastFrameDistance = distance;
-            }
+            applySceneCameraClip();
+            lastFrameDistance = distance;
+            if (controls) { controls.target.copy(target); applyOrbitLimits(); }
+            sceneCameraPinned = true;
             return true;
         };
         const resetCamera = () => { applyCamera(selectedCameraPath); };
@@ -7197,6 +7323,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
         };
         queueDisplayRebuild = () => {
             if (displayRebuildPromise || stopped || !active || !displayDirty || !isMounted()) return displayRebuildPromise;
+            notifyRebuild('materials');
             const scheduledRevision = displayRevision;
             displayRebuildPromise = rebuildDisplayMaterials().catch((error) => {
                 if (rebuildingProvisional) rebuildingProvisional.forEach(disposeMaterial);
@@ -7471,6 +7598,238 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             if (peelPipeline && (!enabled || !anyTransparent)) peelPipeline.dispose();
             renderFrame();
         };
+        // Selection outline: selected meshes render into a supersampled coverage mask
+        // (x-ray, no depth). On a view or selection change an edge pass turns it into an
+        // anti-aliased band plus a soft rim; the rAF loop composites it, captures never do.
+        const SELECTION_MASK_MAX_PIXELS = 16 * 1024 * 1024;
+        const disposeSelectionTarget = () => {
+            [selectionState.target, selectionState.outlineTarget].forEach((target) => {
+                if (target) { try { target.dispose(); } catch (e) {} }
+            });
+            selectionState.target = null;
+            selectionState.outlineTarget = null;
+            selectionState.rect = null;
+            selectionState.key = '';
+        };
+        const rebuildSelectionProxies = () => {
+            if (!selectionState.scene) selectionState.scene = new THREE.Scene();
+            if (!selectionState.maskMaterial) {
+                selectionState.maskMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+                selectionState.maskMaterial.toneMapped = false;
+            }
+            const maskScene = selectionState.scene;
+            while (maskScene.children.length) maskScene.remove(maskScene.children[0]);
+            prims.forEach((object) => {
+                if (!object.visible || !selectionState.paths.has(object.userData.primPath)) return;
+                const proxy = new THREE.Mesh(object.geometry, selectionState.maskMaterial);
+                proxy.matrixAutoUpdate = false;
+                proxy.matrix.copy(object.matrixWorld);
+                proxy.matrixWorld.copy(object.matrixWorld);
+                maskScene.add(proxy);
+            });
+            selectionState.revision = geometryRevision;
+            selectionState.dirty = false;
+            selectionState.key = '';
+        };
+        const ensureSelectionQuad = () => {
+            if (selectionState.quadScene) return;
+            const vertexShader = 'varying vec2 vUv;\nvoid main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
+            // Band = dilated coverage minus own coverage, rim = the next ring out. Taps are
+            // box-filtered one pixel along each of 16 directions, so both edges get a soft ramp.
+            selectionState.quadMaterial = new THREE.ShaderMaterial({
+                uniforms: {
+                    tMask: { value: null },
+                    uPx: { value: new THREE.Vector2(1, 1) },
+                    uWidth: { value: 2 },
+                    uRim: { value: 1 },
+                    uColor: { value: new THREE.Vector3(0.376, 0.647, 0.980) }, // blue-400, the site's selection accent
+                },
+                vertexShader,
+                fragmentShader: [
+                    'uniform sampler2D tMask;',
+                    'uniform vec2 uPx;',
+                    'uniform float uWidth;',
+                    'uniform float uRim;',
+                    'uniform vec3 uColor;',
+                    'varying vec2 vUv;',
+                    'float cov(vec2 uv) { return texture2D(tMask, uv).r; }',
+                    'float covAt(vec2 dir, float r) { return 0.5 * (cov(vUv + dir * (r - 0.25)) + cov(vUv + dir * (r + 0.25))); }',
+                    'void main() {',
+                    '    vec2 q = uPx * 0.25;',
+                    '    float own = 0.25 * (cov(vUv - q) + cov(vUv + q) + cov(vUv + vec2(q.x, -q.y)) + cov(vUv + vec2(-q.x, q.y)));',
+                    '    if (own > 0.999) discard;',
+                    '    float band = 0.0;',
+                    '    float outer = 0.0;',
+                    '    for (int i = 0; i < 16; i++) {',
+                    '        float a = float(i) * 0.39269908;',
+                    '        vec2 dir = vec2(cos(a), sin(a)) * uPx;',
+                    '        band = max(band, max(covAt(dir, uWidth), cov(vUv + dir * uWidth * 0.5)));',
+                    '        outer = max(outer, covAt(dir, uWidth + uRim));',
+                    '    }',
+                    '    band = max(band, own);',
+                    '    float fill = clamp(band - own, 0.0, 1.0);',
+                    '    float rim = clamp(max(outer, band) - band, 0.0, 1.0) * 0.55;',
+                    '    float alpha = fill + rim;',
+                    '    if (alpha < 0.002) discard;',
+                    '    gl_FragColor = vec4(uColor * fill, alpha);',
+                    '}',
+                ].join('\n'),
+                depthTest: false, depthWrite: false,
+            });
+            selectionState.quadMaterial.toneMapped = false;
+            // Premultiplied over the finished frame, one tap per pixel.
+            selectionState.compositeMaterial = new THREE.ShaderMaterial({
+                uniforms: { tOutline: { value: null } },
+                vertexShader,
+                fragmentShader: 'uniform sampler2D tOutline;\nvarying vec2 vUv;\nvoid main() { gl_FragColor = texture2D(tOutline, vUv); }',
+                transparent: true, depthTest: false, depthWrite: false,
+                blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+                blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+                blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
+            });
+            selectionState.compositeMaterial.toneMapped = false;
+            const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), selectionState.quadMaterial);
+            quad.frustumCulled = false;
+            selectionState.quad = quad;
+            selectionState.quadScene = new THREE.Scene();
+            selectionState.quadScene.add(quad);
+            selectionState.quadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        };
+        // Drawing-buffer rect covering the selected proxies plus the outline margin;
+        // the whole buffer when a box crosses the near plane.
+        const selectionCorner = new THREE.Vector3();
+        const selectionScreenRect = (width, height, margin) => {
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const proxy of selectionState.scene.children) {
+                const geometry = proxy.geometry;
+                if (!geometry.boundingBox) geometry.computeBoundingBox();
+                const box = geometry.boundingBox;
+                for (let i = 0; i < 8; i++) {
+                    selectionCorner.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z)
+                        .applyMatrix4(proxy.matrixWorld).applyMatrix4(camera.matrixWorldInverse);
+                    if (camera.isPerspectiveCamera && -selectionCorner.z <= camera.near) return { x: 0, y: 0, w: width, h: height };
+                    selectionCorner.applyMatrix4(camera.projectionMatrix);
+                    minX = Math.min(minX, selectionCorner.x); maxX = Math.max(maxX, selectionCorner.x);
+                    minY = Math.min(minY, selectionCorner.y); maxY = Math.max(maxY, selectionCorner.y);
+                }
+            }
+            if (!(maxX >= minX) || !(maxY >= minY)) return null;
+            const x0 = Math.max(0, Math.floor((minX * 0.5 + 0.5) * width) - margin);
+            const y0 = Math.max(0, Math.floor((minY * 0.5 + 0.5) * height) - margin);
+            const x1 = Math.min(width, Math.ceil((maxX * 0.5 + 0.5) * width) + margin);
+            const y1 = Math.min(height, Math.ceil((maxY * 0.5 + 0.5) * height) + margin);
+            return x1 > x0 && y1 > y0 ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
+        };
+        const selectionBufferSize = new THREE.Vector2();
+        const selectionClearColor = new THREE.Color();
+        const selectionScissor = new THREE.Vector4();
+        const drawSelectionOverlay = () => {
+            if (!selectionState.paths.size || captureState || stopped || !active) return;
+            if (selectionState.dirty || selectionState.revision !== geometryRevision) rebuildSelectionProxies();
+            if (!selectionState.scene.children.length) return;
+            renderer.getDrawingBufferSize(selectionBufferSize);
+            const width = Math.max(1, Math.floor(selectionBufferSize.x));
+            const height = Math.max(1, Math.floor(selectionBufferSize.y));
+            // 2x2 supersampled mask unless the buffer is already huge (then the taps filter it).
+            const maskScale = width * height * 4 <= SELECTION_MASK_MAX_PIXELS ? 2 : 1;
+            const maskWidth = width * maskScale;
+            const maskHeight = height * maskScale;
+            if (!selectionState.target) {
+                selectionState.target = new THREE.WebGLRenderTarget(maskWidth, maskHeight, {
+                    format: THREE.RedFormat, type: THREE.UnsignedByteType,
+                    minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, stencilBuffer: false,
+                });
+                selectionState.target.texture.generateMipmaps = false;
+            } else if (selectionState.target.width !== maskWidth || selectionState.target.height !== maskHeight) {
+                selectionState.target.setSize(maskWidth, maskHeight);
+                selectionState.key = '';
+            }
+            if (!selectionState.outlineTarget) {
+                selectionState.outlineTarget = new THREE.WebGLRenderTarget(width, height, {
+                    minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: false, stencilBuffer: false,
+                });
+                selectionState.outlineTarget.texture.generateMipmaps = false;
+            } else if (selectionState.outlineTarget.width !== width || selectionState.outlineTarget.height !== height) {
+                selectionState.outlineTarget.setSize(width, height);
+                selectionState.key = '';
+            }
+            ensureSelectionQuad();
+            const ratio = renderer.getPixelRatio();
+            // The mask and edge pass are only redrawn when the view or the selection changed.
+            const key = width + 'x' + height + '@' + ratio + ':' + camera.matrixWorld.elements.join(',') + ':' + camera.projectionMatrix.elements.join(',');
+            const perfGl = scenePerf ? renderer.getContext() : null;
+            const previousTarget = renderer.getRenderTarget();
+            const previousAutoClear = renderer.autoClear;
+            const previousScissorTest = renderer.getScissorTest();
+            renderer.getScissor(selectionScissor);
+            renderer.getClearColor(selectionClearColor);
+            const previousClearAlpha = renderer.getClearAlpha();
+            renderer.autoClear = false;
+            try {
+                let edgeMs = null;
+                if (key !== selectionState.key) {
+                    const startedAt = perfGl ? (perfGl.finish(), performance.now()) : 0;
+                    renderer.setClearColor(0x000000, 0);
+                    renderer.setRenderTarget(selectionState.target);
+                    renderer.clear(true, false, false);
+                    renderer.render(selectionState.scene, camera);
+                    const band = 2 * ratio;
+                    const rim = ratio;
+                    const outline = selectionState.outlineTarget;
+                    outline.scissorTest = false;
+                    renderer.setRenderTarget(outline);
+                    renderer.clear(true, false, false);
+                    selectionState.rect = selectionScreenRect(width, height, Math.ceil(band + rim + 2));
+                    if (selectionState.rect) {
+                        const rect = selectionState.rect;
+                        outline.scissor.set(rect.x, rect.y, rect.w, rect.h);
+                        outline.scissorTest = true;
+                        renderer.setRenderTarget(outline);
+                        const uniforms = selectionState.quadMaterial.uniforms;
+                        uniforms.tMask.value = selectionState.target.texture;
+                        uniforms.uPx.value.set(1 / width, 1 / height);
+                        uniforms.uWidth.value = band;
+                        uniforms.uRim.value = rim;
+                        selectionState.quad.material = selectionState.quadMaterial;
+                        renderer.render(selectionState.quadScene, selectionState.quadCamera);
+                        outline.scissorTest = false;
+                    }
+                    selectionState.key = key;
+                    if (perfGl) { perfGl.finish(); edgeMs = performance.now() - startedAt; }
+                }
+                const rect = selectionState.rect;
+                if (rect) {
+                    const startedAt = perfGl ? (perfGl.finish(), performance.now()) : 0;
+                    renderer.setRenderTarget(null);
+                    renderer.setScissor(rect.x / ratio, rect.y / ratio, rect.w / ratio, rect.h / ratio);
+                    renderer.setScissorTest(true);
+                    selectionState.compositeMaterial.uniforms.tOutline.value = selectionState.outlineTarget.texture;
+                    selectionState.quad.material = selectionState.compositeMaterial;
+                    renderer.render(selectionState.quadScene, selectionState.quadCamera);
+                    if (perfGl) {
+                        perfGl.finish();
+                        const previous = selectionState.perf || {};
+                        selectionState.perf = { edgeMs: edgeMs != null ? edgeMs : previous.edgeMs, compositeMs: performance.now() - startedAt, maskScale, rect: { ...rect }, width, height };
+                    }
+                }
+            } finally {
+                renderer.setScissorTest(previousScissorTest);
+                renderer.setScissor(selectionScissor);
+                renderer.setRenderTarget(previousTarget);
+                renderer.autoClear = previousAutoClear;
+                renderer.setClearColor(selectionClearColor, previousClearAlpha);
+            }
+        };
+        const disposeSelectionResources = () => {
+            disposeSelectionTarget();
+            if (selectionState.scene) { while (selectionState.scene.children.length) selectionState.scene.remove(selectionState.scene.children[0]); }
+            [selectionState.maskMaterial, selectionState.quadMaterial, selectionState.compositeMaterial].forEach((material) => {
+                if (material) { try { material.dispose(); } catch (e) {} }
+            });
+            if (selectionState.quadScene) selectionState.quadScene.traverse((o) => { if (o.geometry) { try { o.geometry.dispose(); } catch (e) {} } });
+            selectionState.maskMaterial = null; selectionState.quadMaterial = null; selectionState.compositeMaterial = null;
+            selectionState.quadScene = null; selectionState.quad = null;
+        };
         const render = () => {
             if (stopped || !active) { raf = 0; return; }
             // Perf-gated frame timing: the first 120 frames after the scene is
@@ -7487,8 +7846,10 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             if (window.MTLX_CLOCK && typeof window.clockTick === 'function') window.clockTick(performance.now());
             if (environmentBridge && environmentBridge.update) environmentBridge.update();
             applyOrbitLimits();
-            if (controls) controls.update();
+            // An exact scene camera is left alone until orbit input (or auto-rotate) arrives.
+            if (controls && (!sceneCameraPinned || controls.autoRotate)) controls.update();
             renderFrame();
+            try { drawSelectionOverlay(); } catch (e) { selectionState.paths = new Set(); console.warn('[usd-scene] selection outline disabled', e); }
             raf = requestAnimationFrame(render);
         };
         const startLoop = () => { if (!raf && !stopped && active) render(); };
@@ -7798,11 +8159,63 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             applyMaterialEnvironment();
             return stageLightsEv;
         };
+        // Outliner eye toggles: replaces the hidden set, then refreshes exactly
+        // like setStageLightsEnabled (shadow atlas and lighting, no recompile).
+        const setHiddenLights = (paths) => {
+            const next = new Set((Array.isArray(paths) ? paths : []).map(String));
+            const changed = next.size !== hiddenLightPaths.size || Array.from(next).some((path) => !hiddenLightPaths.has(path));
+            if (!changed) return hiddenLightPaths.size;
+            hiddenLightPaths.clear();
+            next.forEach((path) => hiddenLightPaths.add(path));
+            if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
+            applyMaterialEnvironment();
+            return hiddenLightPaths.size;
+        };
         const getStageLights = () => ({
             count: stageLights.length,
             enabled: stageLightsEnabled,
             ev: stageLightsEv,
+            hidden: Array.from(hiddenLightPaths),
+            active: (activeStageLights() || []).length,
         });
+        // The environment row's eye; refreshes like setStageLightsEnabled.
+        const setEnvironmentLightingEnabled = (on) => {
+            const next = on !== false;
+            if (next === environmentLightingEnabled) return environmentLightingEnabled;
+            environmentLightingEnabled = next;
+            if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
+            applyMaterialEnvironment();
+            return environmentLightingEnabled;
+        };
+        // The light info popover: what the renderer made of one stage light
+        // (samples, delivered energy, pose, shadow casting), read-only.
+        const getStageLightDetails = (primPath) => {
+            const path = String(primPath || '');
+            const samples = stageLights.filter((light) => (light.emitter || light).primPath === path);
+            const first = samples[0] || null;
+            const source = first ? (first.emitter || first) : null;
+            const vector = (v) => (v && Number.isFinite(v.x) ? [v.x, v.y, v.z] : null);
+            const types = { 1: 'distant', 2: 'point', 3: 'spot' };
+            return {
+                primPath: path,
+                converted: samples.length > 0,
+                samples: samples.length,
+                kind: first ? (types[first.type] || '') : '',
+                area: !!(first && Number(first.sourceKind) === 1),
+                intensity: source ? Number(source.intensity) || 0 : 0,
+                gain: Math.pow(2, stageLightsEv),
+                color: vector(first && first.color),
+                position: vector(source && source.position),
+                direction: vector(source && source.direction),
+                // The converter stores cone cosines (usd-scene-lights.js coneOf).
+                coneInnerDeg: first && Number.isFinite(first.inner_angle) ? Math.acos(Math.min(1, first.inner_angle)) * 180 / Math.PI : null,
+                coneOuterDeg: first && Number.isFinite(first.outer_angle) ? Math.acos(Math.min(1, first.outer_angle)) * 180 / Math.PI : null,
+                hidden: hiddenLightPaths.has(path),
+                enabled: stageLightsEnabled,
+                shadows: shadowsEnabled,
+                castsShadows: shadowsEnabled && (shadowCasters || []).some((built) => built && built.rec && built.rec.key === path),
+            };
+        };
         const setEnvExposure = (value) => {
             envExposure = Math.max(0, Number(value) || 0);
             if (environmentBridge && environmentBridge.setEnvExposure) environmentBridge.setEnvExposure(envExposure);
@@ -7879,7 +8292,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 report({ phase: 'geometry', status: 'error', error: detail });
             },
         });
-        const requestSceneRebuild = () => sceneRebuildQueue.request();
+        const requestSceneRebuild = () => { notifyRebuild('geometry'); return sceneRebuildQueue.request(); };
         const getDisplacementSubdivisionOverride = () => displacementSubdivisionOverride;
         // Changes the Scene's own displacement-subdivision override and
         // rebuilds through requestSceneRebuild (never the plain Subdivision
@@ -7955,6 +8368,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
         }
         const handle = {
             scene, camera, renderer, controls, prims, warnings, textureStats,
+            get missingFiles() { return Array.from(missingFiles); },
             udimStats: {
                 tileSize: sceneOptions.udimTileSize,
                 maxTiles: sceneOptions.udimMaxTiles,
@@ -7964,7 +8378,19 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             },
             resize, frameAll,
             getCameras, applyCamera, resetCamera, getDomeLight, getLights, applyDomeLight,
+            // Camera state for tests and diagnostics: the applied camera, whether the view is
+            // still exactly on it, and the studio floor the orbit clamp keeps the eye above.
+            getCameraState: () => ({
+                cameraPath: selectedCameraPath,
+                exact: sceneCameraPinned,
+                lens: sceneCameraLens ? Object.assign({}, sceneCameraLens) : null,
+                floorClamp: !!(orbitFloorClamp && studioPolarApplied),
+                floorY: environmentBridge && environmentBridge.getFloorY ? environmentBridge.getFloorY() : null,
+                floorClearance: environmentBridge && environmentBridge.getFloorClearance ? environmentBridge.getFloorClearance() : 0,
+            }),
             setStageLightsEnabled, setStageLightsEv, getStageLights,
+            setHiddenLights, getHiddenLights: () => Array.from(hiddenLightPaths), getStageLightDetails,
+            setEnvironmentLightingEnabled, getEnvironmentLightingEnabled: () => environmentLightingEnabled,
             setShadowsEnabled, getShadows, setShadowDiagnostic, getShadowDiagnostic, getTransparentPrims,
             setAmbientOcclusionEnabled, setAmbientOcclusionStrength, getAmbientOcclusion,
             setSceneBounceEnabled, setSceneBounceStrength, getSceneBounce,
@@ -8017,6 +8443,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             setBackdrop: (mode) => {
                 const result = environmentBridge && environmentBridge.setBackdrop ? environmentBridge.setBackdrop(mode) : mode;
                 applyOrbitLimits();
+                if (sceneCameraPinned) applySceneCameraClip();
                 return result;
             },
             getBackdrop: () => environmentBridge && environmentBridge.getBackdrop ? environmentBridge.getBackdrop() : 'studio',
@@ -8036,6 +8463,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                     disposeSsrHistoryResources();
                     disposeThicknessResources();
                     disposeOpaqueDepthProbe();
+                    disposeSelectionTarget();
                     if (peelPipeline) { try { peelPipeline.dispose(); } catch (e) {} }
                     if (presentationPipeline) {
                         const settings = presentationPipeline.getSettings();
@@ -8076,6 +8504,46 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 },
             }),
             selectPrim: (primPath) => prims.find((o) => o.userData.primPath === primPath) || null,
+            // Outliner visibility: replaces the hidden set (userData.primPath
+            // values). Hidden prims leave every pass and pickAt; kept across rebuilds.
+            setHiddenPrims: (paths) => {
+                hiddenPrimPaths.clear();
+                (Array.isArray(paths) ? paths : []).forEach((path) => hiddenPrimPaths.add(String(path)));
+                let hidden = 0;
+                prims.forEach((object) => {
+                    object.visible = !hiddenPrimPaths.has(object.userData.primPath);
+                    if (!object.visible) hidden += 1;
+                });
+                shadowCameraKey = ''; // re-fit the shadow atlas without the hidden casters
+                markLocalEnvDirty();
+                selectionState.dirty = true;
+                return hidden;
+            },
+            getHiddenPrims: () => Array.from(hiddenPrimPaths),
+            // Outliner selection: outlines every visible mesh of these prim
+            // paths in the viewport; an empty list clears it.
+            setHighlightedPrims: (paths) => {
+                selectionState.paths = new Set((Array.isArray(paths) ? paths : []).map(String));
+                selectionState.dirty = true;
+                if (!selectionState.paths.size) disposeSelectionTarget();
+                return prims.filter((o) => o.visible && selectionState.paths.has(o.userData.primPath)).length;
+            },
+            // Test hook: what the outline currently covers.
+            getHighlightState: () => {
+                const objects = prims.filter((o) => o.visible && selectionState.paths.has(o.userData.primPath));
+                return {
+                    paths: Array.from(selectionState.paths), meshIds: objects.map((o) => o.id), meshCount: objects.length,
+                    maskAllocated: !!selectionState.target, maskScale: selectionState.target ? selectionState.target.width / Math.max(1, selectionState.outlineTarget ? selectionState.outlineTarget.width : selectionState.target.width) : 0,
+                    rect: selectionState.rect ? { ...selectionState.rect } : null, perf: selectionState.perf ? { ...selectionState.perf } : null,
+                };
+            },
+            // Subscribes to rebuild starts ('materials' or 'geometry'); returns
+            // the unsubscribe function.
+            onRebuild: (listener) => {
+                if (typeof listener !== 'function') return () => {};
+                rebuildListeners.add(listener);
+                return () => rebuildListeners.delete(listener);
+            },
             // Module-level SCENE_COMPILE_CACHE stats (shared across every
             // view/reload, not just this one), for probes and diagnostics.
             getCompileCacheStats: () => {
@@ -8152,16 +8620,21 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                     position: [camera.position.x, camera.position.y, camera.position.z].map(r4),
                     target: [controls.target.x, controls.target.y, controls.target.z].map(r4),
                     cameraPath: selectedCameraPath,
+                    // True while the view is still exactly the scene camera at cameraPath.
+                    exact: sceneCameraPinned,
                 };
             },
             // Applies a saved pose from getCamera(); invalid input is
             // silently ignored, same validation as the shader-preview handle.
+            // An exact pose of the selected scene camera re-applies that camera.
             setCamera: (pose) => {
                 if (!controls || !pose) return false;
                 const isVec3 = (v) => Array.isArray(v) && v.length === 3
                     && v.every((n) => typeof n === 'number' && isFinite(n));
                 if (pose.position !== undefined && !isVec3(pose.position)) return false;
                 if (pose.target !== undefined && !isVec3(pose.target)) return false;
+                if (pose.exact === true && pose.cameraPath && pose.cameraPath === selectedCameraPath) return applyCamera(pose.cameraPath);
+                releaseSceneCameraPin();
                 if (pose.position) camera.position.set(pose.position[0], pose.position[1], pose.position[2]);
                 if (pose.target) controls.target.set(pose.target[0], pose.target[1], pose.target[2]);
                 controls.update();
@@ -8246,6 +8719,8 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 if (stopped) return;
                 stopped = true;
                 sceneRebuildQueue.cancel();
+                rebuildListeners.clear();
+                disposeSelectionResources();
                 disposeShadowResources();
                 disposeAoResources();
                 disposePrepassResources();

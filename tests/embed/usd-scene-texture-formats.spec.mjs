@@ -16,9 +16,19 @@ function fixtureFile(relativePath) {
   return { name: relativePath, mimeType: 'text/plain', buffer: fs.readFileSync(path.join(fixtureRoot, relativePath)) };
 }
 
+// The viewport hint pill is a DOM overlay inside the canvas box; keep it out of the colour means.
+const HIDE_HINT_PILL = '[data-testid="usd-scene-hint-pill"] { visibility: hidden !important; }';
+
 const TIF_RGB = [200, 60, 30];
 const EXR_RGBA = [0.2, 0.6, 0.9, 1.0];
 const EXR_RGB_255 = EXR_RGBA.slice(0, 3).map((v) => Math.round(v * 255));
+
+// The Backdrop select lives in the sidebar's Scene section.
+async function setBackdropNone(page) {
+  await page.getByTestId('usd-scene-backdrop-select').getByRole('combobox').click();
+  await page.getByRole('option', { name: 'None', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__mtlxUsdSceneHandle.getBackdrop())).toBe('none');
+}
 
 function meanOfRegion(png, x0, x1, y0, y1, bg) {
   let sumR = 0, sumG = 0, sumB = 0, count = 0;
@@ -50,14 +60,11 @@ test('@scene EXR and TIF ordinary textures decode instead of falling back to the
   expect(warningsText).not.toContain('does not decode');
   expect(warningsText).not.toContain('PNG/JPEG tiles only');
 
-  const sidebar = page.getByTestId('usd-scene-sidebar');
-  const backdrop = sidebar.getByRole('combobox').last();
-  await backdrop.click();
-  await page.getByRole('option', { name: 'None', exact: true }).click();
+  await setBackdropNone(page);
   await page.waitForTimeout(150);
 
   const canvas = page.getByTestId('usd-scene-canvas').locator('canvas');
-  const png = decodePNG(await canvas.screenshot());
+  const png = decodePNG(await canvas.screenshot({ style: HIDE_HINT_PILL }));
   const bg = png.getPixel(0, 0);
 
   const leftMean = meanOfRegion(png, 0, Math.floor(png.width / 2), 0, png.height, bg);
@@ -91,14 +98,11 @@ test('@scene old-Deflate (compression 32946) TIF decodes its color', async ({ pa
   const warningsText = (await page.getByTestId('usd-material-warnings').allTextContents()).join('\n');
   expect(warningsText).not.toContain('TIF decode unsupported');
 
-  const sidebar = page.getByTestId('usd-scene-sidebar');
-  const backdrop = sidebar.getByRole('combobox').last();
-  await backdrop.click();
-  await page.getByRole('option', { name: 'None', exact: true }).click();
+  await setBackdropNone(page);
   await page.waitForTimeout(150);
 
   const canvas = page.getByTestId('usd-scene-canvas').locator('canvas');
-  const png = decodePNG(await canvas.screenshot());
+  const png = decodePNG(await canvas.screenshot({ style: HIDE_HINT_PILL }));
   const bg = png.getPixel(0, 0);
   const leftMean = meanOfRegion(png, 0, Math.floor(png.width / 2), 0, png.height, bg);
   expect(leftMean).toBeTruthy();
@@ -123,14 +127,11 @@ test('@scene a TIF with an unsupported compression code warns instead of renderi
   const warningsText = (await page.getByTestId('usd-material-warnings').allTextContents()).join('\n');
   expect(warningsText).toContain('TIF decode unsupported');
 
-  const sidebar = page.getByTestId('usd-scene-sidebar');
-  const backdrop = sidebar.getByRole('combobox').last();
-  await backdrop.click();
-  await page.getByRole('option', { name: 'None', exact: true }).click();
+  await setBackdropNone(page);
   await page.waitForTimeout(150);
 
   const canvas = page.getByTestId('usd-scene-canvas').locator('canvas');
-  const png = decodePNG(await canvas.screenshot());
+  const png = decodePNG(await canvas.screenshot({ style: HIDE_HINT_PILL }));
   const leftPixel = png.getPixel(Math.floor(png.width / 4), Math.floor(png.height / 2));
   expect(leftPixel.r > 5 || leftPixel.g > 5 || leftPixel.b > 5).toBe(true);
 });
@@ -151,6 +152,9 @@ const UDIM_TILE_1001_RGB = [220, 40, 40];
 const UDIM_TILE_1002_RGB = [40, 200, 60];
 
 test('@scene UDIM TIF tiles follow the texture resolution tier and shared budget', async ({ page, embedURL }) => {
+  // The shaded colour means depend on framing: the web footer strip made the canvas 29 px
+  // shorter and moved the red mean from 28.7 to 30.7 off; pin the canvas size.
+  await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto(embedURL + '/index.html#!scene');
   await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
 
@@ -166,14 +170,11 @@ test('@scene UDIM TIF tiles follow the texture resolution tier and shared budget
   const warningsText = (await page.getByTestId('usd-material-warnings').allTextContents()).join('\n');
   expect(warningsText).not.toContain('budget');
 
-  const sidebar = page.getByTestId('usd-scene-sidebar');
-  const backdrop = sidebar.getByRole('combobox').last();
-  await backdrop.click();
-  await page.getByRole('option', { name: 'None', exact: true }).click();
+  await setBackdropNone(page);
   await page.waitForTimeout(150);
 
   const canvas = page.getByTestId('usd-scene-canvas').locator('canvas');
-  const png = decodePNG(await canvas.screenshot());
+  const png = decodePNG(await canvas.screenshot({ style: HIDE_HINT_PILL }));
   const bg = png.getPixel(0, 0);
   const leftMean = meanOfRegion(png, 0, Math.floor(png.width / 2), 0, png.height, bg);
   const rightMean = meanOfRegion(png, Math.floor(png.width / 2), png.width, 0, png.height, bg);

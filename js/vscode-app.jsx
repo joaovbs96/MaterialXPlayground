@@ -46,7 +46,7 @@ const VSCODE_FEATURES = [
     { icon: 'external-link', title: 'Node Library Documentation panel', desc: 'Browse the whole node library without a file open, from the Command Palette or a .mtlx context menu. Hover deep-links land on the exact node and signature. Its 3D previews start switched off to keep the webview light.' },
     { icon: 'folder', title: 'Textures load straight from disk', desc: (<>Sibling textures and <code className={CODE_CLASS}>{'xi:include'}</code> documents are found automatically, including large 4K and 8K textures. References must stay inside the workspace folder that contains the document.</>) },
     { icon: 'file-plus', title: 'New Material from Example', desc: 'Copies one of 14 ready-made materials, four from the Playground and ten from the MaterialX examples, into your workspace along with any textures it needs, then opens it.' },
-    { icon: 'cube', title: 'USD Scene Viewer', tag: 'Read only', desc: 'Open .usd, .usda, .usdc and .usdz files: sublayers, references, payloads, and the MaterialX materials and textures they use load straight from the workspace.' },
+    { icon: 'cube', title: 'Scene Viewer', tag: 'Read only', desc: 'Open .usd, .usda, .usdc, .usdz, .gltf, .glb and .obj files: sublayers, references, payloads, buffers, materials, and the MaterialX materials and textures they use load straight from the workspace.' },
 ];
 
 // Three equal-width cards below the install steps.
@@ -98,7 +98,7 @@ const VSCODE_SETTINGS = [
     {
         setting: 'materialxPlayground.autoOpenSceneViewer',
         values: (<>true <span className="text-gray-500 text-xs font-mono">(default)</span>, false</>),
-        desc: 'Automatically open the USD Scene Viewer whenever a USD scene file is opened: beside the text editor for a file VS Code opens as text, or replacing the tab for a file VS Code shows as binary. Fires once per file open.',
+        desc: 'Automatically open the Scene Viewer whenever a USD, glTF, GLB or OBJ scene file is opened: beside the text editor for a file VS Code opens as text, or replacing the tab for a file VS Code shows as binary. Fires once per file open.',
     },
 ];
 
@@ -111,7 +111,7 @@ const VSCODE_LIMITS = [
     { title: 'Some web-app UI is hidden', desc: 'Home, New/Import/Presets, drag-and-drop, the Viewer\'s file sidebar, and Send-to buttons do not apply to a single open file, so the webview hides them. The Docs tab is replaced by the separate docs command.' },
     { title: 'Memory scales with open tabs', desc: 'Each open .mtlx tab is its own webview with its own MaterialX WASM instance and WebGL context, kept alive while backgrounded so switching tabs is instant. The first shader compile after opening a file can take a few seconds while the WASM build warms up.' },
     { title: 'Semantic squiggle positions are best-effort', desc: 'MaterialX validate() reports messages without character offsets, so the extension places each squiggle by locating the named element in the text. Very large documents and ones using xi:include get XML checks only.' },
-    { title: 'USD Scene Viewer limits', desc: 'Read only, shows the opened file only, and loads at most 4,000 referenced files up to 4 GiB. Graph edits to a material from a USD scene cannot be saved back into the USD file; use Export .mtlx instead.' },
+    { title: 'Scene Viewer limits', desc: 'Read only, shows the opened file only, and loads at most 4,000 referenced files up to 4 GiB. Graph edits to a material from a scene cannot be saved back into the scene file; use Export .mtlx instead.' },
 ];
 
 // "Requirements and privacy" items, all sharing the green check icon.
@@ -479,7 +479,8 @@ function VscodeApp({ active } = {}) {
                                 <p className="text-sm leading-[21px] text-gray-400">
                                     The Playground opens beside the text editor automatically (setting <code className={CODE_CLASS}>materialxPlayground.autoOpenPlayground</code>).
                                     If it does not, right-click the file and choose <strong className={STRONG_CLASS}>Open With... {'→'} MaterialX Playground</strong>,
-                                    or run <strong className={STRONG_CLASS}>MaterialX Playground: Open MaterialX Document</strong> from the Command
+                                    or run <strong className={STRONG_CLASS}>MaterialX Playground: Open in Graph Editor</strong> or
+                                    <strong className={STRONG_CLASS}> Open in Material Viewer</strong> from the Command
                                     Palette (<Kbd>Ctrl</Kbd>+<Kbd>Shift</Kbd>+<Kbd>P</Kbd>).
                                 </p>
                             </div>

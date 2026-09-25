@@ -335,6 +335,61 @@
         };
     }
 
+    // Test transport only: js/shell.jsx's AboutDialog calls this once its
+    // license fetch settles, forwarded as 'mtlx-test-about'.
+    if (isTransportTest) {
+        window.__mtlxAboutReport = function (report) {
+            if (vscodeApi) vscodeApi.postMessage({ type: 'mtlx-test-about', report: report });
+        };
+    }
+
+    // Test-transport only: opens the About dialog the same way the header
+    // help button does, so the license fetch (and __mtlxAboutReport above)
+    // runs through the real, unmodified site code path.
+    function handleTestTriggerAbout(msg) {
+        if (!isTransportTest) return;
+        window.dispatchEvent(new CustomEvent('mtlx-about'));
+    }
+
+    // 'mtlx-switch-view': the extension host asking an ALREADY-OPEN
+    // playground tab to switch to a different view, posted by
+    // editorProvider.js's openInGraphEditor/openInMaterialViewer command
+    // handlers (extension.js) when they find and reuse an existing panel
+    // for the target file instead of opening a new one. The site itself
+    // routes views entirely off location.hash (js/shell.jsx), so this is
+    // just that.
+    function handleSwitchView(msg) {
+        if (typeof msg.hash === 'string' && msg.hash) location.hash = msg.hash;
+    }
+
+    // Test-transport only: reports the webview's current location.hash,
+    // so the openViewCommands smoke scenario can prove
+    // openInGraphEditor/openInMaterialViewer actually switched the
+    // visible view (including the reuse-an-open-tab case above).
+    function handleTestTriggerViewHash(msg) {
+        if (!isTransportTest || !vscodeApi) return;
+        vscodeApi.postMessage({ type: 'mtlx-test-view-hash', hash: location.hash });
+    }
+
+    // Test-transport only: reports document.body's COMPUTED padding/margin
+    // (getComputedStyle, not the stylesheet rule) -- the fullWidth smoke
+    // scenario's proof that the reset in scripts/build-webview.mjs's
+    // FOCUS_CSS_BLOCK actually beats VS Code's injected default webview
+    // styles in the real, running webview.
+    function handleTestTriggerFullWidth(msg) {
+        if (!isTransportTest || !vscodeApi) return;
+        var style = window.getComputedStyle(document.body);
+        vscodeApi.postMessage({
+            type: 'mtlx-test-full-width',
+            report: {
+                paddingLeft: style.paddingLeft,
+                paddingRight: style.paddingRight,
+                marginLeft: style.marginLeft,
+                marginRight: style.marginRight,
+            },
+        });
+    }
+
     // Test transport only: recent console warnings/errors, CSP violations and
     // failed resource loads, attached to the material preview report below.
     var testLog = [];
@@ -731,25 +786,248 @@
         });
     }
 
-    // 'mtlx-open-scene': sceneProvider.js posts { root, name, fileUrls, mtimes }
-    // for a USD stage (initial load and every watched change). Every file is
-    // fetched here and handed to js/usd-scene-app.jsx as File objects whose
+    // ------------------------------------------------------------------
+    // Scene Viewer loads (sceneProvider.js has the protocol). One open or
+    // reload is a host seq; on-demand rounds resend the set with the same
+    // seq and a higher round. Progress reaches js/usd-scene-app.jsx as
+    // 'mtlx-scene-host-progress' events, files as 'mtlx-load-scene'.
+    var scene = { seq: 0, round: 0, cancelled: false, token: 0, controller: null };
+    // url (with its ?v=mtime-size buster) -> { promise, blob, loaded }: each
+    // file is fetched once and reused across rounds and file-change reloads.
+    var sceneBlobs = {};
+    var SCENE_FETCH_CONCURRENCY = 6;
+    var SCENE_STREAM_MAX_BYTES = 256 * 1024 * 1024; // larger files skip byte-level progress
+    var sceneFetchStats = { started: 0, completed: 0, aborted: 0, inFlight: 0, bytes: 0 };
+    // Test transport only: ms to pause between streamed chunks in
+    // fetchSceneBlob's pump(), set from 'mtlx-open-scene's throttleMs field
+    // (editorProvider.js's testApi.setSceneFetchThrottle, stamped on by
+    // sceneProvider.js). Zero outside test mode, and isTransportTest also
+    // gates the pump() check itself, so this is inert for a real user.
+    var sceneFetchThrottleMs = 0;
+    var pendingSceneMissing = {}; // requestId -> resolve
+    var nextSceneMissingId = 1;
+
+    function emitSceneProgress(detail) {
+        window.__mtlxSceneHostProgress = detail; // read by a view that mounts late
+        window.dispatchEvent(new CustomEvent('mtlx-scene-host-progress', { detail: detail }));
+    }
+
+    // False for a message from an older seq, or for the seq the user cancelled.
+    function adoptSceneSeq(seq) {
+        if (typeof seq !== 'number') return !scene.cancelled;
+        if (seq < scene.seq) return false;
+        if (seq > scene.seq) {
+            scene.seq = seq;
+            scene.round = 0;
+            scene.cancelled = false;
+        }
+        return !scene.cancelled;
+    }
+
+    function handleSceneProgress(msg) {
+        if (!adoptSceneSeq(msg.seq)) return;
+        emitSceneProgress({ seq: msg.seq, round: 0, phase: 'collect', found: Number(msg.found) || 0, bytes: Number(msg.bytes) || 0 });
+    }
+
+    // One file as a Blob, from the cache when this exact URL was fetched
+    // before. Streams files up to SCENE_STREAM_MAX_BYTES so byte progress
+    // moves while a big file downloads.
+    function fetchSceneBlob(url, signal) {
+        var hit = sceneBlobs[url];
+        if (hit) return hit.promise;
+        var entry = { promise: null, blob: null, loaded: 0 };
+        sceneFetchStats.started++;
+        sceneFetchStats.inFlight++;
+        entry.promise = siteFetch(url, { signal: signal }).then(function (res) {
+            if (!res || !res.ok) throw new Error('HTTP ' + (res ? res.status : '?'));
+            var length = Number(res.headers.get('content-length')) || 0;
+            if (!res.body || typeof res.body.getReader !== 'function' || length > SCENE_STREAM_MAX_BYTES) return res.blob();
+            var reader = res.body.getReader();
+            var chunks = [];
+            function pump() {
+                return reader.read().then(function (step) {
+                    if (step.done) return new Blob(chunks);
+                    chunks.push(step.value);
+                    entry.loaded += step.value.byteLength;
+                    sceneFetchStats.bytes += step.value.byteLength;
+                    if (isTransportTest && sceneFetchThrottleMs > 0) {
+                        return new Promise(function (resolve) { setTimeout(resolve, sceneFetchThrottleMs); }).then(pump);
+                    }
+                    return pump();
+                });
+            }
+            return pump();
+        }).then(function (blob) {
+            entry.blob = blob;
+            entry.loaded = blob.size;
+            sceneFetchStats.completed++;
+            sceneFetchStats.inFlight--;
+            return blob;
+        }, function (e) {
+            if (sceneBlobs[url] === entry) delete sceneBlobs[url];
+            sceneFetchStats.inFlight--;
+            if (e && e.name === 'AbortError') sceneFetchStats.aborted++;
+            throw e;
+        });
+        sceneBlobs[url] = entry;
+        return entry.promise;
+    }
+
+    // 'mtlx-open-scene': fetches the set (cached files are not fetched again)
+    // with fetch progress, then hands js/usd-scene-app.jsx File objects whose
     // lastModified is the file's mtime (the USD worker's input cache key).
-    var sceneSeq = 0;
     function handleOpenScene(msg) {
-        var mySeq = ++sceneSeq;
+        if (!adoptSceneSeq(msg.seq)) return;
+        if (isTransportTest) sceneFetchThrottleMs = Number(msg.throttleMs) || 0;
+        scene.round = Number(msg.round) || 0;
+        var token = ++scene.token;
+        if (!scene.controller) scene.controller = new AbortController();
+        var signal = scene.controller.signal;
+        var urls = msg.fileUrls || {};
         var mtimes = msg.mtimes || {};
-        fetchTextureBlobs(msg.fileUrls || {}, 'Scene file', 6).then(function (result) {
-            if (mySeq !== sceneSeq) return; // superseded by a newer scene payload
-            var files = {};
-            Object.keys(result.blobs).forEach(function (key) {
-                var modified = typeof mtimes[key] === 'number' ? mtimes[key] : Date.now();
-                files[key] = new File([result.blobs[key]], key.slice(key.lastIndexOf('/') + 1), { lastModified: modified });
+        var sizes = msg.sizes || {};
+        var keys = Object.keys(urls);
+        var bytesTotal = keys.reduce(function (sum, key) { return sum + (Number(sizes[key]) || 0); }, 0);
+        var done = 0;
+        var blobs = {};
+        var current = function () { return token === scene.token && !scene.cancelled; };
+        function report() {
+            if (!current()) return;
+            var bytes = 0;
+            keys.forEach(function (key) {
+                var entry = sceneBlobs[urls[key]];
+                if (entry) bytes += entry.blob ? entry.blob.size : entry.loaded;
             });
-            var payload = { files: files, root: msg.root, name: msg.name };
+            emitSceneProgress({
+                seq: msg.seq, round: scene.round, phase: 'fetch', done: done, total: keys.length,
+                bytesDone: Math.min(bytes, bytesTotal), bytesTotal: bytesTotal,
+            });
+        }
+        report();
+        var timer = setInterval(report, 150);
+        var next = 0;
+        function runOne() {
+            if (!current() || next >= keys.length) return Promise.resolve();
+            var key = keys[next++];
+            return fetchSceneBlob(urls[key], signal).then(function (blob) {
+                blobs[key] = blob;
+            }, function (e) {
+                if (!(e && e.name === 'AbortError') && current()) {
+                    postError('Scene file "' + key + '" could not be loaded: ' + String((e && e.message) || e));
+                }
+            }).then(function () {
+                done++;
+                return runOne();
+            });
+        }
+        var starters = [];
+        for (var i = 0; i < Math.min(SCENE_FETCH_CONCURRENCY, keys.length); i++) starters.push(runOne());
+        Promise.all(starters).then(function () {
+            clearInterval(timer);
+            if (!current()) return;
+            report();
+            // Keep only what this set still uses, so memory tracks the scene.
+            var keep = {};
+            keys.forEach(function (key) { keep[urls[key]] = true; });
+            Object.keys(sceneBlobs).forEach(function (url) {
+                if (!keep[url] && sceneBlobs[url].blob) delete sceneBlobs[url];
+            });
+            var files = {};
+            Object.keys(blobs).forEach(function (key) {
+                var modified = typeof mtimes[key] === 'number' ? mtimes[key] : Date.now();
+                files[key] = new File([blobs[key]], key.slice(key.lastIndexOf('/') + 1), { lastModified: modified });
+            });
+            var payload = { files: files, root: msg.root, name: msg.name, seq: msg.seq, round: scene.round };
             window.__mtlxPendingSceneImport = payload;
             window.dispatchEvent(new CustomEvent('mtlx-load-scene', { detail: payload }));
         });
+    }
+
+    // Called by js/usd-scene-app.jsx's Cancel: stops the host's collection
+    // and every fetch in flight; nothing more loads until Reload.
+    window.__mtlxSceneCancel = function () {
+        scene.cancelled = true;
+        scene.token++;
+        if (scene.controller) {
+            scene.controller.abort();
+            scene.controller = null;
+        }
+        Object.keys(pendingSceneMissing).forEach(function (id) {
+            var resolve = pendingSceneMissing[id];
+            delete pendingSceneMissing[id];
+            resolve({ added: 0, cancelled: true });
+        });
+        if (vscodeApi) vscodeApi.postMessage({ type: 'mtlx-scene-cancel', seq: scene.seq });
+    };
+    window.__mtlxSceneReload = function () {
+        if (vscodeApi) vscodeApi.postMessage({ type: 'mtlx-scene-reload' });
+    };
+
+    // Asks the host for files the loaded scene reported missing ({ asset,
+    // introducedBy } entries). Resolves { added, stillMissing }; when added
+    // is above 0 a bigger set follows as a new 'mtlx-open-scene' round.
+    window.__mtlxSceneReportMissing = function (missing) {
+        if (!vscodeApi || !Array.isArray(missing) || !missing.length || scene.cancelled) return Promise.resolve({ added: 0 });
+        var id = nextSceneMissingId++;
+        return new Promise(function (resolve) {
+            var timer = setTimeout(function () {
+                if (!pendingSceneMissing[id]) return;
+                delete pendingSceneMissing[id];
+                resolve({ added: 0, timedOut: true });
+            }, 30000);
+            pendingSceneMissing[id] = function (result) { clearTimeout(timer); resolve(result); };
+            vscodeApi.postMessage({ type: 'mtlx-scene-missing', seq: scene.seq, requestId: id, missing: missing.slice(0, 512) });
+        });
+    };
+    function handleSceneMissingResult(msg) {
+        var resolve = pendingSceneMissing[msg.requestId];
+        if (!resolve) return;
+        delete pendingSceneMissing[msg.requestId];
+        resolve({ added: Number(msg.added) || 0, stillMissing: Number(msg.stillMissing) || 0 });
+    }
+
+    // Test transport only: waits for a scene file fetch to be in flight,
+    // clicks the progress Cancel button, then reports whether loading
+    // stopped ('mtlx-test-scene-cancel').
+    function handleTestTriggerSceneCancel(msg) {
+        if (!isTransportTest || !vscodeApi) return;
+        var started = Date.now();
+        var timeoutMs = Number(msg.timeoutMs) || 60000;
+        var settleMs = Number(msg.settleMs) || 4000;
+        function snapshot() {
+            return {
+                started: sceneFetchStats.started, completed: sceneFetchStats.completed, aborted: sceneFetchStats.aborted,
+                inFlight: sceneFetchStats.inFlight, bytes: sceneFetchStats.bytes,
+            };
+        }
+        (function poll() {
+            var button = document.querySelector('[data-testid="usd-scene-progress-cancel"]');
+            var ready = button && sceneFetchStats.inFlight > 0 && sceneFetchStats.bytes > 0;
+            if (!ready) {
+                if (Date.now() - started > timeoutMs) {
+                    vscodeApi.postMessage({ type: 'mtlx-test-scene-cancel', report: { clicked: false, stats: snapshot(), buttonFound: !!button } });
+                    return;
+                }
+                setTimeout(poll, 50);
+                return;
+            }
+            var atCancel = snapshot();
+            button.click();
+            setTimeout(function () {
+                var after = snapshot();
+                var cancelledPanel = document.querySelector('[data-testid="usd-scene-cancelled"]');
+                vscodeApi.postMessage({
+                    type: 'mtlx-test-scene-cancel',
+                    report: {
+                        clicked: true, atCancel: atCancel, after: after,
+                        cancelledShown: !!cancelledPanel,
+                        cancelledText: cancelledPanel ? cancelledPanel.textContent : '',
+                        reloadShown: !!document.querySelector('[data-testid="usd-scene-reload"]'),
+                        progressShown: !!document.querySelector('[data-testid="usd-scene-progress"]'),
+                    },
+                });
+            }, settleMs);
+        })();
     }
 
     // Test transport only: posts one 'mtlx-save' exactly like requestGraphSave
@@ -767,9 +1045,9 @@
         });
     }
 
-    // Test transport only: the same pointerdown + dblclick a user makes at
-    // the scene viewport's centre, then polls the material preview panel and
-    // reports its state as 'mtlx-test-material-preview'.
+    // Test transport only: the same pointerdown + dblclick a user makes at the
+    // viewport's centre (or on a mesh row when msg.target is 'tree'), then polls
+    // the material preview panel and reports it as 'mtlx-test-material-preview'.
     function handleTestTriggerMaterialPreview(msg) {
         if (!isTransportTest || !vscodeApi) return;
         var started = Date.now();
@@ -788,6 +1066,7 @@
                 graphPreview: !!(panel && panel.querySelector('.mtlx-graph-preview')),
                 nodes: panel ? panel.querySelectorAll('.react-flow__node').length : 0,
                 previewUnavailable: /Preview unavailable in VS Code/.test(text),
+                previewPaneAbsent: !(panel && (panel.querySelector('[data-testid="mtlx-graph-preview-divider"]') || panel.querySelector('[aria-label*="3D preview"]'))),
                 hasGraphPreview: typeof window.MtlxGraphPreview,
                 hasReactFlow: !!window.ReactFlow,
                 hasDagre: !!window.dagre,
@@ -801,14 +1080,7 @@
         function send(extra) {
             vscodeApi.postMessage({ type: 'mtlx-test-material-preview', report: Object.assign(snapshot(), extra || {}, { log: testLog.slice(-30) }) });
         }
-        var canvas = document.querySelector('[data-testid="usd-scene-canvas"]');
-        if (!canvas) { send({ fatal: 'no scene canvas' }); return; }
-        var r = canvas.getBoundingClientRect();
-        var x = r.left + r.width / 2;
-        var y = r.top + r.height / 2;
-        canvas.dispatchEvent(new PointerEvent('pointerdown', { clientX: x, clientY: y, bubbles: true, button: 0, pointerType: 'mouse' }));
-        canvas.dispatchEvent(new MouseEvent('dblclick', { clientX: x, clientY: y, bubbles: true, button: 0, detail: 2 }));
-        (function poll() {
+        function poll() {
             // Observed only once the panel exists, so this never starts the
             // load itself (mtlxLoadViewDeps is memoized: same promise).
             if (deps === 'not requested' && document.querySelector('[data-testid="usd-scene-material-preview"]') && typeof window.mtlxLoadViewDeps === 'function') {
@@ -822,7 +1094,30 @@
             var settled = (shown && ((s.nodes > 0 && !s.graphLoading) || s.depsErrorShown)) || (!!s.dblReason && s.dblReason !== 'ok');
             if (settled || Date.now() - started > timeoutMs) { send({ settled: settled }); return; }
             setTimeout(poll, 500);
-        })();
+        }
+        if (msg.target === 'tree') {
+            // The outliner row of the first mesh bound to a material; a narrow
+            // webview starts with the sidebar collapsed, so open it first.
+            var rowSelector = '[data-testid="usd-scene-tree-row"][data-kind="mesh"][data-has-material="true"]';
+            var expand = document.querySelector('button[title="Expand the scene viewer panel"]');
+            if (!document.querySelector(rowSelector) && expand) expand.click();
+            (function waitForRow() {
+                var row = document.querySelector(rowSelector);
+                if (!row && Date.now() - started < 5000) { setTimeout(waitForRow, 100); return; }
+                if (!row) { send({ fatal: 'no mesh row in the scene tree', via: 'tree' }); return; }
+                row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, button: 0, detail: 2 }));
+                poll();
+            })();
+        } else {
+            var canvas = document.querySelector('[data-testid="usd-scene-canvas"]');
+            if (!canvas) { send({ fatal: 'no scene canvas' }); return; }
+            var r = canvas.getBoundingClientRect();
+            var x = r.left + r.width / 2;
+            var y = r.top + r.height / 2;
+            canvas.dispatchEvent(new PointerEvent('pointerdown', { clientX: x, clientY: y, bubbles: true, button: 0, pointerType: 'mouse' }));
+            canvas.dispatchEvent(new MouseEvent('dblclick', { clientX: x, clientY: y, bubbles: true, button: 0, detail: 2 }));
+            poll();
+        }
     }
 
     // NOTE: this is NOT the only postMessage traffic this page can see —
@@ -840,7 +1135,14 @@
         if (msg.type === 'mtlx-test-trigger-snapshot') { handleTestTriggerSnapshot(msg); return; }
         if (msg.type === 'mtlx-test-trigger-graph-save') { handleTestTriggerGraphSave(msg); return; }
         if (msg.type === 'mtlx-test-trigger-material-preview') { handleTestTriggerMaterialPreview(msg); return; }
+        if (msg.type === 'mtlx-test-trigger-about') { handleTestTriggerAbout(msg); return; }
+        if (msg.type === 'mtlx-switch-view') { handleSwitchView(msg); return; }
+        if (msg.type === 'mtlx-test-trigger-view-hash') { handleTestTriggerViewHash(msg); return; }
+        if (msg.type === 'mtlx-test-trigger-full-width') { handleTestTriggerFullWidth(msg); return; }
         if (msg.type === 'mtlx-open-scene') { handleOpenScene(msg); return; }
+        if (msg.type === 'mtlx-scene-progress') { handleSceneProgress(msg); return; }
+        if (msg.type === 'mtlx-scene-missing-result') { handleSceneMissingResult(msg); return; }
+        if (msg.type === 'mtlx-test-trigger-scene-cancel') { handleTestTriggerSceneCancel(msg); return; }
         if (msg.type !== 'mtlx-open') return;
         handleOpen(msg);
     }, false);

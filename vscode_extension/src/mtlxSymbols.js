@@ -134,6 +134,11 @@ function scanElements(text) {
                 break;
             }
             if (ch === '>') { i += 1; break; }
+            // An unclosed start tag ends where the next element begins:
+            // stop here (without consuming '<') so its attributes are
+            // never read as this tag's own. The outer loop then re-reads
+            // this same '<' as the next element/comment/close tag.
+            if (ch === '<') break;
             if (!isAttrNameChar(ch)) { i += 1; continue; } // tolerate stray junk
 
             const attrNameStart = i;

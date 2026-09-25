@@ -84,6 +84,41 @@ test('scanElements: tolerates a mismatched extra closing tag without losing sibl
   assert.ok(names.includes('NG') || names.includes('NG2'));
 });
 
+test('scanElements: an unclosed start tag does not absorb the next element\'s attributes', () => {
+  // Reproduces the reported bug: <standard_surface followed by a space,
+  // with the '>' not typed yet, and the next line already a complete
+  // element. Before the fix, the attribute scanner treated the next '<'
+  // as stray junk and kept reading attribute tokens past it, so
+  // "name"/"type" from <surfacematerial> ended up in standard_surface's
+  // own attrs map.
+  const text = '<materialx version="1.39">\n  <standard_surface \n'
+    + '  <surfacematerial name="M1" type="material">\n'
+    + '    <input name="surfaceshader" type="surfaceshader" nodename="SR1" />\n'
+    + '  </surfacematerial>\n</materialx>\n';
+  const { root } = mtlxSymbols.scanElements(text);
+  const mtlxRoot = mtlxSymbols.materialxRoot(root);
+  // standard_surface stays open (unclosed): it is the immediate parent of
+  // surfacematerial, not a sibling that swallowed its attributes.
+  const ss = mtlxRoot.children.find((c) => c.tag === 'standard_surface');
+  assert.ok(ss, 'standard_surface must still be scanned as its own element');
+  assert.deepEqual(Object.keys(ss.attrs), [], 'no attribute belongs to the unclosed tag yet');
+  const mat = ss.children.find((c) => c.tag === 'surfacematerial');
+  assert.ok(mat, 'surfacematerial is read as its own element, nested under the still-open tag');
+  assert.equal(mat.attrs.name.value, 'M1');
+  assert.equal(mat.attrs.type.value, 'material');
+});
+
+test('scanElements: an unclosed tag followed directly by its ancestor\'s closing tag', () => {
+  const text = '<materialx version="1.39"><nodegraph name="NG"><constant name="c" type="color3" '
+    + '</nodegraph></materialx>';
+  const { root } = mtlxSymbols.scanElements(text);
+  const ng = mtlxSymbols.materialxRoot(root).children.find((c) => c.tag === 'nodegraph');
+  assert.ok(ng);
+  const constant = ng.children.find((c) => c.tag === 'constant');
+  assert.ok(constant, 'the unclosed <constant tag is still scanned, closed implicitly by </nodegraph>');
+  assert.deepEqual(Object.keys(constant.attrs), ['name', 'type']);
+});
+
 test('buildDocumentSymbols: top-level node, nodegraph (nodes+outputs), nodedef (inputs+outputs)', () => {
   const { root } = mtlxSymbols.scanElements(FIXTURE);
   const symbols = mtlxSymbols.buildDocumentSymbols(root);

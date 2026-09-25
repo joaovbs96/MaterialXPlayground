@@ -347,9 +347,9 @@ async function scenarioCompletion(ctx) {
         // already has name=/type= set, so those are correctly excluded
         // here (see the "<multiply n" unit test in vscode-attribute-
         // schema.test.mjs for the not-yet-present case); this position
-        // instead proves 'nodedef'/'inherit' are offered (node-instance
-        // attributes) and input/token-only UI attributes like uivisible
-        // are NOT.
+        // instead proves 'nodedef' is offered (a node-instance attribute),
+        // while 'inherit' (shader-inheritance only) and input/token-only
+        // UI attributes like uivisible are NOT.
         const nodeAttrIdx = fixtureText.indexOf('<standard_surface') + '<standard_surface'.length + 1;
         const nodeAttrResult = await vscode.commands.executeCommand('vscode.executeCompletionItemProvider', uri, doc.positionAt(nodeAttrIdx));
         const nodeAttrLabels = labelsOf(nodeAttrResult);
@@ -385,7 +385,7 @@ async function scenarioCompletion(ctx) {
             && typeLabels.includes('surfaceshader') && typeLabels.includes('color3')
             && csLabels.includes('lin_rec709') && csLabels.includes('srgb_texture')
             && nameLabels.includes('base_color') && nameLabels.includes('specular_roughness')
-            && nodeAttrLabels.includes('nodedef') && nodeAttrLabels.includes('inherit') && !nodeAttrLabels.includes('uivisible')
+            && nodeAttrLabels.includes('nodedef') && !nodeAttrLabels.includes('inherit') && !nodeAttrLabels.includes('uivisible')
             && nodedefInputAttrLabels.includes('uivisible') && nodedefInputAttrLabels.includes('uimin');
 
         return {
@@ -541,6 +541,124 @@ async function scenarioSceneAutoOpen(ctx) {
     }
 }
 
+// Scenario: a glTF/GLB/OBJ scene root renders through the same Scene
+// Viewer path USD stages use (materialxPlayground.openScene ->
+// usdFileSet.js collects the file set -> js/usd-scene-app.jsx picks the
+// loader by root extension). expectedMinFiles is the root file plus its
+// side files (buffer/mtl, texture), so this also proves the texture was
+// part of the sent file set: a missing texture would leave report.files
+// short and the material would fail to bind the way report.materials
+// checks for.
+async function scenarioSceneFormat(ctx, rootPath, expectedMinFiles) {
+    const uri = vscode.Uri.file(rootPath);
+    const errorsBefore = ctx.testApi.getErrors().length;
+    const reportStart = ctx.sceneReports.length;
+    try {
+        await vscode.commands.executeCommand('materialxPlayground.openScene', uri);
+        const report = await waitForValue(() => ctx.sceneReports.slice(reportStart).find((r) => r && (r.status === 'rendered' || r.status === 'error')), 120000);
+        const newErrors = ctx.testApi.getErrors().slice(errorsBefore);
+        const ok = !!report && report.status === 'rendered' && report.files >= expectedMinFiles
+            && report.meshes >= 1 && report.materials >= 1 && report.errors === 0;
+        return { pass: ok && newErrors.length === 0, report, newErrors: newErrors.slice(0, 5) };
+    } finally {
+        await closeTabsForUri(uri);
+    }
+}
+
+// Scenario: sceneNoSiblings -- a folder holding quad.glb plus several
+// unrelated .glb/.usda files nothing references (smoke-fixtures.mjs's
+// scenenosiblings folder). Opening quad.glb must send exactly the root
+// plus its one referenced texture (report.files === 2), never the
+// unrelated siblings, and the Root layer selector must not render since
+// there is only ever one candidate root in VS Code (js/usd-scene-app.jsx).
+async function scenarioSceneNoSiblings(ctx) {
+    const rootPath = ctx.fixtures.noSiblingsRootPath;
+    const uri = vscode.Uri.file(rootPath);
+    const errorsBefore = ctx.testApi.getErrors().length;
+    const reportStart = ctx.sceneReports.length;
+    try {
+        await vscode.commands.executeCommand('materialxPlayground.openScene', uri);
+        const report = await waitForValue(() => ctx.sceneReports.slice(reportStart).find((r) => r && (r.status === 'rendered' || r.status === 'error')), 120000);
+        const newErrors = ctx.testApi.getErrors().slice(errorsBefore);
+        // The Scene card is not empty for a single .glb: file name, format and files count.
+        const card = (report && report.sceneCard) || {};
+        const cardOk = card.file === 'quad.glb' && card.format === 'glTF binary' && card.files === 2
+            && card.cameraOptions >= 1 && (card.inDom ? card.fileText === 'quad.glb' && /^2 files, /.test(card.filesText) : card.sidebarOpen === false);
+        const ok = !!report && report.status === 'rendered' && report.files === 2
+            && report.meshes >= 1 && report.materials >= 1 && report.errors === 0
+            && report.rootSelectVisible === false && cardOk;
+        return { pass: ok && newErrors.length === 0, cardOk, report, newErrors: newErrors.slice(0, 5) };
+    } finally {
+        await closeTabsForUri(uri);
+    }
+}
+
+// Scenario: sceneFormatAutoOpen -- the same auto-open contract as USD's
+// (scenarioSceneAutoOpen above), checked for the three new root types:
+// .gltf and .obj are real text documents so the viewer opens BESIDE them
+// (two tabs for that uri); .glb has no text form, so its placeholder tab
+// is REPLACED in place (one tab).
+async function scenarioSceneFormatAutoOpen(ctx) {
+    const SCENE_VIEW_TYPE = 'materialxPlayground.sceneViewer';
+    const cfg = vscode.workspace.getConfiguration('materialxPlayground');
+    const prevSetting = cfg.inspect('autoOpenSceneViewer')?.globalValue;
+    const gltfUri = vscode.Uri.file(ctx.fixtures.gltfRootPath);
+    const objUri = vscode.Uri.file(ctx.fixtures.objRootPath);
+    const glbUri = vscode.Uri.file(ctx.fixtures.glbRootPath);
+
+    const sceneTabFor = (uri) => {
+        for (const g of vscode.window.tabGroups.all) {
+            for (const t of g.tabs) {
+                if (t.input instanceof vscode.TabInputCustom && t.input.viewType === SCENE_VIEW_TYPE
+                    && t.input.uri.toString() === uri.toString()) return t;
+            }
+        }
+        return null;
+    };
+    const tabsFor = (uri) => {
+        const out = [];
+        for (const g of vscode.window.tabGroups.all) {
+            for (const t of g.tabs) {
+                if (t.input && t.input.uri && t.input.uri.toString() === uri.toString()) out.push(t);
+            }
+        }
+        return out;
+    };
+
+    const out = { gltfBeside: null, objBeside: null, glbReplaced: null };
+    try {
+        await cfg.update('autoOpenSceneViewer', true, vscode.ConfigurationTarget.Global);
+
+        const gltfDoc = await vscode.workspace.openTextDocument(gltfUri);
+        await vscode.window.showTextDocument(gltfDoc, { preview: false });
+        const gltfSceneTab = await waitForValue(() => sceneTabFor(gltfUri), 20000);
+        out.gltfBeside = { pass: !!gltfSceneTab && tabsFor(gltfUri).length === 2, tabCount: tabsFor(gltfUri).length };
+        await closeTabsForUri(gltfUri);
+
+        const objDoc = await vscode.workspace.openTextDocument(objUri);
+        await vscode.window.showTextDocument(objDoc, { preview: false });
+        const objSceneTab = await waitForValue(() => sceneTabFor(objUri), 20000);
+        out.objBeside = { pass: !!objSceneTab && tabsFor(objUri).length === 2, tabCount: tabsFor(objUri).length };
+        await closeTabsForUri(objUri);
+
+        await vscode.commands.executeCommand('vscode.open', glbUri);
+        const replaced = await waitForValue(() => {
+            const tabs = tabsFor(glbUri);
+            return tabs.length === 1 && tabs[0].input instanceof vscode.TabInputCustom
+                && tabs[0].input.viewType === SCENE_VIEW_TYPE ? tabs[0] : null;
+        }, 20000);
+        out.glbReplaced = { pass: !!replaced, tabCount: tabsFor(glbUri).length };
+        await closeTabsForUri(glbUri);
+
+        return { pass: out.gltfBeside.pass && out.objBeside.pass && out.glbReplaced.pass, ...out };
+    } finally {
+        try { await cfg.update('autoOpenSceneViewer', prevSetting, vscode.ConfigurationTarget.Global); } catch (e) { /* best effort */ }
+        await closeTabsForUri(gltfUri);
+        await closeTabsForUri(objUri);
+        await closeTabsForUri(glbUri);
+    }
+}
+
 async function scenarioDocsPanel(ctx) {
     const errorsBefore = ctx.testApi.getErrors().length;
     await vscode.commands.executeCommand('materialxPlayground.openDocs');
@@ -584,7 +702,7 @@ async function scenarioUsdScene(ctx) {
         const untouched = fs.readFileSync(rootPath).equals(rootBefore) && fs.readFileSync(geoPath).equals(geoBefore);
         const newErrors = ctx.testApi.getErrors().slice(errorsBefore);
         const stageOk = !!report && report.status === 'rendered' && report.files >= 3 && report.meshes >= 1 && report.materials >= 1 && report.errors === 0;
-        const refused = !!save && save.ok === false && /USD file/.test(save.error || '');
+        const refused = !!save && save.ok === false && /(scene|USD) file/.test(save.error || '');
         return {
             pass: stageOk && refused && untouched && newErrors.length === 0,
             report, save, untouched, newErrors: newErrors.slice(0, 5),
@@ -597,7 +715,8 @@ async function scenarioUsdScene(ctx) {
 // Scenario: USD Scene Viewer material preview -- opens the same stage, then
 // double-clicks the viewport centre (the card) through the test seam and
 // waits for the material panel's read-only node graph to finish loading.
-// The 3D column must show the VS Code fallback, never a spinner.
+// In VS Code the 3D preview column is not rendered at all (no WebGL2
+// column, no divider, no toggle button): the node graph fills the panel.
 async function scenarioUsdMaterialPreview(ctx) {
     const uri = vscode.Uri.file(ctx.fixtures.usdMtlxRootPath);
     const errorsBefore = ctx.testApi.getErrors().length;
@@ -614,10 +733,48 @@ async function scenarioUsdMaterialPreview(ctx) {
         const newErrors = ctx.testApi.getErrors().slice(errorsBefore);
         const graphOk = !!preview && preview.panel && !preview.panelHidden && preview.nodes > 0
             && !preview.depsSpinner && !preview.graphLoading;
-        const fallbackOk = !!preview && preview.previewUnavailable;
+        const fallbackOk = !!preview && preview.previewPaneAbsent;
         return {
             pass: graphOk && fallbackOk && newErrors.length === 0,
             graphOk, fallbackOk, preview, newErrors: newErrors.slice(0, 5),
+        };
+    } finally {
+        await closeTabsForUri(uri);
+    }
+}
+
+// Scenario: sceneTreePreview -- double-clicks the Card mesh row in the Scene
+// Viewer's outliner (test seam), waits for the material panel, then rewrites the
+// root layer so the file watcher reloads the stage, which must close the panel.
+async function scenarioSceneTreePreview(ctx) {
+    const rootPath = ctx.fixtures.usdMtlxRootPath;
+    const uri = vscode.Uri.file(rootPath);
+    const errorsBefore = ctx.testApi.getErrors().length;
+    const reportStart = ctx.sceneReports.length;
+    const previewStart = ctx.previewReports.length;
+    try {
+        await vscode.commands.executeCommand('materialxPlayground.openScene', uri);
+        const scene = await waitForValue(() => ctx.sceneReports.slice(reportStart).find((r) => r && (r.status === 'rendered' || r.status === 'error')), 120000);
+        if (!scene || scene.status !== 'rendered') return { pass: false, scene };
+        await new Promise((r) => setTimeout(r, 1000));
+        ctx.testApi.triggerSceneMaterialPreview(45000, { target: 'tree' });
+        const preview = await waitForValue(() => ctx.previewReports[previewStart], 60000);
+        const opened = !!preview && !preview.fatal && preview.panel && !preview.panelHidden && preview.nodes > 0
+            && !preview.graphLoading && preview.dblReason === 'ok';
+        // Same bytes, new mtime: the watcher resends the set as a new host seq.
+        const reloadStart = ctx.sceneReports.length;
+        fs.writeFileSync(rootPath, fs.readFileSync(rootPath));
+        const reloaded = await waitForValue(() => ctx.sceneReports.slice(reloadStart)
+            .find((r) => r && (r.status === 'rendered' || r.status === 'error') && r.hostSeq > scene.hostSeq), 120000);
+        const closedOnReload = !!reloaded && reloaded.status === 'rendered' && reloaded.previewOpen === false;
+        // Objects under Scene (World, Card) plus the Materials group (CardMat).
+        const treeOk = scene.treeNodes >= 2 && scene.treeMaterials >= 1;
+        const newErrors = ctx.testApi.getErrors().slice(errorsBefore);
+        return {
+            pass: opened && closedOnReload && treeOk && newErrors.length === 0,
+            opened, closedOnReload, treeOk, treeNodes: scene.treeNodes,
+            preview, reloaded: reloaded ? { status: reloaded.status, hostSeq: reloaded.hostSeq, previewOpen: reloaded.previewOpen } : null,
+            newErrors: newErrors.slice(0, 5),
         };
     } finally {
         await closeTabsForUri(uri);
@@ -674,6 +831,221 @@ async function scenarioNewFromExample(ctx) {
     return { pass: out.singleFile.pass && out.textured.pass, singleFile: out.singleFile, textured: out.textured };
 }
 
+// Scenario: aboutLicense -- opens the About dialog on the already-open
+// custom editor panel (reuses scenarioEditorSession's tab) and checks the
+// license loader falls back from LICENSE to vsce's renamed LICENSE.txt
+// inside the PACKAGED extension, and that the displayed extension version
+// carries the "v" prefix. testApi.triggerAbout() dispatches the same
+// 'mtlx-about' event the header help button does; __mtlxAboutReport
+// (bootstrap.js) forwards the dialog's real license/version state.
+async function scenarioAboutLicense(ctx) {
+    const uri = vscode.Uri.file(ctx.fixtures.mainMtlxPath);
+    const reportStart = ctx.aboutReports.length;
+    try {
+        await openEditor(uri);
+        await new Promise((r) => setTimeout(r, 3000)); // let the panel settle
+        ctx.testApi.triggerAbout();
+        const report = await waitForValue(() => ctx.aboutReports.slice(reportStart)[0], 20000);
+        const licenseOk = !!report && !report.licenseError && typeof report.license === 'string' && report.license.trim().length > 0;
+        const versionOk = !!report && typeof report.extensionVersionText === 'string' && report.extensionVersionText.indexOf('v') === 0;
+        return { pass: licenseOk && versionOk, licenseOk, versionOk, report };
+    } finally {
+        await closeTabsForUri(uri);
+    }
+}
+
+// Scenario: fullWidth -- proves the webview-only body padding/margin reset
+// (scripts/build-webview.mjs's FOCUS_CSS_BLOCK) beats VS Code's injected
+// default webview styles in BOTH webview.html-based hosts: the playground
+// custom editor and the USD Scene Viewer, each its own webview.html
+// document with its own copy of the injected default + our reset.
+async function scenarioFullWidth(ctx) {
+    const uri = vscode.Uri.file(ctx.fixtures.mainMtlxPath);
+    const sceneUri = vscode.Uri.file(ctx.fixtures.usdRootPath);
+    let playgroundReport = null;
+    let sceneReport = null;
+    try {
+        await openEditor(uri);
+        await new Promise((r) => setTimeout(r, 2000)); // let the panel settle
+        const playgroundStart = ctx.fullWidthReports.length;
+        ctx.testApi.triggerFullWidth();
+        playgroundReport = await waitForValue(() => ctx.fullWidthReports.slice(playgroundStart)[0], 20000);
+
+        const reportStart = ctx.sceneReports.length;
+        await vscode.commands.executeCommand('materialxPlayground.openScene', sceneUri);
+        await waitForValue(() => ctx.sceneReports.slice(reportStart).find((r) => r && (r.status === 'rendered' || r.status === 'error')), 120000);
+        const sceneStart = ctx.fullWidthReports.length;
+        ctx.testApi.triggerSceneFullWidth();
+        sceneReport = await waitForValue(() => ctx.fullWidthReports.slice(sceneStart)[0], 20000);
+
+        const isZero = (r) => !!r && r.paddingLeft === '0px' && r.paddingRight === '0px';
+        const playgroundOk = isZero(playgroundReport);
+        const sceneOk = isZero(sceneReport);
+        return { pass: playgroundOk && sceneOk, playgroundOk, sceneOk, playgroundReport, sceneReport };
+    } finally {
+        await closeTabsForUri(uri);
+        await closeTabsForUri(sceneUri);
+    }
+}
+
+// Scenario: openViewCommands -- materialxPlayground.openInGraphEditor and
+// .openInMaterialViewer both (a) open a NEW panel on exactly the requested
+// view, ignoring materialxPlayground.defaultView, and (b) reuse an
+// ALREADY-OPEN panel for the same file by switching its view in place
+// (one tab total) rather than opening a second one.
+async function scenarioOpenViewCommands(ctx) {
+    const uri = vscode.Uri.file(ctx.fixtures.mainMtlxPath);
+    try {
+        // New panel opened straight into the graph view.
+        let start = ctx.viewHashReports.length;
+        await vscode.commands.executeCommand('materialxPlayground.openInGraphEditor', uri);
+        await new Promise((r) => setTimeout(r, 2000)); // let the panel settle
+        ctx.testApi.triggerViewHash();
+        const graphHash = await waitForValue(() => ctx.viewHashReports.slice(start)[0], 20000);
+        const openedOnGraph = graphHash === '#!graph';
+
+        // Same file, other command: must reuse the tab (still exactly one
+        // tab for this uri) and switch it to the viewer.
+        const tabsBefore = vscode.window.tabGroups.all
+            .flatMap((g) => g.tabs)
+            .filter((t) => t.input && t.input.uri && t.input.uri.toString() === uri.toString()).length;
+        start = ctx.viewHashReports.length;
+        await vscode.commands.executeCommand('materialxPlayground.openInMaterialViewer', uri);
+        await new Promise((r) => setTimeout(r, 1500));
+        ctx.testApi.triggerViewHash();
+        const viewerHash = await waitForValue(() => ctx.viewHashReports.slice(start)[0], 20000);
+        const switchedToViewer = viewerHash === '#!viewer';
+        const tabsAfter = vscode.window.tabGroups.all
+            .flatMap((g) => g.tabs)
+            .filter((t) => t.input && t.input.uri && t.input.uri.toString() === uri.toString()).length;
+        const reusedOneTab = tabsBefore === 1 && tabsAfter === 1;
+
+        return {
+            pass: openedOnGraph && switchedToViewer && reusedOneTab,
+            openedOnGraph, switchedToViewer, reusedOneTab, graphHash, viewerHash, tabsBefore, tabsAfter,
+        };
+    } finally {
+        await closeTabsForUri(uri);
+    }
+}
+
+// Scenario: sceneMissingRoundTrip -- with the host's static reference scan
+// switched off (test-only), root.usda arrives alone; its sublayer
+// (layers/geo.usda) and that layer's texture must then come through the
+// on-demand missing-file rounds, and the final render must be clean.
+async function scenarioSceneMissingRoundTrip(ctx) {
+    const uri = vscode.Uri.file(ctx.fixtures.missingRootPath);
+    const errorsBefore = ctx.testApi.getErrors().length;
+    const reportStart = ctx.sceneReports.length;
+    const roundStart = ctx.sceneRounds.length;
+    ctx.testApi.setSceneStaticScan(false);
+    try {
+        await vscode.commands.executeCommand('materialxPlayground.openScene', uri);
+        const final = await waitForValue(() => ctx.sceneReports.slice(reportStart)
+            .find((r) => r && (r.status === 'error' || (r.status === 'rendered' && r.files >= 3))), 180000);
+        const rounds = ctx.sceneRounds.slice(roundStart).map((r) => ({ round: r.round, files: r.files, added: r.added, stillMissing: r.stillMissing }));
+        const roundOf = (rel) => { const hit = rounds.find((r) => (r.added || []).includes(rel)); return hit ? hit.round : -1; };
+        const firstRound = rounds.find((r) => r.round === 0);
+        const sublayerRound = roundOf('layers/geo.usda');
+        const textureRound = roundOf('textures/checker.png');
+        const newErrors = ctx.testApi.getErrors().slice(errorsBefore);
+        const ok = !!final && final.status === 'rendered' && final.meshes >= 1 && final.errors === 0
+            && !!firstRound && firstRound.files === 1 && sublayerRound >= 1 && textureRound > sublayerRound;
+        return { pass: ok && newErrors.length === 0, final, rounds, sublayerRound, textureRound, newErrors: newErrors.slice(0, 5) };
+    } finally {
+        ctx.testApi.setSceneStaticScan(true);
+        await closeTabsForUri(uri);
+    }
+}
+
+// Scenario: sceneLoadCancel -- a scene whose texture is a large generated
+// file (written here, deleted after). The progress Cancel button is clicked
+// while that file downloads; loading must stop (fetch aborted, nothing new
+// fetched, no render, no further host round) and the viewport must show
+// the cancelled state with a Reload action.
+async function scenarioSceneLoadCancel(ctx) {
+    const dir = path.join(ctx.fixtures.wsDir, 'scenecancel');
+    fs.mkdirSync(dir, { recursive: true });
+    const bigPath = path.join(dir, 'big.png');
+    const rootPath = path.join(dir, 'big.usda');
+    const chunk = Buffer.alloc(16 * 1024 * 1024, 0x5a);
+    const fd = fs.openSync(bigPath, 'w');
+    try { for (let i = 0; i < 15; i++) fs.writeSync(fd, chunk); } finally { fs.closeSync(fd); }
+    fs.writeFileSync(rootPath, [
+        '#usda 1.0',
+        '(',
+        '    defaultPrim = "World"',
+        ')',
+        '',
+        'def Xform "World"',
+        '{',
+        '    asset inputs:file = @big.png@',
+        '}',
+        '',
+    ].join('\n'));
+    const uri = vscode.Uri.file(rootPath);
+    const reportStart = ctx.sceneReports.length;
+    const roundStart = ctx.sceneRounds.length;
+    const cancelStart = ctx.sceneCancelReports.length;
+    // Throttle the streamed read so the 240 MB file cannot finish before
+    // Cancel gets clicked -- without this the load sometimes wins the race
+    // (flaky on a fast disk/cache) and the scenario never sees a chance to
+    // cancel. Always turned back off in the finally below.
+    ctx.testApi.setSceneFetchThrottle(50);
+    try {
+        await vscode.commands.executeCommand('materialxPlayground.openScene', uri);
+        await waitForValue(() => vscode.window.tabGroups.all.some((g) => g.tabs.some((t) => t.input && t.input.uri && t.input.uri.toString() === uri.toString())), 20000);
+        await new Promise((r) => setTimeout(r, 500));
+        ctx.testApi.triggerSceneCancel({ timeoutMs: 60000, settleMs: 5000 });
+        const report = await waitForValue(() => ctx.sceneCancelReports[cancelStart], 90000);
+        const rounds = ctx.sceneRounds.slice(roundStart);
+        const rendered = ctx.sceneReports.slice(reportStart).filter((r) => r && r.status === 'rendered');
+        const at = report && report.atCancel;
+        const after = report && report.after;
+        const stopped = !!at && !!after && after.started === at.started && after.inFlight === 0
+            && (at.inFlight > 0 ? after.aborted > at.aborted : true);
+        const ok = !!report && report.clicked && report.cancelledShown && report.reloadShown && !report.progressShown
+            && stopped && rendered.length === 0 && rounds.length <= 1;
+        return { pass: ok, report, rounds: rounds.map((r) => ({ round: r.round, files: r.files })), renderedAfterCancel: rendered.length };
+    } finally {
+        ctx.testApi.setSceneFetchThrottle(0);
+        await closeTabsForUri(uri);
+        try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) { /* best effort */ }
+    }
+}
+
+// Optional manual scenario, only when MTLX_SMOKE_EXTRA_SCENE names a real
+// scene on disk: time to first render, files per host round, and warnings
+// left once the load settles (no new scene report for 20 s).
+async function scenarioExternalScene(ctx, scenePath) {
+    const uri = vscode.Uri.file(scenePath);
+    const reportStart = ctx.sceneReports.length;
+    const roundStart = ctx.sceneRounds.length;
+    const t0 = Date.now();
+    try {
+        await vscode.commands.executeCommand('materialxPlayground.openScene', uri);
+        const settledReport = (r) => r && (r.status === 'rendered' || r.status === 'error');
+        const first = await waitForValue(() => ctx.sceneReports.slice(reportStart).find(settledReport), 900000);
+        let quietSince = Date.now();
+        let seen = ctx.sceneReports.length;
+        while (Date.now() - quietSince < 20000) {
+            await new Promise((r) => setTimeout(r, 500));
+            if (ctx.sceneReports.length !== seen) { seen = ctx.sceneReports.length; quietSince = Date.now(); }
+        }
+        const reports = ctx.sceneReports.slice(reportStart).filter(settledReport);
+        const last = reports[reports.length - 1] || null;
+        return {
+            pass: !!last && last.status === 'rendered',
+            firstRenderMs: first ? first.ts - t0 : null,
+            finalRenderMs: last ? last.ts - t0 : null,
+            reports,
+            rounds: ctx.sceneRounds.slice(roundStart),
+        };
+    } finally {
+        await closeTabsForUri(uri);
+    }
+}
+
 async function run() {
     const fixturesDir = process.env.MTLX_SMOKE_FIXTURES;
     const resultsFile = process.env.MTLX_SMOKE_RESULTS_FILE;
@@ -700,6 +1072,12 @@ async function run() {
             usdMtlxRootPath: path.join(wsDir, 'usdmtlx', 'scene', 'mtlx_card.usda'),
             autoOpenUsdaPath: path.join(wsDir, 'usdautoopen', 'scene.usda'),
             autoOpenUsdzPath: path.join(wsDir, 'usdautoopen', 'scene.usdz'),
+            gltfRootPath: path.join(wsDir, 'scenegltf', 'quad.gltf'),
+            glbRootPath: path.join(wsDir, 'sceneglb', 'quad.glb'),
+            objRootPath: path.join(wsDir, 'sceneobj', 'quad.obj'),
+            noSiblingsRootPath: path.join(wsDir, 'scenenosiblings', 'quad.glb'),
+            missingRootPath: path.join(wsDir, 'scenemissing', 'root.usda'),
+            wsDir,
         };
 
         log('activating ' + EXT_ID + ' ...');
@@ -715,11 +1093,28 @@ async function run() {
         testApi.onFilesReport((r) => { allReports.push(Object.assign({}, r, { ts: Date.now() })); });
         const sceneReports = [];
         const graphSaves = [];
-        testApi.onSceneReport((r) => { sceneReports.push(r); });
+        testApi.onSceneReport((r) => { sceneReports.push(r ? Object.assign({}, r, { ts: Date.now() }) : r); });
+        const sceneRounds = [];
+        if (testApi.onSceneRound) testApi.onSceneRound((r) => { sceneRounds.push(Object.assign({}, r, { ts: Date.now() })); });
+        const sceneCancelReports = [];
+        if (testApi.onSceneCancelReport) testApi.onSceneCancelReport((r) => { sceneCancelReports.push(r); });
         testApi.onGraphSaveResult((r) => { graphSaves.push(r); });
         const previewReports = [];
         testApi.onMaterialPreviewReport((r) => { previewReports.push(r); });
-        const ctx = { fixtures, extensionUri: ext.extensionUri, extensionRoot, testApi, allReports, sceneReports, graphSaves, previewReports };
+        const aboutReports = [];
+        testApi.onAboutReport((r) => { aboutReports.push(r); });
+        const fullWidthReports = [];
+        testApi.onFullWidthReport((r) => { fullWidthReports.push(r); });
+        const viewHashReports = [];
+        testApi.onViewHashReport((r) => { viewHashReports.push(r); });
+        const ctx = { fixtures, extensionUri: ext.extensionUri, extensionRoot, testApi, allReports, sceneReports, sceneRounds, sceneCancelReports, graphSaves, previewReports, aboutReports, fullWidthReports, viewHashReports };
+
+        const extraScene = process.env.MTLX_SMOKE_EXTRA_SCENE;
+        if (extraScene) {
+            out.scenarios.externalScene = await scenarioExternalScene(ctx, extraScene);
+            writeOut();
+            if (process.env.MTLX_SMOKE_EXTRA_ONLY === '1') return;
+        }
 
         const editorSession = await scenarioEditorSession(ctx);
         out.scenarios.editorE2E = editorSession.editorE2E;
@@ -757,7 +1152,40 @@ async function run() {
         out.scenarios.usdMaterialPreview = await scenarioUsdMaterialPreview(ctx);
         writeOut();
 
+        out.scenarios.sceneTreePreview = await scenarioSceneTreePreview(ctx);
+        writeOut();
+
+        out.scenarios.sceneGltf = await scenarioSceneFormat(ctx, ctx.fixtures.gltfRootPath, 3);
+        writeOut();
+
+        out.scenarios.sceneGlb = await scenarioSceneFormat(ctx, ctx.fixtures.glbRootPath, 2);
+        writeOut();
+
+        out.scenarios.sceneObj = await scenarioSceneFormat(ctx, ctx.fixtures.objRootPath, 3);
+        writeOut();
+
+        out.scenarios.sceneNoSiblings = await scenarioSceneNoSiblings(ctx);
+        writeOut();
+
+        out.scenarios.sceneMissingRoundTrip = await scenarioSceneMissingRoundTrip(ctx);
+        writeOut();
+
+        out.scenarios.sceneLoadCancel = await scenarioSceneLoadCancel(ctx);
+        writeOut();
+
+        out.scenarios.sceneFormatAutoOpen = await scenarioSceneFormatAutoOpen(ctx);
+        writeOut();
+
         out.scenarios.newFromExample = await scenarioNewFromExample(ctx);
+        writeOut();
+
+        out.scenarios.aboutLicense = await scenarioAboutLicense(ctx);
+        writeOut();
+
+        out.scenarios.fullWidth = await scenarioFullWidth(ctx);
+        writeOut();
+
+        out.scenarios.openViewCommands = await scenarioOpenViewCommands(ctx);
         writeOut();
     } catch (e) {
         out.fatalError = String((e && e.stack) || e);

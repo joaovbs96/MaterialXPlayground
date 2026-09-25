@@ -185,3 +185,34 @@ test('a color3-only consumer locks a clamp fed by a vector3 producer, bridged wi
   const stable = repair(fixed);
   assert.equal(stable, fixed);
 });
+// MaterialEggs cyc_wall: ND_mix_color3_color3 arrives as <mix_color3> with a
+// color3 `mix` input. ND_mix_color3 (float mix) also exists, so pinning the
+// short id would retype `mix` to float and break the checkerboard connection.
+const MIX_COLOR3_DEFS = [
+  nodeDef('ND_mix_color3', 'mix', 'color3', [input('fg', 'color3'), input('bg', 'color3'), input('mix', 'float')]),
+  nodeDef('ND_mix_color3_color3', 'mix', 'color3', [input('fg', 'color3'), input('bg', 'color3'), input('mix', 'color3')]),
+  nodeDef('ND_checkerboard_color3', 'checkerboard', 'color3', [input('uvtiling', 'vector2')]),
+];
+
+test('a tag missing its second type suffix pins the longer nodedef its inputs fit (cyc_wall mix_color3)', () => {
+  const repair = loadRepair(MIX_COLOR3_DEFS);
+  const xml = `<materialx version="1.39">
+  <checkerboard name="checker" type="color3" />
+  <mix_color3 name="mix1" type="color3">
+    <input name="bg" type="color3" value="0.26, 0.26, 0.26" />
+    <input name="fg" type="color3" value="0.33, 0.33, 0.33" />
+    <input name="mix" type="color3" nodename="checker" />
+  </mix_color3>
+  <mix_color3 name="mix2" type="color3">
+    <input name="bg" type="color3" value="0, 0, 0" />
+    <input name="mix" type="float" value="0.5" />
+  </mix_color3>
+</materialx>`;
+  const fixed = repair(xml);
+  assert.match(fixed, /<mix nodedef="ND_mix_color3_color3" name="mix1" type="color3">/);
+  assert.match(fixed, /<input name="mix" type="color3" nodename="checker" \/>/);
+  // A float mix keeps the short id.
+  assert.match(fixed, /<mix nodedef="ND_mix_color3" name="mix2" type="color3">/);
+  assert.doesNotMatch(fixed, /_convert/);
+  assert.equal(repair(fixed), fixed);
+});

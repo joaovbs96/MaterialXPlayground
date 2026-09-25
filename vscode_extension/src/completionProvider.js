@@ -29,11 +29,22 @@ const KIND_MAP = {
 // within each bucket (VS Code's default when sortText ties).
 const KIND_SORT_PREFIX = { node: '0', structural: '1', 'attr-name': '8', input: '9' };
 
+// Zero-padded so string comparison (what sortText uses) matches numeric
+// order for any realistic candidate-list length.
+function orderSuffix(cand) {
+    return typeof cand.sortIndex === 'number' ? String(cand.sortIndex).padStart(4, '0') : cand.label;
+}
+
 function toCompletionItem(document, cand) {
     const kind = KIND_MAP[cand.kind] || vscode.CompletionItemKind.Text;
     const item = new vscode.CompletionItem(cand.label, kind);
     if (cand.detail) item.detail = cand.detail;
-    item.sortText = (KIND_SORT_PREFIX[cand.kind] || '5') + cand.label;
+    // cand.sortIndex (set by mtlxCompletions.js for attribute-name and
+    // value completions) is that module's own curated/spec-derived
+    // order; without it, vscode's own alphabetical-by-label tiebreak
+    // applies (node/structural lists, which have no such priority).
+    item.sortText = (KIND_SORT_PREFIX[cand.kind] || '5') + orderSuffix(cand);
+    if (cand.preselect) item.preselect = true;
     item.insertText = cand.isSnippet ? new vscode.SnippetString(cand.insertText) : cand.insertText;
     if (typeof cand.replaceStart === 'number' && typeof cand.replaceEnd === 'number') {
         item.range = new vscode.Range(document.positionAt(cand.replaceStart), document.positionAt(cand.replaceEnd));

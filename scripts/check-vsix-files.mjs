@@ -102,6 +102,12 @@ export const MATERIALX_KEEP_LIST = [
 // scan above; each was confirmed with a grep before being added. MARKETPLACE.md
 // is required now on purpose: this check fails on just that file until Stream D lands.
 const RUNTIME_ASSETS = [
+  // vsce's LicenseProcessor renames the repo's root LICENSE to
+  // LICENSE.txt inside the packaged vsix; vsce ls still reports the
+  // SOURCE path checked here. js/shell.jsx's AboutDialog fetches 'LICENSE'
+  // first (so the web/Electron hosts are unaffected) and falls back to
+  // 'LICENSE.txt' - see checkRenamedRootFileFallbacks() below, which fails
+  // this script if that fallback is ever removed.
   "LICENSE",
   "vendor/vendor-manifest.json",
   "environment_map.mtlx",
@@ -277,6 +283,27 @@ function isForbiddenMaterialxPath(p) {
   return p.startsWith("vendor/materialx/") && !MATERIALX_KEEP_LIST.includes(p);
 }
 
+// vsce renames these unextensioned root files when packaging (see
+// @vscode/vsce's processors): LICENSE -> LICENSE.txt, README -> README.md,
+// CHANGELOG -> CHANGELOG.md. Any webview code that fetches the bare name
+// 404s once installed unless it also falls back to the renamed form.
+// Checked against js/shell.jsx, the only place today that fetches a
+// repo-root file by name (the About dialog).
+const RENAMED_ROOT_FILES = { LICENSE: "LICENSE.txt", README: "README.md", CHANGELOG: "CHANGELOG.md" };
+
+function checkRenamedRootFileFallbacks() {
+  const problems = [];
+  const shellJsx = readRepoFile("js/shell.jsx");
+  for (const [bare, renamed] of Object.entries(RENAMED_ROOT_FILES)) {
+    const fetchesBare = new RegExp(`fetch\\(['"]${bare}['"]\\)`).test(shellJsx);
+    if (!fetchesBare) continue;
+    if (!shellJsx.includes(renamed)) {
+      problems.push(`js/shell.jsx fetches '${bare}' with no fallback to '${renamed}' - it will 404 in the packaged extension`);
+    }
+  }
+  return problems;
+}
+
 function main() {
   const required = collectRequiredFiles();
   const packaged = getPackagedFiles();
@@ -291,6 +318,7 @@ function main() {
         isForbiddenMaterialxPath(p)
     )
     .sort();
+  const renameProblems = checkRenamedRootFileFallbacks();
   log(`checked ${required.size} required file(s) and ${FORBIDDEN_PREFIXES.length + FORBIDDEN_FILES.length} forbidden rule(s) against ${packaged.size} packaged file(s).`);
 
   if (missing.length > 0) {
@@ -301,7 +329,11 @@ function main() {
     console.error("[check-vsix-files] FORBIDDEN paths leaked into the vsix:");
     for (const p of forbidden) console.error(`  - ${p}`);
   }
-  if (missing.length > 0 || forbidden.length > 0) process.exit(1);
+  if (renameProblems.length > 0) {
+    console.error("[check-vsix-files] renamed-root-file fetches with no fallback:");
+    for (const p of renameProblems) console.error(`  - ${p}`);
+  }
+  if (missing.length > 0 || forbidden.length > 0 || renameProblems.length > 0) process.exit(1);
 
   log("OK - every runtime-loadable file is present and no forbidden path leaked in.");
 }

@@ -1,7 +1,7 @@
 {
   "name": "materialx-playground",
   "displayName": "MaterialX Playground",
-  "description": "View .mtlx files in the MaterialX Playground web app: view MaterialX documents in a 3D viewer, or edit node graphs in a graph editor. Open USD stages in the USD Scene Viewer.",
+  "description": "Build and preview MaterialX materials in VS Code: a live node graph editor and 3D preview beside your .mtlx text, smart completion and validation, and a Scene Viewer for USD, glTF and OBJ.",
   "version": "2026.8.11",
   "publisher": "MaterialXPlayground",
   "preview": true,
@@ -28,7 +28,7 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "In Restricted Mode the playground does not open automatically; open it with the MaterialX Playground: Open MaterialX Document command; validation, hovers and the node library work normally."
+      "description": "In Restricted Mode the playground does not open automatically; open it with the MaterialX Playground: Open in Graph Editor, Open in Material Viewer or Open in Scene Viewer commands; validation, hovers and the node library work normally."
     }
   },
   "scripts": {
@@ -78,18 +78,23 @@
   ],
   "keywords": [
     "materialx",
-    "usd",
-    "usdmtlx",
-    "pixar",
-    "openusd",
-    "vfx",
-    "3d",
-    "graphics",
+    "mtlx",
     "node graph",
     "shader",
-    "shader graph",
+    "usd",
+    "openpbr",
+    "standard surface",
+    "gltf",
+    "openusd",
     "material",
     "material graph",
+    "shader graph",
+    "usdmtlx",
+    "obj",
+    "3d",
+    "vfx",
+    "graphics",
+    "pixar",
     "materialx playground",
     "materialx viewer",
     "materialx editor"
@@ -138,7 +143,7 @@
       },
       {
         "viewType": "materialxPlayground.sceneViewer",
-        "displayName": "MaterialX Playground: USD Scene Viewer",
+        "displayName": "MaterialX Playground: Scene Viewer",
         "selector": [
           {
             "filenamePattern": "*.usd"
@@ -151,6 +156,15 @@
           },
           {
             "filenamePattern": "*.usdz"
+          },
+          {
+            "filenamePattern": "*.gltf"
+          },
+          {
+            "filenamePattern": "*.glb"
+          },
+          {
+            "filenamePattern": "*.obj"
           }
         ],
         "priority": "option"
@@ -159,14 +173,24 @@
     "commands": [
       {
         "command": "materialxPlayground.openScene",
-        "title": "MaterialX Playground: Open in USD Scene Viewer",
+        "title": "MaterialX Playground: Open in Scene Viewer",
         "icon": "$(open-preview)",
-        "enablement": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz)$/i"
+        "enablement": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i"
       },
       {
         "command": "materialxPlayground.open",
         "title": "MaterialX Playground: Open MaterialX Document",
         "icon": "$(open-preview)",
+        "enablement": "resourceExtname == .mtlx"
+      },
+      {
+        "command": "materialxPlayground.openInGraphEditor",
+        "title": "MaterialX Playground: Open in Graph Editor",
+        "enablement": "resourceExtname == .mtlx"
+      },
+      {
+        "command": "materialxPlayground.openInMaterialViewer",
+        "title": "MaterialX Playground: Open in Material Viewer",
         "enablement": "resourceExtname == .mtlx"
       },
       {
@@ -224,18 +248,26 @@
         },
         {
           "command": "materialxPlayground.openScene",
-          "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz)$/i && activeCustomEditorId != 'materialxPlayground.sceneViewer'",
+          "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i && activeCustomEditorId != 'materialxPlayground.sceneViewer'",
           "group": "navigation"
         }
       ],
       "commandPalette": [
         {
           "command": "materialxPlayground.open",
+          "when": "false"
+        },
+        {
+          "command": "materialxPlayground.openInGraphEditor",
+          "when": "resourceExtname == .mtlx"
+        },
+        {
+          "command": "materialxPlayground.openInMaterialViewer",
           "when": "resourceExtname == .mtlx"
         },
         {
           "command": "materialxPlayground.openScene",
-          "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz)$/i"
+          "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i"
         },
         {
           "command": "materialxPlayground.openDocs"
@@ -246,7 +278,12 @@
       ],
       "explorer/context": [
         {
-          "command": "materialxPlayground.open",
+          "command": "materialxPlayground.openInGraphEditor",
+          "when": "resourceExtname == .mtlx",
+          "group": "materialxPlayground"
+        },
+        {
+          "command": "materialxPlayground.openInMaterialViewer",
           "when": "resourceExtname == .mtlx",
           "group": "materialxPlayground"
         },
@@ -262,18 +299,23 @@
         },
         {
           "command": "materialxPlayground.openScene",
-          "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz)$/i",
+          "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i",
           "group": "materialxPlayground"
         }
       ],
       "editor/title/context": [
         {
           "command": "materialxPlayground.openScene",
-          "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz)$/i",
+          "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i",
           "group": "materialxPlayground"
         },
         {
-          "command": "materialxPlayground.open",
+          "command": "materialxPlayground.openInGraphEditor",
+          "when": "resourceExtname == .mtlx",
+          "group": "materialxPlayground"
+        },
+        {
+          "command": "materialxPlayground.openInMaterialViewer",
           "when": "resourceExtname == .mtlx",
           "group": "materialxPlayground"
         },
@@ -317,7 +359,7 @@
         "materialxPlayground.autoOpenSceneViewer": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically open the USD Scene Viewer for a USD scene file (.usd, .usda, .usdc, .usdz). A text-editable file (.usda, or .usd that opens as text) opens the viewer beside the text editor; a binary file (.usdc, .usdz, or .usd that VS Code cannot show as text) has its editor tab replaced by the viewer. Triggers once per file open; closing the viewer won't re-trigger it until the file itself is closed and reopened."
+          "description": "Automatically open the Scene Viewer for a USD, glTF, GLB or OBJ scene file (.usd, .usda, .usdc, .usdz, .gltf, .glb, .obj). A text-editable file (.usda, .gltf, .obj, or .usd that opens as text) opens the viewer beside the text editor; a binary file (.usdc, .usdz, .glb, or .usd that VS Code cannot show as text) has its editor tab replaced by the viewer. Triggers once per file open; closing the viewer won't re-trigger it until the file itself is closed and reopened."
         },
         "materialx.defaultView": {
           "type": "string",

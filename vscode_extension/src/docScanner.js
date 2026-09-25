@@ -62,7 +62,22 @@ function defaultDeps() {
         FileType: vscode.FileType,
         getWorkspaceFolder: (uri) => vscode.workspace.getWorkspaceFolder(uri),
         realpath: fs.promises.realpath,
+        readHead,
     };
+}
+
+// First `length` bytes of a local file (usdFileSet.js tells a binary .usd
+// crate from a text layer without reading it in full). null for other schemes.
+async function readHead(uri, length) {
+    if (!uri || uri.scheme !== 'file') return null;
+    const handle = await fs.promises.open(uri.fsPath, 'r');
+    try {
+        const buf = Buffer.alloc(length);
+        const { bytesRead } = await handle.read(buf, 0, length, 0);
+        return buf.subarray(0, bytesRead);
+    } finally {
+        await handle.close();
+    }
 }
 
 // Mirrors js/mtlx-engine.js's normPath: authored fileprefix/filename values

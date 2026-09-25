@@ -11,7 +11,7 @@
 
 const path = require('path');
 const vscode = require('vscode');
-const { MaterialXEditorProvider, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel, getSharedOutputChannel, logLine, disposeSharedOutputChannel, testApi } = require('./editorProvider');
+const { MaterialXEditorProvider, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel, getSharedOutputChannel, logLine, disposeSharedOutputChannel, getPanelForUri, setPendingInitialView, testApi } = require('./editorProvider');
 const validator = require('./validator');
 const { ValidationClient } = require('./validationClient');
 const hoverProvider = require('./hoverProvider');
@@ -347,6 +347,40 @@ function activate(context) {
         }
     };
 
+    // materialxPlayground.openInGraphEditor / openInMaterialViewer: open
+    // (or reuse) the playground for a .mtlx file and show a SPECIFIC view,
+    // regardless of the materialxPlayground.defaultView setting.
+    //   - A playground tab for this file is already open somewhere
+    //     (editorProvider.js's panelsByUri, populated by every resolved
+    //     custom-editor panel): reveal it and ask its webview to switch
+    //     view directly (mtlx-switch-view, handled by
+    //     media/bootstrap.js): one tab, no duplicate.
+    //   - Otherwise: record the requested view as this file's one-shot
+    //     initial-view override (editorProvider.js's
+    //     setPendingInitialView, consumed once by resolveCustomTextEditor)
+    //     and open it through the normal placement path (openInPlayground,
+    //     same openBehavior/splitRight rules as materialxPlayground.open).
+    const openInPlaygroundView = async (uriArg, hash) => {
+        try {
+            const uri = resolveTargetUri(uriArg);
+            if (!uri) {
+                vscode.window.showErrorMessage('MaterialX Playground: no .mtlx file to open (no active editor and no file selected).');
+                return;
+            }
+            const uriStr = uri.toString();
+            const existingPanel = getPanelForUri(uriStr);
+            if (existingPanel) {
+                existingPanel.reveal(existingPanel.viewColumn, false);
+                existingPanel.webview.postMessage({ type: 'mtlx-switch-view', hash });
+                return;
+            }
+            setPendingInitialView(uriStr, hash);
+            await openInPlayground(uri);
+        } catch (err) {
+            vscode.window.showErrorMessage('MaterialX Playground: failed to open - ' + errMsg(err));
+        }
+    };
+
     // materialxPlayground.autoOpenPlayground companion: the first time a .mtlx file
     // becomes the active text editor (and on every subsequent FIRST time
     // after the file is closed and reopened — see the re-arm comment on
@@ -433,6 +467,14 @@ function activate(context) {
 
     context.subscriptions.push(
         vscode.commands.registerCommand('materialxPlayground.open', (uriArg) => openInPlayground(uriArg)),
+        // The two explicit, always-visible commands (Command Palette,
+        // Explorer context, editor tab context, see package.json's
+        // menus): materialxPlayground.open stays registered (the toolbar
+        // button and auto-open still bind to it, and existing user
+        // keybindings to it keep working) but is hidden from those menus
+        // in favor of these two. See openInPlaygroundView above.
+        vscode.commands.registerCommand('materialxPlayground.openInGraphEditor', (uriArg) => openInPlaygroundView(uriArg, '#!graph')),
+        vscode.commands.registerCommand('materialxPlayground.openInMaterialViewer', (uriArg) => openInPlaygroundView(uriArg, '#!viewer')),
         // Bound to the Ctrl+S/Cmd+S keybinding contributed in package.json
         // (when: activeCustomEditorId == 'materialxPlayground.editor') —
         // see editorProvider.js's saveActiveGraph() and the comment on

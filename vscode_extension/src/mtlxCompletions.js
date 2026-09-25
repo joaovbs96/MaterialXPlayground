@@ -324,7 +324,8 @@ function getCompletions({ text, offset, repoRoot }) {
     }
     if (valueHit) {
         const valueStart = posToOffset(valueLineStarts, valueHit.range.start);
-        return valueItemsFor(valueRoot, index, valueHit).map((it) => withRange(it, valueStart, offset));
+        return valueItemsFor(valueRoot, index, valueHit)
+            .map((it, i) => withRange(withOrder(it, i), valueStart, offset));
     }
 
     // Context: typing/typed a tag name directly after '<'. When some
@@ -354,7 +355,7 @@ function getCompletions({ text, offset, repoRoot }) {
     // inAttributeWhitespace below.
     if (inAttributeWhitespace(text, offset)) {
         const el = elementContaining(root);
-        if (el) return attributeNameItems(index, el).map((it) => withRange(it, offset, offset));
+        if (el) return attributeNameItems(index, el).map((it, i) => withRange(withOrder(it, i), offset, offset));
     }
 
     return [];
@@ -371,6 +372,15 @@ function annotateWithin(node, cursorPos) {
 
 function withRange(item, start, end) {
     return Object.assign({}, item, { replaceStart: start, replaceEnd: end });
+}
+
+// Stamps the item's position in its own already-ordered candidate array
+// as `sortIndex`, so the vscode-side wrapper can build a sortText that
+// preserves this module's intended order (required first, then a
+// curated/spec-derived priority) instead of vscode's own default
+// alphabetical-by-label fallback.
+function withOrder(item, i) {
+    return Object.assign({}, item, { sortIndex: i });
 }
 
 // True when `offset` sits in an open tag's attribute region: after the
@@ -592,10 +602,12 @@ function attributeNameItems(index, el) {
         isSnippet: true,
         __required: !!a.required,
     }));
-    items.sort((x, y) => {
-        if (x.__required !== y.__required) return x.__required ? -1 : 1;
-        return x.label < y.label ? -1 : x.label > y.label ? 1 : 0;
-    });
+    // Required first; Array#sort is a stable sort (guaranteed since
+    // ES2019), so ties keep attrSchema's own array order  -  that array
+    // IS the curated priority (spec-required first, then commonly-used,
+    // then UI/layout, then doc last), not alphabetical.
+    items.sort((x, y) => (x.__required === y.__required ? 0 : x.__required ? -1 : 1));
+    if (items.length && items[0].__required) items[0].preselect = true;
     return items.map((it) => { delete it.__required; return it; });
 }
 

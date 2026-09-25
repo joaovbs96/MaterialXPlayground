@@ -129,14 +129,14 @@ function genCheckerPng() {
 // UsdUVTexture reads ../textures/checker.png. Neither sits in the root
 // layer's folder, so the scene file set must follow the references.
 // Multi-line on purpose: one-line USDA prims abort the USD wasm.
-function usdRootLayer() {
+function usdRootLayer(sublayer) {
     return [
         '#usda 1.0',
         '(',
         '    defaultPrim = "World"',
         '    metersPerUnit = 1',
         '    subLayers = [',
-        '        @../layers/geo.usda@',
+        '        @' + (sublayer || '../layers/geo.usda') + '@',
         '    ]',
         '    upAxis = "Y"',
         ')',
@@ -298,6 +298,133 @@ function usdCardMtlx() {
     ].join('\n');
 }
 
+function genBaseColorTexPng() {
+    return encodePNG({
+        width: 32, height: 32, bitDepth: 8, colorType: 2,
+        fillRow: (y, row) => { for (let x = 0; x < 32; x++) { const o = x * 3; row[o] = 0xC0; row[o + 1] = 0x40; row[o + 2] = 0x20; } },
+    });
+}
+
+function u32le(n) {
+    const b = Buffer.alloc(4);
+    b.writeUInt32LE(n, 0);
+    return b;
+}
+
+// One textured quad (4 verts, 2 triangles), shared by the glTF/GLB
+// fixtures below: positions/normals/uvs/indices as a single packed
+// buffer plus the accessors/material JSON that reference it, with the
+// caller filling in `buffers`/`images` (external uri vs GLB-embedded).
+function quadGeometryBuffer() {
+    const positions = [-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0];
+    const normals = [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1];
+    const uvs = [0, 1, 1, 1, 1, 0, 0, 0];
+    const indices = [0, 1, 2, 0, 2, 3];
+
+    const posBuf = Buffer.alloc(positions.length * 4);
+    positions.forEach((v, i) => posBuf.writeFloatLE(v, i * 4));
+    const normBuf = Buffer.alloc(normals.length * 4);
+    normals.forEach((v, i) => normBuf.writeFloatLE(v, i * 4));
+    const uvBuf = Buffer.alloc(uvs.length * 4);
+    uvs.forEach((v, i) => uvBuf.writeFloatLE(v, i * 4));
+    const idxBuf = Buffer.alloc(indices.length * 2);
+    indices.forEach((v, i) => idxBuf.writeUInt16LE(v, i * 2));
+
+    const posMin = [0, 1, 2].map((axis) => Math.min(...positions.filter((_, i) => i % 3 === axis)));
+    const posMax = [0, 1, 2].map((axis) => Math.max(...positions.filter((_, i) => i % 3 === axis)));
+
+    const buffer = Buffer.concat([posBuf, normBuf, uvBuf, idxBuf]);
+    if (buffer.length % 4 !== 0) throw new Error('quadGeometryBuffer: not 4-byte aligned');
+
+    const accessors = [
+        { bufferView: 0, componentType: 5126, count: positions.length / 3, type: 'VEC3', min: posMin, max: posMax },
+        { bufferView: 1, componentType: 5126, count: normals.length / 3, type: 'VEC3' },
+        { bufferView: 2, componentType: 5126, count: uvs.length / 2, type: 'VEC2' },
+        { bufferView: 3, componentType: 5123, count: indices.length, type: 'SCALAR' },
+    ];
+    const bufferViews = [
+        { buffer: 0, byteOffset: 0, byteLength: posBuf.length, target: 34962 },
+        { buffer: 0, byteOffset: posBuf.length, byteLength: normBuf.length, target: 34962 },
+        { buffer: 0, byteOffset: posBuf.length + normBuf.length, byteLength: uvBuf.length, target: 34962 },
+        { buffer: 0, byteOffset: posBuf.length + normBuf.length + uvBuf.length, byteLength: idxBuf.length, target: 34963 },
+    ];
+    return { buffer, accessors, bufferViews };
+}
+
+function quadGltfJson(geo, buffers, images) {
+    return {
+        asset: { version: '2.0', generator: 'mxpt smoke-fixtures.mjs' },
+        scene: 0,
+        scenes: [{ nodes: [0] }],
+        nodes: [{ mesh: 0, name: 'Quad' }],
+        meshes: [{ name: 'Quad', primitives: [{ attributes: { POSITION: 0, NORMAL: 1, TEXCOORD_0: 2 }, indices: 3, material: 0 }] }],
+        materials: [{
+            name: 'TexturedQuad',
+            pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicFactor: 0, roughnessFactor: 0.7 },
+        }],
+        textures: [{ source: 0 }],
+        images,
+        accessors: geo.accessors,
+        bufferViews: geo.bufferViews,
+        buffers,
+    };
+}
+
+// quad.gltf + quad.bin (external buffer) + textures/base.png (external
+// image): the plain-text half of the scene-format smoke scenarios.
+function genGltfFixture() {
+    const geo = quadGeometryBuffer();
+    const json = quadGltfJson(geo, [{ byteLength: geo.buffer.length, uri: 'quad.bin' }], [{ uri: 'textures/base.png' }]);
+    return { json: JSON.stringify(json, null, 2), bin: geo.buffer };
+}
+
+// quad.glb: same quad, geometry buffer embedded in the GLB's own BIN
+// chunk (no external .bin needed), texture kept external so the "texture
+// file was part of the sent file set" assertion still has something to
+// check for the GLB scenario too.
+function genGlbFixture() {
+    const geo = quadGeometryBuffer();
+    const json = quadGltfJson(geo, [{ byteLength: geo.buffer.length }], [{ uri: 'textures/base.png' }]);
+    let jsonText = JSON.stringify(json);
+    while (jsonText.length % 4 !== 0) jsonText += ' ';
+    const jsonBuf = Buffer.from(jsonText, 'utf8');
+    const jsonChunk = Buffer.concat([u32le(jsonBuf.length), Buffer.from('JSON', 'ascii'), jsonBuf]);
+    const binPad = (4 - (geo.buffer.length % 4)) % 4;
+    const binPadded = Buffer.concat([geo.buffer, Buffer.alloc(binPad, 0)]);
+    const binChunk = Buffer.concat([u32le(binPadded.length), Buffer.from('BIN\0', 'ascii'), binPadded]);
+    const totalLength = 12 + jsonChunk.length + binChunk.length;
+    const header = Buffer.concat([Buffer.from('glTF', 'ascii'), u32le(2), u32le(totalLength)]);
+    return Buffer.concat([header, jsonChunk, binChunk]);
+}
+
+// quad.obj + quad.mtl (mtllib) + textures/base.png (map_Kd in a subfolder):
+// the OBJ half of the scene-format smoke scenarios.
+function genObjFixture() {
+    const obj = [
+        'mtllib quad.mtl',
+        'v -0.5 -0.5 0',
+        'v 0.5 -0.5 0',
+        'v 0.5 0.5 0',
+        'v -0.5 0.5 0',
+        'vt 0 0',
+        'vt 1 0',
+        'vt 1 1',
+        'vt 0 1',
+        'vn 0 0 1',
+        'usemtl TexturedQuad',
+        'f 1/1/1 2/2/1 3/3/1',
+        'f 1/1/1 3/3/1 4/4/1',
+        '',
+    ].join('\n');
+    const mtl = [
+        'newmtl TexturedQuad',
+        'Kd 1.0 1.0 1.0',
+        'map_Kd textures/base.png',
+        '',
+    ].join('\n');
+    return { obj, mtl };
+}
+
 async function generateSmokeFixtures(fixturesDir) {
     const wsDir = path.join(fixturesDir, 'ws');
     const texDir = path.join(wsDir, 'textures');
@@ -338,12 +465,71 @@ async function generateSmokeFixtures(fixturesDir) {
     fs.writeFileSync(autoOpenUsdaPath, autoOpenUsdaDoc());
     fs.writeFileSync(autoOpenUsdzPath, genUsdzPlaceholder());
 
+    // glTF: quad.gltf (text) + quad.bin + textures/base.png, all sent.
+    const gltfDir = path.join(wsDir, 'scenegltf');
+    fs.mkdirSync(path.join(gltfDir, 'textures'), { recursive: true });
+    const gltfFixture = genGltfFixture();
+    const gltfRootPath = path.join(gltfDir, 'quad.gltf');
+    fs.writeFileSync(gltfRootPath, gltfFixture.json);
+    fs.writeFileSync(path.join(gltfDir, 'quad.bin'), gltfFixture.bin);
+    manifest['ws/scenegltf/textures/base.png'] = writePngRecordHash(path.join(gltfDir, 'textures', 'base.png'), genBaseColorTexPng());
+
+    // GLB: quad.glb (binary) + textures/base.png (external, referenced
+    // from the GLB's own JSON chunk).
+    const glbDir = path.join(wsDir, 'sceneglb');
+    fs.mkdirSync(path.join(glbDir, 'textures'), { recursive: true });
+    const glbRootPath = path.join(glbDir, 'quad.glb');
+    fs.writeFileSync(glbRootPath, genGlbFixture());
+    manifest['ws/sceneglb/textures/base.png'] = writePngRecordHash(path.join(glbDir, 'textures', 'base.png'), genBaseColorTexPng());
+
+    // OBJ: quad.obj (text) + quad.mtl (mtllib) + textures/base.png
+    // (map_Kd, in a subfolder).
+    const objDir = path.join(wsDir, 'sceneobj');
+    fs.mkdirSync(path.join(objDir, 'textures'), { recursive: true });
+    const objFixture = genObjFixture();
+    const objRootPath = path.join(objDir, 'quad.obj');
+    fs.writeFileSync(objRootPath, objFixture.obj);
+    fs.writeFileSync(path.join(objDir, 'quad.mtl'), objFixture.mtl);
+    manifest['ws/sceneobj/textures/base.png'] = writePngRecordHash(path.join(objDir, 'textures', 'base.png'), genBaseColorTexPng());
+
+    // sceneNoSiblings: a folder holding the actual scene (quad.glb +
+    // textures/base.png) plus several unrelated .glb/.usda files that
+    // nothing references. Opening quad.glb must send only quad.glb and its
+    // referenced texture -- proof there is no folder walk (see
+    // vscode_extension/src/usdFileSet.js).
+    const noSiblingsDir = path.join(wsDir, 'scenenosiblings');
+    fs.mkdirSync(path.join(noSiblingsDir, 'textures'), { recursive: true });
+    const noSiblingsRootPath = path.join(noSiblingsDir, 'quad.glb');
+    fs.writeFileSync(noSiblingsRootPath, genGlbFixture());
+    manifest['ws/scenenosiblings/textures/base.png'] = writePngRecordHash(path.join(noSiblingsDir, 'textures', 'base.png'), genBaseColorTexPng());
+    const noSiblingUnrelatedPaths = [
+        path.join(noSiblingsDir, 'unrelated1.glb'),
+        path.join(noSiblingsDir, 'unrelated2.glb'),
+        path.join(noSiblingsDir, 'unrelated.usda'),
+    ];
+    for (const p of noSiblingUnrelatedPaths) {
+        fs.writeFileSync(p, p.endsWith('.usda') ? usdRootLayer() : genGlbFixture());
+    }
+
+    // sceneMissingRoundTrip: root.usda sublayers layers/geo.usda, whose
+    // UsdUVTexture reads ../textures/checker.png. The scenario turns the
+    // static reference scan off, so both arrive through on-demand rounds.
+    const missingDir = path.join(wsDir, 'scenemissing');
+    for (const sub of ['layers', 'textures']) fs.mkdirSync(path.join(missingDir, sub), { recursive: true });
+    const missingRootPath = path.join(missingDir, 'root.usda');
+    fs.writeFileSync(missingRootPath, usdRootLayer('layers/geo.usda'));
+    fs.writeFileSync(path.join(missingDir, 'layers', 'geo.usda'), usdGeoLayer());
+    manifest['ws/scenemissing/textures/checker.png'] = writePngRecordHash(path.join(missingDir, 'textures', 'checker.png'), genCheckerPng());
+
     fs.writeFileSync(path.join(fixturesDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
 
     return {
         fixturesDir, wsDir, texDir, matDir, outsideDir, manifest,
         mainMtlxPath, outsideMtlxPath, validationMtlxPath, hoverMtlxPath, usdRootPath, usdMtlxRootPath,
         autoOpenUsdaPath, autoOpenUsdzPath,
+        gltfRootPath, glbRootPath, objRootPath,
+        noSiblingsRootPath, noSiblingUnrelatedPaths,
+        missingRootPath,
     };
 }
 

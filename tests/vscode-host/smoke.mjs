@@ -90,6 +90,10 @@ async function main() {
                 MTLX_SMOKE_FIXTURES: FIXTURES_DIR,
                 MTLX_SMOKE_RESULTS_FILE: RESULTS_FILE,
                 MTLX_SMOKE_EXT_ROOT: extensionDir,
+                // Optional manual measurement of a real scene (see the suite's
+                // scenarioExternalScene); empty in CI.
+                MTLX_SMOKE_EXTRA_SCENE: process.env.MTLX_SMOKE_EXTRA_SCENE || '',
+                MTLX_SMOKE_EXTRA_ONLY: process.env.MTLX_SMOKE_EXTRA_ONLY || '',
             },
         });
         log('host exited cleanly.');

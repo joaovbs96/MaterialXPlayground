@@ -182,6 +182,19 @@ const FOCUS_CSS_BLOCK = `
            normally suppress. */
         :focus {
             outline: none;
+        }
+
+        /* WEBVIEW-ONLY - do NOT mirror this rule back to index.html / the
+           real site. VS Code injects its own default webview styles
+           (body { padding: 0 20px; }, confirmed via getComputedStyle in a
+           running webview, see the fullWidth smoke scenario), leaving a
+           ~20px gap on each side between the webview edge and every view
+           (playground, docs panel, Scene Viewer). !important beats VS
+           Code's non-!important default regardless of which <style> tag
+           runs first or last in the document. */
+        body {
+            padding: 0 !important;
+            margin: 0 !important;
         }`;
 
 const PLACEHOLDERS = ["${cspSource}", "${baseUri}", "${bootstrapUri}", "${initialHash}", "${docsOnly}", "${sceneOnly}", "${extensionVersion}", "${vscodeVersion}"];

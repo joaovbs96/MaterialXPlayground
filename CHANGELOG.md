@@ -6,9 +6,21 @@ Full notes for every release, including every fix, are on the [GitHub Releases p
 
 ## Unreleased
 
+- A material opened from the Scene Viewer's "Open in Graph Editor" now opens as view only, with a banner and an Export .mtlx button to save an editable copy.
+- The Scene Viewer's wording is now generic instead of USD-specific: "Scene" instead of "Stage", "Scene selection" instead of "Root layer", "objects" instead of "prims", and so on.
+- The Scene Viewer's Scene card now shows the loaded file, its format, the files loaded (with a list that marks missing files), units and up axis where the scene declares them, a camera picker and a Reload button, including in VS Code.
+- The Scene Viewer's Statistics now count nodes separately from meshes and show how many meshes are visible; the scene name row is gone.
+- The Scene Viewer's selection outline is now smooth instead of jagged, 2 px wide and scaled for high-density displays.
+- Fixed the Scene Viewer loading every scene file in a folder instead of just the one you opened; it now loads only the opened file and what it actually references.
+- In VS Code, binary USD scene files (`.usdc`, binary `.usd`) now load the files they reference on demand, and UDIM textures referenced from `.mtlx` files in a scene are found.
+- In VS Code, finding and loading a scene's files is now part of the Scene Viewer's progress bar, shows files and MB loaded, and can be cancelled; a cancelled load offers Reload. Files already loaded are reused when the scene reloads.
+- The Scene Viewer's Scene selection dropdown and "Load" controls are hidden in VS Code, since the opened file is always the root there.
+- The Scene Viewer's material panel no longer shows an unusable 3D preview column in VS Code; the node graph now fills the panel.
+- The VS Code extension's webviews (playground, docs panel, Scene Viewer) no longer have an extra gap on the left and right edge.
+- The VS Code extension now has "Open in Graph Editor" and "Open in Material Viewer" commands, in the Command Palette and the Explorer/editor-tab context menus, in place of the old single "Open MaterialX Document" command there; opening a file that's already open switches its view in place instead of opening a second tab.
 - The VS Code extension's settings moved to `materialxPlayground.defaultView`, `materialxPlayground.openBehavior` and `materialxPlayground.autoOpenPlayground`; the old `materialx.*` names still work but are marked deprecated.
-- The VS Code extension can now open USD stages (`.usd`, `.usda`, `.usdc`, `.usdz`) in the experimental USD Scene Viewer, with the "Open in USD Scene Viewer" command or Open With.
-- The USD Scene Viewer now opens automatically when you open a USD scene file, same as the Playground does for `.mtlx` files; turn it off with the new `materialxPlayground.autoOpenSceneViewer` setting.
+- The VS Code extension can now open USD stages (`.usd`, `.usda`, `.usdc`, `.usdz`), glTF/GLB scenes (`.gltf`, `.glb`) and OBJ meshes (`.obj`) in the experimental Scene Viewer, with the "Open in Scene Viewer" command or Open With.
+- The Scene Viewer now opens automatically when you open a scene file, same as the Playground does for `.mtlx` files; turn it off with the new `materialxPlayground.autoOpenSceneViewer` setting.
 - The VS Code extension now has a "New Material from Example" command that copies a ready-made standard_surface or OpenPBR material into your workspace and opens it, also available from the Explorer folder context menu.
 - The VS Code extension now offers snippets for common material patterns and auto-complete for node names, node inputs and reference attributes in `.mtlx` files.
 - Attribute auto-complete now offers only the attributes valid for the element you're editing (a node, a node definition input, a look, and so on), instead of one generic list.

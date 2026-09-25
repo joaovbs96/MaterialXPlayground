@@ -212,6 +212,67 @@ test('getLibraryIndex: memoized per repoRoot (same object returned)', () => {
     assert.equal(a, b);
 });
 
+test('attribute-name completion in an unclosed tag never offers an already-present attribute from the NEXT element', () => {
+    // The reported screenshot bug: cursor right after "<standard_surface "
+    // with the tag not closed yet, followed by a complete sibling element
+    // on the next line. name/type must still be offered (not swallowed
+    // as already-present), and inherit must not appear at all (removed
+    // from the node-instance schema, see mtlxAttributeSchema.js).
+    const text = '<materialx version="1.39">\n<standard_surface |\n'
+        + '<surfacematerial name="M1" type="material">\n'
+        + '  <input name="surfaceshader" type="surfaceshader" nodename="SR1" />\n'
+        + '  <input name="displacementshader" type="displacementshader" nodename="" />\n'
+        + '</surfacematerial>\n</materialx>\n';
+    const ls = labels(complete(text));
+    assert.ok(ls.includes('name'), 'name must still be offered, not hidden by the next element\'s name=');
+    assert.ok(ls.includes('type'), 'type must still be offered, not hidden by the next element\'s type=');
+    assert.ok(!ls.includes('inherit'), 'inherit is not part of the node-instance schema');
+});
+
+test('attribute-name completion in an unclosed tag at end of file', () => {
+    const text = '<materialx version="1.39">\n  <standard_surface |';
+    const ls = labels(complete(text));
+    assert.ok(ls.includes('name'));
+    assert.ok(ls.includes('type'));
+});
+
+test('attribute-name completion with the cursor among an unclosed tag\'s OWN already-typed attributes', () => {
+    // Cursor sits between name="SR1" and the (not yet typed) rest of the
+    // tag, which itself is unclosed and followed by a sibling element.
+    // Only this tag's own already-present "name" should be excluded.
+    const text = '<materialx version="1.39">\n<standard_surface name="SR1" |\n'
+        + '<surfacematerial name="M1" type="material" />\n</materialx>\n';
+    const ls = labels(complete(text));
+    assert.ok(!ls.includes('name'), 'name is already present on THIS tag');
+    assert.ok(ls.includes('type'), 'type has not been typed on this tag yet');
+});
+
+test('attribute-name completion for an unclosed <input inside a node instance', () => {
+    const text = '<materialx version="1.39">\n  <standard_surface name="SR1" type="surfaceshader">\n'
+        + '    <input name="base_color" |\n'
+        + '  </standard_surface>\n</materialx>\n';
+    const ls = labels(complete(text));
+    assert.ok(ls.includes('value'), 'value is a node-instance-input attribute');
+    assert.ok(ls.includes('nodename'));
+    assert.ok(!ls.includes('name'), 'name is already present on this <input');
+});
+
+test('value completion inside an unclosed tag followed by a sibling element on the next line', () => {
+    const text = '<materialx version="1.39">\n<standard_surface name="SR1" type="|\n'
+        + '<surfacematerial name="M1" type="material" />\n</materialx>\n';
+    const ls = labels(complete(text));
+    assert.ok(ls.includes('surfaceshader'), 'standard_surface\'s own output type is still offered');
+    assert.equal(ls[0], 'surfaceshader', 'the node\'s own output type sorts first');
+});
+
+test('attribute-name completion in an unclosed tag whose next line is a comment', () => {
+    const text = '<materialx version="1.39">\n<standard_surface |\n'
+        + '<!-- a comment -->\n<surfacematerial name="M1" type="material" />\n</materialx>\n';
+    const ls = labels(complete(text));
+    assert.ok(ls.includes('name'));
+    assert.ok(ls.includes('type'));
+});
+
 test('unknown attribute values and non-completion positions yield no items', () => {
     assert.deepEqual(complete('<materialx version="1.39" unknownattr="|" />\n'), []);
     assert.deepEqual(complete('<materialx version="1.39">plain text|</materialx>\n'), []);

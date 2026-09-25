@@ -408,7 +408,7 @@
             return (b.entry.intensity * b.entry.color.length()) - (a.entry.intensity * a.entry.color.length());
         });
         if (prepared.length > limit) {
-            warn('Stage has ' + prepared.length + ' analytic lights; using the brightest ' + limit);
+            warn('Scene has ' + prepared.length + ' analytic lights; using the brightest ' + limit);
             prepared = prepared.slice(0, limit);
         }
 

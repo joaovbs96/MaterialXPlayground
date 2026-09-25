@@ -268,6 +268,9 @@ test('gltfCameraToRecord: perspective camera derives focalLength/apertures from 
   assert.ok(Math.abs(record.verticalAperture - 24) < 1e-6);
   assert.ok(Math.abs(record.focalLength - 50) < 0.01);
   assert.deepEqual(record.clippingRange, [0.1, 500]);
+  assert.equal(record.horizontalApertureOffset, 0);
+  assert.equal(record.verticalApertureOffset, 0);
+  assert.equal(record.aspectFromViewport, undefined, 'an authored aspectRatio is fitted like a USD aperture');
 });
 
 test('gltfCameraToRecord: perspective camera without aspectRatio still produces a usable focalLength', () => {
@@ -275,13 +278,17 @@ test('gltfCameraToRecord: perspective camera without aspectRatio still produces 
   const record = gltfCameraToRecord(cameraDef, IDENTITY, '/Cameras/main', 'main');
   assert.ok(Number.isFinite(record.focalLength) && record.focalLength > 0);
   assert.deepEqual(record.clippingRange, [0.01, 1000000]);
+  // glTF: no aspectRatio means the viewport's, with yfov kept as the vertical extent.
+  assert.equal(record.aspectFromViewport, true);
+  assert.ok(Math.abs(2 * Math.atan(record.verticalAperture / (2 * record.focalLength)) - 0.8) < 1e-12);
 });
 
 test('gltfCameraToRecord: orthographic camera derives apertures from xmag/ymag', () => {
   const cameraDef = { type: 'orthographic', orthographic: { xmag: 2, ymag: 1, znear: 0.05, zfar: 200 } };
   const record = gltfCameraToRecord(cameraDef, IDENTITY, '/Cameras/ortho', 'ortho');
   assert.equal(record.projection, 'orthographic');
-  assert.equal(record.horizontalAperture, 4);
-  assert.equal(record.verticalAperture, 2);
+  // USD orthographic apertures are in tenths of a scene unit: xmag 2 is 4 units wide.
+  assert.equal(record.horizontalAperture, 40);
+  assert.equal(record.verticalAperture, 20);
   assert.deepEqual(record.clippingRange, [0.05, 200]);
 });

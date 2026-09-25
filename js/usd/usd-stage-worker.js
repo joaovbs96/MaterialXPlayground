@@ -438,7 +438,14 @@ function resolveStageMetrics(summary, rootMetrics) {
     if (headerUp) warnings.push(`[info] Native USD summary omitted upAxis; using root USDA header value ${headerUp}`);
     else if (!rootMetrics?.ascii) warnings.push('[info] Native USD summary omitted upAxis for a binary root; using USD default Y (authored binary metadata unavailable)');
   }
-  return { metersPerUnit, upAxis, warnings };
+  // Scene card qualifier: whether the root header authored each value, null when a
+  // binary or truncated root makes that unknowable.
+  const known = !!rootMetrics?.ascii && !rootMetrics.truncated;
+  const authored = {
+    metersPerUnit: known ? Number.isFinite(rootMetrics.metersPerUnit) : null,
+    upAxis: known ? !!headerUp : null,
+  };
+  return { metersPerUnit, upAxis, warnings, authored };
 }
 
 function copyTexture(texture, assets) {
@@ -1771,6 +1778,14 @@ function loadMaterialDocs() {
   return materialDocsModule;
 }
 
+// Houdini publishes an auto-created UsdPreviewSurface next to the MaterialX
+// network; the native payload then types the record UsdPreviewSurface but still
+// carries that network, which wins over the flattened preview constants.
+function hasNativeMaterialX(material) {
+  const mx = material?.materialX;
+  return !!(mx && (mx.data || mx.path));
+}
+
 // Encodes a synthesized MaterialX document, points the material record at it
 // and publishes it as a top-level asset the renderer can resolve.
 function attachSynthesizedMaterialX(result, material, mtlxPath, xml, materialName) {
@@ -1954,7 +1969,109 @@ function graphEntriesOfType(graph, matches) {
   });
 }
 
-function collectCameras(api, root, graph, warn, evaluatedTransforms = null) {
+// Every Material prim in the composed stage, bound or not. The native payload
+// only carries materials a drawn mesh binds, so unbound ones (a library, a
+// Volume-only binding) reach the outliner through this path list.
+function collectMaterialPrims(graph) {
+  const prims = [];
+  const seen = new Set();
+  for (const entry of graphEntriesOfType(graph, name => name === "material")) {
+    const path = text(entry.path);
+    if (seen.has(path)) continue;
+    seen.add(path);
+    prims.push({ path, name: text(entry.name) || path.split("/").filter(Boolean).pop() || path });
+  }
+  return prims;
+}
+
+// UsdGeomCamera schema fallbacks, for a lens attribute the runtime returns no
+// record or no number for.
+const CAMERA_SCHEMA_DEFAULTS = {
+  focalLength: 50, horizontalAperture: 20.955, verticalAperture: 15.2908,
+  horizontalApertureOffset: 0, verticalApertureOffset: 0,
+  clippingRange: [1, 1000000], focusDistance: 0, projection: "perspective",
+};
+const CAMERA_LENS_ATTRIBUTES = [
+  "focalLength", "horizontalAperture", "verticalAperture",
+  "horizontalApertureOffset", "verticalApertureOffset", "clippingRange", "focusDistance",
+];
+
+// Numbers of a `.timeSamples` map at `time`, linearly interpolated between the
+// bracketing samples and held past either end, as USD resolves float values.
+function sampledNumbersAtTime(samples, time) {
+  const parsed = (samples ?? []).map(([at, value]) => [at, parseNumbers(value)])
+    .filter(([at, nums]) => Number.isFinite(at) && nums.length)
+    .sort((a, b) => a[0] - b[0]);
+  if (!parsed.length) return null;
+  if (!Number.isFinite(time) || time <= parsed[0][0]) return parsed[0][1];
+  for (let i = 1; i < parsed.length; i++) {
+    const [t1, v1] = parsed[i];
+    if (time > t1) continue;
+    const [t0, v0] = parsed[i - 1];
+    if (time === t1) return v1;
+    if (v0.length !== v1.length) return v0;
+    const u = (time - t0) / (t1 - t0);
+    return v0.map((value, k) => value + (v1[k] - value) * u);
+  }
+  return parsed[parsed.length - 1][1];
+}
+
+// Own attributes (child prim blocks stripped) a USD text scope authors for
+// `names`: the default value text and the `.timeSamples` pairs of each.
+function collectScopeAttributes(scopeText, names) {
+  const own = stripChildBlocks(scopeText, extractChildBlocks(scopeText));
+  const found = new Map();
+  const re = /(?:^|\n)[ \t]*(?:(?:uniform|custom|varying)[ \t]+)*[A-Za-z_][\w[\]]*[ \t]+([A-Za-z_][\w:]*)(\.timeSamples)?[ \t]*=[ \t]*/g;
+  let m;
+  while ((m = re.exec(own))) {
+    if (!names.includes(m[1])) continue;
+    const rest = own.slice(m.index + m[0].length);
+    const entry = found.get(m[1]) ?? { value: null, timeSamples: null };
+    if (m[2]) {
+      const body = leadingBraceBody(rest);
+      if (body !== null) entry.timeSamples = parseTimeSamples(body);
+    } else {
+      entry.value = leadingValueText(rest) || entry.value;
+    }
+    found.set(m[1], entry);
+  }
+  return found;
+}
+
+// A camera prim's block in one text layer: by its full path, else a typed
+// `def Camera` of the same leaf name (a referenced camera asset's own layer).
+function findCameraBlockBody(usdaText, primPath) {
+  const byPath = findMaterialBlockBody(usdaText, primPath);
+  if (byPath != null) return byPath;
+  const leaf = primPath.split("/").filter(Boolean).pop();
+  const match = leaf ? new RegExp('\\bdef\\s+Camera\\s+"' + escapeRegExp(leaf) + '"[^{]*\\{').exec(usdaText) : null;
+  return match ? leadingBraceBody(usdaText.slice(match.index + match[0].length - 1)) : null;
+}
+
+// getPrimAttributes reads the default time only, so a lens authored purely as
+// time samples arrives as the schema fallback. The text layers keep the samples:
+// the first layer (root first) with an opinion decides, evaluated at `time`.
+function sampledCameraLens(usdaLayers, rootPath, primPath, time) {
+  const lens = new Map();
+  const isRoot = layer => normalizePath(layer.path) === rootPath;
+  const layers = (usdaLayers ?? []).slice().sort((a, b) => Number(isRoot(b)) - Number(isRoot(a)));
+  const decided = new Set();
+  for (const layer of layers) {
+    const body = findCameraBlockBody(layer.text, primPath);
+    if (body == null) continue;
+    for (const [name, entry] of collectScopeAttributes(body, CAMERA_LENS_ATTRIBUTES)) {
+      if (decided.has(name)) continue;
+      decided.add(name);
+      const nums = entry.timeSamples ? sampledNumbersAtTime(entry.timeSamples, time) : null;
+      if (nums) lens.set(name, nums);
+    }
+  }
+  return lens;
+}
+
+// Lens values are read at `stageTime`, the stage start time evaluatedTransforms
+// uses; composed default-time reads cover every attribute without text samples.
+function collectCameras(api, root, graph, warn, evaluatedTransforms = null, usdaLayers = [], stageTime = Number.NaN) {
   const cameraEntries = graphEntriesOfType(graph, name => name === "camera");
   const cameras = [];
   for (const entry of cameraEntries) {
@@ -1963,24 +2080,31 @@ function collectCameras(api, root, graph, warn, evaluatedTransforms = null) {
     const { matrix: worldSoFar, leafMap, unsupported } = composeWorldMatrix(api, root, primPath, warn, "Camera");
     if (unsupported) continue;
     const map = leafMap;
-    const numberOf = (name, fallback) => {
+    let sampled = new Map();
+    try { sampled = sampledCameraLens(usdaLayers, root, primPath, stageTime); } catch { /* composed reads only */ }
+    const numbersOf = (name) => {
+      if (sampled.has(name)) return sampled.get(name);
       const record = map.get(name);
-      const nums = record ? parseNumbers(record.value) : [];
-      return nums.length ? nums[0] : fallback;
+      return record ? parseNumbers(record.value) : [];
     };
-    const clipRecord = map.get("clippingRange");
-    const clipNums = clipRecord ? parseNumbers(clipRecord.value) : [];
-    const projectionRecord = map.get("projection");
+    const numberOf = (name) => numbersOf(name)[0] ?? CAMERA_SCHEMA_DEFAULTS[name];
+    const clipNums = numbersOf("clippingRange");
+    const projection = text(map.get("projection")?.value)?.trim().replace(/^"|"$/g, "");
     cameras.push({
       primPath,
       name: segments[segments.length - 1] || primPath,
       matrix: evaluatedTransforms?.get(primPath) ?? worldSoFar,
-      focalLength: numberOf("focalLength", 50),
-      horizontalAperture: numberOf("horizontalAperture", 36),
-      verticalAperture: numberOf("verticalAperture", 24),
-      clippingRange: [clipNums[0] ?? 0.1, clipNums[1] ?? 1000000],
-      focusDistance: numberOf("focusDistance", 0),
-      projection: projectionRecord ? text(projectionRecord.value) : "perspective",
+      focalLength: numberOf("focalLength"),
+      horizontalAperture: numberOf("horizontalAperture"),
+      verticalAperture: numberOf("verticalAperture"),
+      horizontalApertureOffset: numberOf("horizontalApertureOffset"),
+      verticalApertureOffset: numberOf("verticalApertureOffset"),
+      clippingRange: [
+        clipNums[0] ?? CAMERA_SCHEMA_DEFAULTS.clippingRange[0],
+        clipNums[1] ?? CAMERA_SCHEMA_DEFAULTS.clippingRange[1],
+      ],
+      focusDistance: numberOf("focusDistance"),
+      projection: projection || CAMERA_SCHEMA_DEFAULTS.projection,
     });
   }
   return cameras;
@@ -2084,7 +2208,7 @@ function collectLights(api, root, graph, warn, evaluatedTransforms = null) {
     });
   }
   const domes = lights.filter(light => light.type.toLowerCase() === "domelight");
-  if (domes.length > 1) warn(`Stage has ${domes.length} dome lights; using ${domes[0].primPath}`);
+  if (domes.length > 1) warn(`Scene has ${domes.length} dome lights; using ${domes[0].primPath}`);
   for (const light of lights) {
     const kind = light.type.toLowerCase();
     if (kind === "domelight") {
@@ -2407,6 +2531,7 @@ function copyStageResult(summary, draw, payloads, cameras, lights, metrics = nul
     rootPath: summary?.rootFile ?? "",
     upAxis: metrics?.upAxis ?? summary?.upAxis,
     metersPerUnit: metrics?.metersPerUnit ?? summary?.metersPerUnit,
+    metricsAuthored: metrics?.authored ?? null,
     summary: summary ?? null,
     meshes,
     materials: materialList,
@@ -2545,7 +2670,7 @@ async function load(request) {
   if (!loadedFiles) throw new Error("USD file buffers were empty or not transferable");
   const root = normalizePath(request.rootPath);
   if (!root) throw new Error("USD rootPath is required");
-  postMessage({ id: request.id, type: "progress", value: { phase: "parse", done: 0, total: 0, fraction: 0.3, message: "Composing stage" } });
+  postMessage({ id: request.id, type: "progress", value: { phase: "parse", done: 0, total: 0, fraction: 0.3, message: "Composing scene" } });
   stderrBuffer.length = 0;
   const summary = api.openStage(root, true);
   const openStageStderrLines = stderrBuffer.slice();
@@ -2554,7 +2679,7 @@ async function load(request) {
   // failed load never leaves a half-composed stage marked as closeable.
   activeStage = root;
   const stageMetrics = resolveStageMetrics(summary, rootMetrics);
-  postMessage({ id: request.id, type: "progress", value: { phase: "parse", done: 1, total: 1, fraction: 0.4, message: "Composed stage" } });
+  postMessage({ id: request.id, type: "progress", value: { phase: "parse", done: 1, total: 1, fraction: 0.4, message: "Composed scene" } });
   if (!api.createStageDriver(root)) throw new Error("OpenUSD stage driver could not be created");
   const evaluatedTransforms = snapshotEvaluatedTransforms(api, root, summary);
   const stageTime = stageStartTime(api, root, summary);
@@ -2743,11 +2868,14 @@ async function load(request) {
     "Unsupported USD volume rendering: " + path + " (VDB volume data was not imported)"
   );
   const cameraWarnings = [];
-  const cameras = collectCameras(api, root, graph, message => cameraWarnings.push(message), evaluatedTransforms);
+  const cameras = collectCameras(
+    api, root, graph, message => cameraWarnings.push(message), evaluatedTransforms, usdaTexts, stageTime
+  );
   markDefaultCamera(api, root, graph, cameras);
   const lightWarnings = [];
   const lights = collectLights(api, root, graph, message => lightWarnings.push(message), evaluatedTransforms);
   const result = copyStageResult(summary, drawSnapshot, payloadSnapshot, cameras, lights, stageMetrics);
+  result.materialPrims = collectMaterialPrims(graph);
   result.warnings.push(...stageMetrics.warnings, ...volumeWarnings);
   const connectionWarnedLayers = new Set();
   for (const material of result.materials) {
@@ -2755,7 +2883,8 @@ async function load(request) {
     const overrides = collectMaterialOverrides(api, root, usdaTexts, mtlxTexts, material.path, stageTime);
     if (overrides.length) material.overrides = overrides;
 
-    const isPreviewSurface = String(material.shaderId || "") === "UsdPreviewSurface";
+    const isPreviewSurface = String(material.shaderId || "") === "UsdPreviewSurface"
+      && !hasNativeMaterialX(material);
     const materialLeaf = String(material.path || "").split("/").filter(Boolean).pop() || "material";
     const built = buildUsdShadeMaterialX(api, root, material.path, usdaTexts, {
       allowPreviewSurface: isPreviewSurface,

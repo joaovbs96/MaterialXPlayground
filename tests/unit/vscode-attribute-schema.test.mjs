@@ -129,6 +129,43 @@ test('attribute-name: node input type resolved from the library when the input h
     assert.ok(ls.includes('colorspace'), 'base_color resolves to color3 via the library, so colorspace applies');
 });
 
+test('attribute-name: inherit is not offered on a node instance', () => {
+    // Spec (Specification.md lines 1303-1309) only documents `inherit` on
+    // "instantiated shader nodes... of the same class", a narrow
+    // same-category case this schema can't narrow to, so it's left off
+    // the generic node-instance list entirely (see mtlxAttributeSchema.js
+    // 'node-instance' comment).
+    const closed = complete('<materialx version="1.39">\n  <standard_surface |/>\n</materialx>\n');
+    assert.ok(!labels(closed).includes('inherit'));
+    const withType = complete('<materialx version="1.39">\n  <standard_surface type="surfaceshader" |/>\n</materialx>\n');
+    assert.ok(!labels(withType).includes('inherit'));
+});
+
+test('attribute-name: node-instance items carry an explicit sortIndex in curated priority order', () => {
+    const items = complete('<materialx version="1.39">\n  <standard_surface |/>\n</materialx>\n');
+    const byLabel = Object.fromEntries(items.map((i) => [i.label, i.sortIndex]));
+    assert.ok(byLabel.name < byLabel.type, 'name before type');
+    assert.ok(byLabel.type < byLabel.nodedef, 'required attrs sort before the rest');
+    assert.ok(byLabel.nodedef < byLabel.version);
+    assert.ok(byLabel.version < byLabel.colorspace);
+    assert.ok(byLabel.colorspace < byLabel.uiname, 'commonly-used attrs sort before UI/layout ones');
+    assert.ok(byLabel.uiname < byLabel.xpos);
+    assert.ok(byLabel.xpos < byLabel.doc, 'doc sorts last');
+    every(items, (i) => typeof i.sortIndex === 'number');
+});
+
+test('attribute-name: the first required item is preselected', () => {
+    const items = complete('<materialx version="1.39">\n  <standard_surface |/>\n</materialx>\n');
+    const name = items.find((i) => i.label === 'name');
+    assert.equal(name.preselect, true);
+    const type = items.find((i) => i.label === 'type');
+    assert.ok(!type.preselect, 'only the very first required item is preselected');
+});
+
+function every(items, pred) {
+    for (const i of items) assert.ok(pred(i));
+}
+
 test('classifyElement: node instance vs nodedef vs nodedef-input vs nodegraph', () => {
     assert.equal(schema.classifyElement({ tag: 'materialx' }), 'materialx');
     assert.equal(schema.classifyElement({ tag: 'nodedef' }), 'nodedef');

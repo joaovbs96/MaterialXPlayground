@@ -1229,7 +1229,7 @@ const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotat
 // Hand a document off to the node graph editor: stash it (plus any loose
 // files) where js/graph-app.jsx's 'mtlx-load-document' listener expects
 // it, fire that event, then hash-route to the graph view.
-const openInGraphEditor = ({ xml, name, files, select, implOf }) => {
+const openInGraphEditor = ({ xml, name, files, select, implOf, readOnly, readOnlySource }) => {
     // Drop out of any active fullscreen (native or the CSS-maximize
     // fallback) before leaving this view — the shell keeps the old view
     // mounted (CSS-hidden), so fullscreen would otherwise persist on it.
@@ -1239,7 +1239,13 @@ const openInGraphEditor = ({ xml, name, files, select, implOf }) => {
     // node than the one the sender was showing.
     // `implOf`: optional nodedef name whose library implementation
     // nodegraph to jump into (docs page's "View implementation" button).
-    window.__mtlxPendingImport = { xml, name, files: files || null, select: select || null, implOf: implOf || null };
+    // `readOnly`/`readOnlySource`: view-only handoff (e.g. a Scene Viewer
+    // material). The editor enters view-only mode until a different
+    // document is loaded.
+    window.__mtlxPendingImport = {
+        xml, name, files: files || null, select: select || null, implOf: implOf || null,
+        readOnly: !!readOnly, readOnlySource: readOnlySource || null,
+    };
     window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: window.__mtlxPendingImport }));
     window.location.hash = '#!graph';
 };

@@ -1,6 +1,7 @@
-// site-header.js: shared site header, used by every page. Plain
+// site-header.js: shared site header and web footer, used by every page. Plain
 // (non-Babel) script injected synchronously into <div id="site-header">
 // so the header paints before React, Babel, three.js, or the MaterialX WASM start downloading.
+// The footer mounts into <div id="site-footer"> at DOMContentLoaded (web only).
 // Also publishes window.SITE_DISCLAIMER_PARTS (read by js/shell.jsx's
 // AboutDialog) and window.SITE_LINKS / window.SITE_TITLE, the single
 // source of truth read by home-app.jsx, doc-links.jsx and sidebar.jsx.
@@ -1180,9 +1181,8 @@
     window.addEventListener('mtlx-version', function (e) { setVer(e.detail || window.__mtlxVersion); });
 
     // ---- Disclaimer text --------------------------------------------------
-    // Two paragraphs (Experimental Preview + affiliation note), rendered
-    // only inside js/shell.jsx's AboutDialog now (the footer strip that
-    // used to show them on every page has been removed).
+    // Two paragraphs (Experimental Preview + affiliation note), rendered by
+    // js/shell.jsx's AboutDialog in every host and by the web footer below.
     // Host noun/subject swap in app-appropriate phrasing: "this site" /
     // "This website" reads wrong inside the desktop app or the extension.
     var DISCLAIMER_HOST_NOUN = IS_ELECTRON ? 'this app' : (window.__MTLX_VSCODE__ ? 'this extension' : 'this site');
@@ -1205,10 +1205,94 @@
                 'remains the definitive source of truth.' +
             '</p>';
 
+    // ---- Shared footer --------------------------------------------------
+    // Web only, as in v2026.9.4: the same two paragraphs with the footer's
+    // own .mtlx-footer-* classes, in a collapsible strip resting collapsed.
+    var FOOTER_EXPERIMENTAL_HTML =
+            '<p class="mtlx-footer-experimental">' +
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
+                    ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"' +
+                    ' class="mtlx-footer-warn-icon">' +
+                    '<path d="M12 9v4"/><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.871l-8.106 -13.534a1.914 1.914 0 0 0 -3.274 0z"/><path d="M12 16h.01"/>' +
+                '</svg>' +
+                '<strong>Experimental preview:</strong> ' + DISCLAIMER_HOST_NOUN + ' is under active development, 3D previews and parameter values may not match reference renders. Spotted a problem? Report it in the ' +
+                '<a href="' + LINKS.issues + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link-amber">project repository</a>.' +
+            '</p>';
+    var FOOTER_AFFILIATION_HTML =
+            '<p>' +
+                DISCLAIMER_PROJECT_SUBJECT + ' is an independent, open-source project and is not officially affiliated with MaterialX or the Academy Software Foundation. ' +
+                'In the event of any discrepancies, the specification in the ' +
+                '<a href="' + LINKS.specMain + '" target="_blank" rel="noopener noreferrer" class="mtlx-footer-link">official MaterialX repository</a> ' +
+                'remains the definitive source of truth.' +
+            '</p>';
+    var DISCLAIMER_BODY_HTML = FOOTER_EXPERIMENTAL_HTML + FOOTER_AFFILIATION_HTML;
+
+    var footerHtml =
+        '<footer id="mtlx-footer" class="mtlx-footer">' +
+            '<button id="mtlx-footer-toggle" type="button" class="mtlx-footer-toggle"' +
+                ' aria-expanded="true" aria-controls="mtlx-footer-body">' +
+                '<span class="mtlx-footer-toggle-inner">' +
+                    '<span>Disclaimer</span>' +
+                    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"' +
+                        ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"' +
+                        ' class="mtlx-footer-chevron">' +
+                        '<path d="M6 9l6 6 6-6" />' +
+                    '</svg>' +
+                '</span>' +
+            '</button>' +
+            '<div id="mtlx-footer-body" class="mtlx-footer-pop">' +
+                '<div class="mtlx-footer-inner">' +
+                    DISCLAIMER_BODY_HTML +
+                '</div>' +
+            '</div>' +
+        '</footer>';
+
+    var mountFooter = function () {
+        var el = document.getElementById('site-footer');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'site-footer';
+            document.body.appendChild(el);
+        }
+        el.innerHTML = footerHtml;
+
+        // ---- Collapsible disclaimer: rests collapsed, click toggles -----
+        // Rests collapsed on every route/device; the strip click is the
+        // only toggle, state is ephemeral (no localStorage). Expanded body
+        // is an overlay (.mtlx-footer-pop), so it never resizes #root/layout.
+        var footerEl = document.getElementById('mtlx-footer');
+        var toggleBtn = document.getElementById('mtlx-footer-toggle');
+        if (!footerEl || !toggleBtn) return;
+
+        var collapsed = true;
+        function applyFooter() {
+            footerEl.classList.toggle('is-collapsed', collapsed);
+            toggleBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        }
+        applyFooter();
+
+        toggleBtn.addEventListener('click', function () {
+            collapsed = !collapsed;
+            applyFooter();
+        });
+    };
+    // Skipped entirely under VS Code (this shrink-0 strip would steal
+    // bottom height from the full-bleed webview views) and under Electron
+    // (js/shell.jsx's DesktopAboutDialog shows SITE_DISCLAIMER_PARTS instead,
+    // reachable from the header help button there).
+    if (!window.__MTLX_VSCODE__ && !window.__MTLX_ELECTRON__) {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', mountFooter);
+        } else {
+            mountFooter();
+        }
+    }
+
     // Published for the React apps (page <title>s, doc-ui links, ...).
     window.SITE_TITLE = SITE_TITLE;
     window.SITE_LINKS = LINKS;
     window.SITE_LOGO_PATHS = LOGO_PATHS;
+    window.SITE_DISCLAIMER_HTML = DISCLAIMER_BODY_HTML;
     // Split paragraphs for shell.jsx's AboutDialog, which styles the
     // experimental notice as its own warning box.
     window.SITE_DISCLAIMER_PARTS = {

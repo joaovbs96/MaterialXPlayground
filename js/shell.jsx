@@ -902,8 +902,8 @@ function fallbackLibraryFor(source) {
 }
 
 // About dialog opened from the header help button, available in every
-// host now, and the only place the two disclaimer paragraphs render since
-// the footer strip is gone. Taller/wider than DesktopSettingsDialog to fit the license text.
+// host; it repeats the two disclaimer paragraphs of the web footer strip.
+// Taller/wider than DesktopSettingsDialog to fit the license text.
 let __licenseCache = null;
 let __vendorEntriesCache = null;
 let __libVersionsCache = null;
@@ -931,8 +931,20 @@ function AboutDialog() {
                 window.mtlxSourceFacts.then((facts) => setWebRelease((facts && facts.version) || null));
             }
             if (__licenseCache === null) {
-                fetch('LICENSE')
-                    .then((res) => { if (!res.ok) throw new Error('bad response'); return res.text(); })
+                // vsce renames the repo's root LICENSE to LICENSE.txt inside
+                // the packaged .vsix (LicenseProcessor). Inside VS Code the
+                // webview is always serving that packaged/staged tree, so
+                // try LICENSE.txt FIRST there to avoid VS Code logging a
+                // resource 404 on every About open; everywhere else
+                // (web, Electron) the file is still named LICENSE. Both
+                // fetch('LICENSE')/fetch('LICENSE.txt') calls stay as
+                // literal strings so scripts/check-vsix-files.mjs's
+                // checkRenamedRootFileFallbacks can still find them.
+                const fetchOk = (name) => fetch(name).then((res) => { if (!res.ok) throw new Error('bad response'); return res.text(); });
+                const fetchLicense = () => (isVSCode
+                    ? fetchOk('LICENSE.txt').catch(() => fetchOk('LICENSE'))
+                    : fetchOk('LICENSE').catch(() => fetchOk('LICENSE.txt')));
+                fetchLicense()
                     .then((text) => { __licenseCache = text; setLicense(text); })
                     .catch(() => setLicenseError(true));
             }
@@ -995,6 +1007,21 @@ function AboutDialog() {
         return () => window.removeEventListener('pointerdown', onDown);
     }, [open]);
 
+    // VS Code test seam: bootstrap.js defines __mtlxAboutReport only for
+    // the extension's test transport (mirrors __mtlxSceneReport in
+    // usd-scene-app.jsx). Fires once the license fetch settles, reporting
+    // the same license text and version string the dialog renders.
+    React.useEffect(() => {
+        if (!isVSCode || typeof window.__mtlxAboutReport !== 'function') return;
+        if (license === null && !licenseError) return;
+        const extensionVersion = (window.__MTLX_VSCODE_VERSIONS__ || {}).extension;
+        window.__mtlxAboutReport({
+            license: license || '',
+            licenseError,
+            extensionVersionText: extensionVersion ? 'v' + extensionVersion : 'n/a',
+        });
+    }, [isVSCode, license, licenseError]);
+
     if (!open) return null;
 
     // window.MTLX_HEADER_VERSION (js/site-header.js's setVer) holds the
@@ -1040,7 +1067,7 @@ function AboutDialog() {
                     {isElectron ? (
                         about ? (
                             <div>
-                                <div>Version {about.appVersion}</div>
+                                <div>Version {about.appVersion ? 'v' + about.appVersion : 'n/a'}</div>
                                 <div>Electron {about.electron} &middot; Chromium {about.chrome} &middot; Node {about.node}</div>
                             </div>
                         ) : (
@@ -1048,7 +1075,7 @@ function AboutDialog() {
                         )
                     ) : isVSCode ? (
                         <div>
-                            <div>Extension {vscodeVersions.extension || 'n/a'}</div>
+                            <div>Extension {vscodeVersions.extension ? 'v' + vscodeVersions.extension : 'n/a'}</div>
                             <div>VS Code {vscodeVersions.vscode || 'n/a'}</div>
                         </div>
                     ) : (
@@ -1081,9 +1108,9 @@ function AboutDialog() {
                     ) : null}
                 </div>
 
-                {/* Only place these two paragraphs render now (footer strip
-                    is gone). .mtlx-about-disclaimer neutralizes
-                    .mtlx-about-experimental's own amber styling. */}
+                {/* Same two paragraphs as the web footer strip (the only place
+                    they show in VS Code and Electron). .mtlx-about-disclaimer
+                    neutralizes .mtlx-about-experimental's own amber styling. */}
                 {disclaimerParts.experimental ? (
                     <div
                         className="mtlx-about-disclaimer flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200 mt-1 mb-3"

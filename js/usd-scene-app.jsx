@@ -277,6 +277,7 @@
         return sum + Math.floor(corners / 3);
     }, 0);
     const stageMaterials = (stage) => Array.isArray(stage && stage.materials) ? stage.materials : [];
+    const stageLightRecords = (stage) => (Array.isArray(stage && stage.lights) ? stage.lights.filter(Boolean) : []);
     const materialWarningList = (stage) => {
         const out = [];
         (Array.isArray(stage && stage.warnings) ? stage.warnings : []).forEach((w) => out.push(String(w && (w.message || w.text || w) || 'Scene warning')));
@@ -318,11 +319,64 @@
     // readDroppedItems, which preserves nested directory paths); flatten it
     // to the same { path, data } shape readFiles() produces.
     const filesFromMap = (map) => Object.keys(map || {}).map((path) => ({ path: String(path).replace(/\\/g, '/'), data: map[path] }));
+    // VS Code: files a loaded stage asked for but did not receive, with the
+    // layer that referenced each one, read from the native USD messages.
+    const stageMissingEntries = (stage) => {
+        const out = [];
+        (Array.isArray(stage && stage.warnings) ? stage.warnings : []).forEach((w) => {
+            const raw = String(w && (w.message || w.text || w) || '');
+            const m = /Could not open asset @([^@]+)@ for [^\n]*?introduced by @([^@]+)@/i.exec(raw)
+                || /Could not load sublayer @([^@]+)@ of layer @([^@]+)@/i.exec(raw);
+            if (m) out.push({ asset: m[1], introducedBy: m[2] });
+        });
+        return out;
+    };
+    // VS Code: textures the renderer could not find (relative to the file
+    // set, UDIM patterns included) and a dome light's missing texture.
+    const renderMissingEntries = (handle, root) => {
+        const out = [];
+        (Array.isArray(handle && handle.missingFiles) ? handle.missingFiles : []).forEach((path) => out.push({ asset: String(path), introducedBy: '' }));
+        (Array.isArray(handle && handle.warnings) ? handle.warnings : []).forEach((w) => {
+            const m = /^Dome light texture not found: "(.+)"$/.exec(String(w));
+            if (m) out.push({ asset: m[1], introducedBy: root || '' });
+        });
+        return out;
+    };
+    const formatMegabytes = (bytes) => {
+        const mb = Number(bytes || 0) / 1048576;
+        return String(mb >= 10 ? Math.round(mb) : Math.round(mb * 10) / 10);
+    };
+    // Scene section: the root's format in plain words ('.usd' is sniffed for the
+    // crate header), named units for metersPerUnit, and byte sizes.
+    const SCENE_FORMAT_LABELS = { '.usda': 'USD', '.usdc': 'USD binary', '.usdz': 'USDZ package', '.gltf': 'glTF', '.glb': 'glTF binary', '.obj': 'OBJ' };
+    const sceneFormatLabel = (path, usdBinary) => (ext(String(path || '')) === '.usd'
+        ? (usdBinary ? 'USD binary' : 'USD')
+        : (SCENE_FORMAT_LABELS[ext(String(path || ''))] || ''));
+    const SCENE_UNIT_NAMES = [[1, 'Meters'], [0.1, 'Decimeters'], [0.01, 'Centimeters'], [0.001, 'Millimeters'], [1000, 'Kilometers'], [0.0254, 'Inches'], [0.3048, 'Feet']];
+    const sceneUnitsLabel = (metersPerUnit) => {
+        const value = Number(metersPerUnit);
+        if (!(value > 0)) return '';
+        const named = SCENE_UNIT_NAMES.find(([meters]) => Math.abs(meters - value) <= meters * 1e-6);
+        return named ? named[1] : value + ' m per unit';
+    };
+    const sceneFileBytes = (file) => {
+        const data = file && file.data !== undefined ? file.data : file;
+        if (!data) return 0;
+        if (typeof data.size === 'number') return data.size;
+        return typeof data.byteLength === 'number' ? data.byteLength : 0;
+    };
+    const formatByteSize = (bytes) => {
+        const n = Number(bytes || 0);
+        if (n < 1024) return n + ' B';
+        if (n < 1048576) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB';
+        if (n < 1073741824) return (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + ' MB';
+        return (n / 1073741824).toFixed(1) + ' GB';
+    };
     // Whole-load phase table: the single source of truth for the load
     // sequence's step numbering, labels and progress-bar segments.
-    const USD_SCENE_LOAD_PHASES = [
+    const USD_SCENE_BASE_LOAD_PHASES = [
         { phase: 'worker', label: 'Reading files', segment: [0.00, 0.06] },
-        { phase: 'parse', label: 'Composing stage', segment: [0.06, 0.10] },
+        { phase: 'parse', label: 'Composing scene', segment: [0.06, 0.10] },
         { phase: 'extract-geometry', label: 'Extracting meshes', segment: [0.10, 0.14] },
         { phase: 'extract-materials', label: 'Extracting materials', segment: [0.14, 0.16] },
         { phase: 'prepare-geometry', label: 'Subdividing meshes', segment: [0.16, 0.20] },
@@ -332,6 +386,16 @@
         { phase: 'geometry', label: 'Preparing geometry', segment: [0.72, 0.86] },
         { phase: 'renderer', label: 'Preparing viewport', segment: [0.86, 0.99] },
     ];
+    // In VS Code the host's file collection and the webview's file fetch
+    // come first and own the start of the bar; the web table is unchanged.
+    const USD_SCENE_LOAD_PHASES = IN_VSCODE
+        ? [
+            { phase: 'collect', label: 'Finding referenced files', segment: [0.00, 0.03] },
+            { phase: 'fetch', label: 'Loading files', segment: [0.03, 0.25] },
+        ].concat(USD_SCENE_BASE_LOAD_PHASES.map((entry) => ({
+            ...entry, segment: [0.25 + entry.segment[0] * 0.75, 0.25 + entry.segment[1] * 0.75],
+        })))
+        : USD_SCENE_BASE_LOAD_PHASES;
     window.USD_SCENE_LOAD_PHASES = USD_SCENE_LOAD_PHASES;
     // Each phase owns a slice of the bar so it fills once across the whole
     // load instead of restarting per phase.
@@ -394,6 +458,231 @@
     };
     window.usdSceneClampPanelRect = clampPanelRect;
 
+    // Scene outliner model built from the neutral stage payload (USD, glTF or OBJ): four
+    // fixed groups, Scene (the object tree), Materials, Cameras and Lights. Scene rows key
+    // on their path, every other row on a prefixed id. Pure: tests/unit/usd-scene-tree.test.mjs.
+    const sceneTreeSegments = (path) => String(path || '').split('/').filter(Boolean);
+    const sceneTreeLeafName = (path) => { const segments = sceneTreeSegments(path); return segments.length ? segments[segments.length - 1] : String(path || ''); };
+    const SCENE_TREE_GROUPS = [['scene', 'Scene'], ['materials', 'Materials'], ['cameras', 'Cameras'], ['lights', 'Lights']];
+    const SCENE_TREE_DEFAULT_CAMERA_ID = 'camera:default';
+    const SCENE_TREE_ENVIRONMENT_ID = 'light:environment';
+    const sceneTreeNameCollator = typeof Intl !== 'undefined' && Intl.Collator ? new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }) : null;
+    const sceneTreeByName = (a, b) => (sceneTreeNameCollator ? sceneTreeNameCollator.compare(a.name, b.name) : (a.name < b.name ? -1 : (a.name > b.name ? 1 : 0)))
+        || (a.path < b.path ? -1 : (a.path > b.path ? 1 : 0));
+    const buildSceneTree = (stage) => {
+        const byId = new Map();
+        const byPath = new Map();
+        const byRenderPath = new Map();
+        const meshesByMaterial = new Map();
+        const list = (value) => (Array.isArray(value) ? value : []);
+        const makeNode = (id, path, name, kind, group, depth, parent) => ({
+            id, path, name, kind, group, isGroup: kind === 'group', depth, parent,
+            children: [], renderPaths: [], materialPath: '', lightType: '', meshCount: 0, count: 0,
+        });
+        const groups = {};
+        const roots = SCENE_TREE_GROUPS.map(([key, label]) => {
+            const node = makeNode('group:' + key, '', label, 'group', key, 0, null);
+            groups[key] = node;
+            byId.set(node.id, node);
+            return node;
+        });
+        const ensure = (path) => {
+            const existing = byPath.get(path);
+            if (existing) return existing;
+            const segments = sceneTreeSegments(path);
+            const parent = segments.length > 1 ? ensure('/' + segments.slice(0, -1).join('/')) : groups.scene;
+            const node = makeNode(path, path, segments[segments.length - 1], 'xform', 'scene', segments.length, parent);
+            byPath.set(path, node);
+            byId.set(path, node);
+            parent.children.push(node);
+            return node;
+        };
+        const addObject = (path, kind) => {
+            const segments = sceneTreeSegments(path);
+            if (!segments.length) return null;
+            const node = ensure('/' + segments.join('/'));
+            if (kind === 'mesh') node.kind = 'mesh';
+            return node;
+        };
+        const addItem = (groupKey, id, path, name, kind) => {
+            if (byId.has(id)) return null;
+            const group = groups[groupKey];
+            const node = makeNode(id, path, name, kind, groupKey, 1, group);
+            byId.set(id, node);
+            group.children.push(node);
+            return node;
+        };
+        const bindMaterial = (materialPath, renderPath) => {
+            if (!materialPath) return;
+            const key = String(materialPath);
+            if (!meshesByMaterial.has(key)) meshesByMaterial.set(key, []);
+            const bound = meshesByMaterial.get(key);
+            if (bound.indexOf(renderPath) < 0) bound.push(renderPath);
+        };
+        // Scene: glTF node order first (empty transforms count too), then the meshes.
+        list(stage && stage.nodes).forEach((entry) => addObject(typeof entry === 'string' ? entry : String((entry && entry.treePath) || ''), 'xform'));
+        list(stage && stage.meshes).forEach((mesh) => {
+            const renderPath = String((mesh && (mesh.instanceOwnerPath || mesh.primPath)) || '');
+            if (!renderPath) return;
+            const node = addObject(mesh.treePath || renderPath, 'mesh');
+            if (!node) return;
+            if (node.renderPaths.indexOf(renderPath) < 0) node.renderPaths.push(renderPath);
+            if (!byRenderPath.has(renderPath)) byRenderPath.set(renderPath, node);
+            const meshGroups = list(mesh.groups);
+            const groupMaterial = (meshGroups.find((group) => group && group.materialPath) || {}).materialPath;
+            if (!node.materialPath) node.materialPath = String(mesh.materialPath || groupMaterial || '');
+            bindMaterial(mesh.materialPath, renderPath);
+            meshGroups.forEach((group) => bindMaterial(group && group.materialPath, renderPath));
+        });
+        // Materials: every stage material, any bound path the stage did not list, and every
+        // Material prim the worker found even when no mesh binds it (stage.materialPrims).
+        const materialPaths = [];
+        list(stage && stage.materials).forEach((material) => { const path = String((material && material.path) || ''); if (path) materialPaths.push(path); });
+        meshesByMaterial.forEach((bound, path) => materialPaths.push(path));
+        list(stage && stage.materialPrims).forEach((prim) => { const path = String((prim && prim.path) || ''); if (path) materialPaths.push(path); });
+        materialPaths.forEach((path) => {
+            const node = addItem('materials', 'material:' + path, path, sceneTreeLeafName(path), 'material');
+            if (node) node.materialPath = path;
+        });
+        groups.materials.children.sort(sceneTreeByName);
+        const defaultCamera = addItem('cameras', SCENE_TREE_DEFAULT_CAMERA_ID, '', 'Default camera', 'camera');
+        defaultCamera.isDefaultCamera = true;
+        list(stage && stage.cameras).forEach((camera) => {
+            const path = String((camera && camera.primPath) || '');
+            if (path) addItem('cameras', 'camera:' + path, path, String(camera.name || sceneTreeLeafName(path)), 'camera');
+        });
+        // Lights: the environment first, which is the stage's first dome light when it has one
+        // (the one the renderer applies), then every other light in stage order.
+        const lights = list(stage && stage.lights);
+        const dome = lights.find((light) => String((light && light.type) || '').toLowerCase() === 'domelight');
+        const domePath = dome ? String(dome.primPath || '') : '';
+        const environment = addItem('lights', SCENE_TREE_ENVIRONMENT_ID, domePath, dome ? String(dome.name || sceneTreeLeafName(domePath)) : 'Environment', 'light');
+        environment.isEnvironment = true;
+        environment.lightType = dome ? String(dome.type || '') : '';
+        lights.forEach((light) => {
+            const path = String((light && light.primPath) || '');
+            const node = light !== dome && path ? addItem('lights', 'light:' + path, path, String(light.name || sceneTreeLeafName(path)), 'light') : null;
+            if (node) node.lightType = String(light.type || '');
+        });
+        // Post-order mesh counts: a row shows an eye only when it can hide something.
+        const order = [];
+        const stack = [groups.scene];
+        while (stack.length) { const node = stack.pop(); order.push(node); node.children.forEach((child) => stack.push(child)); }
+        for (let i = order.length - 1; i >= 0; i--) {
+            const node = order[i];
+            node.meshCount = node.renderPaths.length + node.children.reduce((sum, child) => sum + child.meshCount, 0);
+        }
+        groups.scene.count = byPath.size;
+        groups.materials.count = groups.materials.children.length;
+        groups.cameras.count = groups.cameras.children.length - 1;
+        groups.lights.count = groups.lights.children.length;
+        return {
+            roots, groups, byId, byPath, byRenderPath, meshesByMaterial,
+            count: byPath.size, materialCount: groups.materials.count, cameraCount: groups.cameras.count, lightCount: groups.lights.count,
+        };
+    };
+    // Stage lights the renderer converts (every light but the environment and dome lights).
+    const sceneTreeLightHideable = (node) => !!node && node.kind === 'light' && !node.isEnvironment && !/^dome/i.test(node.lightType);
+    const sceneTreeLightPaths = (tree) => (tree ? tree.groups.lights.children.filter(sceneTreeLightHideable).map((node) => node.path) : []);
+    // Every renderer prim path at or under a node (a material row: the meshes it is bound to).
+    const sceneTreeRenderPaths = (tree, node) => {
+        if (!tree || !node) return [];
+        if (node.kind === 'material') return (tree.meshesByMaterial.get(node.path) || []).slice();
+        if (node.group !== 'scene') return [];
+        const out = [];
+        const stack = [node];
+        while (stack.length) {
+            const current = stack.pop();
+            current.renderPaths.forEach((path) => out.push(path));
+            current.children.forEach((child) => stack.push(child));
+        }
+        return out;
+    };
+    const sceneTreeHiddenRenderPaths = (tree, hidden) => {
+        const out = new Set();
+        (hidden || new Set()).forEach((id) => {
+            const node = tree && tree.byId.get(id);
+            if (node && node.group === 'scene') sceneTreeRenderPaths(tree, node).forEach((p) => out.add(p));
+        });
+        return Array.from(out);
+    };
+    const sceneTreeHiddenBy = (node, hidden) => {
+        for (let current = node; current; current = current.parent) if (hidden.has(current.id)) return current;
+        return null;
+    };
+    // Visible rows in display order. A filter keeps matches, their ancestors (forced
+    // open, a group header only when something under it matches) and the descendants
+    // of matches the user expanded.
+    const flattenSceneTree = (tree, expanded, filter) => {
+        const rows = [];
+        if (!tree) return rows;
+        const query = String(filter || '').trim().toLowerCase();
+        let matches = null;
+        let forced = null;
+        if (query) {
+            matches = new Set();
+            forced = new Set();
+            tree.byId.forEach((node) => {
+                if (node.isGroup || node.name.toLowerCase().indexOf(query) < 0) return;
+                matches.add(node);
+                for (let parent = node.parent; parent && !forced.has(parent); parent = parent.parent) forced.add(parent);
+            });
+        }
+        const visit = (nodes, insideMatch) => {
+            nodes.forEach((node) => {
+                const matched = !!matches && matches.has(node);
+                if (matches && !matched && !insideMatch && !forced.has(node)) return;
+                rows.push(node);
+                const open = (forced && forced.has(node)) || expanded.has(node.id);
+                if (open && node.children.length) visit(node.children, insideMatch || matched);
+            });
+        };
+        visit(tree.roots, false);
+        return rows;
+    };
+    // The four groups start open. Small scenes open fully; larger ones open their roots
+    // and single-child chains.
+    const defaultSceneTreeExpanded = (tree) => {
+        const open = new Set();
+        if (!tree) return open;
+        tree.roots.forEach((group) => open.add(group.id));
+        if (tree.count <= 64) {
+            tree.byPath.forEach((node) => { if (node.children.length) open.add(node.id); });
+            return open;
+        }
+        const follow = (node) => {
+            if (!node.children.length) return;
+            open.add(node.id);
+            if (node.children.length === 1) follow(node.children[0]);
+        };
+        tree.groups.scene.children.forEach(follow);
+        return open;
+    };
+    // Row tooltip: the name path without the leading slash and a generic type, no USD terms.
+    const SCENE_TREE_TYPE_LABELS = { xform: 'Group', mesh: 'Mesh', material: 'Material', light: 'Light', camera: 'Camera' };
+    const SCENE_TREE_GROUP_TITLES = {
+        scene: 'Every object in the scene', materials: 'Every material in the scene',
+        cameras: 'Click a camera to look through it', lights: 'Every light in the scene',
+    };
+    const SCENE_TREE_LIGHT_TYPES = { distant: 'Distant', sphere: 'Sphere', rect: 'Rectangle', disk: 'Disk', cylinder: 'Cylinder', dome: 'Dome', portal: 'Portal', geometry: 'Geometry' };
+    const sceneTreeLightTypeLabel = (type) => {
+        const raw = String(type || '');
+        return SCENE_TREE_LIGHT_TYPES[raw.toLowerCase().replace(/light(_\d+)?$/, '')] || raw;
+    };
+    const sceneTreeRowTitle = (node) => {
+        if (node && node.isGroup) return SCENE_TREE_GROUP_TITLES[node.group] || node.name;
+        if (node && node.isDefaultCamera) return 'Frame the whole scene';
+        const path = sceneTreeSegments(node && node.path).join('/');
+        if (node && node.isEnvironment) return path ? path + ' (Environment, dome light)' : 'The environment map lighting the scene';
+        if (node && node.kind === 'light') {
+            const type = sceneTreeLightTypeLabel(node.lightType);
+            const title = path + ' (Light' + (type ? ': ' + type : '') + ')';
+            return /^dome/i.test(node.lightType) ? title + '\nNot applied: only the first dome light lights the scene' : title;
+        }
+        return path + ' (' + (SCENE_TREE_TYPE_LABELS[node && node.kind] || 'Object') + ')';
+    };
+    window.usdSceneTree = { buildSceneTree, sceneTreeRenderPaths, sceneTreeHiddenRenderPaths, flattenSceneTree, defaultSceneTreeExpanded, sceneTreeRowTitle, sceneTreeLightPaths };
+
     const MATERIAL_PREVIEW_RECT_KEY = 'mtlx_scene_material_preview_rect';
     const MATERIAL_PREVIEW_DEFAULT_SIZE = { width: 640, height: 420 };
     const MATERIAL_PREVIEW_MIN_SIZE = { width: 320, height: 220 };
@@ -432,7 +721,7 @@
     // double-click in the viewport. Stays mounted (CSS-hidden) after first
     // open so the graph-preview/materialx-viewer instances survive reopens.
     // `warm` mounts it hidden with the warm-up document ahead of any open.
-    function MaterialPreviewPanel({ open, payload, anchor, onClose, containerRef, panelRef, sceneFiles, warm }) {
+    function MaterialPreviewPanel({ open, payload, anchor, onClose, containerRef, panelRef, sceneFiles, warm, sceneFileName }) {
         const shownRef = React.useRef(null);
         if (payload) shownRef.current = payload;
         if (!shownRef.current && warm) shownRef.current = MATERIAL_PREVIEW_WARM_PAYLOAD;
@@ -457,22 +746,19 @@
             // eslint-disable-next-line react-hooks/exhaustive-deps
         }, []);
 
-        // First-ever open with no persisted rect: default 640x420, top-left
-        // offset from the click point, clamped inside the viewport and below
-        // the HUD row. useLayoutEffect (not useEffect) so the panel never
-        // paints a frame at the wrong spot before this runs. An open with no
-        // anchor (keyboard, or a re-open before any click) centres instead.
+        // A viewport double-click (an anchor) always places the top-left at the
+        // click, keeping the remembered size (else 640x420); an open with no
+        // anchor (tree row, Enter) keeps the remembered rect, else centres.
+        // Clamped below the HUD row; a layout effect, so no misplaced frame.
         React.useLayoutEffect(() => {
             if (!open || !containerRef.current) return;
             const bounds = containerRef.current.getBoundingClientRect();
-            // A remembered rect is re-clamped on every open so one saved from
-            // a larger window still lands inside the current viewport.
-            if (rectRef.current) { setRect(clampPanelRect(rectRef.current, bounds, MATERIAL_PREVIEW_TOP_INSET)); return; }
-            const width = MATERIAL_PREVIEW_DEFAULT_SIZE.width;
-            const height = MATERIAL_PREVIEW_DEFAULT_SIZE.height;
+            const remembered = rectRef.current;
+            const width = remembered ? remembered.width : MATERIAL_PREVIEW_DEFAULT_SIZE.width;
+            const height = remembered ? remembered.height : MATERIAL_PREVIEW_DEFAULT_SIZE.height;
             const base = anchor
                 ? { x: anchor.x + MATERIAL_PREVIEW_CLICK_OFFSET, y: anchor.y + MATERIAL_PREVIEW_CLICK_OFFSET, width, height }
-                : { x: (bounds.width - width) / 2, y: (bounds.height - height) / 2, width, height };
+                : (remembered || { x: (bounds.width - width) / 2, y: (bounds.height - height) / 2, width, height });
             setRect(clampPanelRect(base, bounds, MATERIAL_PREVIEW_TOP_INSET));
             // eslint-disable-next-line react-hooks/exhaustive-deps
         }, [open, anchor]);
@@ -573,7 +859,10 @@
         if (!shown) return null; // never opened yet this session
 
         const openInEditor = () => {
-            window.openInGraphEditor({ xml: shown.xml, name: shown.name, files: handoffFiles, select: shown.materialName });
+            window.openInGraphEditor({
+                xml: shown.xml, name: shown.name, files: handoffFiles, select: shown.materialName,
+                readOnly: true, readOnlySource: sceneFileName || 'the scene',
+            });
         };
         const rectStyle = rect
             ? { left: rect.x, top: rect.y, width: rect.width, height: rect.height }
@@ -617,7 +906,7 @@
                     )) : (
                         <window.MtlxGraphPreview
                             xml={shown.xml}
-                            preview="right"
+                            preview={IN_VSCODE ? false : 'right'}
                             previewTextures={handoffFiles}
                             previewName={shown.name}
                             previewExpanded
@@ -643,12 +932,277 @@
         );
     }
 
+    // Outliner rows: fixed height so only the rows in view (plus overscan) mount,
+    // which keeps scenes with thousands of objects responsive. The box fills the
+    // Hierarchy section, never shorter than SCENE_TREE_MIN_H.
+    const SCENE_TREE_ROW_H = 22;
+    const SCENE_TREE_MIN_H = 200;
+    const SCENE_TREE_INDENT = 12;
+    const SCENE_TREE_OVERSCAN = 8;
+    const SCENE_TREE_ICONS = { mesh: 'cube', xform: 'focus-2', material: 'palette', light: 'bolt', camera: 'camera' };
+    const SCENE_TREE_GROUP_ICONS = { scene: 'world', materials: 'palette', cameras: 'camera', lights: 'sun' };
+    const SCENE_LIGHTS_OFF_TITLE = 'Scene lights are turned off in the render settings';
+    // Eye state of a row, or null when it has nothing to hide: objects and the Scene group
+    // hide meshes, light rows and the Lights group turn stage lights off, the environment
+    // row turns the environment's lighting off.
+    const sceneTreeEye = (node, state) => {
+        if (node.group === 'scene') {
+            if (!(node.meshCount > 0)) return null;
+            const own = state.hidden.has(node.id);
+            const by = own ? node : sceneTreeHiddenBy(node, state.hidden);
+            const noun = node.isGroup ? 'every object' : 'object';
+            return { own, by, title: own ? 'Show ' + noun : (by ? 'Hidden by ' + by.name : 'Hide ' + noun) };
+        }
+        if (node.isGroup && node.group === 'lights') {
+            const paths = node.children.filter(sceneTreeLightHideable).map((child) => child.path);
+            if (!paths.length) return null;
+            const own = paths.every((path) => state.hiddenLights.has(path));
+            return { own, by: own ? node : null, title: own ? 'Turn every light on' : 'Turn every light off' };
+        }
+        if (node.isEnvironment) {
+            if (!state.envEyeAvailable) return null;
+            const own = !!state.envLightingOff;
+            return { own, by: own ? node : null, title: own ? 'Turn the environment lighting on' : 'Turn the environment lighting off' };
+        }
+        if (sceneTreeLightHideable(node)) {
+            const own = state.hiddenLights.has(node.path);
+            return { own, by: own ? node : null, title: own ? 'Turn light on' : 'Turn light off' };
+        }
+        return null;
+    };
+    function SceneTree({ rows, expanded, selectedId, hidden, hiddenLights, lightsOff, envLightingOff, envEyeAvailable, activeCamera, revealToken, onToggleExpand, onSelect, onRowClick, onToggleHidden, onActivate }) {
+        const scrollRef = React.useRef(null);
+        const [scrollTop, setScrollTop] = React.useState(0);
+        // The rendered window follows the box's measured height, which the flex layout sets.
+        const [viewHeight, setViewHeight] = React.useState(SCENE_TREE_MIN_H);
+        React.useLayoutEffect(() => {
+            const el = scrollRef.current;
+            if (!el) return undefined;
+            const measure = () => setViewHeight(Math.max(SCENE_TREE_ROW_H, el.clientHeight));
+            measure();
+            if (typeof ResizeObserver !== 'function') return undefined;
+            const observer = new ResizeObserver(measure);
+            observer.observe(el);
+            return () => observer.disconnect();
+        }, []);
+        const first = Math.max(0, Math.floor(scrollTop / SCENE_TREE_ROW_H) - SCENE_TREE_OVERSCAN);
+        const last = Math.min(rows.length, Math.ceil((scrollTop + viewHeight) / SCENE_TREE_ROW_H) + SCENE_TREE_OVERSCAN);
+        const selectedIndex = selectedId ? rows.findIndex((node) => node.id === selectedId) : -1;
+        const eyeState = { hidden, hiddenLights, envLightingOff, envEyeAvailable };
+        // Scrolls the selection into view when it moved from the viewport or the keyboard.
+        React.useEffect(() => {
+            const el = scrollRef.current;
+            if (!el || selectedIndex < 0) return;
+            const top = selectedIndex * SCENE_TREE_ROW_H;
+            if (top < el.scrollTop) el.scrollTop = top;
+            else if (top + SCENE_TREE_ROW_H > el.scrollTop + el.clientHeight) el.scrollTop = top + SCENE_TREE_ROW_H - el.clientHeight;
+            setScrollTop(el.scrollTop);
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [revealToken]);
+        const onKeyDown = (e) => {
+            if (!rows.length) return;
+            const current = selectedIndex >= 0 ? rows[selectedIndex] : null;
+            const go = (index) => { const node = rows[Math.max(0, Math.min(rows.length - 1, index))]; if (node) onSelect(node.id, true); };
+            if (e.key === 'ArrowDown') go(selectedIndex + 1);
+            else if (e.key === 'ArrowUp') go(selectedIndex < 0 ? rows.length - 1 : selectedIndex - 1);
+            else if (e.key === 'Home') go(0);
+            else if (e.key === 'End') go(rows.length - 1);
+            else if (e.key === 'ArrowRight' && current) {
+                if (current.children.length && !expanded.has(current.id)) onToggleExpand(current.id);
+                else if (current.children.length) go(selectedIndex + 1);
+            } else if (e.key === 'ArrowLeft' && current) {
+                if (current.children.length && expanded.has(current.id)) onToggleExpand(current.id);
+                else if (current.parent) onSelect(current.parent.id, true);
+            } else if (e.key === 'Enter' && current) onActivate(current);
+            else return; // Escape goes to the page handler, which lets open panels close first
+            e.preventDefault();
+            e.stopPropagation();
+        };
+        const renderEye = (node, eye, selected) => (
+            <button
+                type="button"
+                tabIndex={-1}
+                data-testid="usd-scene-tree-eye"
+                aria-pressed={eye.own}
+                aria-label={eye.title}
+                title={eye.title}
+                onClick={(e) => { e.stopPropagation(); onToggleHidden(node); }}
+                onDoubleClick={(e) => e.stopPropagation()}
+                className={'w-5 h-4 shrink-0 inline-flex items-center justify-center rounded '
+                    + (selected ? 'text-blue-100 hover:text-white' : (eye.own ? 'text-gray-400 hover:text-gray-200' : 'text-gray-500 hover:text-gray-200'))
+                    + (eye.by && !eye.own ? ' opacity-40' : '')}
+            >
+                <MtlxIcon name={eye.own ? 'eye-off' : 'eye'} className="w-3.5 h-3.5" />
+            </button>
+        );
+        const renderChevron = (node, open, selected) => (node.children.length ? (
+            <button
+                type="button"
+                tabIndex={-1}
+                aria-label={open ? 'Collapse' : 'Expand'}
+                data-testid="usd-scene-tree-toggle"
+                onClick={(e) => { e.stopPropagation(); onToggleExpand(node.id); }}
+                onDoubleClick={(e) => e.stopPropagation()}
+                className={'w-3.5 h-3.5 shrink-0 inline-flex items-center justify-center rounded ' + (selected ? 'text-blue-100' : 'text-gray-500 hover:text-gray-200')}
+            >
+                <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="w-3 h-3" />
+            </button>
+        ) : <span className="w-3.5 shrink-0" />);
+        return (
+            <div
+                ref={scrollRef}
+                role="tree"
+                aria-label="Scene hierarchy"
+                tabIndex={0}
+                data-testid="usd-scene-tree"
+                onKeyDown={onKeyDown}
+                onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+                className="relative overflow-y-auto custom-scrollbar rounded-md border border-gray-700 bg-gray-900/60 focus:outline-none focus-visible:border-blue-500"
+                style={{ flex: '1 1 0px', minHeight: SCENE_TREE_MIN_H }}
+            >
+                <div style={{ height: rows.length * SCENE_TREE_ROW_H, position: 'relative' }}>
+                    {rows.slice(first, last).map((node, offset) => {
+                        const index = first + offset;
+                        const selected = index === selectedIndex;
+                        const open = expanded.has(node.id);
+                        const eye = sceneTreeEye(node, eyeState);
+                        const rowStyle = { top: index * SCENE_TREE_ROW_H, height: SCENE_TREE_ROW_H, paddingLeft: 6 + node.depth * SCENE_TREE_INDENT };
+                        if (node.isGroup) {
+                            return (
+                                <div
+                                    key={node.id}
+                                    role="treeitem"
+                                    aria-level={1}
+                                    aria-selected={selected}
+                                    aria-expanded={node.children.length ? open : undefined}
+                                    data-testid={'usd-scene-tree-group-' + node.group}
+                                    data-id={node.id}
+                                    data-hidden={eye && eye.own ? 'true' : 'false'}
+                                    title={sceneTreeRowTitle(node)}
+                                    onClick={() => onRowClick(node)}
+                                    className={'absolute left-0 right-0 flex items-center gap-1 pr-1 text-[11px] font-semibold cursor-default select-none '
+                                        + (selected ? 'bg-blue-600 text-white' : 'bg-gray-800/50 text-gray-200 hover:bg-gray-700/60')}
+                                    style={rowStyle}
+                                >
+                                    {renderChevron(node, open, selected)}
+                                    <MtlxIcon name={SCENE_TREE_GROUP_ICONS[node.group] || 'list-details'}
+                                        className={'w-3.5 h-3.5 shrink-0 ' + (selected ? 'text-blue-100' : 'text-gray-400')} />
+                                    <span className="flex-1 min-w-0 truncate">{node.name}</span>
+                                    <span data-testid="usd-scene-tree-group-count"
+                                        className={'shrink-0 px-1 font-mono font-normal tabular-nums text-[10px] ' + (selected ? 'text-blue-100' : 'text-gray-500')}>
+                                        {node.count.toLocaleString()}
+                                    </span>
+                                    {eye ? renderEye(node, eye, selected) : <span className="w-5 shrink-0" />}
+                                </div>
+                            );
+                        }
+                        const isStageLight = sceneTreeLightHideable(node);
+                        const dimmedByOff = isStageLight && lightsOff;
+                        const hiddenBy = eye ? eye.by : null;
+                        const activeCam = node.kind === 'camera' && activeCamera === (node.isDefaultCamera ? 'default' : node.path);
+                        const title = dimmedByOff ? sceneTreeRowTitle(node) + '\n' + SCENE_LIGHTS_OFF_TITLE
+                            : (activeCam ? sceneTreeRowTitle(node) + '\nActive camera' : sceneTreeRowTitle(node));
+                        return (
+                            <div
+                                key={node.id}
+                                role="treeitem"
+                                aria-level={node.depth + 1}
+                                aria-selected={selected}
+                                aria-expanded={node.children.length ? open : undefined}
+                                data-testid="usd-scene-tree-row"
+                                data-id={node.id}
+                                data-path={node.path}
+                                data-kind={node.kind}
+                                data-group={node.group}
+                                data-hidden={hiddenBy ? 'true' : 'false'}
+                                data-has-material={node.materialPath ? 'true' : 'false'}
+                                data-active={node.kind === 'camera' ? (activeCam ? 'true' : 'false') : undefined}
+                                data-environment={node.isEnvironment ? 'true' : undefined}
+                                data-default-camera={node.isDefaultCamera ? 'true' : undefined}
+                                data-lights-off={dimmedByOff ? 'true' : undefined}
+                                title={title}
+                                onClick={() => onRowClick(node)}
+                                onDoubleClick={() => onActivate(node)}
+                                className={'absolute left-0 right-0 flex items-center gap-1 pr-1 text-[11px] cursor-default select-none '
+                                    + (selected ? 'bg-blue-600 text-white' : (hiddenBy ? 'text-gray-500 hover:bg-gray-800' : 'text-gray-300 hover:bg-gray-800'))
+                                    + (dimmedByOff && !selected ? ' opacity-50' : '')}
+                                style={rowStyle}
+                            >
+                                {Array.from({ length: node.depth }, (_, level) => (
+                                    <span key={level} aria-hidden="true"
+                                        className={'absolute top-0 bottom-0 w-px ' + (selected ? 'bg-blue-300/40' : 'bg-gray-700/80')}
+                                        style={{ left: 6 + level * SCENE_TREE_INDENT + 6 }} />
+                                ))}
+                                {renderChevron(node, open, selected)}
+                                <MtlxIcon name={node.isEnvironment ? 'sun' : (node.isDefaultCamera ? 'camera-reset' : (SCENE_TREE_ICONS[node.kind] || 'cube'))}
+                                    className={'w-3.5 h-3.5 shrink-0 ' + (selected ? 'text-blue-100' : (activeCam ? 'text-blue-400' : 'text-gray-500'))} />
+                                <span className={'flex-1 min-w-0 truncate ' + (node.group === 'scene' || node.kind === 'material' ? 'font-mono' : '')
+                                    + (activeCam && !selected ? ' text-blue-300' : '')}>{node.name}</span>
+                                {activeCam ? (
+                                    <span data-testid="usd-scene-tree-active-camera" className={'shrink-0 mr-1 inline-flex ' + (selected ? 'text-white' : 'text-blue-400')}>
+                                        <MtlxIcon name="check" className="w-3.5 h-3.5" />
+                                    </span>
+                                ) : null}
+                                {eye ? renderEye(node, eye, selected) : null}
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+        );
+    }
+
+    // Light info popover: plain labels with the raw attribute dimmed below, units where known.
+    const SCENE_UNIT_SHORT = [[1, 'm'], [0.1, 'dm'], [0.01, 'cm'], [0.001, 'mm'], [1000, 'km'], [0.0254, 'in'], [0.3048, 'ft']];
+    const sceneUnitShort = (metersPerUnit) => {
+        const value = Number(metersPerUnit);
+        const named = value > 0 ? SCENE_UNIT_SHORT.find(([meters]) => Math.abs(meters - value) <= meters * 1e-6) : null;
+        return named ? named[1] : 'units';
+    };
+    const lightNumber = (value, digits = 3) => {
+        const n = Number(value);
+        return Number.isFinite(n) ? String(Math.round(n * Math.pow(10, digits)) / Math.pow(10, digits)) : '';
+    };
+    const lightTriple = (values, digits = 3) => (Array.isArray(values) ? values.slice(0, 3).map((v) => lightNumber(v, digits)).join(', ') : '');
+    // A linear colour as an sRGB swatch, scaled down when brighter than 1.
+    const lightSwatch = (rgb) => {
+        if (!Array.isArray(rgb) || rgb.length < 3) return 'transparent';
+        const peak = Math.max(1, ...rgb.slice(0, 3).map((v) => Number(v) || 0));
+        const encode = (v) => Math.round(255 * Math.pow(Math.max(0, Math.min(1, (Number(v) || 0) / peak)), 1 / 2.2));
+        return 'rgb(' + rgb.slice(0, 3).map(encode).join(', ') + ')';
+    };
+    const LightInfoRow = ({ label, raw, testId, children }) => (
+        <div className="flex items-start justify-between gap-3 min-w-0 py-0.5">
+            <span className="shrink-0 flex flex-col">
+                <span className="text-[11px] text-gray-400">{label}</span>
+                {raw ? <span className="text-[10px] font-mono text-gray-600">{raw}</span> : null}
+            </span>
+            <span data-testid={testId} className="min-w-0 text-right text-[11px] font-mono tabular-nums text-gray-200 break-words">{children}</span>
+        </div>
+    );
+    const LightInfoColor = ({ rgb }) => (
+        <React.Fragment>
+            <span aria-hidden="true" className="inline-block w-3 h-3 mr-1.5 rounded-sm border border-gray-500 align-[-2px]" style={{ background: lightSwatch(rgb) }} />
+            {lightTriple(rgb)}
+        </React.Fragment>
+    );
+
+    // One label/value pair of the Scene section's facts: two cells of the Info grid,
+    // in the Statistics micro-label idiom.
+    const SCENE_ROW_LABEL = 'text-[10px] leading-4 font-semibold uppercase tracking-[0.08em] text-gray-500';
+    const SceneInfoRow = ({ label, testId, title, children }) => (
+        <React.Fragment>
+            <span className={SCENE_ROW_LABEL}>{label}</span>
+            <span data-testid={testId} title={title} className="min-w-0 truncate text-right text-[11px] leading-4 text-gray-300">{children}</span>
+        </React.Fragment>
+    );
+
     // Kept as one array so the list is easy to edit without touching the
     // popover markup below.
     const SCENE_KNOWN_ISSUES = [
-        'A malformed prim can crash the USD runtime.',
+        'A malformed object in a USD file can crash the USD runtime.',
         'UsdPreviewSurface is only flattened to basic constants and textures, not converted to MaterialX.',
-        'Reloading stages many times in one session has hung twice.',
+        'Reloading scenes many times in one session has hung twice.',
     ];
     const KNOWN_ISSUES_POPOVER_W = 260;
 
@@ -825,12 +1379,6 @@
             </div>
         );
     };
-    const ButtonRow = ({ label, onClick, disabled, title, description }) => (
-        <div className="py-2 border-b border-gray-700/60 last:border-b-0">
-            <button type="button" onClick={onClick} disabled={disabled} title={title} className={BTN_SECONDARY + ' w-full'}>{label}</button>
-            {description ? <div className="mt-1 text-[11px] text-gray-400">{description}</div> : null}
-        </div>
-    );
     // Three-way quality control used by the Render settings popover.
     // Kept local rather than moved into js/shared/mtlx-ui.jsx, which
     // feeds the embed bundle where Tailwind utilities silently no-op.
@@ -881,6 +1429,18 @@
             </div>
         );
     };
+    // Diagnostics popover over the Statistics footer: this wide, at most this
+    // share of the window tall, clamped to the window.
+    const DIAGNOSTICS_POPOVER_W = 440;
+    const DIAGNOSTICS_POPOVER_MAX_VH = 0.6;
+    // Title row of a flat sidebar section, in the Statistics header idiom.
+    const SidebarSectionHeader = ({ icon, title, summary, testId }) => (
+        <div data-testid={testId} className="flex items-center gap-2 min-w-0">
+            <MtlxIcon name={icon} className="w-4 h-4 text-gray-400 shrink-0" />
+            <span className="text-[13px] font-semibold text-gray-200 shrink-0">{title}</span>
+            {summary ? <span className="flex-1 min-w-0 text-right text-xs text-gray-500 truncate" title={summary}>{summary}</span> : null}
+        </div>
+    );
     function SceneViewerApp({ active = true }) {
         const narrow = useNarrowPane();
         const [sidebarOpen, setSidebarOpen] = React.useState(!narrow);
@@ -888,8 +1448,12 @@
         sidebarOpenRef.current = sidebarOpen;
         const [files, setFiles] = React.useState([]);
         const [rootPath, setRootPath] = React.useState('');
-        const [status, setStatus] = React.useState('idle');
-        const [progress, setProgress] = React.useState({ phase: '', done: 0, total: 0, message: '' });
+        // VS Code starts in 'host-loading': the host is already collecting
+        // the scene's files when this view mounts.
+        const [status, setStatus] = React.useState(IN_VSCODE ? 'host-loading' : 'idle');
+        const [progress, setProgress] = React.useState(IN_VSCODE
+            ? { phase: 'collect', fraction: 0, done: 0, total: 0, message: '', label: '', step: '' }
+            : { phase: '', done: 0, total: 0, message: '' });
         const [stage, setStage] = React.useState(null);
         const [handle, setHandle] = React.useState(null);
         // Full loose (non-.mtlx) file map of the loaded scene, for the
@@ -923,22 +1487,75 @@
         };
         const DOUBLE_CLICK_NOTES = {
             moved: 'Double-click ignored: the pointer moved between the clicks',
-            'no-api': 'Double-click preview is unavailable for this stage',
+            'no-api': 'Double-click preview is unavailable for this scene',
             'no-hit': 'Double-click: no surface under the pointer',
             'no-material': 'Double-click: the surface has no material bound',
             'no-document': 'Double-click: no MaterialX document for this material',
+            unbound: 'This material is not assigned to any mesh in the scene',
         };
         const [previewPayload, setPreviewPayload] = React.useState(null);
         const [previewWarm, setPreviewWarm] = React.useState(false);
         const [previewAnchor, setPreviewAnchor] = React.useState(null);
         const previewPanelRef = React.useRef(null);
+        // Read by the viewport listeners and row clicks between renders.
+        const previewPayloadRef = React.useRef(null);
+        previewPayloadRef.current = previewPayload;
+        const previewOpenRef = React.useRef(false);
+        previewOpenRef.current = previewOpen;
+        // 'open' (double-click, Enter) shows the panel, placed at `anchor` when given;
+        // 'swap' (single click) only changes what an open panel shows. The same
+        // material again never reloads the graph.
+        const showMaterialPreview = (doc, info, mode, anchor) => {
+            const current = previewPayloadRef.current;
+            const same = previewOpenRef.current && !!current && current.previewMaterialPath === info.materialPath;
+            if (mode === 'swap' && (!previewOpenRef.current || same)) return false;
+            if (!same) {
+                const payload = Object.assign({ primPath: info.primPath, materialName: info.materialName == null ? null : info.materialName }, doc, { previewMaterialPath: info.materialPath });
+                previewPayloadRef.current = payload;
+                setPreviewPayload(payload);
+            }
+            if (mode === 'open') {
+                previewOpenRef.current = true;
+                setPreviewAnchor(anchor || null);
+                setPreviewOpen(true);
+            }
+            return !same;
+        };
+        const showMaterialPreviewRef = React.useRef(null);
+        showMaterialPreviewRef.current = showMaterialPreview;
         const [dragOver, setDragOver] = React.useState(false);
-        const [selectedPrim, setSelectedPrim] = React.useState('');
+        // Outliner state lives here, not in the tree, so closing the sidebar or
+        // reloading the same stage keeps it; a different stage resets it.
+        // Keys are row ids (an object's path, 'group:scene', 'material:<path>', ...);
+        // treeHidden holds Scene ids, lightsHidden the light prim paths.
+        const [treeExpanded, setTreeExpanded] = React.useState(() => new Set());
+        const [treeSelected, setTreeSelected] = React.useState('');
+        const [treeHidden, setTreeHidden] = React.useState(() => new Set());
+        const [lightsHidden, setLightsHidden] = React.useState(() => new Set());
+        // The Environment row's eye: per view like hidden lights, never persisted.
+        const [envLightingOff, setEnvLightingOff] = React.useState(false);
+        const [treeFilter, setTreeFilter] = React.useState('');
+        const [treeReveal, setTreeReveal] = React.useState(0);
+        const treeSceneKeyRef = React.useRef(null);
+        // The Cameras group's active row: 'default' (frame the scene) or a camera path.
         const [selectedCamera, setSelectedCamera] = React.useState('default');
         React.useEffect(() => {
             const stageCameras = Array.isArray(stage && stage.cameras) ? stage.cameras : [];
             setSelectedCamera(defaultCameraPathFor(stageCameras) || 'default');
         }, [stage]);
+        // Scene section: Info and loaded-files disclosures, and whether a '.usd' root is a crate.
+        const [sceneInfoOpen, setSceneInfoOpen] = React.useState(true);
+        const [sceneFilesOpen, setSceneFilesOpen] = React.useState(false);
+        const [rootUsdBinary, setRootUsdBinary] = React.useState(false);
+        React.useEffect(() => {
+            setRootUsdBinary(false);
+            if (ext(rootPath) !== '.usd') return undefined;
+            const blob = blobOfCandidate(files.find((file) => file.path === rootPath));
+            if (!blob) return undefined;
+            let live = true;
+            blob.slice(0, 8).text().then((head) => { if (live) setRootUsdBinary(head.indexOf('PXR-USDC') === 0); }, () => {});
+            return () => { live = false; };
+        }, [files, rootPath]);
         const [rootTouched, setRootTouched] = React.useState(false);
         // Model (glTF/OBJ) root candidates set aside when a USD root layer
         // was also supplied; surfaced as an info-level diagnostic below.
@@ -1055,6 +1672,29 @@
             window.addEventListener('pointerdown', onDown);
             return () => window.removeEventListener('pointerdown', onDown);
         }, [renderSettingsOpen]);
+        // Viewport popovers under the HUD row besides Render settings: the editable
+        // Environment settings and the view-only info of one stage light (its prim
+        // path). At most one of the three is open.
+        const [envPopoverOpen, setEnvPopoverOpen] = React.useState(false);
+        const [lightInfoPath, setLightInfoPath] = React.useState('');
+        const envBtnRef = React.useRef(null);
+        const envPopRef = React.useRef(null);
+        const lightPopRef = React.useRef(null);
+        const openEnvPopover = () => { setRenderSettingsOpen(false); setLightInfoPath(''); setEnvPopoverOpen(true); };
+        const openLightInfo = (path) => { setRenderSettingsOpen(false); setEnvPopoverOpen(false); setLightInfoPath(path || ''); };
+        React.useEffect(() => { if (renderSettingsOpen) { setEnvPopoverOpen(false); setLightInfoPath(''); } }, [renderSettingsOpen]);
+        useEscapeToClose(() => setEnvPopoverOpen(false), envPopoverOpen);
+        useEscapeToClose(() => setLightInfoPath(''), !!lightInfoPath);
+        React.useEffect(() => {
+            if (!envPopoverOpen && !lightInfoPath) return undefined;
+            const inside = (ref, target) => !!(ref.current && ref.current.contains(target));
+            const onDown = (e) => {
+                if (envPopoverOpen && !inside(envPopRef, e.target) && !inside(envBtnRef, e.target)) setEnvPopoverOpen(false);
+                if (lightInfoPath && !inside(lightPopRef, e.target)) setLightInfoPath('');
+            };
+            window.addEventListener('pointerdown', onDown);
+            return () => window.removeEventListener('pointerdown', onDown);
+        }, [envPopoverOpen, lightInfoPath]);
         // Sidebar "Experimental" pill: a small known-issues popover, portaled
         // out of the sidebar's overflow-hidden and clamped to the viewport
         // the same way SettingsDialog in mtlx-ui.jsx anchors below its cog.
@@ -1082,6 +1722,38 @@
             window.addEventListener('pointerdown', onDown);
             return () => window.removeEventListener('pointerdown', onDown);
         }, [knownIssuesOpen]);
+        // Diagnostics popover, opened from the Statistics header. Portaled and kept
+        // mounted while closed (hidden): specs read its messages without opening it.
+        const [diagnosticsOpen, setDiagnosticsOpen] = React.useState(false);
+        const diagnosticsBtnRef = React.useRef(null);
+        const diagnosticsPopRef = React.useRef(null);
+        const [diagnosticsPos, setDiagnosticsPos] = React.useState(null);
+        useEscapeToClose(() => setDiagnosticsOpen(false), diagnosticsOpen);
+        React.useEffect(() => { if (!active || !sidebarOpen) setDiagnosticsOpen(false); }, [active, sidebarOpen]);
+        React.useLayoutEffect(() => {
+            if (!diagnosticsOpen) return undefined;
+            const place = () => {
+                const rect = diagnosticsBtnRef.current ? diagnosticsBtnRef.current.getBoundingClientRect() : null;
+                if (!rect) return;
+                const width = Math.min(DIAGNOSTICS_POPOVER_W, window.innerWidth - 16);
+                const left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8));
+                const maxHeight = Math.max(120, Math.min(window.innerHeight * DIAGNOSTICS_POPOVER_MAX_VH, rect.top - 12));
+                setDiagnosticsPos({ left, width, maxHeight, bottom: window.innerHeight - rect.top + 4 });
+            };
+            place();
+            window.addEventListener('resize', place);
+            return () => window.removeEventListener('resize', place);
+        }, [diagnosticsOpen]);
+        React.useEffect(() => {
+            if (!diagnosticsOpen) return undefined;
+            const onDown = (e) => {
+                if (diagnosticsPopRef.current && diagnosticsPopRef.current.contains(e.target)) return;
+                if (diagnosticsBtnRef.current && diagnosticsBtnRef.current.contains(e.target)) return;
+                setDiagnosticsOpen(false);
+            };
+            window.addEventListener('pointerdown', onDown);
+            return () => window.removeEventListener('pointerdown', onDown);
+        }, [diagnosticsOpen]);
         // Mirrors the boolean keys js/usd-scene-renderer.js reads at creation
         // (storedSceneAo etc.) so a toggle flipped before load is honored by
         // the next renderer instance without editing that file.
@@ -1251,6 +1923,7 @@
             if (preferredRoot) await load(next, preferredRoot);
         };
         const chooseFiles = async (list) => {
+            treeSceneKeyRef.current = null; // new files: a fresh outliner
             const generation = ++generationRef.current;
             if (abortRef.current) abortRef.current.abort();
             if (handleRef.current && handleRef.current.dispose) handleRef.current.dispose();
@@ -1260,6 +1933,7 @@
             applyChosenFiles(next, generation);
         };
         const chooseFilesFromMap = async (map) => {
+            treeSceneKeyRef.current = null;
             const generation = ++generationRef.current;
             if (abortRef.current) abortRef.current.abort();
             if (handleRef.current && handleRef.current.dispose) handleRef.current.dispose();
@@ -1267,7 +1941,17 @@
             window.__mtlxUsdSceneHandle = null;
             applyChosenFiles(filesFromMap(map), generation);
         };
-        const load = async (loadFiles = filesRef.current, loadRoot = rootPath) => {
+        // VS Code: missing-file entries already sent to the host for the
+        // current host seq; each is asked for once.
+        const hostSeqRef = React.useRef(0);
+        const hostMissingSentRef = React.useRef(new Set());
+        const unsentMissing = (entries) => entries.filter((entry) => {
+            const key = entry.asset + '|' + entry.introducedBy;
+            if (hostMissingSentRef.current.has(key)) return false;
+            hostMissingSentRef.current.add(key);
+            return true;
+        });
+        const load = async (loadFiles = filesRef.current, loadRoot = rootPath, options = {}) => {
             if (!loadRoot) { setError('Select one root layer before loading.'); setStatus('error'); return; }
             // js/usd-scene-sources.js tells a glTF/OBJ root apart from a
             // USD one; its loaders resolve to the same neutral stage
@@ -1291,6 +1975,17 @@
                 // loaders simply ignore the two fields.
                 const result = await loader({ files: loadFiles, rootPath: loadRoot, signal: controller.signal, subdivisionLevel: subdivisionLevelRef.current, triangleLimits: triangleLimitsRef.current, onProgress: (value) => updateProgress(value, generation) });
                 if (!mountedRef.current || controller.signal.aborted || generation !== generationRef.current) return;
+                // VS Code: layers the stage could not open are asked for before
+                // rendering; when the host finds any, its bigger set replaces this load.
+                if (IN_VSCODE && options.host && typeof window.__mtlxSceneReportMissing === 'function') {
+                    const missing = unsentMissing(stageMissingEntries(result));
+                    if (missing.length) {
+                        updateProgress({ phase: 'parse', fraction: 1, label: 'Looking for ' + missing.length + ' missing file' + (missing.length === 1 ? '' : 's') }, generation);
+                        const reply = await window.__mtlxSceneReportMissing(missing);
+                        if (!mountedRef.current || controller.signal.aborted || generation !== generationRef.current) return;
+                        if (reply && reply.added > 0) return;
+                    }
+                }
                 setStage(result); setStatus('loaded');
             } catch (e) {
                 if (!mountedRef.current || controller.signal.aborted || generation !== generationRef.current || e && e.name === 'AbortError') return;
@@ -1298,6 +1993,7 @@
             }
         };
         const loadExample = async () => {
+            treeSceneKeyRef.current = null;
             const generation = ++generationRef.current;
             if (abortRef.current) abortRef.current.abort();
             if (handleRef.current && handleRef.current.dispose) handleRef.current.dispose();
@@ -1317,9 +2013,23 @@
         // VS Code host entry: { files: { relPath: File }, root } from the
         // extension (media/bootstrap.js). load() routes the explicit root by
         // kind, so a USD, glTF/GLB or OBJ root all take the same path.
+        // { seq, round } of the host set handed to load(), and the one whose
+        // files are being collected or fetched (bootstrap.js progress events).
+        const hostLoadRef = React.useRef(null);
+        const hostPhaseKeyRef = React.useRef('');
+        const hostGenerationRef = React.useRef(0);
+        const adoptHostSeq = (seq) => {
+            if (seq === hostSeqRef.current) return;
+            hostSeqRef.current = seq;
+            hostMissingSentRef.current = new Set();
+        };
         const loadFromHostRef = React.useRef(null);
         loadFromHostRef.current = (payload) => {
             if (!payload || !payload.files || !payload.root) return;
+            const host = { seq: Number(payload.seq) || 0, round: Number(payload.round) || 0 };
+            hostLoadRef.current = host;
+            hostPhaseKeyRef.current = host.seq + ':' + host.round;
+            adoptHostSeq(host.seq);
             generationRef.current += 1;
             if (abortRef.current) abortRef.current.abort();
             if (handleRef.current && handleRef.current.dispose) handleRef.current.dispose();
@@ -1328,7 +2038,41 @@
             const next = filesFromMap(payload.files);
             setFiles(next); setRootPath(payload.root); setRootTouched(true); setError('');
             setIgnoredModelRoots([]);
-            load(next, payload.root);
+            load(next, payload.root, { host });
+        };
+        // Host collection ('collect') and webview fetch ('fetch') progress. A
+        // new (seq, round) tears down what is shown and starts a host load.
+        const hostProgressRef = React.useRef(null);
+        hostProgressRef.current = (detail) => {
+            if (!detail || !mountedRef.current) return;
+            const seq = Number(detail.seq) || 0;
+            const round = Number(detail.round) || 0;
+            const loaded = hostLoadRef.current;
+            if (loaded && (seq < loaded.seq || (seq === loaded.seq && round <= loaded.round))) return; // already loaded
+            const key = seq + ':' + round;
+            if (hostPhaseKeyRef.current !== key) {
+                hostPhaseKeyRef.current = key;
+                adoptHostSeq(seq);
+                hostGenerationRef.current = ++generationRef.current;
+                if (abortRef.current) abortRef.current.abort();
+                abortRef.current = null;
+                if (handleRef.current && handleRef.current.dispose) handleRef.current.dispose();
+                handleRef.current = null; setHandle(null); setStage(null); setError('');
+                window.__mtlxUsdSceneHandle = null;
+                setStatus('host-loading');
+            }
+            if (detail.phase === 'collect') {
+                const found = Number(detail.found) || 0;
+                updateProgress({ phase: 'collect', label: found ? found + (found === 1 ? ' file, ' : ' files, ') + formatMegabytes(detail.bytes) + ' MB' : '' }, hostGenerationRef.current);
+            } else {
+                const bytesTotal = Number(detail.bytesTotal) || 0;
+                const total = Number(detail.total) || 0;
+                updateProgress({
+                    phase: 'fetch', done: Number(detail.done) || 0, total,
+                    fraction: bytesTotal ? (Number(detail.bytesDone) || 0) / bytesTotal : (total ? (Number(detail.done) || 0) / total : 0),
+                    label: (round ? 'More referenced files: ' : '') + formatMegabytes(detail.bytesDone) + ' of ' + formatMegabytes(bytesTotal) + ' MB',
+                }, hostGenerationRef.current);
+            }
         };
         React.useEffect(() => {
             if (!IN_VSCODE) return undefined;
@@ -1338,8 +2082,16 @@
                 if (payload) loadFromHostRef.current(payload);
             };
             take();
+            const onProgress = (event) => hostProgressRef.current(event.detail);
+            // Progress posted before this view mounted still applies unless
+            // a newer set was already taken above (the guard checks that).
+            if (window.__mtlxSceneHostProgress) hostProgressRef.current(window.__mtlxSceneHostProgress);
             window.addEventListener('mtlx-load-scene', take);
-            return () => window.removeEventListener('mtlx-load-scene', take);
+            window.addEventListener('mtlx-scene-host-progress', onProgress);
+            return () => {
+                window.removeEventListener('mtlx-load-scene', take);
+                window.removeEventListener('mtlx-scene-host-progress', onProgress);
+            };
         }, []);
         React.useEffect(() => {
             if (!stage || !containerRef.current) return undefined;
@@ -1439,6 +2191,12 @@
                     callHandle('setAutoRotate', settings.autoRotate);
                     if (currentEnvironmentRef.current && !useDome) callHandle('setEnvironment', currentEnvironmentRef.current);
                     setHandle(nextHandle); setStatus('rendered');
+                    // VS Code: textures and layers still missing once rendered go
+                    // to the host; if it finds any, a bigger set reloads the scene.
+                    if (IN_VSCODE && hostLoadRef.current && typeof window.__mtlxSceneReportMissing === 'function') {
+                        const missing = unsentMissing(stageMissingEntries(stage).concat(renderMissingEntries(nextHandle, rootPath)));
+                        if (missing.length) window.__mtlxSceneReportMissing(missing);
+                    }
                     // Apply the chosen camera up front instead of framing
                     // first, so the view never visibly jumps; applyCamera
                     // already falls back to frameAll when the path is missing.
@@ -1488,16 +2246,170 @@
                 if (!doc) return fail('no-document', { hit });
                 log(Object.assign({ reason: 'ok' }, base, { hit: { primPath: hit.primPath, materialPath: hit.materialPath } }));
                 const bounds = container.getBoundingClientRect();
-                setPreviewPayload(Object.assign({ primPath: hit.primPath, materialName: hit.materialName }, doc));
-                setPreviewAnchor({ x: e.clientX - bounds.left, y: e.clientY - bounds.top });
-                setPreviewOpen(true);
+                showMaterialPreviewRef.current(doc, { primPath: hit.primPath, materialName: hit.materialName, materialPath: hit.materialPath }, 'open',
+                    { x: e.clientX - bounds.left, y: e.clientY - bounds.top });
+            };
+            // A click on the canvas itself (not an orbit drag, not a HUD pill)
+            // selects the surface under it in the outliner; empty space clears.
+            // With the preview open, a surface also swaps it to the material under the click.
+            const onClick = (e) => {
+                if (e.button !== 0 || !handle.renderer || e.target !== handle.renderer.domElement) return;
+                if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4 || typeof handle.pickAt !== 'function') return;
+                const hit = handle.pickAt(e.clientX, e.clientY);
+                if (viewportSelectRef.current) viewportSelectRef.current(hit ? hit.primPath : '');
+                if (!hit || !hit.materialPath || !previewOpenRef.current || typeof handle.getMaterialDocument !== 'function') return;
+                const doc = handle.getMaterialDocument(hit.materialPath);
+                if (doc) showMaterialPreviewRef.current(doc, { primPath: hit.primPath, materialName: hit.materialName, materialPath: hit.materialPath }, 'swap');
             };
             container.addEventListener('pointerdown', onPointerDown);
             container.addEventListener('dblclick', onDblClick);
+            container.addEventListener('click', onClick);
             return () => {
                 container.removeEventListener('pointerdown', onPointerDown);
                 container.removeEventListener('dblclick', onDblClick);
+                container.removeEventListener('click', onClick);
             };
+        }, [handle]);
+
+        // Outliner: tree model, renderer sync, selection and activation.
+        const sceneTree = React.useMemo(() => (stage ? buildSceneTree(stage) : null), [stage]);
+        React.useEffect(() => {
+            if (!sceneTree) return;
+            if (treeSceneKeyRef.current === rootPath) {
+                // The same stage reloaded (Apply, watcher, Reload): keep what still exists.
+                setTreeHidden((prev) => { const next = new Set(Array.from(prev).filter((id) => sceneTree.byId.has(id))); return next.size === prev.size ? prev : next; });
+                setLightsHidden((prev) => { const next = new Set(Array.from(prev).filter((path) => sceneTree.byId.has('light:' + path))); return next.size === prev.size ? prev : next; });
+                setTreeSelected((prev) => (prev && sceneTree.byId.has(prev) ? prev : ''));
+                return;
+            }
+            treeSceneKeyRef.current = rootPath;
+            setTreeExpanded(defaultSceneTreeExpanded(sceneTree));
+            setTreeSelected('');
+            setTreeHidden(new Set());
+            setLightsHidden(new Set());
+            setEnvLightingOff(false);
+            setTreeFilter('');
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [sceneTree]);
+        React.useEffect(() => {
+            if (handle && typeof handle.setHiddenPrims === 'function') handle.setHiddenPrims(sceneTreeHiddenRenderPaths(sceneTree, treeHidden));
+        }, [handle, sceneTree, treeHidden]);
+        React.useEffect(() => {
+            if (handle && typeof handle.setHiddenLights === 'function') handle.setHiddenLights(Array.from(lightsHidden));
+        }, [handle, lightsHidden]);
+        React.useEffect(() => {
+            if (handle && typeof handle.setEnvironmentLightingEnabled === 'function') handle.setEnvironmentLightingEnabled(!envLightingOff);
+        }, [handle, envLightingOff]);
+        React.useEffect(() => {
+            if (!handle || typeof handle.setHighlightedPrims !== 'function') return;
+            const node = treeSelected && sceneTree ? sceneTree.byId.get(treeSelected) : null;
+            handle.setHighlightedPrims(node && !node.isGroup ? sceneTreeRenderPaths(sceneTree, node) : []);
+        }, [handle, sceneTree, treeSelected]);
+        const treeRows = React.useMemo(() => flattenSceneTree(sceneTree, treeExpanded, treeFilter), [sceneTree, treeExpanded, treeFilter]);
+        const toggleTreeExpanded = (id) => setTreeExpanded((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
+        });
+        const toggleSetEntry = (setter, key) => setter((prev) => {
+            const next = new Set(prev);
+            if (next.has(key)) next.delete(key); else next.add(key);
+            return next;
+        });
+        // Eye buttons: objects and the Scene group hide meshes, stage lights (one or the
+        // whole group) and the environment's lighting are turned off in the renderer.
+        const toggleTreeHidden = (node) => {
+            if (!node) return;
+            if (node.group === 'scene') { toggleSetEntry(setTreeHidden, node.id); return; }
+            if (node.isEnvironment) { setEnvLightingOff((off) => !off); return; }
+            if (node.isGroup && node.group === 'lights') {
+                const paths = sceneTreeLightPaths(sceneTree);
+                setLightsHidden((prev) => (paths.length && paths.every((path) => prev.has(path)) ? new Set() : new Set(paths)));
+                return;
+            }
+            if (sceneTreeLightHideable(node)) toggleSetEntry(setLightsHidden, node.path);
+        };
+        const selectTreePath = (id, reveal) => {
+            setTreeSelected(id || '');
+            if (!id || !reveal) return;
+            const node = sceneTree && sceneTree.byId.get(id);
+            setTreeExpanded((prev) => {
+                let next = null;
+                for (let parent = node && node.parent; parent; parent = parent.parent) {
+                    if (!prev.has(parent.id)) { next = next || new Set(prev); next.add(parent.id); }
+                }
+                return next || prev;
+            });
+            setTreeReveal((token) => token + 1);
+        };
+        const viewportSelectRef = React.useRef(null);
+        viewportSelectRef.current = (renderPath) => {
+            const node = renderPath && sceneTree ? sceneTree.byRenderPath.get(renderPath) : null;
+            if (!node) { setTreeSelected(''); return; }
+            const query = treeFilter.trim().toLowerCase();
+            if (query && node.name.toLowerCase().indexOf(query) < 0) setTreeFilter('');
+            selectTreePath(node.id, true);
+        };
+        // The material preview for a mesh row (its bound material) or a material row.
+        const previewTreeNode = (node, mode) => {
+            const current = handleRef.current;
+            const log = (reason) => {
+                const list = (window.__mtlxUsdSceneDoubleClicks = window.__mtlxUsdSceneDoubleClicks || []);
+                list.push({ t: Math.round(performance.now()), event: mode === 'swap' ? 'click' : 'dblclick', source: 'tree', reason, primPath: node.path, materialPath: node.materialPath });
+                if (list.length > 40) list.splice(0, list.length - 40);
+            };
+            // A swap stays quiet about a mesh without a material, never about an unbound one.
+            const fail = (reason) => { log(reason); if (mode !== 'swap' || reason === 'unbound') showDoubleClickNote(DOUBLE_CLICK_NOTES[reason] || reason); };
+            if (!current || typeof current.getMaterialDocument !== 'function') return fail('no-api');
+            if (!node.materialPath) return fail('no-material');
+            const doc = current.getMaterialDocument(node.materialPath);
+            // Only bound materials are compiled, so an unassigned Material prim has no document.
+            const unbound = node.kind === 'material' && !(sceneTree && (sceneTree.meshesByMaterial.get(node.path) || []).length);
+            if (!doc) return fail(unbound ? 'unbound' : 'no-document');
+            log('ok');
+            showMaterialPreview(doc, { primPath: node.path, materialName: null, materialPath: node.materialPath }, mode, null);
+        };
+        // Single click on a row: selects it; a group header also opens or closes, a
+        // camera becomes the view, the environment opens its settings, another light
+        // its info, and an open preview follows a mesh or material.
+        const clickTreeRow = (node) => {
+            if (!node) return;
+            selectTreePath(node.id, false);
+            if (node.kind !== 'light') setLightInfoPath('');
+            if (node.isGroup) { if (node.children.length) toggleTreeExpanded(node.id); return; }
+            if (node.kind === 'camera') { selectCamera(node.isDefaultCamera ? 'default' : node.path); return; }
+            if (node.isEnvironment) { openEnvPopover(); return; }
+            if (node.kind === 'light') { openLightInfo(node.path); return; }
+            if ((node.kind === 'mesh' || node.kind === 'material') && previewOpenRef.current) previewTreeNode(node, 'swap');
+        };
+        // Double-click or Enter on a row: the material preview for a mesh or material
+        // row, the camera, environment or light info for those; groups toggle open.
+        const activateTreeNode = (node) => {
+            if (!node) return;
+            if (node.isGroup || node.kind === 'xform') { if (node.children.length) toggleTreeExpanded(node.id); return; }
+            if (node.kind === 'camera') { selectCamera(node.isDefaultCamera ? 'default' : node.path); return; }
+            if (node.isEnvironment) { openEnvPopover(); return; }
+            if (node.kind === 'light') { openLightInfo(node.path); return; }
+            if (node.kind === 'mesh' || node.kind === 'material') previewTreeNode(node, 'open');
+        };
+        // Escape clears the selection once no popover or preview claims it first.
+        React.useEffect(() => {
+            if (!active || !treeSelected || previewOpen || renderSettingsOpen || envPopoverOpen || lightInfoPath || knownIssuesOpen || diagnosticsOpen || recordOpen) return undefined;
+            const onKey = (e) => {
+                if (e.key !== 'Escape' || e.defaultPrevented) return;
+                const tag = e.target && e.target.tagName;
+                if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+                setTreeSelected('');
+            };
+            window.addEventListener('keydown', onKey);
+            return () => window.removeEventListener('keydown', onKey);
+        }, [active, treeSelected, previewOpen, renderSettingsOpen, envPopoverOpen, lightInfoPath, knownIssuesOpen, diagnosticsOpen, recordOpen]);
+        // Anything that replaces the stage, its handle or its compiled programs
+        // closes the material preview, which would otherwise show a stale document.
+        React.useEffect(() => { setPreviewOpen(false); }, [stage, handle]);
+        React.useEffect(() => {
+            if (!handle || typeof handle.onRebuild !== 'function') return undefined;
+            return handle.onRebuild(() => setPreviewOpen(false));
         }, [handle]);
 
         // Page-wide drag & drop: files can drop anywhere, not just a sidebar
@@ -1592,7 +2504,7 @@
                 <React.Fragment>
                     {label.slice(0, at)}
                     <button type="button" data-testid="usd-scene-warning-setting-link"
-                        onClick={() => { setRenderTab(link.tab); setRenderSettingsOpen(true); }}
+                        onClick={() => { setDiagnosticsOpen(false); setRenderTab(link.tab); setRenderSettingsOpen(true); }}
                         title="Open this setting"
                         className="underline decoration-dotted underline-offset-2 hover:text-amber-100 text-left break-all">
                         {link.text}
@@ -1669,7 +2581,6 @@
         const updatePresentation = (patch) => {
             if (callHandle('setPresentation', patch)) refreshPresentation();
         };
-        const resetPresentation = () => updatePresentation({ reset: true });
         const disposeUnusedEnvironment = (env) => {
             const seen = new Set();
             ['radiance', 'irradiance', 'background'].forEach((name) => {
@@ -1732,12 +2643,11 @@
                 setEnvRotation(Math.round(dome.rotationDeg));
                 setEnvExposureLinear(dome.exposure);
                 domeRotationActiveRef.current = true;
-                setBackdrop('studio'); callHandle('setBackdrop', 'studio');
                 return;
             }
             domeRotationActiveRef.current = false;
             if (env) { currentEnvironmentRef.current = env; callHandle('setEnvironment', env); }
-            setEnvFileName(''); setEnvRotation(0); setEnvExposureLinear(1); callHandle('setEnvRotation', 0); callHandle('setEnvExposure', 1); setBackdrop('studio'); callHandle('setBackdrop', 'studio');
+            setEnvFileName(''); setEnvRotation(0); setEnvExposureLinear(1); callHandle('setEnvRotation', 0); callHandle('setEnvExposure', 1);
         };
         // The slider always displays and edits the authored degrees (matching
         // the dome light's own rotationDeg label when one is active); only
@@ -1750,9 +2660,33 @@
             callHandle('setEnvRotation', engineDeg * Math.PI / 180);
         };
         const setEnvExposureVal = (linear) => { setEnvExposureLinear(linear); callHandle('setEnvExposure', linear); };
-        const cancel = () => { generationRef.current += 1; if (abortRef.current) abortRef.current.abort(); setStatus('cancelled'); setProgress((p) => ({ ...p, message: 'Cancelled' })); };
+        const cancel = () => {
+            generationRef.current += 1;
+            if (abortRef.current) abortRef.current.abort();
+            if (IN_VSCODE) {
+                // Also stops the host's file collection and the file fetches,
+                // leaving an empty viewport with a Reload action.
+                if (typeof window.__mtlxSceneCancel === 'function') window.__mtlxSceneCancel();
+                hostPhaseKeyRef.current = '';
+                if (handleRef.current && handleRef.current.dispose) handleRef.current.dispose();
+                handleRef.current = null; setHandle(null); setStage(null);
+                window.__mtlxUsdSceneHandle = null;
+            }
+            setStatus('cancelled'); setProgress((p) => ({ ...p, message: 'Cancelled' }));
+        };
+        const reloadFromHost = () => {
+            hostPhaseKeyRef.current = '';
+            setError('');
+            setStatus('host-loading');
+            setProgress({ phase: 'collect', fraction: 0, done: 0, total: 0, message: '', label: '', step: '' });
+            if (typeof window.__mtlxSceneReload === 'function') window.__mtlxSceneReload();
+        };
+        // Scene section Reload: the host re-collects in VS Code, the web reloads the same file set.
+        const reloadScene = () => {
+            if (IN_VSCODE) { reloadFromHost(); return; }
+            if (filesRef.current && filesRef.current.length && rootPath) load(filesRef.current, rootPath);
+        };
         const frameAll = () => { if (handle && handle.frameAll) { handle.frameAll(); if (handle.renderNow) handle.renderNow(); } };
-        const select = (mesh) => { const path = String(mesh && (mesh.primPath || mesh.path || mesh.name) || ''); setSelectedPrim(path); if (handle && handle.selectPrim) handle.selectPrim(path); if (handle && handle.renderNow) handle.renderNow(); };
         const selectCamera = (value) => {
             setSelectedCamera(value);
             callHandle('applyCamera', value === 'default' ? null : value);
@@ -1920,6 +2854,7 @@
             if ('localReflections' in diff) setLocalEnvOn(diff.localReflections);
             if ('specularAA' in diff) setSpecularAAOn(diff.specularAA);
             if ('subdivision' in diff) { setSubdivisionLevel(diff.subdivision); subdivisionLevelRef.current = diff.subdivision; }
+            if (result && (result.reload || result.rebuild || result.geometry)) setPreviewOpen(false);
             const reloadPromise = (result && result.reload && files.length && rootPath) ? load() : null;
             return Object.assign({ reload: false, rebuild: false, geometry: false }, result, { reloadPromise });
         };
@@ -2072,7 +3007,7 @@
         // Second, dimmer overlay line: the current item within the phase.
         const RENDERER_STEP_LABELS = { 'shadow-atlas': 'Building shadow atlas', 'sky-visibility': 'Baking sky visibility', 'occlusion-volume': 'Baking occlusion volume', 'shader-join': 'Finishing shader compiles', 'gpu-program': 'Checking GPU programs', 'first-frame': 'Rendering first frame' };
         const progressDetail = progress.phase === 'renderer' ? (RENDERER_STEP_LABELS[progress.step] || '') : (progress.label || '');
-        const busy = status === 'loading' || status === 'loading-example' || status === 'loaded';
+        const busy = status === 'loading' || status === 'loading-example' || status === 'loaded' || status === 'host-loading';
         const canTuneEnvironment = !!handle && typeof handle.setEnvRotation === 'function';
         const envSummary = (envRotation === 0 && envExposureLinear === 1)
             ? 'Default environment'
@@ -2080,6 +3015,31 @@
         const renderedPrimCount = (handle && Array.isArray(handle.prims)) ? handle.prims.length : meshes.length;
         const triangleCount = stageTriangleCount(stage);
         const hasStage = !!stage || files.length > 0;
+        // Statistics: the objects under Scene (the same number the Hierarchy section shows),
+        // and the meshes the eye toggles leave visible.
+        const objectCount = sceneTree ? sceneTree.count : 0;
+        const hiddenRenderPaths = new Set(treeHidden.size ? sceneTreeHiddenRenderPaths(sceneTree, treeHidden) : []);
+        const visibleMeshCount = meshes.filter((mesh) => !hiddenRenderPaths.has(String((mesh && (mesh.instanceOwnerPath || mesh.primPath)) || ''))).length;
+        // Scene section facts. glTF is meters and Y up by definition; OBJ declares neither.
+        // A reload of the same files keeps the last stage's facts on screen, so its
+        // Cancel button takes the Reload button's place instead of jumping up.
+        const lastCardStageRef = React.useRef(null);
+        if (stage) lastCardStageRef.current = { stage, files, rootPath };
+        const lastCard = lastCardStageRef.current;
+        const cardStage = stage || (busy && lastCard && lastCard.files === files && lastCard.rootPath === rootPath ? lastCard.stage : null);
+        const sceneKind = isUsdRootPath(rootPath) ? 'usd' : (/\.(glb|gltf)$/i.test(rootPath) ? 'gltf' : (/\.obj$/i.test(rootPath) ? 'obj' : ''));
+        const sceneFormat = sceneFormatLabel(rootPath, rootUsdBinary);
+        const sceneBytes = files.reduce((sum, file) => sum + sceneFileBytes(file), 0);
+        const sceneMissing = cardStage
+            ? Array.from(new Set(stageMissingEntries(cardStage).concat(renderMissingEntries(handle, rootPath)).map((entry) => String(entry.asset).replace(/\\/g, '/'))))
+            : [];
+        const sceneAuthored = (cardStage && cardStage.metricsAuthored) || {};
+        const usdDefault = (text, authored) => (text && authored === false ? text + ' (USD default)' : text);
+        const sceneUnits = !cardStage ? '' : (sceneKind === 'gltf' ? 'Meters'
+            : (sceneKind === 'usd' ? usdDefault(sceneUnitsLabel(cardStage.metersPerUnit), sceneAuthored.metersPerUnit) : ''));
+        const sceneUpAxis = !cardStage ? '' : (sceneKind === 'gltf' ? 'Y'
+            : (sceneKind === 'usd' ? usdDefault(String(cardStage.upAxis || '').toUpperCase(), sceneAuthored.upAxis) : ''));
+        const sceneFilesText = files.length + ' file' + (files.length === 1 ? '' : 's') + ', ' + formatByteSize(sceneBytes);
         // VS Code test seam: bootstrap.js defines __mtlxSceneReport only for
         // the extension's test transport; one report per settled load.
         React.useEffect(() => {
@@ -2088,10 +3048,24 @@
             const errorLines = warnings.filter((label) => severityOf(label) === 'error');
             window.__mtlxSceneReport({
                 status, root: rootPath, files: files.length, prims: renderedPrimCount, meshes: meshes.length, materials: materials.length,
+                hostSeq: hostLoadRef.current ? hostLoadRef.current.seq : 0, hostRound: hostLoadRef.current ? hostLoadRef.current.round : 0,
                 warnings: warnings.filter((label) => severityOf(label) === 'warning').length,
                 errors: errorLines.length + (status === 'error' ? 1 : 0),
                 error: status === 'error' ? error : '',
                 sample: errorLines.concat(warnings).slice(0, 5),
+                rootSelectVisible: !!document.querySelector('[data-testid="usd-scene-root-select"]'),
+                previewOpen, treeNodes: objectCount,
+                treeMaterials: sceneTree ? sceneTree.materialCount : 0, treeCameras: sceneTree ? sceneTree.cameraCount : 0, treeLights: sceneTree ? sceneTree.lightCount : 0,
+                visibleMeshes: visibleMeshCount,
+                // What the Scene section shows; inDom is false only while the sidebar is collapsed.
+                sceneCard: {
+                    file: rootBasename, format: sceneFormat, files: files.length, bytes: sceneBytes, missing: sceneMissing.length,
+                    units: sceneUnits, upAxis: sceneUpAxis, cameraOptions: stage ? cameras.length + 1 : 0,
+                    sidebarOpen: sidebarOpenRef.current,
+                    inDom: !!document.querySelector('[data-testid="usd-scene-info"]'),
+                    fileText: (document.querySelector('[data-testid="usd-scene-info-file"]') || {}).textContent || '',
+                    filesText: (document.querySelector('[data-testid="usd-scene-info-files"]') || {}).textContent || '',
+                },
             });
         }, [status]);
 
@@ -2142,7 +3116,7 @@
                     title={draftValues.specularAA ? 'Turn off geometric specular anti-aliasing' : 'Widen specular roughness where it is changing fast on screen'}
                     onChange={(next) => stageQualityValue('specularAA', next)}
                     description="Widens anisotropic specular roughness by the screen-space variance of the shading normal and of the roughness input, so a fine procedural roughness noise network does not sparkle under a single-sample rasterizer the way a multi-sample path tracer would not. Smooth, constant-roughness materials are essentially unaffected. Staged: takes effect on Apply." />
-                <SliderRow settingKey="displayExposure" description="Scales the whole image before the display transform, the way a camera would. The Environment card's exposure only gains the image based lighting.">
+                <SliderRow settingKey="displayExposure" description="Scales the whole image before the display transform, the way a camera would. The exposure in Environment settings only scales the image based lighting.">
                     <SliderField label="Camera exposure" unit="EV" value={displayExposure} min={-8} max={8} step={0.25} decimals={2}
                         defaultValue={draftLevel && draftLevel.values.displayExposure}
                         onSlider={applyDisplayExposure} onNumber={applyDisplayExposure} />
@@ -2203,11 +3177,6 @@
                                 onSlider={(radius) => updatePresentation({ radius })} onNumber={(radius) => updatePresentation({ radius })} />
                         </SliderRow>
                     </React.Fragment>
-                ) : null}
-                {presentation.supported ? (
-                    <ButtonRow label="Reset HDR presentation" onClick={resetPresentation} disabled={!handle}
-                        title={handle ? undefined : 'Load a stage first'}
-                        description={presentation.supported ? 'Scene-linear HDR preserves luminous highlights; this restores its defaults.' : (presentation.reason || 'HDR is unavailable on this device.')} />
                 ) : null}
             </React.Fragment>
         );
@@ -2358,127 +3327,161 @@
                     description="Skips or lowers subdivision and displacement detail that would exceed 700,000 triangles per mesh or 6,000,000 per scene. Turning this off can run out of memory or freeze the tab on heavy scenes. Staged: reloads the stage on Apply." />
             </React.Fragment>
         );
-        const sidebarBody = (
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-3.5 space-y-4">
-                <SectionCard icon="file" title="Stage" summary={rootBasename || 'No stage'} defaultOpen>
-                    {!IN_VSCODE && (<React.Fragment>
-                    <div className="flex items-center gap-1">
-                        <div className="flex-1 min-w-0">
-                            <FilePickerField
-                                value={files.length ? files.length + ' file' + (files.length === 1 ? '' : 's') : ''}
-                                placeholder="No stage loaded"
-                                multiple
-                                icon="files"
-                                accept=".usd,.usda,.usdc,.usdz,.glb,.gltf,.obj,.mtl,.bin,.mtlx,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff,.ktx2"
-                                onFiles={chooseFiles}
-                                inputTestId="usd-scene-file-picker"
-                            />
-                        </div>
-                        <label
-                            title="Choose a folder"
-                            className="h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-gray-700 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300 cursor-pointer"
+        // The Diagnostics button carries the count and the icon of the most severe
+        // message, so problems show next to Statistics while the popover is closed.
+        const topSeverity = ['error', 'warning', 'info'].find((severity) => grouped[severity].length) || '';
+        const diagnosticsContent = warnings.length || transparentPrims.length ? (
+            <div data-testid="usd-material-warnings">
+                {['error', 'warning', 'info'].map((severity) => {
+                    const records = grouped[severity];
+                    if (!records.length) return null;
+                    const style = SEVERITY_STYLE[severity];
+                    return (
+                        <DiagGroup
+                            key={severity}
+                            id={severity}
+                            icon={style.icon}
+                            tone={style.text}
+                            label={style.label}
+                            lines={records.map((record) => record.label)}
                         >
-                            <MtlxIcon name="folder" className="w-3.5 h-3.5" />
-                            <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={(e) => chooseFiles(e.target.files)} />
-                        </label>
-                    </div>
-                    <div className="text-xs text-gray-500">or drag-and-drop anywhere on the page</div>
-                    </React.Fragment>)}
-
-                    {candidates.length > 1 && (() => {
-                        const candidatePaths = candidates.map((f) => f.path);
-                        const shortLabels = distinctRootLabels(candidatePaths);
-                        const rootLabels = {};
-                        const rootTitles = {};
-                        candidatePaths.forEach((p, i) => { rootLabels[p] = shortLabels[i]; rootTitles[p] = p; });
-                        return (
-                            <div data-testid="usd-scene-root-select">
-                                <FieldLabel label="Root layer" />
-                                <MtlxSelect
-                                    value={rootPath}
-                                    options={candidatePaths}
-                                    labels={rootLabels}
-                                    titles={rootTitles}
-                                    title={rootPath || undefined}
-                                    popWidth={320}
-                                    onChange={(v) => {
-                                        setRootPath(v); setRootTouched(true);
-                                        // One-click scene switching: reload the newly picked root
-                                        // right away instead of waiting on the explicit Load button.
-                                        if (filesRef.current && filesRef.current.length > 0) load(filesRef.current, v);
-                                    }}
-                                    defValue={null}
-                                    size="lg"
-                                    variant="field"
-                                    block
-                                />
+                            {records.map((record, i) => (
+                                <div key={severity + i} className={'font-mono text-xs break-all ' + style.text}>{renderWarningText(record.label)}</div>
+                            ))}
+                        </DiagGroup>
+                    );
+                })}
+                {transparentPrims.length ? (
+                    <DiagGroup
+                        id="transparent"
+                        icon="color-filter"
+                        tone="text-sky-300/90"
+                        label="Transparency"
+                        lines={transparentPrims.map((entry) => entry.primPath + ' [' + entry.materialPath + ']')}
+                    >
+                        {transparentPrims.map((entry, i) => (
+                            <div key={'t' + i} className="font-mono text-xs break-all text-sky-300/90">
+                                {entry.primPath}
+                                <span className="text-gray-500"> [{entry.materialPath}]</span>
                             </div>
-                        );
-                    })()}
-
-                    {cameras.length > 0 && (() => {
-                        const cameraOptions = ['default', ...cameras.map((c) => c.primPath)];
-                        const cameraLabels = { default: 'Auto framing' };
-                        const cameraTitles = {};
-                        cameras.forEach((c) => { cameraLabels[c.primPath] = c.name || c.primPath; cameraTitles[c.primPath] = c.primPath; });
-                        const defaultCameraPath = defaultCameraPathFor(cameras);
-                        return (
-                            <div data-testid="usd-scene-camera-select">
-                                <FieldLabel label="Camera" />
-                                <MtlxSelect
-                                    value={selectedCamera}
-                                    options={cameraOptions}
-                                    labels={cameraLabels}
-                                    titles={cameraTitles}
-                                    onChange={selectCamera}
-                                    defValue={defaultCameraPath || 'default'}
-                                    size="lg"
-                                    variant="field"
-                                    block
-                                />
+                        ))}
+                    </DiagGroup>
+                ) : null}
+                {materials.length ? (
+                    <DiagGroup
+                        id="materials"
+                        icon="file-text"
+                        tone="text-gray-500"
+                        label="Material sources"
+                        lines={materials.map((material) => String(material.materialX && material.materialX.path || material.sourceAsset || material.path || 'Material source unavailable'))}
+                    >
+                        {materials.map((material, i) => (
+                            <div key={'m' + i} className="text-gray-400 font-mono text-xs break-all">
+                                {String(material.materialX && material.materialX.path || material.sourceAsset || material.path || 'Material source unavailable')}
                             </div>
-                        );
-                    })()}
-
-                    {files.length > 0 && (
-                        <div className="text-xs text-gray-500">{files.length} input file{files.length === 1 ? '' : 's'}</div>
-                    )}
-
-                    {files.length > 0 && rootPath && (
-                        <button type="button" onClick={() => load()} className={BTN_PRIMARY + ' w-full'}>Load {rootBasename}</button>
-                    )}
-                    {busy && (
-                        <button type="button" data-testid="usd-scene-cancel" onClick={cancel} className={BTN_SECONDARY + ' w-full'}>Cancel</button>
-                    )}
-                    {!IN_VSCODE && (
-                        <button type="button" data-testid="usd-scene-load-example" onClick={loadExample} className={BTN_SECONDARY + ' w-full'}>Load example</button>
-                    )}
-
-                    {meshes.length > 0 && (
-                        <details>
-                            <summary className="cursor-pointer text-xs text-gray-400">Prim selection</summary>
-                            <div className="mt-2 max-h-48 overflow-y-auto custom-scrollbar space-y-0.5">
-                                {meshes.map((mesh, i) => {
-                                    const path = String(mesh.primPath || mesh.path || mesh.name || ('mesh ' + (i + 1)));
-                                    const isSelected = selectedPrim === path;
-                                    return (
-                                        <button
-                                            type="button"
-                                            key={path + i}
-                                            onClick={() => select(mesh)}
-                                            className={'block w-full truncate rounded px-2 py-1 text-left text-[11px] font-mono '
-                                                + (isSelected ? 'bg-blue-500/[0.12] text-blue-300 ring-1 ring-blue-500/60' : 'text-gray-300 hover:bg-gray-800')}
-                                        >
-                                            {path}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        </details>
-                    )}
-                </SectionCard>
-
-                <SectionCard icon="sun" title="Environment" summary={envSummary} defaultOpen dense>
+                        ))}
+                    </DiagGroup>
+                ) : null}
+            </div>
+        ) : (
+            <div className="py-1 text-xs text-gray-500">No warnings.</div>
+        );
+        const statisticsRows = [
+            ['Objects', objectCount.toLocaleString(), 'usd-stage-nodes', 'Every item under Scene in the hierarchy'],
+            ['Meshes', meshes.length.toLocaleString(), 'usd-stage-meshes'],
+            ['Triangles', triangleCount.toLocaleString(), 'usd-stage-triangles'],
+            ['Materials', (sceneTree ? sceneTree.materialCount : materials.length).toLocaleString(), 'usd-stage-materials', 'Every item under Materials in the hierarchy'],
+            ['Visible meshes', visibleMeshCount.toLocaleString(), 'usd-stage-visible-meshes', 'Meshes not hidden in the hierarchy'],
+            ['Warnings', warnings.length.toLocaleString(), 'usd-stage-warnings'],
+        ];
+        const SEVERITY_NOUNS = { error: ['error', 'errors'], warning: ['warning', 'warnings'], info: ['info', 'info'] };
+        const diagnosticsSummary = ['error', 'warning', 'info']
+            .filter((severity) => grouped[severity].length)
+            .map((severity) => grouped[severity].length.toLocaleString() + ' ' + SEVERITY_NOUNS[severity][grouped[severity].length === 1 ? 0 : 1])
+            .join(', ');
+        const severityTone = topSeverity ? SEVERITY_STYLE[topSeverity].text : 'text-gray-500';
+        const diagnosticsButton = (
+            <button
+                ref={diagnosticsBtnRef}
+                type="button"
+                data-testid="usd-scene-diagnostics-button"
+                data-severity={topSeverity || 'none'}
+                aria-haspopup="dialog"
+                aria-expanded={diagnosticsOpen}
+                title={'Diagnostics: ' + (diagnosticsSummary || 'no warnings')}
+                onClick={() => setDiagnosticsOpen((open) => !open)}
+                className={'ml-auto -my-0.5 h-6 inline-flex items-center gap-1.5 px-1.5 rounded-md border text-[11px] font-medium whitespace-nowrap transition-colors '
+                    + (diagnosticsOpen ? 'bg-gray-700 border-gray-500 text-gray-100' : 'bg-gray-800/80 border-gray-700 text-gray-300 hover:bg-gray-700/80 hover:text-gray-100')}
+            >
+                <span data-testid="usd-scene-diagnostics-severity" className={'inline-flex ' + severityTone}>
+                    <MtlxIcon name={topSeverity ? SEVERITY_STYLE[topSeverity].icon : 'check'} className="w-3.5 h-3.5" />
+                </span>
+                Diagnostics
+                {warnings.length ? (
+                    <span data-testid="usd-scene-diagnostics-count"
+                        className={'text-[10px] font-mono font-normal tabular-nums bg-gray-900/60 border border-gray-700 rounded-full px-1.5 ' + severityTone}>
+                        {warnings.length.toLocaleString()}
+                    </span>
+                ) : null}
+            </button>
+        );
+        const statisticsFooter = (
+            <div className="shrink-0 border-t border-gray-700 px-3.5 py-3.5 space-y-1" style={{ background: PANEL_SURFACE }} data-testid="usd-stage-counts">
+                <div className="flex items-center gap-2 mb-1.5">
+                    <MtlxIcon name="cube" className="w-4 h-4 text-gray-400 shrink-0" />
+                    <span className="text-[13px] font-semibold text-gray-200 shrink-0">Statistics</span>
+                    {diagnosticsButton}
+                </div>
+                <div className="space-y-1 text-[11px] text-gray-300">
+                    {statisticsRows.map(([label, value, testId, title]) => (
+                        <div key={label} className="flex justify-between" title={title}>
+                            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">{label}</span>
+                            <span className="font-mono tabular-nums" data-testid={testId}>{value}</span>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+        // Environment and light info popovers: the Render settings surface, under the
+        // Environment settings pill, clamped inside the viewport.
+        const HUD_POPOVER_W = 320;
+        const hudPopoverStyle = () => {
+            const pill = envBtnRef.current;
+            const box = containerRef.current;
+            const wanted = pill ? 8 + pill.offsetLeft : 8;
+            const left = box ? Math.max(8, Math.min(wanted, box.clientWidth - HUD_POPOVER_W - 8)) : wanted;
+            return { left, width: 'min(' + HUD_POPOVER_W + 'px, calc(100% - 16px))', maxHeight: 'calc(100% - 56px)' };
+        };
+        const HUD_POPOVER_CLASS = 'absolute z-30 top-11 flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden';
+        const popoverHeader = (icon, title, subtitle, onClose, tag, mono) => (
+            <div className="flex-none flex items-center gap-2 px-3 py-2 border-b border-gray-700">
+                <MtlxIcon name={icon} className="w-4 h-4 text-gray-400 shrink-0" />
+                <div className="flex-1 min-w-0 flex flex-col">
+                    <span className="text-[13px] font-semibold text-gray-200 truncate">{title}</span>
+                    {subtitle ? <span className={'text-[11px] text-gray-500 truncate' + (mono ? ' font-mono' : '')} title={subtitle}>{subtitle}</span> : null}
+                </div>
+                {tag ? <span className="shrink-0 text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border border-gray-600 text-gray-400">{tag}</span> : null}
+                <button type="button" aria-label="Close" onClick={onClose} className="shrink-0 p-1 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700">
+                    <MtlxIcon name="x" className="w-3.5 h-3.5" />
+                </button>
+            </div>
+        );
+        const envNode = sceneTree ? sceneTree.groups.lights.children.find((node) => node.isEnvironment) : null;
+        const envDome = handle && typeof handle.getDomeLight === 'function' ? handle.getDomeLight() : null;
+        const envPopover = envPopoverOpen ? (
+            <div ref={envPopRef} data-testid="usd-scene-env-popover" className={HUD_POPOVER_CLASS} style={hudPopoverStyle()}>
+                {popoverHeader('sun', 'Environment', [envFileName || 'Default environment', (envRotation !== 0 || envExposureLinear !== 1) ? envSummary : ''].filter(Boolean).join(', '), () => setEnvPopoverOpen(false))}
+                <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-3 space-y-3">
+                    {envNode && envNode.path ? (
+                        <div data-testid="usd-scene-env-dome" className="text-[11px] text-gray-400">
+                            {envOverrideRef.current ? 'The imported environment replaces the stage\'s dome light ' : (envDome ? 'From the stage\'s dome light ' : 'The stage\'s dome light could not be applied, see Diagnostics: ')}
+                            <span className="font-mono text-gray-300">{sceneTreeSegments(envNode.path).join('/')}</span>
+                            {envDome && envDome.fileName && !envOverrideRef.current ? ' (' + envDome.fileName + ')' : ''}
+                        </div>
+                    ) : null}
+                    {envLightingOff ? (
+                        <div data-testid="usd-scene-env-lighting-off" className="text-[11px] text-amber-300/90">The environment's lighting is turned off in the hierarchy; the backdrop still shows it.</div>
+                    ) : null}
                     <FilePickerField
                         value={envFileName}
                         placeholder="Default environment"
@@ -2504,81 +3507,316 @@
                         onSlider={(v) => setEnvExposureVal(evToLinear(v))}
                         onNumber={(v) => setEnvExposureVal(evToLinear(v))}
                     />
-                    <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-medium text-gray-400">Backdrop</span>
-                        <MtlxSelect
-                            value={backdrop}
-                            options={['studio', 'studio-dark', 'environment', 'none']}
-                            labels={{ studio: 'Studio', 'studio-dark': 'Studio (Dark)', environment: 'Environment', none: 'None' }}
-                            onChange={(value) => { setBackdrop(value); callHandle('setBackdrop', value); }}
-                            defValue="studio"
-                            size="sm"
-                            disabled={!handle || typeof handle.setBackdrop !== 'function'}
-                        />
-                    </div>
-                    <button type="button" onClick={resetEnvironment} className={BTN_SECONDARY + ' w-full'}>Reset</button>
-                </SectionCard>
-
-                <div data-testid={materials.length ? 'usd-material-provenance' : undefined}>
-                    <SectionCard key={warnings.length > 0} icon="alert-triangle" title="Diagnostics" summary={warnings.length ? warnings.length + ' warning' + (warnings.length === 1 ? '' : 's') : 'None'} defaultOpen={warnings.length > 0} dense>
-                        {warnings.length || transparentPrims.length ? (
-                            <div data-testid="usd-material-warnings">
-                                {['error', 'warning', 'info'].map((severity) => {
-                                    const records = grouped[severity];
-                                    if (!records.length) return null;
-                                    const style = SEVERITY_STYLE[severity];
-                                    return (
-                                        <DiagGroup
-                                            key={severity}
-                                            id={severity}
-                                            icon={style.icon}
-                                            tone={style.text}
-                                            label={style.label}
-                                            lines={records.map((record) => record.label)}
-                                        >
-                                            {records.map((record, i) => (
-                                                <div key={severity + i} className={'font-mono text-xs break-all ' + style.text}>{renderWarningText(record.label)}</div>
-                                            ))}
-                                        </DiagGroup>
-                                    );
-                                })}
-                                {transparentPrims.length ? (
-                                    <DiagGroup
-                                        id="transparent"
-                                        icon="color-filter"
-                                        tone="text-sky-300/90"
-                                        label="Transparency"
-                                        lines={transparentPrims.map((entry) => entry.primPath + ' [' + entry.materialPath + ']')}
-                                    >
-                                        {transparentPrims.map((entry, i) => (
-                                            <div key={'t' + i} className="font-mono text-xs break-all text-sky-300/90">
-                                                {entry.primPath}
-                                                <span className="text-gray-500"> [{entry.materialPath}]</span>
-                                            </div>
-                                        ))}
-                                    </DiagGroup>
-                                ) : null}
-                                {materials.length ? (
-                                    <DiagGroup
-                                        id="materials"
-                                        icon="file-text"
-                                        tone="text-gray-500"
-                                        label="Material sources"
-                                        lines={materials.map((material) => String(material.materialX && material.materialX.path || material.sourceAsset || material.path || 'Material source unavailable'))}
-                                    >
-                                        {materials.map((material, i) => (
-                                            <div key={'m' + i} className="text-gray-400 font-mono text-xs break-all">
-                                                {String(material.materialX && material.materialX.path || material.sourceAsset || material.path || 'Material source unavailable')}
-                                            </div>
-                                        ))}
-                                    </DiagGroup>
-                                ) : null}
-                            </div>
-                        ) : (
-                            <div className="text-xs text-gray-500">No warnings.</div>
-                        )}
-                    </SectionCard>
+                    <button type="button" data-testid="usd-scene-env-reset" onClick={resetEnvironment} className={BTN_SECONDARY + ' w-full'}>Reset</button>
                 </div>
+            </div>
+        ) : null;
+        // View-only facts of one stage light: what the file authors, then what the
+        // viewport made of it (the renderer's converted samples).
+        const lightRecord = lightInfoPath && stage ? stageLightRecords(stage).find((record) => String(record.primPath || '') === lightInfoPath) : null;
+        const lightNode = lightInfoPath && sceneTree ? sceneTree.byId.get('light:' + lightInfoPath) : null;
+        const lightDetails = lightInfoPath && handle && typeof handle.getStageLightDetails === 'function' ? handle.getStageLightDetails(lightInfoPath) : null;
+        const lightPopover = lightRecord ? (() => {
+            const units = sceneKind === 'gltf' ? 'm' : sceneUnitShort(stage && stage.metersPerUnit);
+            const isDome = /^dome/i.test(String(lightRecord.type || ''));
+            const exposure = Number(lightRecord.exposure) || 0;
+            const effective = (Number(lightRecord.intensity) || 0) * Math.pow(2, exposure);
+            const notes = warningDetails.map((record) => stripTag(record.raw || record.label)).filter((text) => text.indexOf(lightInfoPath) >= 0);
+            const status = lightsHidden.has(lightInfoPath) ? 'Turned off in the hierarchy'
+                : (!stageLightsOn ? 'Off: scene lights are turned off in the render settings'
+                    : (lightDetails && lightDetails.converted ? 'On' : 'Not in the viewport'));
+            const imported = !lightDetails || !lightDetails.converted
+                ? (isDome ? 'Not applied: only the first dome light lights the scene' : 'Skipped, see the notes below')
+                : (lightDetails.samples > 1 ? 'Split into ' + lightDetails.samples + ' point samples across its surface'
+                    : ({ distant: 'One distant light', spot: 'One spot light', point: lightDetails.area ? 'One point at its centre' : 'One point light' }[lightDetails.kind] || 'One light'));
+            const size = [['Radius', 'radius'], ['Width', 'width'], ['Height', 'height'], ['Length', 'length']]
+                .filter(([, key]) => lightRecord[key] != null && Number.isFinite(Number(lightRecord[key])));
+            return (
+                <div ref={lightPopRef} data-testid="usd-scene-light-popover" data-path={lightInfoPath} className={HUD_POPOVER_CLASS} style={hudPopoverStyle()}>
+                    {popoverHeader('bolt', String(lightRecord.name || (lightNode && lightNode.name) || lightInfoPath), sceneTreeSegments(lightInfoPath).join('/'), () => setLightInfoPath(''), 'View only', true)}
+                    <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-3 py-2 space-y-2">
+                        <div>
+                            <LightInfoRow label="Type" raw={String(lightRecord.type || '')} testId="usd-scene-light-type">{sceneTreeLightTypeLabel(lightRecord.type) || 'Unknown'}</LightInfoRow>
+                            <LightInfoRow label="Intensity" raw="inputs:intensity" testId="usd-scene-light-intensity">{lightNumber(lightRecord.intensity)}</LightInfoRow>
+                            <LightInfoRow label="Exposure" raw="inputs:exposure">{lightNumber(exposure) + ' EV'}</LightInfoRow>
+                            <LightInfoRow label="Effective intensity" raw="intensity x 2^exposure" testId="usd-scene-light-effective">{lightNumber(effective)}</LightInfoRow>
+                            <LightInfoRow label="Color" raw="inputs:color" testId="usd-scene-light-color"><LightInfoColor rgb={lightRecord.color} /></LightInfoRow>
+                            {lightRecord.enableColorTemperature ? (
+                                <LightInfoRow label="Color temperature" raw="inputs:colorTemperature">{lightNumber(lightRecord.colorTemperature, 0) + ' K'}</LightInfoRow>
+                            ) : null}
+                            {size.map(([label, key]) => (
+                                <LightInfoRow key={key} label={label} raw={'inputs:' + key} testId={'usd-scene-light-' + key}>{lightNumber(lightRecord[key]) + ' ' + units}</LightInfoRow>
+                            ))}
+                            {lightRecord.angle != null ? <LightInfoRow label="Angular size" raw="inputs:angle">{lightNumber(lightRecord.angle) + ' deg'}</LightInfoRow> : null}
+                            {lightRecord.coneAngle != null ? <LightInfoRow label="Cone angle" raw="inputs:shaping:cone:angle">{lightNumber(lightRecord.coneAngle) + ' deg'}</LightInfoRow> : null}
+                            {lightRecord.coneSoftness != null ? <LightInfoRow label="Cone softness" raw="inputs:shaping:cone:softness">{lightNumber(lightRecord.coneSoftness)}</LightInfoRow> : null}
+                            <LightInfoRow label="Normalized by size" raw="inputs:normalize">{lightRecord.normalize ? 'Yes' : 'No'}</LightInfoRow>
+                            {Number(lightRecord.diffuse) !== 1 && lightRecord.diffuse != null ? <LightInfoRow label="Diffuse multiplier" raw="inputs:diffuse">{lightNumber(lightRecord.diffuse) + ' (not applied)'}</LightInfoRow> : null}
+                            {Number(lightRecord.specular) !== 1 && lightRecord.specular != null ? <LightInfoRow label="Specular multiplier" raw="inputs:specular">{lightNumber(lightRecord.specular) + ' (not applied)'}</LightInfoRow> : null}
+                            {lightRecord.textureFile ? <LightInfoRow label="Texture" raw="inputs:texture:file">{String(lightRecord.textureFile)}</LightInfoRow> : null}
+                        </div>
+                        <div className="pt-2 border-t border-gray-700/70">
+                            <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">In the viewport</div>
+                            <LightInfoRow label="Status" testId="usd-scene-light-status">{status}</LightInfoRow>
+                            <LightInfoRow label="Imported as" testId="usd-scene-light-imported">{imported}</LightInfoRow>
+                            {lightDetails && lightDetails.converted ? (
+                                <React.Fragment>
+                                    <LightInfoRow label="Delivered intensity" raw="after size and the stage light intensity">{lightNumber(lightDetails.intensity * lightDetails.gain)}</LightInfoRow>
+                                    {lightDetails.color ? <LightInfoRow label="Final color" raw="color and temperature"><LightInfoColor rgb={lightDetails.color} /></LightInfoRow> : null}
+                                    {lightDetails.position && lightDetails.kind !== 'distant' ? <LightInfoRow label="Position" raw="world, meters" testId="usd-scene-light-position">{lightTriple(lightDetails.position, 2)}</LightInfoRow> : null}
+                                    {lightDetails.direction ? <LightInfoRow label="Direction" raw="world">{lightTriple(lightDetails.direction, 2)}</LightInfoRow> : null}
+                                    {lightDetails.coneOuterDeg != null ? <LightInfoRow label="Cone edge" raw="inner, outer">{lightNumber(lightDetails.coneInnerDeg, 1) + ', ' + lightNumber(lightDetails.coneOuterDeg, 1) + ' deg'}</LightInfoRow> : null}
+                                    <LightInfoRow label="Casts shadows" testId="usd-scene-light-shadows">
+                                        {!lightDetails.shadows ? 'No, shadows are off in the render settings' : (lightDetails.castsShadows ? 'Yes' : 'No, not among the shadow casters')}
+                                    </LightInfoRow>
+                                </React.Fragment>
+                            ) : null}
+                        </div>
+                        {notes.length ? (
+                            <div data-testid="usd-scene-light-notes" className="pt-2 border-t border-gray-700/70 space-y-1">
+                                <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Notes</div>
+                                {notes.map((text, i) => <div key={i} className="text-[11px] text-gray-400 break-words">{text}</div>)}
+                            </div>
+                        ) : null}
+                    </div>
+                </div>
+            );
+        })() : null;
+        // Kept mounted while closed (hidden) so the messages stay readable in the DOM.
+        const diagnosticsPopover = ReactDOM.createPortal(
+            <div
+                ref={diagnosticsPopRef}
+                role="dialog"
+                aria-label="Diagnostics"
+                data-testid="usd-scene-diagnostics-popover"
+                style={Object.assign({ position: 'fixed', zIndex: 9999 }, diagnosticsPos || {})}
+                className={(diagnosticsOpen && diagnosticsPos ? 'flex' : 'hidden') + ' flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden'}
+            >
+                {popoverHeader('alert-triangle', 'Diagnostics', diagnosticsSummary || 'No warnings', () => setDiagnosticsOpen(false))}
+                <div
+                    data-testid={materials.length ? 'usd-material-provenance' : 'usd-scene-diagnostics'}
+                    className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-3 py-1.5"
+                >
+                    {diagnosticsContent}
+                </div>
+            </div>,
+            fullscreenPortalRoot()
+        );
+        // One slot: Cancel while anything loads, Reload once a stage is shown, else Load.
+        const sceneSlotButton = busy ? (
+            <button type="button" data-testid="usd-scene-cancel" onClick={cancel} className={BTN_SECONDARY + ' flex-1 min-w-0 gap-1'}>
+                <MtlxIcon name="x" className="w-3.5 h-3.5 flex-none" />Cancel
+            </button>
+        ) : (stage ? (
+            <button type="button" data-testid="usd-scene-info-reload" onClick={reloadScene} className={BTN_SECONDARY + ' flex-1 min-w-0 gap-1'}>
+                <MtlxIcon name="refresh" className="w-3.5 h-3.5 flex-none" />Reload
+            </button>
+        ) : (!IN_VSCODE && files.length > 0 && rootPath ? (
+            <button type="button" onClick={() => load()} title={'Load ' + rootBasename} className={BTN_PRIMARY + ' flex-1 min-w-0'}>
+                <span className="truncate">Load {rootBasename}</span>
+            </button>
+        ) : null));
+        const sidebarBody = (
+            <div className="flex-1 min-h-0 flex flex-col overflow-y-auto custom-scrollbar">
+                <section data-testid="usd-scene-section-scene" className="flex-none px-3.5 py-3 space-y-2">
+                    <SidebarSectionHeader icon="file" title="Scene" summary={rootBasename || 'No scene'} testId="usd-scene-section-header" />
+                    {!IN_VSCODE && (
+                        <div className="flex items-center gap-1">
+                            <div className="flex-1 min-w-0">
+                                <FilePickerField
+                                    value={files.length ? files.length + ' file' + (files.length === 1 ? '' : 's') : ''}
+                                    placeholder="Drop scene files or choose"
+                                    multiple
+                                    icon="files"
+                                    accept=".usd,.usda,.usdc,.usdz,.glb,.gltf,.obj,.mtl,.bin,.mtlx,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff,.ktx2"
+                                    onFiles={chooseFiles}
+                                    inputTestId="usd-scene-file-picker"
+                                />
+                            </div>
+                            <label
+                                title="Choose a folder"
+                                className="h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-gray-700 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300 cursor-pointer"
+                            >
+                                <MtlxIcon name="folder" className="w-3.5 h-3.5" />
+                                <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={(e) => chooseFiles(e.target.files)} />
+                            </label>
+                        </div>
+                    )}
+
+                    {!IN_VSCODE && candidates.length > 1 && (() => {
+                        const candidatePaths = candidates.map((f) => f.path);
+                        const shortLabels = distinctRootLabels(candidatePaths);
+                        const rootLabels = {};
+                        const rootTitles = {};
+                        candidatePaths.forEach((p, i) => { rootLabels[p] = shortLabels[i]; rootTitles[p] = p; });
+                        return (
+                            <div data-testid="usd-scene-root-select" className="flex items-center gap-3">
+                                <span className={SCENE_ROW_LABEL + ' shrink-0 pl-4'}>Scene file</span>
+                                <div className="flex-1 min-w-0">
+                                    <MtlxSelect
+                                        value={rootPath}
+                                        options={candidatePaths}
+                                        labels={rootLabels}
+                                        titles={rootTitles}
+                                        title={rootPath || undefined}
+                                        ariaLabel="Scene selection"
+                                        popWidth={320}
+                                        onChange={(v) => {
+                                            setRootPath(v); setRootTouched(true);
+                                            // One-click scene switching: reload the newly picked root
+                                            // right away instead of waiting on the explicit Load button.
+                                            if (filesRef.current && filesRef.current.length > 0) load(filesRef.current, v);
+                                        }}
+                                        defValue={null}
+                                        size="sm"
+                                        variant="field"
+                                        block
+                                    />
+                                </div>
+                            </div>
+                        );
+                    })()}
+
+                    {cardStage ? (
+                        <div className="flex items-center justify-between gap-3" title={handle ? undefined : 'Load a scene first'}>
+                            <span className={SCENE_ROW_LABEL + ' shrink-0 pl-4'}>Backdrop</span>
+                            <div data-testid="usd-scene-backdrop-select">
+                                <MtlxSelect
+                                    value={backdrop}
+                                    options={['studio', 'studio-dark', 'environment', 'none']}
+                                    labels={{ studio: 'Studio', 'studio-dark': 'Studio (Dark)', environment: 'Environment', none: 'None' }}
+                                    onChange={(value) => { setBackdrop(value); callHandle('setBackdrop', value); }}
+                                    ariaLabel="Backdrop"
+                                    defValue="studio"
+                                    size="sm"
+                                    disabled={!handle || typeof handle.setBackdrop !== 'function'}
+                                />
+                            </div>
+                        </div>
+                    ) : null}
+
+                    {cardStage ? (
+                        <div data-testid="usd-scene-info" className="space-y-1">
+                            <div>
+                                <button
+                                    type="button"
+                                    data-testid="usd-scene-info-toggle"
+                                    aria-expanded={sceneInfoOpen}
+                                    title={sceneInfoOpen ? 'Hide the scene facts' : 'Show the scene facts'}
+                                    onClick={() => setSceneInfoOpen((open) => !open)}
+                                    className="w-full h-5 flex items-center justify-between gap-3 -mx-1 px-1 rounded text-left hover:bg-gray-800/60"
+                                >
+                                    <span className={SCENE_ROW_LABEL + ' inline-flex items-center gap-1 shrink-0'}>
+                                        <MtlxIcon name={sceneInfoOpen ? 'chevron-down' : 'chevron-right'} className="w-3 h-3" />Info
+                                    </span>
+                                    {!sceneInfoOpen ? (
+                                        <span data-testid="usd-scene-info-summary" className="min-w-0 truncate text-right text-[11px] text-gray-500">
+                                            {[sceneFormat, sceneUpAxis ? sceneUpAxis.split(' ')[0] + ' up' : ''].filter(Boolean).join(', ') || rootBasename}
+                                        </span>
+                                    ) : null}
+                                </button>
+                                {/* Collapsed rows stay mounted (hidden): the VS Code scene report reads them. */}
+                                <div data-testid="usd-scene-info-details" className={(sceneInfoOpen ? 'grid' : 'hidden') + ' grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 mt-0.5 mb-1 pl-4'}>
+                                    <SceneInfoRow label="File" testId="usd-scene-info-file" title={rootPath}>{rootBasename}</SceneInfoRow>
+                                    {sceneFormat ? <SceneInfoRow label="Format" testId="usd-scene-info-format">{sceneFormat}</SceneInfoRow> : null}
+                                    {sceneUnits ? <SceneInfoRow label="Units" testId="usd-scene-info-units">{sceneUnits}</SceneInfoRow> : null}
+                                    {sceneUpAxis ? <SceneInfoRow label="Up axis" testId="usd-scene-info-up-axis">{sceneUpAxis}</SceneInfoRow> : null}
+                                </div>
+                            </div>
+                            <div>
+                                <button
+                                    type="button"
+                                    data-testid="usd-scene-info-files-toggle"
+                                    aria-expanded={sceneFilesOpen}
+                                    title={sceneFilesOpen ? 'Hide the loaded files' : 'List the loaded files'}
+                                    onClick={() => setSceneFilesOpen((open) => !open)}
+                                    className="w-full h-5 flex items-center justify-between gap-3 -mx-1 px-1 rounded text-left hover:bg-gray-800/60"
+                                >
+                                    <span className={SCENE_ROW_LABEL + ' inline-flex items-center gap-1 shrink-0'}>
+                                        <MtlxIcon name={sceneFilesOpen ? 'chevron-down' : 'chevron-right'} className="w-3 h-3" />Files loaded
+                                    </span>
+                                    <span data-testid="usd-scene-info-files" className="min-w-0 truncate text-right text-[11px] text-gray-300">
+                                        {sceneFilesText}
+                                        {sceneMissing.length ? <span className="text-amber-300/90">{', ' + sceneMissing.length + ' missing'}</span> : null}
+                                    </span>
+                                </button>
+                                {sceneFilesOpen && (
+                                    <div data-testid="usd-scene-info-files-list" className="mt-1 max-h-40 overflow-y-auto custom-scrollbar rounded-md border border-gray-700 bg-gray-900/60 py-1">
+                                        {files.map((file) => (
+                                            <div key={file.path} className="flex items-baseline justify-between gap-2 px-2 py-0.5 text-[11px]">
+                                                <span className="min-w-0 truncate font-mono text-gray-300" title={file.path}>{file.path}</span>
+                                                <span className="shrink-0 font-mono tabular-nums text-gray-500">{formatByteSize(sceneFileBytes(file))}</span>
+                                            </div>
+                                        ))}
+                                        {sceneMissing.map((asset) => (
+                                            <div key={'missing:' + asset} data-missing="true" className="flex items-baseline justify-between gap-2 px-2 py-0.5 text-[11px]">
+                                                <span className="min-w-0 truncate font-mono text-gray-500" title={asset}>{asset}</span>
+                                                <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-300/90">Missing</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    ) : (!busy && (IN_VSCODE || files.length > 0) ? (
+                        <div data-testid="usd-scene-info-empty" className="text-xs text-gray-500">No scene loaded</div>
+                    ) : null)}
+
+                    {sceneSlotButton || !IN_VSCODE ? (
+                        <div className="flex items-center gap-1.5 pt-0.5">
+                            {sceneSlotButton}
+                            {!IN_VSCODE && (
+                                <button type="button" data-testid="usd-scene-load-example" onClick={loadExample} className={BTN_SECONDARY + ' flex-1 min-w-0 gap-1'}>
+                                    <MtlxIcon name="file-upload" className="w-3.5 h-3.5 flex-none" />Load example
+                                </button>
+                            )}
+                        </div>
+                    ) : null}
+                </section>
+
+                {sceneTree && (
+                    <section data-testid="usd-scene-section-hierarchy" className="flex-1 flex flex-col gap-2 px-3.5 py-3 border-t border-gray-700">
+                        <SidebarSectionHeader icon="list-details" title="Hierarchy" summary={objectCount.toLocaleString() + ' object' + (objectCount === 1 ? '' : 's')} testId="usd-scene-section-header" />
+                        <div className="relative flex-none h-[26px]">
+                            <MtlxIcon name="search" className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500 pointer-events-none" />
+                            <input
+                                type="text"
+                                value={treeFilter}
+                                onChange={(e) => setTreeFilter(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Escape' && treeFilter) { e.stopPropagation(); setTreeFilter(''); } }}
+                                placeholder="Filter objects"
+                                aria-label="Filter objects"
+                                data-testid="usd-scene-tree-filter"
+                                spellCheck={false}
+                                className="w-full h-full bg-gray-900 border border-gray-700 rounded-md pl-7 pr-2 text-[11px] text-gray-300 placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                            />
+                        </div>
+                        {treeRows.length ? (
+                            <SceneTree
+                                rows={treeRows}
+                                expanded={treeExpanded}
+                                selectedId={treeSelected}
+                                hidden={treeHidden}
+                                hiddenLights={lightsHidden}
+                                lightsOff={!stageLightsOn}
+                                envLightingOff={envLightingOff}
+                                envEyeAvailable={!!handle && typeof handle.setEnvironmentLightingEnabled === 'function'}
+                                activeCamera={selectedCamera}
+                                revealToken={treeReveal}
+                                onToggleExpand={toggleTreeExpanded}
+                                onSelect={selectTreePath}
+                                onRowClick={clickTreeRow}
+                                onToggleHidden={toggleTreeHidden}
+                                onActivate={activateTreeNode}
+                            />
+                        ) : (
+                            <div className="flex-1 text-xs text-gray-500">No objects match the filter.</div>
+                        )}
+                        <div className="flex-none text-[11px] text-gray-500 truncate" title="Click a camera to look through it; while the material preview is open, a single click switches it.">
+                            Double-click a row to preview its material.
+                        </div>
+                    </section>
+                )}
             </div>
         );
 
@@ -2635,46 +3873,13 @@
                         fullscreenPortalRoot()
                     )}
                     {sidebarBody}
-                    <div className="shrink-0 border-t border-gray-700 px-3.5 py-3.5 space-y-1" style={{ background: PANEL_SURFACE }} data-testid="usd-stage-counts">
-                        <div className="flex items-center gap-2 mb-1.5">
-                            <MtlxIcon name="cube" className="w-4 h-4 text-gray-400 shrink-0" />
-                            <span className="text-[13px] font-semibold text-gray-200 shrink-0">Statistics</span>
-                        </div>
-                        <div className="space-y-1 text-[11px] text-gray-300">
-                            <div className="flex justify-between">
-                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Meshes</span>
-                                <span className="font-mono tabular-nums">{meshes.length}</span>
-                            </div>
-                            <div className="flex justify-between">
-                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Triangles</span>
-                                <span className="font-mono tabular-nums" data-testid="usd-stage-triangles">{triangleCount.toLocaleString()}</span>
-                            </div>
-                            <div className="flex justify-between">
-                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Materials</span>
-                                <span className="font-mono tabular-nums">{materials.length}</span>
-                            </div>
-                            <div className="flex justify-between">
-                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Rendered prims</span>
-                                <span className="font-mono tabular-nums">{renderedPrimCount}</span>
-                            </div>
-                            <div className="flex justify-between">
-                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">Warnings</span>
-                                <span className="font-mono tabular-nums">{warnings.length}</span>
-                            </div>
-                            <div className="flex justify-between gap-2">
-                                <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500 shrink-0">Root</span>
-                                <span className="font-mono tabular-nums break-all text-right" data-testid="usd-stage-root">{rootPath || 'None'}</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div className="flex-none border-t border-gray-700 px-3 py-2 text-[11px] text-gray-500">
-                        Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to the image node's default color. Double-click a surface to preview its material graph and shaderball.
-                    </div>
+                    {statisticsFooter}
                 </div>
             )}
+            {diagnosticsPopover}
 
             <div className="relative flex-1 min-w-0">
-                <div ref={containerRef} data-testid="usd-scene-canvas" className="absolute inset-0 bg-gray-900" aria-label="Rendered USD scene">
+                <div ref={containerRef} data-testid="usd-scene-canvas" className="absolute inset-0 bg-gray-900" aria-label="Rendered scene">
                     <LoadingOverlay
                         show={busy}
                         label={progressLabel + (progressText ? ' ' + progressText : '')}
@@ -2690,10 +3895,19 @@
                                 className="text-xs text-gray-500 truncate w-56 text-center"
                             >{progressDetail}</span>
                         )}
-                        <button type="button" onClick={cancel} className={HUD_PILL + ' pointer-events-auto'}>Cancel</button>
+                        <button type="button" data-testid="usd-scene-progress-cancel" onClick={cancel} className={HUD_PILL + ' pointer-events-auto'}>Cancel</button>
                     </LoadingOverlay>
 
-                    {!hasStage && !busy && (
+                    {IN_VSCODE && status === 'cancelled' && (
+                        <div data-testid="usd-scene-cancelled" className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 text-center px-6">
+                            <div className="text-gray-400 text-sm">Loading cancelled</div>
+                            <button type="button" data-testid="usd-scene-reload" onClick={reloadFromHost} className={PILL_ACTION}>
+                                <MtlxIcon name="refresh" className="w-3.5 h-3.5" /> Reload
+                            </button>
+                        </div>
+                    )}
+
+                    {!hasStage && !busy && !IN_VSCODE && (
                         <React.Fragment>
                             <div
                                 aria-hidden="true"
@@ -2707,13 +3921,11 @@
                             />
                             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center px-6">
                                 <div className="text-gray-500 text-sm max-w-sm">
-                                    {IN_VSCODE ? 'Reading the scene and its referenced files' : 'Drop a USD stage (.usd, .usda, .usdc, .usdz), a glTF (.gltf, .glb) or an OBJ (.obj) and its referenced files'}
+                                    Drop a USD stage (.usd, .usda, .usdc, .usdz), a glTF (.gltf, .glb) or an OBJ (.obj) and its referenced files
                                 </div>
-                                {!IN_VSCODE && (
-                                    <button type="button" onClick={loadExample} className={PILL_ACTION}>
-                                        <MtlxIcon name="file-upload" className="w-3.5 h-3.5" /> Load example
-                                    </button>
-                                )}
+                                <button type="button" onClick={loadExample} className={PILL_ACTION}>
+                                    <MtlxIcon name="file-upload" className="w-3.5 h-3.5" /> Load example
+                                </button>
                             </div>
                         </React.Fragment>
                     )}
@@ -2769,7 +3981,22 @@
                                 <span title="Unapplied changes" className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-400 border border-gray-900" />
                             ) : null}
                         </button>
+                        <button
+                            type="button"
+                            ref={envBtnRef}
+                            data-testid="usd-scene-env-settings"
+                            title="Environment settings"
+                            aria-expanded={envPopoverOpen}
+                            onClick={() => { if (envPopoverOpen) setEnvPopoverOpen(false); else openEnvPopover(); }}
+                            className={envPopoverOpen ? HUD_PILL_ACTIVE : HUD_PILL}
+                        >
+                            <MtlxIcon name="sun" className="w-4 h-4" />
+                            <span>Environment settings</span>
+                        </button>
                     </div>
+
+                    {envPopover}
+                    {lightPopover}
 
                     {renderSettingsMounted && (
                         <div
@@ -2829,6 +4056,18 @@
                             {doubleClickNote}
                         </div>
                     )}
+                    {/* Bottom-left hint pill: stacked directly above the
+                        status pill below so the two never overlap, even at
+                        narrow widths (both are left-anchored, fixed-height
+                        rows). DOM overlay, not canvas content, so it never
+                        shows up in a viewport screenshot or GIF capture. */}
+                    {handle && meshes.length > 0 && status === 'rendered' && (
+                        <div data-testid="usd-scene-hint-pill" className="absolute bottom-10 left-2 z-10 flex items-center gap-1.5 pl-2 pr-2 py-1 rounded-full bg-black/60 text-[11px] text-white/90">
+                            <MtlxIcon name="info-circle" className="w-3.5 h-3.5 shrink-0 text-white/70" />
+                            <span>Double-click a mesh to preview its material graph</span>
+                        </div>
+                    )}
+
                     {handle && (() => {
                         const segments = [rootBasename, meshes.length + ' meshes'];
                         const mtlxVersion = (window.MtlxAssets && window.MtlxAssets.MTLX_DEFAULT_VERSION) || window.__mtlxVersion;
@@ -2856,11 +4095,12 @@
                         panelRef={previewPanelRef}
                         sceneFiles={sceneLooseFiles}
                         warm={previewWarm}
+                        sceneFileName={rootBasename}
                     />
                 </div>
             </div>
 
-            {status === 'cancelled' && !busy && (
+            {status === 'cancelled' && !busy && !IN_VSCODE && (
                 <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-gray-800/90 backdrop-blur border border-gray-600 text-gray-300 text-sm rounded-lg px-4 py-2 break-words shadow-lg">Cancelled</div>
             )}
             {error && (

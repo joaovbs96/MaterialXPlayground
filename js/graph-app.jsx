@@ -376,6 +376,15 @@
             const [mtlxPaths, setMtlxPaths] = React.useState([]);
             const [chosenMtlx, setChosenMtlx] = React.useState(null);
             const [parsed, setParsed] = React.useState(null); // { mx, doc, nodegraphs, label }
+            // View-only mode: set when the current document arrived via a
+            // handoff flagged readOnly (e.g. a Scene Viewer material), and
+            // cleared by New Document, Open, an unflagged handoff, or the
+            // VS Code host document. docReadOnlySource names the origin
+            // for the banner (a scene file name).
+            const [docReadOnly, setDocReadOnly] = React.useState(false);
+            const [docReadOnlySource, setDocReadOnlySource] = React.useState('');
+            const docReadOnlyRef = React.useRef(false);
+            docReadOnlyRef.current = docReadOnly;
             const [scope, setScope] = React.useState('');     // '' = document root
             const [flow, setFlow] = React.useState({ nodes: [], edges: [] });
             // Live mirror, so a rebuild triggered from a ref-held handler
@@ -684,6 +693,11 @@
             // fromId }. Consumed once parsed settles, right after the
             // imported node itself is selected in root scope.
             const pendingImplRef = React.useRef(null);
+            // Set by handleImport when a payload carries readOnly: true;
+            // consumed by loadDocument right after it sets the new parsed
+            // document, so docReadOnly always tracks the document actually
+            // showing rather than the previous one.
+            const pendingReadOnlyRef = React.useRef(null); // { source } | null
             // { id, scope } of the node whose "Explore Node Graph" pill/menu
             // opened the CURRENT scope, so leaving a library implementation
             // graph returns to (and frames) that node instead of scope root.
@@ -1332,6 +1346,14 @@
                     const p = await parseMtlxDocument(resolved);
                     p.label = path;
                     setParsed(p);
+                    // Consume the view-only handoff flag here, the single
+                    // point where a newly loaded document actually becomes
+                    // the active one. Any load not preceded by handleImport
+                    // (Open, a scope drop, etc.) leaves this null → editable.
+                    const ro = pendingReadOnlyRef.current;
+                    pendingReadOnlyRef.current = null;
+                    setDocReadOnly(!!ro);
+                    setDocReadOnlySource(ro ? ro.source : '');
                     setScope('');
                     // Same default-target reset as opening a document fresh:
                     // a stale selection/pin from a PREVIOUS document (multi-
@@ -1376,6 +1398,9 @@
                     setChosenMtlx(null);
                     setSelectedId(null);
                     hostDocRef.current = false;
+                    pendingReadOnlyRef.current = null;
+                    setDocReadOnly(false);
+                    setDocReadOnlySource('');
                     setParsed(p);
                     setScope('');
                     setStatus(null);
@@ -1639,6 +1664,10 @@
                     pendingImplRef.current = (payload.implOf && payload.select)
                         ? { nodedef: payload.implOf, fromId: 'n:' + payload.select, returnHash: payload.returnHash || null }
                         : null;
+                    // View-only handoff (Scene Viewer material). Every
+                    // handoff sets this explicitly, null included, so a
+                    // later unflagged import always clears a stale lock.
+                    pendingReadOnlyRef.current = payload.readOnly ? { source: payload.readOnlySource || '' } : null;
                     const safeName = (payload.name || 'material').replace(/[^a-z0-9_\-]+/gi, '_') || 'material';
                     const map = Object.assign({}, payload.files || {}, {
                         [safeName + '.mtlx']: new Blob([payload.xml], { type: 'application/xml' }),
@@ -3252,6 +3281,7 @@
             // Save and Ctrl+S always write identical content.
             const doSaveInApp = async (forceDialog) => {
                 if (!parsed || !IN_ELECTRON || !window.mtlxDesktop) return false;
+                if (docReadOnlyRef.current) return false; // view-only: export a copy instead
                 if (typeof window.__mtlxGetGraphXml !== 'function') {
                     setStatus('Save failed: graph view is not ready.');
                     return false;
@@ -3708,9 +3738,10 @@
             // e.g. NG_standard_surface_surfaceshader. Every mutating action
             // in this scope must bail when this is true.
             const scopeLocked = React.useMemo(() => {
+                if (docReadOnly) return true; // whole-document view-only handoff
                 if (!scope || !parsed) return false;
                 return !isDocLocal(graphByName(scope));
-            }, [parsed, scope, docRev]);
+            }, [parsed, scope, docRev, docReadOnly]);
             const scopeLockedRef = React.useRef(false);
             scopeLockedRef.current = scopeLocked;
             // Shared guard for every writer below: tells the caller to bail.
@@ -6986,14 +7017,14 @@
                 },
                 !IN_VSCODE && { separator: true },
                 IN_ELECTRON && {
-                    label: 'Save', icon: 'file-download', keys: 'Ctrl+S', disabled: !parsed,
+                    label: 'Save', icon: 'file-download', keys: 'Ctrl+S', disabled: !parsed || docReadOnly,
                     onSelect: () => doSaveInApp(false),
-                    title: 'Save the current document to its file (or choose a location if it has none yet)',
+                    title: docReadOnly ? 'View only: export a copy instead' : 'Save the current document to its file (or choose a location if it has none yet)',
                 },
                 IN_ELECTRON && {
-                    label: 'Save As…', icon: 'file-download', keys: 'Ctrl+Shift+S', disabled: !parsed,
+                    label: 'Save As…', icon: 'file-download', keys: 'Ctrl+Shift+S', disabled: !parsed || docReadOnly,
                     onSelect: () => doSaveInApp(true),
-                    title: 'Save the current document to a new file',
+                    title: docReadOnly ? 'View only: export a copy instead' : 'Save the current document to a new file',
                 },
                 IN_ELECTRON && {
                     label: window.__MTLX_PLATFORM__ === 'darwin' ? 'Reveal in Finder'
@@ -7297,9 +7328,17 @@
                                         {(scopeOriginRef.current && scopeOriginRef.current.graph === scope && scopeOriginRef.current.returnHash)
                                             ? 'Back to Node Specs' : parsed.label}
                                     </button>
+                                    {docReadOnly && (
+                                        <span
+                                            title={'View only: material from ' + (docReadOnlySource || 'a scene')}
+                                            className="inline-flex items-center align-middle ml-1.5 px-1 rounded text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-300 bg-amber-900/40 border border-amber-700/40"
+                                        >
+                                            View only
+                                        </span>
+                                    )}
                                     {scope && <span className="inline-flex items-center align-middle text-gray-500 mx-1"><MtlxIcon name="chevron-right" className="w-3 h-3" /></span>}
                                     {scope && <span className="text-blue-300">{scope}</span>}
-                                    {scope && scopeLocked && <span className="text-amber-300"> (library, view only)</span>}
+                                    {scope && scopeLocked && !docReadOnly && <span className="text-amber-300"> (library, view only)</span>}
                                 </div>
                             </div>
                         ) : <div />}
@@ -7331,8 +7370,9 @@
                             {parsed && (
                                 <button
                                     onClick={openAddSearch}
-                                    title="Add a node from the standard library (shortcut: Tab)"
-                                    className={BTN_MENUBAR}
+                                    disabled={scopeLocked}
+                                    title={scopeLocked ? 'View only' : 'Add a node from the standard library (shortcut: Tab)'}
+                                    className={BTN_MENUBAR + (scopeLocked ? ' opacity-50 cursor-not-allowed' : '')}
                                 >
                                     <MtlxIcon name="share" className="w-3.5 h-3.5" />
                                     <span className="gtb-label">Add Node</span>
@@ -7342,11 +7382,11 @@
                             {parsed && (
                                 <button
                                     onClick={() => deleteSelectionRef.current()}
-                                    disabled={!canDelete}
-                                    title={canDelete
+                                    disabled={!canDelete || scopeLocked}
+                                    title={scopeLocked ? 'View only' : canDelete
                                         ? 'Delete the selected node(s) and disconnect the selected edge(s) (Del)'
                                         : 'Select nodes or edges to delete'}
-                                    className={BTN_MENUBAR + (canDelete ? '' : ' opacity-50 cursor-not-allowed')}
+                                    className={BTN_MENUBAR + ((canDelete && !scopeLocked) ? '' : ' opacity-50 cursor-not-allowed')}
                                 >
                                     <MtlxIcon name="trash" className="w-3.5 h-3.5" />
                                     <span className="gtb-label">Delete Nodes</span>
@@ -7576,7 +7616,21 @@
                             {scopeLocked && (
                                 <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-center gap-2 px-3 py-1 bg-amber-900/40 border-b border-amber-700/50 text-[11px] text-amber-200 backdrop-blur">
                                     <MtlxIcon name="lock" className="w-3.5 h-3.5" />
-                                    <span>View only: {scope} is part of the standard library and cannot be edited.</span>
+                                    {docReadOnly ? (
+                                        <>
+                                            <span>
+                                                {'View only: material from ' + (docReadOnlySource || 'a scene') + '. Export .mtlx to save an editable copy.'}
+                                            </span>
+                                            <button
+                                                onClick={openExportDialog}
+                                                className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium bg-amber-800/60 hover:bg-amber-800 text-amber-100 transition-colors"
+                                            >
+                                                Export .mtlx
+                                            </button>
+                                        </>
+                                    ) : (
+                                        <span>View only: {scope} is part of the standard library and cannot be edited.</span>
+                                    )}
                                 </div>
                             )}
 
@@ -8155,7 +8209,7 @@
                                     ),
                                 ] : (
                                     <div className="text-[11px] text-gray-500 py-2">
-                                        Click a node to inspect and edit its parameters.
+                                        {docReadOnly ? 'Click a node to inspect its parameters.' : 'Click a node to inspect and edit its parameters.'}
                                     </div>
                                 )}
                             </div>

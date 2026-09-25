@@ -139,15 +139,25 @@ const ATTRS_BY_KIND = {
         attr('fileprefix'), attr('geomprefix'), attr('doc'),
     ],
 
-    // "Individual node elements" (spec lines 581-593) + custom-attribute
-    // note that `target`/`inherit` are used on shader-node instances
-    // ("Instantiated shader nodes can also inherit...", line 1303-1309).
+    // "Individual node elements" (spec lines 581-593): name/type required;
+    // version/nodedef disambiguate which nodedef signature is requested;
+    // colorspace on a node instance is spec-legal generally (line 358,
+    // "Other elements, such as <nodegraph> or a node instance, are
+    // allowed to define a colorspace attribute...") but only offered here
+    // once the element's resolved type is one colorspace actually
+    // describes (typeGate). `inherit` is deliberately NOT offered here:
+    // the spec only documents it for "instantiated shader nodes... of
+    // the same class" (lines 1303-1309, e.g. a <unified_srf> inheriting
+    // another <unified_srf>), a narrow same-category case this schema
+    // has no way to narrow to, so it is left off the generic node-
+    // instance list rather than offered on every node category.
     'node-instance': [
         attr('name', { required: true }), attr('type', { required: true }),
-        attr('version'), attr('nodedef'), attr('uiname'), attr('inherit'),
+        attr('nodedef'), attr('version'),
         attr('colorspace', { typeGate: isColorspaceEligible }),
-        attr('target'), attr('doc'),
-        ...NODE_UI_POS,
+        attr('target'),
+        attr('uiname'), attr('uicolor'), attr('xpos'), attr('ypos'), attr('width'), attr('height'),
+        attr('doc'),
     ],
 
     // "Node elements contain zero or more <input> elements" (spec lines

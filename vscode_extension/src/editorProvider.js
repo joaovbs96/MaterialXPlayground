@@ -40,8 +40,27 @@ if (TEST_TRANSPORT) {
     const sceneReportListeners = [];
     const graphSaveListeners = [];
     const materialPreviewListeners = [];
+    const aboutReportListeners = [];
+    const viewHashListeners = [];
+    const fullWidthListeners = [];
+    const sceneRoundListeners = [];
+    const sceneCancelListeners = [];
     const errors = [];
     testHooks = {
+        // sceneProvider.js: one event per file set sent (round 0 is the
+        // static collection) and the webview's cancel test report.
+        emitSceneRound(report) {
+            for (const listener of sceneRoundListeners) listener(report);
+        },
+        emitSceneCancelReport(report) {
+            for (const listener of sceneCancelListeners) listener(report);
+        },
+        // false disables static reference parsing in sceneProvider.js, so
+        // the on-demand round trip is the only way references are found.
+        sceneStaticScan: true,
+        // ms sceneProvider.js's postSet() stamps onto every 'mtlx-open-scene'
+        // message as throttleMs -- see testApi.setSceneFetchThrottle below.
+        sceneFetchThrottleMs: 0,
         // 'mtlx-test-material-preview': the scene's material panel state.
         emitMaterialPreviewReport(report) {
             for (const listener of materialPreviewListeners) listener(report);
@@ -53,6 +72,24 @@ if (TEST_TRANSPORT) {
         },
         emitGraphSaveResult(rec) {
             for (const listener of graphSaveListeners) listener(rec);
+        },
+        // 'mtlx-test-about': js/shell.jsx's AboutDialog license/version report.
+        emitAboutReport(report) {
+            for (const listener of aboutReportListeners) listener(report);
+        },
+        // 'mtlx-test-view-hash': bootstrap.js's report of location.hash,
+        // used by the openViewCommands smoke scenario to prove
+        // materialxPlayground.openInGraphEditor/openInMaterialViewer
+        // actually switched the visible view.
+        emitViewHashReport(report) {
+            for (const listener of viewHashListeners) listener(report);
+        },
+        // 'mtlx-test-full-width': bootstrap.js's getComputedStyle(body)
+        // padding/margin report, used by the fullWidth smoke scenario to
+        // prove the body-padding reset in scripts/build-webview.mjs wins
+        // over VS Code's injected default webview styles.
+        emitFullWidthReport(report) {
+            for (const listener of fullWidthListeners) listener(report);
         },
         emitFilesReport(report) {
             for (const listener of filesListeners) listener(report);
@@ -86,7 +123,44 @@ if (TEST_TRANSPORT) {
             // live render-view handle -- see bootstrap.js's
             // handleTestTriggerSnapshot.
             triggerSnapshot(baseName) { postToActivePanel({ type: 'mtlx-test-trigger-snapshot', baseName }); },
+            // Opens the About dialog on the active panel (same as the header
+            // help button) and reports its license/version state -- see
+            // bootstrap.js's handleTestTriggerAbout and __mtlxAboutReport.
+            triggerAbout() { postToActivePanel({ type: 'mtlx-test-trigger-about' }); },
+            onAboutReport(listener) { aboutReportListeners.push(listener); },
+            // Asks the active panel to report its current location.hash
+            // (bootstrap.js's handleTestTriggerViewHash) -- used to prove
+            // openInGraphEditor/openInMaterialViewer switched the visible
+            // view, including the reuse-an-open-tab case.
+            triggerViewHash() { postToActivePanel({ type: 'mtlx-test-trigger-view-hash' }); },
+            onViewHashReport(listener) { viewHashListeners.push(listener); },
+            // Asks the active playground panel to report its body's
+            // computed padding/margin (bootstrap.js's
+            // handleTestTriggerFullWidth) -- the fullWidth smoke scenario.
+            triggerFullWidth() { postToActivePanel({ type: 'mtlx-test-trigger-full-width' }); },
+            // Same, for the USD Scene Viewer's most recent panel -- mirrors
+            // triggerSceneMaterialPreview/triggerSceneGraphSave above.
+            triggerSceneFullWidth() {
+                if (activeScenePanel) activeScenePanel.webview.postMessage({ type: 'mtlx-test-trigger-full-width' });
+            },
+            onFullWidthReport(listener) { fullWidthListeners.push(listener); },
             onSceneReport(listener) { sceneReportListeners.push(listener); },
+            onSceneRound(listener) { sceneRoundListeners.push(listener); },
+            onSceneCancelReport(listener) { sceneCancelListeners.push(listener); },
+            setSceneStaticScan(enabled) { testHooks.sceneStaticScan = enabled !== false; },
+            // Waits for the most recent scene panel's file fetch to start,
+            // clicks the progress Cancel button, and reports what happened
+            // (bootstrap.js's handleTestTriggerSceneCancel).
+            triggerSceneCancel(options) {
+                if (activeScenePanel) activeScenePanel.webview.postMessage(Object.assign({ type: 'mtlx-test-trigger-scene-cancel' }, options || {}));
+            },
+            // Makes every scene file fetch this webview streams pause `ms`
+            // between chunks (bootstrap.js's pump loop, via the throttleMs
+            // field sceneProvider.js's postSet() reads off testHooks below)
+            // -- lets a cancel scenario stay in flight long enough to click
+            // Cancel deterministically, instead of racing a fast local
+            // read. 0 or omitted turns it back off.
+            setSceneFetchThrottle(ms) { testHooks.sceneFetchThrottleMs = Number(ms) || 0; },
             onGraphSaveResult(listener) { graphSaveListeners.push(listener); },
             // Asks the most recent USD scene panel to post a probe 'mtlx-save'
             // (bootstrap.js's handleTestTriggerGraphSave).
@@ -96,8 +170,9 @@ if (TEST_TRANSPORT) {
             // Double-clicks the scene viewport centre and reports the material
             // preview panel (bootstrap.js's handleTestTriggerMaterialPreview).
             onMaterialPreviewReport(listener) { materialPreviewListeners.push(listener); },
-            triggerSceneMaterialPreview(timeoutMs) {
-                if (activeScenePanel) activeScenePanel.webview.postMessage({ type: 'mtlx-test-trigger-material-preview', timeoutMs: timeoutMs || 30000 });
+            // options.target 'tree' double-clicks a mesh row in the outliner instead.
+            triggerSceneMaterialPreview(timeoutMs, options) {
+                if (activeScenePanel) activeScenePanel.webview.postMessage({ type: 'mtlx-test-trigger-material-preview', timeoutMs: timeoutMs || 30000, target: (options && options.target) || 'viewport' });
             },
             // Test-only seam for the settingsFallback smoke scenario: the
             // exact effective value getSetting() (settingsHost.js) would
@@ -124,6 +199,34 @@ function trackScenePanel(panel) {
 // testHooks.api.setSaveTarget above. null in normal operation (and
 // always null outside TEST_TRANSPORT, since nothing can ever set it).
 let testSaveTargetDir = null;
+
+// Every currently-open custom-editor webview panel, keyed by
+// document.uri.toString() -- lets the materialxPlayground.openInGraphEditor/
+// openInMaterialViewer commands (extension.js) find an already-open
+// playground tab for a file and reuse it instead of opening a second one.
+// Populated in resolveCustomTextEditor, cleared on panel dispose.
+const panelsByUri = new Map();
+
+// One-shot override for the initial view a freshly created panel opens
+// on, keyed by the same uriKey as panelsByUri -- set by
+// materialxPlayground.openInGraphEditor/openInMaterialViewer just before
+// they open a NEW panel (no existing one to reuse), read once by
+// resolveCustomTextEditor and deleted immediately after, so it never
+// affects a later, unrelated open of the same file (which falls back to
+// the materialxPlayground.defaultView setting as usual).
+const pendingInitialView = new Map();
+
+// Returns the open webview panel for `uriStr` (document.uri.toString()),
+// or null if that file has no open playground tab right now.
+function getPanelForUri(uriStr) {
+    return panelsByUri.get(uriStr) || null;
+}
+
+// Records that the NEXT panel opened for `uriStr` should start on `hash`
+// (e.g. '#!graph', '#!viewer') instead of the defaultView setting.
+function setPendingInitialView(uriStr, hash) {
+    pendingInitialView.set(uriStr, hash);
+}
 
 // Reads vscode_extension/media/webview.html and substitutes its
 // ${placeholder} tokens. Shared by resolveCustomTextEditor (the real
@@ -317,6 +420,8 @@ async function handleSaveFile(webview, msg, documentUri) {
 //     'mtlx-test-error' { text }: inert unless TEST_TRANSPORT is set (see
 //     above): the stress-test harness's view into bootstrap.js's texture
 //     fetch/hash report and mirrored error text, relayed to testHooks.
+//   - 'mtlx-test-about' { report }: the About dialog's license/version
+//     report, relayed to testHooks (test transport only).
 //   - 'mtlx-save-file' { id, name, mime, bytesB64 }: bootstrap.js's
 //     window.__mtlxHostSave, the VS Code replacement for the site's
 //     `<a download>` export buttons: see handleSaveFile above.
@@ -342,6 +447,14 @@ function wireCommonWebviewMessages(webview, outputChannel, documentUri) {
             if (testHooks) testHooks.emitGraphSaveResult({ ok: !!msg.ok, error: msg.error ? String(msg.error) : '' });
         } else if (msg.type === 'mtlx-test-material-preview') {
             if (testHooks) testHooks.emitMaterialPreviewReport(msg.report || null);
+        } else if (msg.type === 'mtlx-test-about') {
+            if (testHooks) testHooks.emitAboutReport(msg.report || null);
+        } else if (msg.type === 'mtlx-test-view-hash') {
+            if (testHooks) testHooks.emitViewHashReport(msg.hash || '');
+        } else if (msg.type === 'mtlx-test-full-width') {
+            if (testHooks) testHooks.emitFullWidthReport(msg.report || null);
+        } else if (msg.type === 'mtlx-test-scene-cancel') {
+            if (testHooks) testHooks.emitSceneCancelReport(msg.report || null);
         } else if (msg.type === 'mtlx-save-file') {
             await handleSaveFile(webview, msg, documentUri);
         }
@@ -497,7 +610,15 @@ class MaterialXEditorProvider {
             // first paint. The header nav switches to the other view,
             // already loaded.
             const defaultView = getSetting('defaultView');
-            const initialHash = defaultView === 'graph' ? '#!graph' : '#!viewer';
+            let initialHash = defaultView === 'graph' ? '#!graph' : '#!viewer';
+            // A materialxPlayground.openInGraphEditor/openInMaterialViewer
+            // call that found no existing panel for this file recorded an
+            // override here just before asking us to open one -- it wins
+            // over the defaultView setting for this one panel only.
+            if (pendingInitialView.has(uriKey)) {
+                initialHash = pendingInitialView.get(uriKey);
+                pendingInitialView.delete(uriKey);
+            }
 
             // Same root docScanner.scan() confines refs to, sized into
             // localResourceRoots below so the webview can asWebviewUri()
@@ -520,6 +641,10 @@ class MaterialXEditorProvider {
             // it current as focus moves between tabs — see the comment on
             // activePanelInfo above for why this tracking exists.
             activePanelInfo = { panel: webviewPanel, document };
+            // See the comment on panelsByUri above -- lets
+            // openInGraphEditor/openInMaterialViewer find and reuse this
+            // panel later without needing their own tab-scan.
+            panelsByUri.set(uriKey, webviewPanel);
             const viewStateSub = webviewPanel.onDidChangeViewState(() => {
                 if (webviewPanel.active) {
                     activePanelInfo = { panel: webviewPanel, document };
@@ -767,6 +892,11 @@ class MaterialXEditorProvider {
                 if (activePanelInfo && activePanelInfo.panel === webviewPanel) {
                     activePanelInfo = null;
                 }
+                // Same "only clear if it's still the recorded one" guard as
+                // activePanelInfo above, for panelsByUri.
+                if (panelsByUri.get(uriKey) === webviewPanel) {
+                    panelsByUri.delete(uriKey);
+                }
             });
         } catch (err) {
             vscode.window.showErrorMessage(
@@ -814,8 +944,13 @@ module.exports = {
     getSharedOutputChannel,
     logLine,
     disposeSharedOutputChannel,
+    // materialxPlayground.openInGraphEditor/openInMaterialViewer (extension.js).
+    getPanelForUri,
+    setPendingInitialView,
     // null unless MTLX_TEST_TRANSPORT=1 (see TEST_TRANSPORT above):
     // extension.js's activate() surfaces this as its return value's
     // `_test` field, for the stress-test harness only.
     testApi: testHooks ? testHooks.api : null,
+    // sceneProvider.js only: its test events and switches, null outside tests.
+    sceneTestHooks: testHooks,
 };

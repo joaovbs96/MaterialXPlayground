@@ -38,18 +38,28 @@ dependencies — it runs directly out of a checkout of this repo.
 - **Explorer context menu / editor tab context menu / Command Palette**:
   right-click a `.mtlx` file (in the Explorer or an editor tab), or run
   from the Command Palette (`Ctrl+Shift+P`):
-  - `MaterialX Playground: Open MaterialX Document` — loads the file into both the
-    Material Viewer and the Node Graph Editor at once; `materialxPlayground.defaultView`
-    picks which one is shown first, and the header nav switches to the
-    other, already-loaded view. Only available for `.mtlx` files — the
-    Command Palette entry is hidden entirely unless a `.mtlx` file is
-    active, and the command itself is disabled outside that context. See
-    "Opening the playground" below for *where* it opens.
+  - `MaterialX Playground: Open in Graph Editor` and `MaterialX Playground:
+    Open in Material Viewer` load the file into both the Material Viewer
+    and the Node Graph Editor at once (same as `materialxPlayground.open`
+    below), but start on the named view instead of following
+    `materialxPlayground.defaultView`; the header nav still switches to the
+    other, already-loaded view. If a playground tab for that file is
+    already open, these reveal and switch it in place instead of opening a
+    second one. Only available for `.mtlx` files: the Command Palette
+    entries are hidden entirely unless a `.mtlx` file is active, and the
+    commands themselves are disabled outside that context. See "Opening
+    the playground" below for *where* they open. `materialxPlayground.open`
+    (the plain "Open MaterialX Document" command, still following
+    `materialxPlayground.defaultView`) stays registered for the editor
+    toolbar button and auto-open, and any keybinding already bound to it
+    keeps working, but it is hidden from the Command Palette and the
+    Explorer/editor-tab context menus in favor of the two explicit
+    commands above.
   - `MaterialX Playground: Open Node Library Documentation` — opens the node-library docs
     view on its own, with no file involved. Available from the Command
     Palette at any time (no `.mtlx` file needed), and also from the
     Explorer/editor-tab context menu on a `.mtlx` file, right alongside
-    `MaterialX Playground: Open MaterialX Document`.
+    `MaterialX Playground: Open in Graph Editor` / `Open in Material Viewer`.
   - `MaterialX Playground: New Material from Example` (`src/newFromExample.js`,
     catalog in `src/exampleCatalog.js`) quick-picks one of 14 curated
     materials (4 from this repo's own Playground presets, 10 from the
@@ -59,7 +69,7 @@ dependencies — it runs directly out of a checkout of this repo.
 - **Editor toolbar**: `.mtlx` text editors get an `$(open-preview)` button
   in the editor title bar (`materialxPlayground.open`, same icon and
   placement pattern as Markdown's preview button), and `.usd`/`.usda`/
-  `.usdc`/`.usdz` editors get the equivalent for
+  `.usdc`/`.usdz`/`.gltf`/`.glb`/`.obj` editors get the equivalent for
   `materialxPlayground.openScene`. Both are hidden once the matching
   custom editor is already the active one for that resource.
 - **File icon**: `.mtlx` files get a light/dark SVG icon
@@ -170,20 +180,26 @@ Auto-open only triggers when a `.mtlx` text editor becomes active, so in
 this mode the Playground opens on its own; the text editor stays
 reachable through *Open With…* -> *Text Editor*.
 
-### USD Scene Viewer
+### Scene Viewer
 
-`MaterialX Playground: Open in USD Scene Viewer` (Explorer and editor tab context menus, the editor title bar, or *Open With…*) opens a `.usd`, `.usda`, `.usdc` or `.usdz` file in the site's experimental Scene Viewer (custom editor `materialxPlayground.sceneViewer`, read only, header limited to Scene Viewer and Graph Editor). The extension sends the root layer's folder tree plus every file its text layers and `.mtlx` documents reference (confined like textures, at most 4,000 files and 4 GiB) and resends them when a watched file changes. Graph edits made to a material opened from the scene are never written into the USD file: saving is refused with a message pointing at Export .mtlx.
+`MaterialX Playground: Open in Scene Viewer` (Explorer and editor tab context menus, the editor title bar, or *Open With…*) opens a `.usd`, `.usda`, `.usdc`, `.usdz`, `.gltf`, `.glb` or `.obj` file in the site's experimental Scene Viewer (custom editor `materialxPlayground.sceneViewer`, read only, header limited to Scene Viewer and Graph Editor). The extension sends only the root file plus every file its text layers (`.usda`, `.gltf`, `.obj`), GLB JSON chunk and `.mtlx` documents reference, recursively (confined like textures, at most 4,000 files and 4 GiB). There is no folder walk, so unrelated files sitting next to the root are never loaded, and the set is resent when a watched file changes. Binary USD layers (`.usdc`, binary `.usd`) can't be scanned, so their references are loaded on demand: once a load settles, the Scene Viewer reports the layers, textures and UDIM tile patterns it could not open (with the layer that referenced each one), and the extension looks them up relative to that layer with the same containment and limits, scans any new text files for further references, and resends the bigger set. That repeats at most 5 times per open or reload and stops when a round finds nothing new; the "MaterialX Playground" Output channel lists what each round added and what is still missing. Files found this way are kept for later reloads of the same tab. Loading shows one progress bar from finding the referenced files and fetching them (files and MB) through composing and compiling, with a Cancel button that stops the host scan and every fetch in flight and leaves a Reload action. A material opened from the scene ("Open in Graph Editor") opens view only: a banner names the source scene file and offers Export .mtlx, and node add/delete/move, connections, value edits, renames, undo/redo and paste are all no-ops until a different document is opened. Graph edits are never written into the scene file: saving is refused with a message pointing at Export .mtlx.
 
 **Auto-open** (`materialxPlayground.autoOpenSceneViewer`, default `true`):
-when enabled, opening a USD scene file automatically opens the Scene
+when enabled, opening a scene file automatically opens the Scene
 Viewer, once per file per "open" (same re-arm rule as `.mtlx` auto-open
-above). VS Code opens some scene files (`.usda`, or a `.usd` it can decode
-as text) as a real text editor, in which case the Scene Viewer opens
-**beside it**, following `materialxPlayground.openBehavior` exactly like
-the Playground does for `.mtlx`, without stealing keyboard focus. Others
-(`.usdc`, `.usdz`, or a `.usd` VS Code shows its binary-file placeholder
-for) have no usable text editor to split against, so their tab is
-**replaced in place** by the Scene Viewer instead.
+above). VS Code opens some scene files (`.usda`, `.gltf`, `.obj`, or a
+`.usd` it can decode as text) as a real text editor, in which case the
+Scene Viewer opens **beside it**, following
+`materialxPlayground.openBehavior` exactly like the Playground does for
+`.mtlx`, without stealing keyboard focus. Others (`.usdc`, `.usdz`,
+`.glb`, or a `.usd` VS Code shows its binary-file placeholder for) have no
+usable text editor to split against, so their tab is **replaced in
+place** by the Scene Viewer instead.
+
+Double-clicking a mesh's material opens a read-only node graph panel. In
+VS Code that panel is graph-only: there is no 3D preview pane, since it
+would need a second WebGL2 context. Graph edits are saved with Export
+.mtlx, never into the scene file.
 
 ### Exports
 
@@ -203,9 +219,9 @@ cancel is reported as `ok: false` with no error, not a failure.
 In a workspace VS Code has not trusted, the extension stays enabled but
 `materialxPlayground.autoOpenPlayground` and
 `materialxPlayground.autoOpenSceneViewer` are both skipped: opening a
-`.mtlx` or USD scene file only opens VS Code's own editor for it, not the
-Playground or the Scene Viewer. Run `MaterialX Playground: Open MaterialX
-Document` or `MaterialX Playground: Open in USD Scene Viewer` to open one
+`.mtlx` or scene file only opens VS Code's own editor for it, not the
+Playground or the Scene Viewer. Run `MaterialX Playground: Open in Graph
+Editor`, `Open in Material Viewer` or `Open in Scene Viewer` to open one
 by hand once you are ready to; validation, hover docs and the node
 library documentation panel are unaffected by workspace trust.
 
@@ -325,11 +341,11 @@ editor.
   `.mtlx` file is opened. See "Opening the playground" under Usage above
   for exactly when this re-triggers.
 - `materialxPlayground.autoOpenSceneViewer` (boolean, default `true`):
-  automatically open the USD Scene Viewer whenever a USD scene file
-  (`.usd`, `.usda`, `.usdc`, `.usdz`) is opened, beside the text editor
-  for a file VS Code opens as text, or replacing the tab in place for a
-  file VS Code shows as binary. See "USD Scene Viewer" under Usage above
-  for exactly when this re-triggers.
+  automatically open the Scene Viewer whenever a USD, glTF, GLB or OBJ
+  scene file (`.usd`, `.usda`, `.usdc`, `.usdz`, `.gltf`, `.glb`, `.obj`)
+  is opened, beside the text editor for a file VS Code opens as text, or
+  replacing the tab in place for a file VS Code shows as binary. See
+  "Scene Viewer" under Usage above for exactly when this re-triggers.
 
 The previous `materialx.defaultView`, `materialx.openBehavior` and
 `materialx.autoOpenPlayground` names still work if you already have them

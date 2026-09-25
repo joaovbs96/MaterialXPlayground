@@ -80,6 +80,13 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 
 - [done] **About dialog**: credits for every bundled library and asset, and a link to the MaterialX release in use, in the web app, VS Code and the desktop app.
 
+## Themes
+
+- [planned] **Theme colors**: move every color in the app, the embed and the integrations onto one set of named theme colors (surfaces, borders, text, accent, status), with today's dark look as the only theme. Nothing changes visually, checked with before and after screenshots of every view.
+- [planned] **Light mode**: a light theme with a light, dark or system switch that follows the operating system's setting live unless you override it, on the website, in the desktop app, in VS Code and in embeds (as a `theme` attribute). The 3D viewport backdrop stays a separate setting.
+- [idea] **Follow the VS Code theme**: the extension picks light, dark or high contrast from your VS Code theme and uses its colors by default, with a setting to override it.
+- [idea] **Theme presets and custom themes**: more built-in themes and your own color themes, shared by every integration.
+
 ## Desktop App
 
 - [done] **Electron merge**: an experimental desktop build is merged, with native open and save, recent files, file watching and a Windows jump list, and CI builds and smoke-tests installers for Windows, macOS and Linux on every release.
