@@ -1441,6 +1441,61 @@
             {summary ? <span className="flex-1 min-w-0 text-right text-xs text-gray-500 truncate" title={summary}>{summary}</span> : null}
         </div>
     );
+    // Slim viewport indicator for material/texture/geometry rebuilds after a
+    // settings change (handle.onRebuildProgress). Shown after a short delay so
+    // instant rebuilds never flash; DOM only, so captures never include it.
+    const REBUILD_INDICATOR_DELAY_MS = 200;
+    function SceneRebuildIndicator({ handle }) {
+        const [view, setView] = React.useState(null);
+        React.useEffect(() => {
+            setView(null);
+            if (!handle || typeof handle.onRebuildProgress !== 'function') return undefined;
+            const live = new Map();
+            let latest = '';
+            let timer = 0;
+            let shown = false;
+            const sync = () => {
+                if (!shown) return;
+                const state = live.get(latest) || Array.from(live.values()).pop();
+                setView(state ? { kind: state.kind, done: state.done, total: state.total, label: state.label } : null);
+            };
+            const off = handle.onRebuildProgress((event) => {
+                if (!event || !event.kind) return;
+                if (event.phase === 'end') live.delete(event.kind);
+                else { live.set(event.kind, event); latest = event.kind; }
+                if (!live.size) {
+                    clearTimeout(timer); timer = 0; shown = false;
+                    setView(null);
+                    return;
+                }
+                if (!shown && !timer) timer = setTimeout(() => { timer = 0; shown = true; sync(); }, REBUILD_INDICATOR_DELAY_MS);
+                sync();
+            });
+            return () => { off(); clearTimeout(timer); };
+        }, [handle]);
+        if (!view) return null;
+        const determinate = view.total > 0;
+        const fraction = determinate ? Math.max(0, Math.min(1, view.done / view.total)) : 0;
+        const text = (view.label || 'Updating') + (determinate ? ' ' + view.done + '/' + view.total : '');
+        return (
+            <React.Fragment>
+                <div data-testid="usd-scene-rebuild-bar" role="progressbar" aria-label={text}
+                    aria-valuemin="0" aria-valuemax="100" aria-valuenow={determinate ? Math.round(fraction * 100) : undefined}
+                    className="absolute top-0 left-0 right-0 z-30 pointer-events-none overflow-hidden"
+                    style={{ height: 2, background: 'rgba(59,130,246,0.18)' }}>
+                    {determinate
+                        ? <div className="h-full bg-blue-400 transition-all duration-200" style={{ width: (fraction * 100) + '%' }} />
+                        : <div className="mtlx-loading-bar" style={{ height: 2, borderRadius: 0, background: 'transparent' }} />}
+                </div>
+                <div data-testid="usd-scene-rebuild-indicator" data-kind={view.kind} data-done={view.done} data-total={view.total}
+                    aria-live="polite"
+                    className="absolute bottom-2 right-2 z-10 pointer-events-none flex items-center gap-2 px-2 py-1 rounded-full bg-black/60 text-[11px] text-white/90">
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0 animate-pulse" />
+                    <span className="whitespace-nowrap tabular-nums">{text}</span>
+                </div>
+            </React.Fragment>
+        );
+    }
     function SceneViewerApp({ active = true }) {
         const narrow = useNarrowPane();
         const [sidebarOpen, setSidebarOpen] = React.useState(!narrow);
@@ -2213,13 +2268,18 @@
             observer.observe(containerRef.current); return () => observer.disconnect();
         }, [handle]);
 
+        // True while a popover or dialog owns the viewport; a double-click
+        // whose first press dismisses one never opens the preview.
+        const overlayOpenRef = React.useRef(false);
+        overlayOpenRef.current = !!(renderSettingsOpen || envPopoverOpen || lightInfoPath || knownIssuesOpen || diagnosticsOpen || recordOpen);
+
         // Double-click a mesh to open its material's graph + shaderball
-        // preview. A dblclick within 4px of its own pointerdown counts as a
-        // click on the viewport; one starting inside the open panel does not.
+        // preview. Only a dblclick on the canvas itself, within 4px of its own
+        // pointerdown, counts; popovers, pills and the panel never do.
         React.useEffect(() => {
             const container = containerRef.current;
             if (!container || !handle) return undefined;
-            const down = { x: 0, y: 0, t: 0 };
+            const down = { x: 0, y: 0, t: 0, dismissAt: -Infinity };
             // Diagnostics: every attempt lands in window.__mtlxUsdSceneDoubleClicks
             // (last 40) and a failure shows its reason in the viewport.
             const log = (entry) => {
@@ -2230,14 +2290,17 @@
             };
             const onPointerDown = (e) => {
                 down.x = e.clientX; down.y = e.clientY; down.t = performance.now();
+                if (overlayOpenRef.current && handle.renderer && e.target === handle.renderer.domElement) down.dismissAt = down.t;
                 log({ event: 'pointerdown', x: e.clientX, y: e.clientY, button: e.button, pointerType: e.pointerType, target: e.target && e.target.tagName });
             };
             const onDblClick = (e) => {
                 const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y);
                 const base = { event: 'dblclick', x: e.clientX, y: e.clientY, moved: Math.round(moved), sinceDown: Math.round(performance.now() - down.t), target: e.target && e.target.tagName };
                 const fail = (reason, extra) => { log(Object.assign({ reason }, base, extra || {})); showDoubleClickNote(DOUBLE_CLICK_NOTES[reason] || reason); };
-                if (moved > 4) return fail('moved');
                 if (previewPanelRef.current && previewPanelRef.current.contains(e.target)) return log(Object.assign({ reason: 'in-panel' }, base));
+                if (!handle.renderer || e.target !== handle.renderer.domElement) return log(Object.assign({ reason: 'off-canvas' }, base));
+                if (overlayOpenRef.current || performance.now() - down.dismissAt < 800) return log(Object.assign({ reason: 'overlay-open' }, base));
+                if (moved > 4) return fail('moved');
                 if (typeof handle.pickAt !== 'function' || typeof handle.getMaterialDocument !== 'function') return fail('no-api');
                 const hit = handle.pickAt(e.clientX, e.clientY);
                 if (!hit) return fail('no-hit');
@@ -4084,6 +4147,8 @@
                             </div>
                         );
                     })()}
+
+                    {handle && <SceneRebuildIndicator handle={handle} />}
 
                     <MaterialPreviewPanel
                         key={previewEpoch}

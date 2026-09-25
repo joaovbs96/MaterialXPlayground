@@ -597,6 +597,41 @@ const describeSceneSettingsCost = (current, target) => {
     return { reload, rebuild, geometry };
 };
 
+// Per-kind rebuild progress behind handle.onRebuildProgress. Restarting a live
+// kind replaces its state (a newer rebuild supersedes); end() always clears it,
+// and every event carries { kind, phase, done, total, label }.
+const createSceneRebuildProgress = (emit) => {
+    const live = new Map();
+    const send = (kind, phase, state) => {
+        try { emit({ kind, phase, done: state.done, total: state.total, label: state.label }); } catch (e) {}
+    };
+    const end = (kind) => {
+        const state = live.get(kind);
+        if (!state) return;
+        live.delete(kind);
+        send(kind, 'end', state);
+    };
+    return {
+        start: (kind, label, total) => {
+            const state = { done: 0, total: Math.max(0, Number(total) || 0), label: String(label || '') };
+            live.set(kind, state);
+            send(kind, 'start', state);
+        },
+        progress: (kind, done, total, label) => {
+            const state = live.get(kind);
+            if (!state) return;
+            if (total != null) state.total = Math.max(0, Number(total) || 0);
+            state.done = Math.max(0, Math.min(Number(done) || 0, state.total || Infinity));
+            if (label != null) state.label = String(label);
+            send(kind, 'progress', state);
+        },
+        end,
+        endAll: () => { Array.from(live.keys()).forEach(end); },
+        isActive: (kind) => live.has(kind),
+        snapshot: () => Array.from(live, ([kind, state]) => ({ kind, done: state.done, total: state.total, label: state.label })),
+    };
+};
+
 // Serializes rebuilds and coalesces rapid setting changes into one latest pass.
 // request() never rejects, so UI setters may fire it without creating an
 // unhandled promise; whenSettled() gives tests and callers an explicit fence.
@@ -633,6 +668,7 @@ const createSceneRebuildQueue = ({ build, commit, isStopped, onError }) => {
         request,
         cancel: () => { cancelled = true; requested = false; },
         whenSettled: () => running || Promise.resolve(),
+        isBusy: () => !!running,
     };
 };
 
@@ -1728,6 +1764,11 @@ const createMtlxSceneView = async ({
     // starts so the page can drop UI tied to the old programs.
     const rebuildListeners = new Set();
     const notifyRebuild = (kind) => { rebuildListeners.forEach((fn) => { try { fn(kind); } catch (e) {} }); };
+    // handle.onRebuildProgress listeners: start, progress and end per kind.
+    const rebuildProgressListeners = new Set();
+    const rebuildProgress = createSceneRebuildProgress((event) => {
+        rebuildProgressListeners.forEach((fn) => { try { fn(event); } catch (e) {} });
+    });
     let displayRebuildPromise = null;
     let displayDirty = false;
     let displayRevision = 0;
@@ -3647,10 +3688,11 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
         if (!isMounted()) throw new Error('USD scene view was cancelled.');
         const byPath = new Map();
         const pendingTextures = [];
-        const awaitTextureJobs = async (jobs) => {
+        const awaitTextureJobs = async (jobs, onTick) => {
             if (!jobs.length) return;
             const total = jobs.length;
             let done = 0;
+            if (onTick) onTick(0, total);
             report({ phase: 'texture', done: 0, total, loaded: 0, failed: 0, udimTiles: textureStats.udimTiles });
             const watched = jobs.map((job) => Promise.resolve(job).then((result) => {
                 done += 1;
@@ -3659,6 +3701,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                     textureStats.failed += 1;
                     warnings.push('MaterialX texture decode failed: ' + String(result.error.message || result.error));
                 } else textureStats.loaded += 1;
+                if (onTick) onTick(done, total);
                 report({ phase: 'texture', done, total, loaded: textureStats.loaded, failed: textureStats.failed,
                     udimTiles: textureStats.udimTiles });
                 return result;
@@ -6944,6 +6987,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 });
                 const geometryLabel = String(record.primPath || '').split('/').filter(Boolean).pop() || String(record.name || '');
                 report({ phase: 'geometry', index: i + 1, total: stage.meshes.length, primPath: String(record.primPath || ''), label: geometryLabel });
+                rebuildProgress.progress('geometry', i + 1, stage.meshes.length);
             }
             const __perfTexturePhaseStart2 = scenePerf ? performance.now() : 0;
             await awaitTextureJobs(pendingTextures);
@@ -7190,6 +7234,9 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 const rebuildPending = [];
                 const oldMaterials = Array.from(materials);
                 resetGeneratedFeatures();
+                // A superseded pass restarts the count from zero.
+                let compiledCount = 0;
+                rebuildProgress.progress('materials', 0, materialRecords.size, 'Updating materials');
                 for (const [path, record] of materialRecords) {
                     const result = await makeMtlxMaterial(record, true);
                     if (result) {
@@ -7197,6 +7244,8 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                         if (result.material) provisional.add(result.material);
                         rebuildPending.push(...(result.pendingTextures || []));
                     }
+                    compiledCount += 1;
+                    rebuildProgress.progress('materials', compiledCount, materialRecords.size);
                     if (stopped || !isMounted()) break;
                 }
                 if (stopped || !isMounted()) {
@@ -7233,7 +7282,9 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                         }
                     }
                 }
-                await awaitTextureJobs(rebuildPending);
+                await awaitTextureJobs(rebuildPending, (done, total) => {
+                    rebuildProgress.progress('materials', done, total, 'Loading textures');
+                });
                 if (stopped || !isMounted()) {
                     provisional.forEach(disposeMaterial);
                     rebuildingProvisional = null;
@@ -7324,6 +7375,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
         queueDisplayRebuild = () => {
             if (displayRebuildPromise || stopped || !active || !displayDirty || !isMounted()) return displayRebuildPromise;
             notifyRebuild('materials');
+            rebuildProgress.start('materials', 'Updating materials', materialRecords.size);
             const scheduledRevision = displayRevision;
             displayRebuildPromise = rebuildDisplayMaterials().catch((error) => {
                 if (rebuildingProvisional) rebuildingProvisional.forEach(disposeMaterial);
@@ -7337,6 +7389,8 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             }).finally(() => {
                 displayRebuildPromise = null;
                 if (displayDirty && active && !stopped && isMounted()) queueDisplayRebuild();
+                // A follow-up pass restarted the state above; otherwise this one is over.
+                if (!displayRebuildPromise) rebuildProgress.end('materials');
             });
             return displayRebuildPromise;
         };
@@ -8292,7 +8346,19 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 report({ phase: 'geometry', status: 'error', error: detail });
             },
         });
-        const requestSceneRebuild = () => { notifyRebuild('geometry'); return sceneRebuildQueue.request(); };
+        // The queue coalesces requests, so geometry progress ends only once
+        // it is idle; a request mid-pass restarts the count.
+        const requestSceneRebuild = () => {
+            notifyRebuild('geometry');
+            rebuildProgress.start('geometry', 'Rebuilding geometry', stage.meshes.length);
+            const pending = sceneRebuildQueue.request();
+            const endWhenIdle = () => {
+                if (sceneRebuildQueue.isBusy()) sceneRebuildQueue.whenSettled().then(endWhenIdle);
+                else rebuildProgress.end('geometry');
+            };
+            pending.then(endWhenIdle);
+            return pending;
+        };
         const getDisplacementSubdivisionOverride = () => displacementSubdivisionOverride;
         // Changes the Scene's own displacement-subdivision override and
         // rebuilds through requestSceneRebuild (never the plain Subdivision
@@ -8544,6 +8610,15 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 rebuildListeners.add(listener);
                 return () => rebuildListeners.delete(listener);
             },
+            // Rebuild progress: { kind: 'materials'|'geometry', phase:
+            // 'start'|'progress'|'end', done, total, label }; returns the unsubscribe.
+            onRebuildProgress: (listener) => {
+                if (typeof listener !== 'function') return () => {};
+                rebuildProgressListeners.add(listener);
+                return () => rebuildProgressListeners.delete(listener);
+            },
+            // Live rebuilds as [{ kind, done, total, label }], empty when idle.
+            getRebuildState: () => rebuildProgress.snapshot(),
             // Module-level SCENE_COMPILE_CACHE stats (shared across every
             // view/reload, not just this one), for probes and diagnostics.
             getCompileCacheStats: () => {
@@ -8720,6 +8795,8 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 stopped = true;
                 sceneRebuildQueue.cancel();
                 rebuildListeners.clear();
+                rebuildProgress.endAll();
+                rebuildProgressListeners.clear();
                 disposeSelectionResources();
                 disposeShadowResources();
                 disposeAoResources();

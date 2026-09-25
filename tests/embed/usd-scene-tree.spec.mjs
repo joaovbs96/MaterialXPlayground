@@ -588,6 +588,52 @@ test('@scene a viewport double-click places the preview at the click and keeps t
   expect(await panel.boundingBox()).toEqual(box);
 });
 
+test('@scene double-clicks inside the Render and Environment popovers never open the preview or change the selection', async ({ page, embedURL }) => {
+  test.setTimeout(300000);
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await loadScene(page, embedURL, rigFiles());
+  const panel = page.getByTestId('usd-scene-material-preview');
+  // Fill the viewport with MeshA so every popover pixel has a surface behind it.
+  await page.evaluate(() => {
+    const h = window.__mtlxUsdSceneHandle;
+    h.camera.position.set(-0.8, 0, 0.25);
+    h.controls.target.set(-0.8, 0, 0);
+    h.controls.update();
+    h.renderNow();
+  });
+  const canvas = await page.getByTestId('usd-scene-canvas').boundingBox();
+  const middle = { x: canvas.x + canvas.width / 2, y: canvas.y + canvas.height * 0.7 };
+
+  for (const [buttonId, popoverId] of [['usd-scene-render-settings', 'usd-scene-render-settings-popover'], ['usd-scene-env-settings', 'usd-scene-env-popover']]) {
+    await row(page, '/World/Group/MeshB').click();
+    await expect(row(page, '/World/Group/MeshB')).toHaveAttribute('aria-selected', 'true');
+    await page.getByTestId(buttonId).click();
+    const popover = page.getByTestId(popoverId);
+    await expect(popover).toBeVisible();
+    const box = await popover.boundingBox();
+    const corner = { x: box.x + 5, y: box.y + box.height - 5 };
+    // Without the canvas check this would have picked MeshA straight through the popover.
+    expect(await page.evaluate(({ x, y }) => !!window.__mtlxUsdSceneHandle.pickAt(x, y), corner)).toBe(true);
+    await page.mouse.dblclick(corner.x, corner.y);
+    await popover.locator('span').first().dblclick();
+    await expect(popover).toBeVisible();
+    await expect(panel).toBeHidden();
+    await expect(row(page, '/World/Group/MeshB')).toHaveAttribute('aria-selected', 'true');
+    await expect(row(page, '/World/Group/MeshA')).toHaveAttribute('aria-selected', 'false');
+    const reasons = await page.evaluate(() => window.__mtlxUsdSceneDoubleClicks.filter((e) => e.event === 'dblclick').slice(-2).map((e) => e.reason));
+    expect(reasons).toEqual(['off-canvas', 'off-canvas']);
+    // A double-click on the mesh while the popover is open only dismisses it.
+    await page.mouse.dblclick(middle.x, middle.y);
+    await expect(popover).toBeHidden();
+    await expect(panel).toBeHidden();
+  }
+
+  // With nothing open, a double-click on the canvas opens the preview.
+  await page.mouse.dblclick(middle.x, middle.y);
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText('red_material');
+});
+
 test('@scene Reload and Cancel share one slot in the Scene section', async ({ page, embedURL }) => {
   test.setTimeout(240000);
   await loadScene(page, embedURL, rigFiles());

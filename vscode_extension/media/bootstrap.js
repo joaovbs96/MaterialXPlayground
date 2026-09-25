@@ -1114,8 +1114,11 @@
             var r = canvas.getBoundingClientRect();
             var x = r.left + r.width / 2;
             var y = r.top + r.height / 2;
-            canvas.dispatchEvent(new PointerEvent('pointerdown', { clientX: x, clientY: y, bubbles: true, button: 0, pointerType: 'mouse' }));
-            canvas.dispatchEvent(new MouseEvent('dblclick', { clientX: x, clientY: y, bubbles: true, button: 0, detail: 2 }));
+            // Dispatch on whatever is under that point, like a real click: the WebGL
+            // canvas, since the viewer ignores double-clicks that miss it.
+            var hit = document.elementFromPoint(x, y) || canvas;
+            hit.dispatchEvent(new PointerEvent('pointerdown', { clientX: x, clientY: y, bubbles: true, button: 0, pointerType: 'mouse' }));
+            hit.dispatchEvent(new MouseEvent('dblclick', { clientX: x, clientY: y, bubbles: true, button: 0, detail: 2 }));
             poll();
         }
     }
