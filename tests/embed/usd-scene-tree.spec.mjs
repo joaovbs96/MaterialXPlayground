@@ -751,12 +751,16 @@ test('@scene the Diagnostics button is quiet with nothing reported and neutral f
   await expect(popover).toContainText('No warnings.');
   await page.keyboard.press('Escape');
   await expect(popover).toBeHidden();
-  // Info messages only: a neutral marker, never amber or red, with the count.
+  // Info messages only: a neutral marker, never amber or red, with the
+  // count of every diagnostic (info included). The Statistics "Warnings"
+  // row only counts warnings + errors, so it stays 0 here even though the
+  // Diagnostics badge is not (item 5: info notes never inflate it).
   await page.getByTestId('usd-scene-file-picker').setInputFiles(usdFiles());
   await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 150000 });
   await expect(button).toHaveAttribute('data-severity', 'info');
   await expect(button.getByTestId('usd-scene-diagnostics-severity')).toHaveClass(/text-gray-400/);
-  await expect(button.getByTestId('usd-scene-diagnostics-count')).toHaveText(await page.getByTestId('usd-stage-warnings').textContent());
+  await expect(button.getByTestId('usd-scene-diagnostics-count')).toHaveText(/^[1-9]\d*$/);
+  await expect(page.getByTestId('usd-stage-warnings')).toHaveText('0');
 });
 
 test('@scene glTF scenes get an outliner from their node tree', async ({ page, embedURL }) => {
@@ -784,4 +788,97 @@ test('@scene glTF scenes get an outliner from their node tree', async ({ page, e
   await expect(page.getByTestId('usd-stage-visible-meshes')).toHaveText('1');
   await row(page, '/Car/Body').dblclick();
   await expect(page.getByTestId('usd-scene-material-preview')).toBeVisible();
+});
+
+test('@scene the Scene file dropdown hides referenced sub-layers by default, "Show all files" reveals them', async ({ page, embedURL }) => {
+  test.setTimeout(180000);
+  // A referenced sub-layer only, alongside a standalone root: sub.usda
+  // should stay out of the picker until "Show all files" is picked (item 4).
+  const SUB_USDA = ROOT_USDA.replace('World', 'Sub');
+  const MAIN_USDA = [
+    '#usda 1.0',
+    '(',
+    '    defaultPrim = "World"',
+    '    subLayers = [@sub.usda@]',
+    ')',
+    'def Xform "World" {}',
+    '',
+  ].join('\n');
+  await page.goto(embedURL + '/index.html#!scene');
+  await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
+  await page.getByTestId('usd-scene-file-picker').setInputFiles([
+    { name: 'main.usda', mimeType: 'text/plain', buffer: Buffer.from(MAIN_USDA) },
+    { name: 'sub.usda', mimeType: 'text/plain', buffer: Buffer.from(SUB_USDA) },
+    { name: 'red.mtlx', mimeType: 'application/xml', buffer: Buffer.from(RED_MTLX) },
+  ]);
+  await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 150000 });
+
+  const select = page.getByTestId('usd-scene-root-select').getByRole('combobox');
+  await select.click();
+  await expect(page.getByRole('option', { name: 'main.usda' })).toBeVisible();
+  await expect(page.getByRole('option', { name: 'sub.usda' })).toHaveCount(0);
+  const showAll = page.getByRole('option', { name: /^Show all files/ });
+  await expect(showAll).toBeVisible();
+  await showAll.click();
+
+  await select.click();
+  await expect(page.getByRole('option', { name: 'sub.usda' })).toBeVisible();
+});
+
+test('@scene the status pill uses singular "1 mesh" for a single-mesh scene', async ({ page, embedURL }) => {
+  test.setTimeout(180000);
+  const ONE_MESH_USDA = [
+    '#usda 1.0',
+    '(',
+    '    defaultPrim = "World"',
+    '    upAxis = "Y"',
+    '    metersPerUnit = 1',
+    ')',
+    'def Xform "World" {',
+    '    def Scope "Looks" {',
+    '        def Material "Red" (',
+    '            references = @red.mtlx@</MaterialX/Materials/red_material>',
+    '        ) {',
+    '        }',
+    '    }',
+    ...quad('MeshA', 0),
+    '}',
+    '',
+  ].join('\n');
+  await loadScene(page, embedURL, [
+    { name: 'root.usda', mimeType: 'text/plain', buffer: Buffer.from(ONE_MESH_USDA) },
+    { name: 'red.mtlx', mimeType: 'application/xml', buffer: Buffer.from(RED_MTLX) },
+  ]);
+  await expect(page.getByTestId('usd-scene-status-pill')).toContainText('1 mesh');
+  await expect(page.getByTestId('usd-scene-status-pill')).not.toContainText('1 meshes');
+});
+
+test('@scene a stage with materials but no meshes shows a clear viewport message; Materials still lists them', async ({ page, embedURL }) => {
+  test.setTimeout(180000);
+  const LOOKS_ONLY_USDA = [
+    '#usda 1.0',
+    '(',
+    '    defaultPrim = "World"',
+    '    upAxis = "Y"',
+    ')',
+    'def Xform "World" {',
+    '    def Scope "Looks" {',
+    '        def Material "Red" (',
+    '            references = @red.mtlx@</MaterialX/Materials/red_material>',
+    '        ) {',
+    '        }',
+    '    }',
+    '}',
+    '',
+  ].join('\n');
+  await loadScene(page, embedURL, [
+    { name: 'root.usda', mimeType: 'text/plain', buffer: Buffer.from(LOOKS_ONLY_USDA) },
+    { name: 'red.mtlx', mimeType: 'application/xml', buffer: Buffer.from(RED_MTLX) },
+  ]);
+  await expect(page.getByTestId('usd-stage-meshes')).toHaveText('0');
+  const notice = page.getByTestId('usd-scene-empty-geometry');
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText('materials but no geometry');
+  await expect(notice).toContainText('1 material');
+  await expect(group(page, 'materials').getByTestId('usd-scene-tree-group-count')).toHaveText('1');
 });

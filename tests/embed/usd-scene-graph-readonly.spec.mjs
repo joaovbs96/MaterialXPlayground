@@ -1,8 +1,11 @@
 // @scene: a material double-clicked open from the Scene Viewer and sent to
 // the Graph Editor ("Open in Graph Editor") must land there view only.
-// js/usd-scene-app.jsx openInEditor passes readOnly/readOnlySource through
-// js/shared/mtlx-ui.jsx openInGraphEditor to js/graph-app.jsx's docReadOnly
-// state, which folds into the existing library scopeLocked gate.
+// js/usd-scene-app.jsx openInEditor builds the window.__mtlxPendingImport +
+// 'mtlx-load-document' handoff directly (it does not go through
+// js/shared/mtlx-ui.jsx openInGraphEditor, which drops a materialName
+// field), setting readOnly/readOnlySource and materialName for
+// js/graph-app.jsx's docReadOnly state and __inline_/__usdshade_/
+// __usdpreview_ name mapping.
 import { test, expect } from './lib/test-base.mjs';
 
 const RED_MTLX = [
@@ -62,9 +65,19 @@ test('@scene material opened from the Scene Viewer opens the Graph Editor view o
   await page.locator('[data-testid="usd-scene-tree-row"][data-path="/World/MeshA"]').dblclick();
   const panel = page.getByTestId('usd-scene-material-preview');
   await expect(panel).toBeVisible();
+
+  // The handoff event fires before the Graph Editor view (and its own
+  // listener) exists, so capture it directly to check materialName made it
+  // through (the leaf of the material's prim path: "Red" -> "red_material").
+  await page.evaluate(() => {
+    window.__testHandoffDetail = null;
+    window.addEventListener('mtlx-load-document', (e) => { window.__testHandoffDetail = e.detail; });
+  });
   await panel.getByRole('button', { name: 'Open in Graph Editor' }).click();
 
   await expect(page).toHaveURL(/#!graph/);
+  const handoffDetail = await page.evaluate(() => window.__testHandoffDetail);
+  expect(handoffDetail && handoffDetail.materialName).toBe('red_material');
 
   // The view-only banner names the scene file and offers Export .mtlx.
   const banner = page.getByText(/View only: material from root\.usda/);

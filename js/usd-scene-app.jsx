@@ -11,6 +11,9 @@
     // glTF/OBJ roots route through window.MtlxSceneSources (js/usd-scene-sources.js)
     // instead of the USD worker; see detectRootKind() and load() below.
     const MODEL_ROOT_EXTENSIONS = ['.glb', '.gltf', '.obj'];
+    // Sentinel MtlxSelect option (item 4): picking it reveals every root
+    // candidate instead of just the top-level ones, never a real root path.
+    const SHOW_ALL_ROOT_FILES_VALUE = '__mtlx_scene_show_all_files__';
     const EXAMPLE_ROOT = 'tests/fixtures/usd-scene/root.usda';
     const EXAMPLE_FILES = [
         EXAMPLE_ROOT,
@@ -56,6 +59,53 @@
             out.push(part);
         });
         return out.join('/');
+    };
+    // Pure: given each candidate layer's own text (ASCII USD or glTF JSON,
+    // read by the caller so this needs no Blob/File API), returns the set of
+    // normalized lowercase paths any of them references: a USD `@asset@`
+    // token, or a glTF buffer/image "uri". Used to tell a folder's top-level
+    // scenes from sub-layers/buffers other picked files pull in (item 4).
+    const scanReferencedAssetPaths = (entries) => {
+        const referenced = new Set();
+        (entries || []).forEach((entry) => {
+            const path = String((entry && entry.path) || '');
+            const text = String((entry && entry.text) || '');
+            const dir = dirOf(path);
+            const selfKey = normalizeRelativePath(path).toLowerCase();
+            const addRef = (raw) => {
+                let ref = String(raw || '').trim();
+                if (!ref || ref.indexOf('anon:') === 0) return;
+                if (/^data:/i.test(ref) || /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(ref)) return;
+                ref = ref.replace(/\\/g, '/').split(/[?#]/)[0];
+                if (!ref) return;
+                const resolved = ref.charAt(0) === '/' ? normalizeRelativePath(ref) : normalizeRelativePath(dir ? dir + '/' + ref : ref);
+                const resolvedKey = resolved.toLowerCase();
+                if (!resolvedKey || resolvedKey === selfKey) return; // self references never count as "referenced by something else"
+                referenced.add(resolvedKey);
+            };
+            if (ext(path) === '.gltf') {
+                const uriPattern = /"uri"\s*:\s*"((?:[^"\\]|\\.)*)"/g;
+                let m;
+                while ((m = uriPattern.exec(text))) {
+                    let ref = m[1].replace(/\\(.)/g, '$1');
+                    try { ref = decodeURIComponent(ref); } catch (e) { /* keep raw */ }
+                    addRef(ref);
+                }
+                return;
+            }
+            const tokenPattern = /@([^@\n]+)@/g;
+            let match;
+            while ((match = tokenPattern.exec(text))) addRef(match[1].replace(/:SDF_FORMAT_ARGS:.*$/, ''));
+        });
+        return referenced;
+    };
+    // Pure: candidate paths not referenced by anything else scanned stay
+    // "top level" (the Scene file dropdown's default list); everything else
+    // only shows once "Show all files" is picked.
+    const topLevelRootPaths = (candidatePaths, referenced) => {
+        const list = Array.isArray(candidatePaths) ? candidatePaths : [];
+        if (!referenced || !referenced.size) return list.slice();
+        return list.filter((p) => !referenced.has(String(p).replace(/\\/g, '/').toLowerCase()));
     };
     // Source containers (the dropped .glb/.usdz/.obj and friends) are never
     // textures: handing one to the material preview ships megabytes through
@@ -155,22 +205,54 @@
         const sorted = (pool.length ? pool : modelCandidates).slice().sort(shallowestFirst);
         return sorted[0].path;
     }
+    // .gltf candidates only (glTF JSON, always text): scanReferencedAssetPaths'
+    // buffer/image "uri" branch, so a folder of model roots can also tell a
+    // top-level scene from something only another .gltf pulls in (item 4).
+    async function scanGltfCandidateReferences(candidates) {
+        const entries = [];
+        for (const file of candidates) {
+            if (ext(file.path) !== '.gltf') continue;
+            const blob = blobOfCandidate(file);
+            if (!blob) continue;
+            const size = typeof blob.size === 'number' ? blob.size : 0;
+            if (size > ASCII_SCAN_SKIP_BYTES) continue;
+            let text;
+            try { text = await blob.text(); } catch (e) { continue; }
+            if (text.length > ASCII_SCAN_MAX_CHARS) text = text.slice(0, ASCII_SCAN_MAX_CHARS);
+            entries.push({ path: file.path, text });
+        }
+        return scanReferencedAssetPaths(entries);
+    }
     // A USD root always wins the default pick over a co-uploaded model
     // root, which comes back as an ignoredModelRoots entry for the
     // caller's diagnostics; with no USD root, a model root is picked.
+    // topLevelPaths (item 4): every candidate path nothing else picked
+    // references, reusing the same ASCII scan pickDefaultUsdRootLayer
+    // already runs (plus a lightweight glTF buffer/image pass) so the
+    // Scene file dropdown's default list costs no extra work.
     async function pickDefaultRootLayer(files) {
         const candidates = rootCandidates(files);
-        if (candidates.length === 0) return { path: '', ignoredModelRoots: [] };
+        if (candidates.length === 0) return { path: '', ignoredModelRoots: [], topLevelPaths: [] };
         const usdCandidates = candidates.filter((f) => isUsdRootPath(f.path));
         const modelCandidates = candidates.filter((f) => isModelRootPath(f.path));
-        if (usdCandidates.length === 0) return { path: pickDefaultModelRoot(modelCandidates), ignoredModelRoots: [] };
-        const path = await pickDefaultUsdRootLayer(usdCandidates);
-        return { path, ignoredModelRoots: modelCandidates.map((f) => f.path) };
+        const gltfReferenced = await scanGltfCandidateReferences(candidates);
+        const candidatePaths = candidates.map((f) => f.path);
+        if (usdCandidates.length === 0) {
+            const path = pickDefaultModelRoot(modelCandidates);
+            return { path, ignoredModelRoots: [], topLevelPaths: topLevelRootPaths(candidatePaths, gltfReferenced) };
+        }
+        const { path, referenced } = await pickDefaultUsdRootLayer(usdCandidates);
+        gltfReferenced.forEach((r) => referenced.add(r));
+        return {
+            path,
+            ignoredModelRoots: modelCandidates.map((f) => f.path),
+            topLevelPaths: topLevelRootPaths(candidatePaths, referenced),
+        };
     }
     async function pickDefaultUsdRootLayer(candidates) {
         const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-        if (candidates.length === 0) return '';
-        if (candidates.length === 1) return candidates[0].path;
+        if (candidates.length === 0) return { path: '', referenced: new Set() };
+        if (candidates.length === 1) return { path: candidates[0].path, referenced: new Set() };
         const cacheKey = candidates.map((f) => {
             const size = f && f.data && typeof f.data.size === 'number' ? f.data.size : -1;
             const modified = f && f.data && typeof f.data.lastModified === 'number' ? f.data.lastModified : -1;
@@ -179,7 +261,8 @@
         if (rootLayerCache.has(cacheKey)) {
             const elapsedMs = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt;
             console.debug('pickDefaultRootLayer: scanned', candidates.length, 'candidates in', elapsedMs.toFixed(1) + 'ms (cached)');
-            return rootLayerCache.get(cacheKey);
+            const cached = rootLayerCache.get(cacheKey);
+            return { path: cached.path, referenced: new Set(cached.referenced) };
         }
         const candidateKeys = new Set(candidates.map((f) => String(f.path).replace(/\\/g, '/').toLowerCase()));
         const referenced = new Set();
@@ -216,7 +299,10 @@
         const topLevel = candidates.filter((f) => !referenced.has(String(f.path).replace(/\\/g, '/').toLowerCase()));
         const elapsedMs = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt;
         console.debug('pickDefaultRootLayer: scanned', candidates.length, 'candidates in', elapsedMs.toFixed(1) + 'ms');
-        if (topLevel.length === 0) return cacheRootLayer(cacheKey, oldDefaultRoot(candidates));
+        if (topLevel.length === 0) {
+            const path = cacheRootLayer(cacheKey, { path: oldDefaultRoot(candidates), referenced: Array.from(referenced) }).path;
+            return { path, referenced };
+        }
         const isComposition = (f) => outgoing.has(String(f.path).replace(/\\/g, '/').toLowerCase());
         const isNamedRoot = (f) => rootNamePattern.test(f.path);
         topLevel.sort((a, b) => {
@@ -231,7 +317,8 @@
             const aPath = String(a.path), bPath = String(b.path);
             return aPath < bPath ? -1 : (aPath > bPath ? 1 : 0);
         });
-        return cacheRootLayer(cacheKey, topLevel[0].path);
+        const path = cacheRootLayer(cacheKey, { path: topLevel[0].path, referenced: Array.from(referenced) }).path;
+        return { path, referenced };
     }
     // The camera the picker should apply with no user interaction: the one
     // the worker flags defaultCamera, else the first authored camera, else
@@ -444,13 +531,19 @@
     // it is larger than the container. `minY` keeps the top edge below a HUD
     // row (e.g. the scene toolbar); it never grows the rect past the bottom.
     // No side effects, safe for a Node test.
-    const clampPanelRect = (rect, bounds, minY) => {
+    // `minSize` (optional): a hard floor for width/height that wins over the
+    // bounds ceiling when the two conflict (a container narrower/shorter
+    // than the floor), so a caller like the material preview panel can
+    // guarantee its panel never resizes below a usable size (item 8).
+    const clampPanelRect = (rect, bounds, minY, minSize) => {
         // Empty bounds mean the view is hidden (display none); clamping
         // against them would collapse the rect to nothing, so keep it.
         if (!bounds || !(bounds.width > 0) || !(bounds.height > 0)) return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
         const top = minY || 0;
-        const width = Math.max(0, Math.min(rect.width, bounds.width));
-        const height = Math.max(0, Math.min(rect.height, bounds.height));
+        const minWidth = (minSize && minSize.width) || 0;
+        const minHeight = (minSize && minSize.height) || 0;
+        const width = Math.max(minWidth, Math.min(rect.width, bounds.width));
+        const height = Math.max(minHeight, Math.min(rect.height, bounds.height));
         const x = Math.max(0, Math.min(rect.x, bounds.width - width));
         const maxY = Math.max(0, bounds.height - height);
         const y = Math.min(Math.max(rect.y, top), maxY);
@@ -695,10 +788,18 @@
             const raw = localStorage.getItem(MATERIAL_PREVIEW_RECT_KEY);
             if (!raw) return null;
             const parsed = JSON.parse(raw);
-            // A collapsed rect (persisted from a hidden view) is discarded so
-            // the next open falls back to the default size at the click.
-            if (parsed && [parsed.x, parsed.y, parsed.width, parsed.height].every(Number.isFinite)
-                && parsed.width >= MATERIAL_PREVIEW_MIN_SIZE.width && parsed.height >= MATERIAL_PREVIEW_MIN_SIZE.height) return parsed;
+            // Malformed/missing fields are genuinely unusable and stay
+            // discarded (next open falls back to the default size at the
+            // click); an undersized width/height (a stale value, or one
+            // clamped down by a small container) is clamped back up to the
+            // floor instead, rather than accepted as-is or dropped outright.
+            if (parsed && [parsed.x, parsed.y, parsed.width, parsed.height].every(Number.isFinite)) {
+                return {
+                    x: parsed.x, y: parsed.y,
+                    width: Math.max(MATERIAL_PREVIEW_MIN_SIZE.width, parsed.width),
+                    height: Math.max(MATERIAL_PREVIEW_MIN_SIZE.height, parsed.height),
+                };
+            }
         } catch (e) { /* storage unavailable or corrupt */ }
         return null;
     };
@@ -742,7 +843,7 @@
         React.useEffect(() => {
             if (!containerRef.current) return;
             const bounds = containerRef.current.getBoundingClientRect();
-            setRect((prev) => (prev ? clampPanelRect(prev, bounds, MATERIAL_PREVIEW_TOP_INSET) : prev));
+            setRect((prev) => (prev ? clampPanelRect(prev, bounds, MATERIAL_PREVIEW_TOP_INSET, MATERIAL_PREVIEW_MIN_SIZE) : prev));
             // eslint-disable-next-line react-hooks/exhaustive-deps
         }, []);
 
@@ -759,7 +860,7 @@
             const base = anchor
                 ? { x: anchor.x + MATERIAL_PREVIEW_CLICK_OFFSET, y: anchor.y + MATERIAL_PREVIEW_CLICK_OFFSET, width, height }
                 : (remembered || { x: (bounds.width - width) / 2, y: (bounds.height - height) / 2, width, height });
-            setRect(clampPanelRect(base, bounds, MATERIAL_PREVIEW_TOP_INSET));
+            setRect(clampPanelRect(base, bounds, MATERIAL_PREVIEW_TOP_INSET, MATERIAL_PREVIEW_MIN_SIZE));
             // eslint-disable-next-line react-hooks/exhaustive-deps
         }, [open, anchor]);
 
@@ -771,7 +872,7 @@
             const onWindowResize = () => {
                 if (!containerRef.current) return;
                 const bounds = containerRef.current.getBoundingClientRect();
-                setRect((prev) => (prev ? clampPanelRect(prev, bounds, MATERIAL_PREVIEW_TOP_INSET) : prev));
+                setRect((prev) => (prev ? clampPanelRect(prev, bounds, MATERIAL_PREVIEW_TOP_INSET, MATERIAL_PREVIEW_MIN_SIZE) : prev));
             };
             window.addEventListener('resize', onWindowResize);
             return () => window.removeEventListener('resize', onWindowResize);
@@ -833,7 +934,7 @@
                 x: drag.rect.x + (e.clientX - drag.startX),
                 y: drag.rect.y + (e.clientY - drag.startY),
                 width: drag.rect.width, height: drag.rect.height,
-            }, bounds, MATERIAL_PREVIEW_TOP_INSET);
+            }, bounds, MATERIAL_PREVIEW_TOP_INSET, MATERIAL_PREVIEW_MIN_SIZE);
             setRect(next);
         };
         const onResizeMove = (e) => {
@@ -844,7 +945,7 @@
                 x: drag.rect.x, y: drag.rect.y,
                 width: Math.max(MATERIAL_PREVIEW_MIN_SIZE.width, drag.rect.width + (e.clientX - drag.startX)),
                 height: Math.max(MATERIAL_PREVIEW_MIN_SIZE.height, drag.rect.height + (e.clientY - drag.startY)),
-            }, bounds, MATERIAL_PREVIEW_TOP_INSET);
+            }, bounds, MATERIAL_PREVIEW_TOP_INSET, MATERIAL_PREVIEW_MIN_SIZE);
             setRect(next);
         };
 
@@ -859,10 +960,23 @@
         if (!shown) return null; // never opened yet this session
 
         const openInEditor = () => {
-            window.openInGraphEditor({
-                xml: shown.xml, name: shown.name, files: handoffFiles, select: shown.materialName,
+            // window.openInGraphEditor (js/shared/mtlx-ui.jsx) builds its own
+            // payload object and does not forward a materialName field, so
+            // the Graph Editor's __inline_/__usdshade_/__usdpreview_ name
+            // mapping never gets a value from a scene handoff. Build the same
+            // window.__mtlxPendingImport + 'mtlx-load-document' contract it
+            // uses, with materialName (the material's own name, the leaf of
+            // its prim path) always included.
+            if (fullscreenElement()) toggleFullscreen();
+            const primSegments = sceneTreeSegments(shown.primPath);
+            const materialName = shown.materialName || (primSegments.length ? primSegments[primSegments.length - 1] : null);
+            window.__mtlxPendingImport = {
+                xml: shown.xml, name: shown.name, files: handoffFiles || null,
+                select: materialName, implOf: null, materialName,
                 readOnly: true, readOnlySource: sceneFileName || 'the scene',
-            });
+            };
+            window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: window.__mtlxPendingImport }));
+            window.location.hash = '#!graph';
         };
         const rectStyle = rect
             ? { left: rect.x, top: rect.y, width: rect.width, height: rect.height }
@@ -1531,6 +1645,10 @@
             return map;
         }, [files, stage]);
         const [error, setError] = React.useState('');
+        // A fatal load failure (setError below) also needs to show up in
+        // Diagnostics as an error-severity record, not just the viewport
+        // alert; cleared on every new load attempt.
+        const [loadErrorDetails, setLoadErrorDetails] = React.useState([]);
         const [previewOpen, setPreviewOpen] = React.useState(false);
         // Short viewport note explaining why a double-click opened nothing.
         const [doubleClickNote, setDoubleClickNote] = React.useState('');
@@ -1615,6 +1733,12 @@
         // Model (glTF/OBJ) root candidates set aside when a USD root layer
         // was also supplied; surfaced as an info-level diagnostic below.
         const [ignoredModelRoots, setIgnoredModelRoots] = React.useState([]);
+        // Lowercase normalized paths of the root candidates nothing else
+        // picked references (item 4); the Scene file dropdown shows only
+        // these until "Show all files" is picked. Empty set means unknown/
+        // not yet scanned, which the dropdown treats as "show everything".
+        const [rootTopLevelPaths, setRootTopLevelPaths] = React.useState(null);
+        const [showAllRootFiles, setShowAllRootFiles] = React.useState(false);
         const [envFileName, setEnvFileName] = React.useState('');
         const [envImportError, setEnvImportError] = React.useState(null);
         const [envRotation, setEnvRotation] = React.useState(0);
@@ -1964,10 +2088,12 @@
         const applyChosenFiles = async (next, generation) => {
             if (!mountedRef.current || generation !== generationRef.current) return;
             setFiles(next);
-            const { path: preferredRoot, ignoredModelRoots } = await pickDefaultRootLayer(next);
+            const { path: preferredRoot, ignoredModelRoots, topLevelPaths } = await pickDefaultRootLayer(next);
             if (!mountedRef.current || generation !== generationRef.current) return;
             setRootPath(preferredRoot);
             setIgnoredModelRoots(ignoredModelRoots);
+            setRootTopLevelPaths(new Set((topLevelPaths || []).map((p) => String(p).toLowerCase())));
+            setShowAllRootFiles(false);
             setRootTouched(false);
             setStage(null);
             setStatus(next.length ? 'ready-to-load' : 'idle');
@@ -2022,7 +2148,7 @@
             const controller = new AbortController();
             abortRef.current = controller;
             if (handleRef.current && typeof handleRef.current.dispose === 'function') handleRef.current.dispose();
-            handleRef.current = null; setHandle(null); setStage(null); setError(''); setStatus('loading');
+            handleRef.current = null; setHandle(null); setStage(null); setError(''); setLoadErrorDetails([]); setStatus('loading');
             window.__mtlxUsdSceneHandle = null;
             try {
                 // subdivisionLevel/triangleLimits are USD-only knobs; a
@@ -2044,7 +2170,11 @@
                 setStage(result); setStatus('loaded');
             } catch (e) {
                 if (!mountedRef.current || controller.signal.aborted || generation !== generationRef.current || e && e.name === 'AbortError') return;
-                setError(String(e && e.message || e)); setStatus('error');
+                const message = String(e && e.message || e);
+                setError(message); setStatus('error');
+                // Diagnostics has no severity of its own for a fatal load
+                // failure, so tag it explicitly (severityOf() honors the tag).
+                setLoadErrorDetails(['[error] Scene failed to load: ' + message]);
             }
         };
         const loadExample = async () => {
@@ -2054,7 +2184,7 @@
             if (handleRef.current && handleRef.current.dispose) handleRef.current.dispose();
             handleRef.current = null; setHandle(null); setStage(null);
             window.__mtlxUsdSceneHandle = null;
-            setStatus('loading-example'); setError('');
+            setStatus('loading-example'); setError(''); setLoadErrorDetails([]);
             try {
                 const loaded = await Promise.all(EXAMPLE_FILES.map(async (path) => {
                     const response = await fetch(path, { cache: 'no-store' });
@@ -2063,7 +2193,13 @@
                 }));
                 if (!mountedRef.current || generation !== generationRef.current) return;
                 setFiles(loaded); setRootPath(EXAMPLE_ROOT); setRootTouched(true); await load(loaded, EXAMPLE_ROOT);
-            } catch (e) { if (mountedRef.current && generation === generationRef.current) { setError(String(e && e.message || e)); setStatus('error'); } }
+            } catch (e) {
+                if (mountedRef.current && generation === generationRef.current) {
+                    const message = String(e && e.message || e);
+                    setError(message); setStatus('error');
+                    setLoadErrorDetails(['[error] Scene failed to load: ' + message]);
+                }
+            }
         };
         // VS Code host entry: { files: { relPath: File }, root } from the
         // extension (media/bootstrap.js). load() routes the explicit root by
@@ -2430,7 +2566,12 @@
             const unbound = node.kind === 'material' && !(sceneTree && (sceneTree.meshesByMaterial.get(node.path) || []).length);
             if (!doc) return fail(unbound ? 'unbound' : 'no-document');
             log('ok');
-            showMaterialPreview(doc, { primPath: node.path, materialName: null, materialPath: node.materialPath }, mode, null);
+            // materialName is the leaf of the material's own prim path, not
+            // node.name (which is the mesh's name for a mesh row): the Graph
+            // Editor handoff needs the material's real name, not the surface it's bound to.
+            const materialSegments = sceneTreeSegments(node.materialPath);
+            const materialName = materialSegments.length ? materialSegments[materialSegments.length - 1] : null;
+            showMaterialPreview(doc, { primPath: node.path, materialName, materialPath: node.materialPath }, mode, null);
         };
         // Single click on a row: selects it; a group header also opens or closes, a
         // camera becomes the view, the environment opens its settings, another light
@@ -2494,7 +2635,7 @@
         // ignored model roots surface here as [info], the same tag prefix
         // severityOf() below already recognizes.
         const ignoredRootWarnings = ignoredModelRoots.map((path) => '[info] Ignored model root (a USD root layer was found): ' + path);
-        const warningDetails = warningRecords(materialWarningList(stage).concat(ignoredRootWarnings).concat(handle && Array.isArray(handle.warnings) ? handle.warnings.map(String) : []));
+        const warningDetails = warningRecords(materialWarningList(stage).concat(ignoredRootWarnings).concat(handle && Array.isArray(handle.warnings) ? handle.warnings.map(String) : []).concat(loadErrorDetails));
         const warnings = warningDetails.map((record) => record.label);
         // Diagnostics carry no severity of their own, so classify by wording:
         // anything that stopped working is an error, anything that merely
@@ -3455,7 +3596,10 @@
             ['Triangles', triangleCount.toLocaleString(), 'usd-stage-triangles'],
             ['Materials', (sceneTree ? sceneTree.materialCount : materials.length).toLocaleString(), 'usd-stage-materials', 'Every item under Materials in the hierarchy'],
             ['Visible meshes', visibleMeshCount.toLocaleString(), 'usd-stage-visible-meshes', 'Meshes not hidden in the hierarchy'],
-            ['Warnings', warnings.length.toLocaleString(), 'usd-stage-warnings'],
+            // Warnings + errors only: [info] notes (e.g. "Loaded from...")
+            // are not problems, so they don't belong in this count even
+            // though the Diagnostics popover lists them in their own group.
+            ['Warnings', (grouped.warning.length + grouped.error.length).toLocaleString(), 'usd-stage-warnings'],
         ];
         const SEVERITY_NOUNS = { error: ['error', 'errors'], warning: ['warning', 'warnings'], info: ['info', 'info'] };
         const diagnosticsSummary = ['error', 'warning', 'info']
@@ -3707,24 +3851,42 @@
                     )}
 
                     {!IN_VSCODE && candidates.length > 1 && (() => {
-                        const candidatePaths = candidates.map((f) => f.path);
-                        const shortLabels = distinctRootLabels(candidatePaths);
+                        const allCandidatePaths = candidates.map((f) => f.path);
+                        // Sub-layers/buffers another picked file references stay
+                        // hidden by default (item 4); a null set means "not yet
+                        // scanned", which shows everything rather than nothing.
+                        const topLevelPaths = rootTopLevelPaths
+                            ? allCandidatePaths.filter((p) => rootTopLevelPaths.has(p.toLowerCase()))
+                            : allCandidatePaths;
+                        const hiddenCount = allCandidatePaths.length - topLevelPaths.length;
+                        const filtering = hiddenCount > 0 && !showAllRootFiles;
+                        let visiblePaths = filtering ? topLevelPaths : allCandidatePaths;
+                        // The current root always stays selectable even if it
+                        // would otherwise be filtered out (e.g. a host-picked layer).
+                        if (rootPath && visiblePaths.indexOf(rootPath) < 0) visiblePaths = visiblePaths.concat([rootPath]);
+                        const shortLabels = distinctRootLabels(visiblePaths);
                         const rootLabels = {};
                         const rootTitles = {};
-                        candidatePaths.forEach((p, i) => { rootLabels[p] = shortLabels[i]; rootTitles[p] = p; });
+                        visiblePaths.forEach((p, i) => { rootLabels[p] = shortLabels[i]; rootTitles[p] = p; });
+                        const selectOptions = filtering ? visiblePaths.concat([SHOW_ALL_ROOT_FILES_VALUE]) : visiblePaths;
+                        if (filtering) {
+                            rootLabels[SHOW_ALL_ROOT_FILES_VALUE] = 'Show all files (' + allCandidatePaths.length + ')';
+                            rootTitles[SHOW_ALL_ROOT_FILES_VALUE] = 'Show every scene file in this folder, including referenced sub-layers';
+                        }
                         return (
                             <div data-testid="usd-scene-root-select" className="flex items-center gap-3">
                                 <span className={SCENE_ROW_LABEL + ' shrink-0 pl-4'}>Scene file</span>
                                 <div className="flex-1 min-w-0">
                                     <MtlxSelect
                                         value={rootPath}
-                                        options={candidatePaths}
+                                        options={selectOptions}
                                         labels={rootLabels}
                                         titles={rootTitles}
                                         title={rootPath || undefined}
                                         ariaLabel="Scene selection"
                                         popWidth={320}
                                         onChange={(v) => {
+                                            if (v === SHOW_ALL_ROOT_FILES_VALUE) { setShowAllRootFiles(true); return; }
                                             setRootPath(v); setRootTouched(true);
                                             // One-click scene switching: reload the newly picked root
                                             // right away instead of waiting on the explicit Load button.
@@ -3846,7 +4008,15 @@
                                 type="text"
                                 value={treeFilter}
                                 onChange={(e) => setTreeFilter(e.target.value)}
-                                onKeyDown={(e) => { if (e.key === 'Escape' && treeFilter) { e.stopPropagation(); setTreeFilter(''); } }}
+                                onKeyDown={(e) => {
+                                    // An open popover (Diagnostics, Render settings,
+                                    // Environment, light info) owns the first Escape via
+                                    // its window-level useEscapeToClose listener; only
+                                    // intercept here once none of them are open.
+                                    if (e.key !== 'Escape' || !treeFilter) return;
+                                    if (diagnosticsOpen || renderSettingsOpen || envPopoverOpen || lightInfoPath) return;
+                                    e.stopPropagation(); setTreeFilter('');
+                                }}
                                 placeholder="Filter objects"
                                 aria-label="Filter objects"
                                 data-testid="usd-scene-tree-filter"
@@ -4131,12 +4301,25 @@
                         </div>
                     )}
 
+                    {/* A stage with materials but no meshes (e.g. a .usdc that
+                        only holds a Look library) would otherwise render an
+                        empty viewport with just an [info] note in Diagnostics;
+                        say so plainly, the Materials group still lists them. */}
+                    {handle && status === 'rendered' && meshes.length === 0 && materials.length > 0 && (
+                        <div data-testid="usd-scene-empty-geometry" className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-center px-6 pointer-events-none">
+                            <MtlxIcon name="info-circle" className="w-5 h-5 text-gray-500" />
+                            <div className="text-gray-400 text-sm max-w-sm">
+                                This file has materials but no geometry ({materials.length.toLocaleString()} material{materials.length === 1 ? '' : 's'})
+                            </div>
+                        </div>
+                    )}
+
                     {handle && (() => {
-                        const segments = [rootBasename, meshes.length + ' meshes'];
+                        const segments = [rootBasename, meshes.length + ' mesh' + (meshes.length === 1 ? '' : 'es')];
                         const mtlxVersion = (window.MtlxAssets && window.MtlxAssets.MTLX_DEFAULT_VERSION) || window.__mtlxVersion;
                         if (mtlxVersion) segments.push('v' + mtlxVersion);
                         return (
-                            <div className="absolute bottom-2 left-2 z-10 pointer-events-none flex items-center gap-2 px-2 py-1 rounded-full bg-black/60 text-[11px] text-white/90">
+                            <div data-testid="usd-scene-status-pill" className="absolute bottom-2 left-2 z-10 pointer-events-none flex items-center gap-2 px-2 py-1 rounded-full bg-black/60 text-[11px] text-white/90">
                                 <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
                                 {segments.filter(Boolean).map((seg, i) => (
                                     <React.Fragment key={i}>
