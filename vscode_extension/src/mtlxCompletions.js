@@ -384,6 +384,35 @@ function tagAlreadyHasBody(text, offset) {
     return false;
 }
 
+// Is `offset` right after '</' plus zero or more tag-name characters
+// (a closing tag being typed)? Returns the offset of the '<' itself plus
+// the typed-name range, or null. Companion to tagPrefixAt, which
+// deliberately returns null for this same case.
+function closingTagPrefixAt(text, offset) {
+    let start = offset;
+    while (start > 0 && isTagNameChar(text[start - 1])) start--;
+    if (start < 2 || text[start - 1] !== '/' || text[start - 2] !== '<') return null;
+    return { ltStart: start - 2, start, end: offset, prefix: text.slice(start, offset) };
+}
+
+// The tag name of the innermost element still open right before `ltStart`
+// (the '<' of a '</' being typed). Reparses only the text BEFORE that '<'
+// so the half-typed closing tag (and anything after it) can't perturb the
+// scan; whatever is still open at that point is exactly what a closing
+// tag typed there would close.
+function innermostUnclosedTagName(text, ltStart) {
+    let root, lineStarts;
+    try {
+        ({ root, lineStarts } = scanElements(text.slice(0, ltStart)));
+    } catch (e) {
+        return null;
+    }
+    const pos = offsetToPos(lineStarts, ltStart);
+    annotateWithin(root, pos);
+    const el = elementContaining(root);
+    return el ? el.tag : null;
+}
+
 // A plain identifier/word ending right at `offset`, used for the bare
 // document-snippet prefixes (e.g. "standard_surface") typed as ordinary
 // text rather than after '<': mirrors tagPrefixAt's backward scan but
@@ -521,6 +550,20 @@ function getCompletions({ text, offset, repoRoot }) {
         const alreadyHasBody = tagAlreadyHasBody(text, offset);
         const items = nodeAndStructuralItems(index, parent, root, alreadyHasBody);
         return items.map((it) => withRange(it, tagHit.start, offset));
+    }
+
+    // Context: typing a CLOSING tag, '</' optionally followed by a
+    // partial name. tagPrefixAt above deliberately returns null here; the
+    // one sensible completion is the innermost still-open element's own
+    // tag name, replacing any partial name already typed.
+    const closeHit = closingTagPrefixAt(text, offset);
+    if (closeHit) {
+        const tag = innermostUnclosedTagName(text, closeHit.ltStart);
+        if (!tag) return [];
+        return [withRange({
+            kind: 'closing-tag', label: tag, detail: 'close <' + tag + '>',
+            insertText: tag + '>', isSnippet: false, preselect: true,
+        }, closeHit.start, closeHit.end)];
     }
 
     // Context: inside an element's own attribute whitespace (not inside a

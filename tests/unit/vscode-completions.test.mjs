@@ -497,3 +497,46 @@ test('uniqueName: a second standard_surface insertion gets unique names and a ma
     assert.ok(nodenameMatches.length > 0);
     for (const m of nodenameMatches) assert.equal(m[1], shaderMatch[1]);
 });
+
+test('closing tag: "</" offers the innermost unclosed element, nested case picks the deepest one', () => {
+    const text = '<materialx version="1.39">\n  <nodegraph name="NG1">\n'
+        + '    <multiply name="m1" type="float">\n    </|\n    </multiply>\n  </nodegraph>\n</materialx>\n';
+    const items = complete(text);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].kind, 'closing-tag');
+    assert.equal(items[0].label, 'multiply');
+    assert.equal(items[0].insertText, 'multiply>');
+});
+
+test('closing tag: a partial name already typed after "</" is replaced, not appended to', () => {
+    const text = '<materialx version="1.39">\n  <nodegraph name="NG1">\n  </nodegr|\n</materialx>\n';
+    const items = complete(text);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].label, 'nodegraph');
+    assert.equal(items[0].insertText, 'nodegraph>');
+    const offset = text.indexOf('|');
+    const ltIdx = text.lastIndexOf('</', offset);
+    assert.equal(items[0].replaceStart, ltIdx + 2);
+    assert.equal(items[0].replaceEnd, offset);
+});
+
+test('closing tag: nothing to close yields no items', () => {
+    const items = complete('hello |\n');
+    assert.deepEqual(items, []);
+});
+
+test('closing tag: a self-closed sibling is never offered as the element to close', () => {
+    const text = '<materialx version="1.39">\n  <standard_surface name="SR1" type="surfaceshader">\n'
+        + '    <input name="base_color" type="color3" value="1, 0, 0" />\n    </|\n  </standard_surface>\n</materialx>\n';
+    const items = complete(text);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].label, 'standard_surface');
+});
+
+test('closing tag: a "</...>" sequence inside a comment is not mistaken for a real close', () => {
+    const text = '<materialx version="1.39">\n  <standard_surface name="SR1" type="surfaceshader">\n'
+        + '    <!-- </standard_surface> -->\n    </|\n  </standard_surface>\n</materialx>\n';
+    const items = complete(text);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].label, 'standard_surface');
+});

@@ -92,7 +92,7 @@ function register(context) {
                     return candidates.map((c) => toCompletionItem(document, c));
                 },
             },
-            '<', '"', ' '
+            '<', '"', ' ', '/'
         )
     );
 }
