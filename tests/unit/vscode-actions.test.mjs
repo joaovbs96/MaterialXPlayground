@@ -12,8 +12,8 @@ const actionsModel = require('../../vscode_extension/src/actionsModel.js');
 test('buildActionRows: six rows, in the specified order, with icons and variants', () => {
     const rows = actionsModel.buildActionRows(false);
     assert.deepEqual(rows.map((r) => r.id), [
-        'newFromExample', 'newDocument', 'openDocs',
-        'openInGraphEditor', 'openInMaterialViewer', 'filterDocsByFile',
+        'newDocument', 'openDocs',
+        'openInGraphEditor', 'openInMaterialViewer', 'filterDocsByFile', 'newFromExample',
     ]);
     assert.equal(rows.find((r) => r.id === 'openDocs').icon, 'book');
     assert.equal(rows.find((r) => r.id === 'newFromExample').variant, 'primary');
@@ -126,4 +126,78 @@ test('buildAboutData: vendor entries are deduped by name and sorted', () => {
     assert.equal(names.filter((n) => n === 'MaterialX').length, 1);
     const sorted = [...names].sort((a, b) => a.localeCompare(b));
     assert.deepEqual(names, sorted);
+});
+
+// reflowLicenseText: shaped like the real Apache-2.0 LICENSE file the
+// extension ships -- a 3-line centered title block with no blank lines
+// between them, then blank-line-separated sections including a numbered
+// heading, a wrapped body paragraph and (a)/(b) list items.
+const APACHE_SAMPLE = [
+    '                                 Apache License',
+    '                           Version 2.0, January 2004',
+    '                        http://www.apache.org/licenses/',
+    '',
+    '   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION',
+    '',
+    '   1. Definitions.',
+    '',
+    '      "License" shall mean the terms and conditions for use, reproduction,',
+    '      and distribution as defined by Sections 1 through 9 of this document.',
+    '',
+    '   4. Redistribution. You may reproduce and distribute copies of the Work',
+    '      provided that You meet the following conditions:',
+    '',
+    '      (a) You must give any other recipients of the Work or',
+    '          Derivative Works a copy of this License; and',
+    '',
+    '      (b) You must cause any modified files to carry prominent notices',
+    '          stating that You changed the files; and',
+].join('\n');
+
+test('reflowLicenseText: centered title lines each stay their own paragraph', () => {
+    const paragraphs = actionsModel.reflowLicenseText(APACHE_SAMPLE);
+    assert.equal(paragraphs[0], 'Apache License');
+    assert.equal(paragraphs[1], 'Version 2.0, January 2004');
+    assert.equal(paragraphs[2], 'http://www.apache.org/licenses/');
+});
+
+test('reflowLicenseText: section heading and numbered section stay isolated', () => {
+    const paragraphs = actionsModel.reflowLicenseText(APACHE_SAMPLE);
+    assert.ok(paragraphs.includes('TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION'));
+    assert.ok(paragraphs.includes('1. Definitions.'));
+});
+
+test('reflowLicenseText: a wrapped paragraph body is joined onto one line', () => {
+    const paragraphs = actionsModel.reflowLicenseText(APACHE_SAMPLE);
+    assert.ok(paragraphs.includes(
+        '"License" shall mean the terms and conditions for use, reproduction, '
+        + 'and distribution as defined by Sections 1 through 9 of this document.'
+    ));
+});
+
+test('reflowLicenseText: (a)/(b) list items each stay their own paragraph, joined internally', () => {
+    const paragraphs = actionsModel.reflowLicenseText(APACHE_SAMPLE);
+    assert.ok(paragraphs.includes('(a) You must give any other recipients of the Work or Derivative Works a copy of this License; and'));
+    assert.ok(paragraphs.includes('(b) You must cause any modified files to carry prominent notices stating that You changed the files; and'));
+});
+
+test('reflowLicenseText: no line break characters survive in any paragraph', () => {
+    const paragraphs = actionsModel.reflowLicenseText(APACHE_SAMPLE);
+    for (const p of paragraphs) assert.ok(!/\n/.test(p));
+});
+
+test('reflowLicenseText: empty/missing input yields an empty array', () => {
+    assert.deepEqual(actionsModel.reflowLicenseText(''), []);
+    assert.deepEqual(actionsModel.reflowLicenseText(null), []);
+    assert.deepEqual(actionsModel.reflowLicenseText(undefined), []);
+});
+
+test('buildAboutData: licenseParagraphs is the reflowed license, empty array with no license', () => {
+    const withLicense = actionsModel.buildAboutData({ license: APACHE_SAMPLE });
+    assert.ok(Array.isArray(withLicense.licenseParagraphs));
+    assert.ok(withLicense.licenseParagraphs.length > 3);
+    assert.equal(withLicense.licenseParagraphs[0], 'Apache License');
+
+    const withoutLicense = actionsModel.buildAboutData({});
+    assert.deepEqual(withoutLicense.licenseParagraphs, []);
 });

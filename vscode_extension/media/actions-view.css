@@ -246,7 +246,6 @@ body {
 .mtlx-about-panel {
     background: var(--vscode-editorWidget-background);
     border: 1px solid var(--vscode-widget-border);
-    box-shadow: 0 4px 16px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.4));
     border-radius: 4px;
     margin: 4px;
     padding: 10px 12px 12px;
@@ -254,6 +253,9 @@ body {
     flex-direction: column;
     gap: 8px;
     min-height: 0;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
 }
 
 .mtlx-about-header {
@@ -321,18 +323,28 @@ body {
     flex: 1 1 auto;
     min-height: 80px;
     max-height: 40vh;
+    min-width: 0;
     overflow-y: auto;
+    overflow-x: hidden;
     border: 1px solid var(--vscode-widget-border);
     border-radius: 3px;
     padding: 6px 8px;
     background: var(--vscode-editor-background);
 }
 
+/* Reflowed paragraphs (actionsModel.js's reflowLicenseText), not the
+   license file's own hard line breaks -- normal wrapping text that
+   follows the sidebar's actual width instead of a fixed-width <pre>. */
 .mtlx-about-license-text {
-    margin: 0;
-    font-family: var(--vscode-editor-font-family, monospace);
-    font-size: 10.5px;
-    white-space: pre-wrap;
+    margin: 0 0 8px;
+    font-family: var(--vscode-font-family);
+    font-size: calc(var(--vscode-font-size, 13px) - 1px);
+    white-space: normal;
+    overflow-wrap: break-word;
+}
+
+.mtlx-about-license-text:last-child {
+    margin-bottom: 0;
 }
 
 .mtlx-about-license-missing {

@@ -408,7 +408,7 @@
         {
           "id": "materialxPlayground.outline",
           "name": "Outline",
-          "when": "true"
+          "when": "materialxPlayground.outlineVisible"
         }
       ]
     },

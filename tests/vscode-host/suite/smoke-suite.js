@@ -664,8 +664,101 @@ async function scenarioDocsPanel(ctx) {
     await vscode.commands.executeCommand('materialxPlayground.openDocs');
     await new Promise((r) => setTimeout(r, 20000));
     const newErrors = ctx.testApi.getErrors().length - errorsBefore;
+    // Both spellings -- see lifecycleCloseReopen's comment on
+    // TabInputWebview's 'mainThreadWebview-' viewType prefix; closing only
+    // the bare id left the tab (and the host-side docs panel) open for
+    // whatever scenario runs next.
     await closeTabsForViewType('materialxPlayground.docs');
+    await closeTabsForViewType('mainThreadWebview-materialxPlayground.docs');
     return { pass: newErrors === 0, newErrors };
+}
+
+// Scenario: docsFilter -- materialxPlayground.filterDocsByFile (the
+// sidebar's "Filter Node Docs by Current File" button) from a COLD start:
+// no docs panel open yet. Proves it opens the panel itself (previously it
+// only showed an info message telling the user to open Node Documentation
+// first) and that the filter actually reaches the docs page's own state
+// (js/docs-app.jsx's fileFilter, reported via __mtlxDocsFilterState/
+// ctx.testApi.triggerDocsFilter) rather than just "a message was posted"
+// -- the panel-just-opened race (filter sent before docs-app.jsx mounts
+// its 'mtlx-docs-filter' listener) is exactly what this proves is fixed,
+// via bootstrap.js's __mtlxPendingDocsFilter replay. Running the command
+// again clears it.
+async function scenarioDocsFilter(ctx) {
+    const fixturePath = path.join(ctx.fixtures.matDir, 'docsfilter.mtlx');
+    const fixtureText = [
+        '<?xml version="1.0"?>',
+        '<materialx version="1.39" colorspace="lin_rec709">',
+        '  <nodegraph name="NG_main">',
+        '    <constant name="base" type="color3">',
+        '      <input name="value" type="color3" value="0.8, 0.2, 0.1" />',
+        '    </constant>',
+        '    <output name="color_out" type="color3" nodename="base" />',
+        '  </nodegraph>',
+        '  <standard_surface name="SR_test" type="surfaceshader">',
+        '    <input name="base_color" type="color3" nodegraph="NG_main" output="color_out" />',
+        '  </standard_surface>',
+        '  <surfacematerial name="M_test" type="material">',
+        '    <input name="surfaceshader" type="surfaceshader" nodename="SR_test" />',
+        '  </surfacematerial>',
+        '</materialx>',
+        '',
+    ].join('\n');
+    fs.mkdirSync(path.dirname(fixturePath), { recursive: true });
+    fs.writeFileSync(fixturePath, fixtureText);
+    const uri = vscode.Uri.file(fixturePath);
+
+    try {
+        // cold start -- a TabInputWebview's viewType is prefixed by VS
+        // Code ('mainThreadWebview-<id>'), see lifecycleCloseReopen above;
+        // both spellings need closing or the docs tab survives.
+        await closeTabsForViewType('materialxPlayground.docs');
+        await closeTabsForViewType('mainThreadWebview-materialxPlayground.docs');
+        // The tab close resolving doesn't guarantee the panel's
+        // onDidDispose has already run on the host side (a prior
+        // scenario's own docs panel close can still be draining) -- poll
+        // briefly instead of assuming it's synchronous.
+        {
+            const deadline = Date.now() + 5000;
+            while (ctx.testApi.isDocsPanelOpen() && Date.now() < deadline) {
+                await new Promise((r) => setTimeout(r, 100));
+            }
+        }
+        const doc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(doc, { preview: false });
+        await new Promise((r) => setTimeout(r, 500)); // let activeMtlxDocument() settle
+
+        const openBefore = ctx.testApi.isDocsPanelOpen();
+
+        const reportStart1 = ctx.docsFilterReports.length;
+        await vscode.commands.executeCommand('materialxPlayground.filterDocsByFile');
+        await waitForValue(() => ctx.testApi.isDocsPanelOpen() || null, 20000);
+        const openedByCommand = ctx.testApi.isDocsPanelOpen();
+        await new Promise((r) => setTimeout(r, 20000)); // let docs-app.jsx boot/mount for real
+        ctx.testApi.triggerDocsFilter();
+        const onReport = await waitForValue(() => ctx.docsFilterReports.slice(reportStart1)[0], 20000);
+
+        const onOk = !!onReport && onReport.active === true
+            && onReport.file === 'docsfilter.mtlx'
+            && onReport.categoryCount > 0 && onReport.nodeCount > 0;
+
+        const reportStart2 = ctx.docsFilterReports.length;
+        await vscode.commands.executeCommand('materialxPlayground.filterDocsByFile');
+        await new Promise((r) => setTimeout(r, 500));
+        ctx.testApi.triggerDocsFilter();
+        const offReport = await waitForValue(() => ctx.docsFilterReports.slice(reportStart2)[0], 20000);
+        const offOk = !!offReport && offReport.active === false;
+
+        return {
+            pass: !openBefore && openedByCommand && onOk && offOk,
+            openBefore, openedByCommand, onReport, offReport,
+        };
+    } finally {
+        await closeTabsForViewType('materialxPlayground.docs');
+        await closeTabsForViewType('mainThreadWebview-materialxPlayground.docs');
+        await closeTabsForUri(uri);
+        try { fs.unlinkSync(fixturePath); } catch (e) { /* best effort cleanup */ }
+    }
 }
 
 function waitForValue(getter, timeoutMs) {
@@ -880,7 +973,7 @@ async function scenarioActionsView(ctx) {
     await actions.focus();
     await new Promise((r) => setTimeout(r, 3000)); // let the view resolve
     const state = actions.getState();
-    const expectedIds = ['newFromExample', 'newDocument', 'openDocs', 'openInGraphEditor', 'openInMaterialViewer', 'filterDocsByFile'];
+    const expectedIds = ['newDocument', 'openDocs', 'openInGraphEditor', 'openInMaterialViewer', 'filterDocsByFile', 'newFromExample'];
     const idsOk = JSON.stringify(state.rowIds) === JSON.stringify(expectedIds);
     return { pass: state.resolved && idsOk, resolved: state.resolved, rowIds: state.rowIds };
 }
@@ -1497,7 +1590,9 @@ async function run() {
         if (testApi.onPixelReport) testApi.onPixelReport((r) => { pixelReports.push(r); });
         const graphSelectionReports = [];
         if (testApi.onGraphSelectionReport) testApi.onGraphSelectionReport((r) => { graphSelectionReports.push(r); });
-        const ctx = { fixtures, extensionUri: ext.extensionUri, extensionRoot, testApi, allReports, sceneReports, sceneRounds, sceneCancelReports, graphSaves, previewReports, aboutReports, fullWidthReports, viewHashReports, pixelReports, graphSelectionReports };
+        const docsFilterReports = [];
+        if (testApi.onDocsFilterReport) testApi.onDocsFilterReport((r) => { docsFilterReports.push(r); });
+        const ctx = { fixtures, extensionUri: ext.extensionUri, extensionRoot, testApi, allReports, sceneReports, sceneRounds, sceneCancelReports, graphSaves, previewReports, aboutReports, fullWidthReports, viewHashReports, pixelReports, graphSelectionReports, docsFilterReports };
 
         const extraScene = process.env.MTLX_SMOKE_EXTRA_SCENE;
         if (extraScene) {
@@ -1524,6 +1619,7 @@ async function run() {
         if (want('boundary')) { out.scenarios.boundary = await scenarioBoundary(ctx); writeOut(); }
         if (want('settingsFallback')) { out.scenarios.settingsFallback = await scenarioSettingsFallback(ctx); writeOut(); }
         if (want('docsPanel')) { out.scenarios.docsPanel = await scenarioDocsPanel(ctx); writeOut(); }
+        if (want('docsFilter')) { out.scenarios.docsFilter = await scenarioDocsFilter(ctx); writeOut(); }
         if (want('sceneAutoOpen')) { out.scenarios.sceneAutoOpen = await scenarioSceneAutoOpen(ctx); writeOut(); }
         if (want('usdScene')) { out.scenarios.usdScene = await scenarioUsdScene(ctx); writeOut(); }
         if (want('usdMaterialPreview')) { out.scenarios.usdMaterialPreview = await scenarioUsdMaterialPreview(ctx); writeOut(); }

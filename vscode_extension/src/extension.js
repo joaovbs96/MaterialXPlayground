@@ -808,30 +808,44 @@ function activate(context) {
                 const hash = category
                     ? '#/' + encodeURIComponent(String(category)) + (sigOk ? '?sig=' + encodeURIComponent(sig) : '')
                     : '#!docs';
+                // W1: captured BEFORE opening/revealing the panel below --
+                // createWebviewPanel/panel.reveal focuses the docs panel
+                // itself, so activeMtlxDocument() (which needs a focused
+                // text editor or the mtlx custom-editor tab) would answer
+                // null if read only after opening it.
+                const filterDoc = activeMtlxDocument();
                 await openDocsPanel(context, hash, vscode.ViewColumn.Active);
                 // W1: opened from a .mtlx context (hover link, explorer, or
                 // just the active editor) -- send the current filter right
                 // away instead of waiting for the next document-change event.
-                updateDocsFilter(activeMtlxDocument(), true);
+                updateDocsFilter(filterDoc, true);
             } catch (err) {
                 vscode.window.showErrorMessage('MaterialX Playground: failed to open node documentation — ' + errMsg(err));
             }
         }),
         // W1: manual override for the docs panel's file-based filter, which
         // otherwise tracks the active .mtlx document automatically (see the
-        // design note on updateDocsFilter above). Toggling this off clears
-        // the filter and stops the automatic tracking until toggled back on
-        // -- useful when the auto-applied filter (shown as a dismissable
-        // chip in the sidebar) is in the way and the file/document keeps
-        // changing under the user.
-        vscode.commands.registerCommand('materialxPlayground.filterDocsByFile', () => {
-            docsFilterAutoEnabled = !docsFilterAutoEnabled;
-            if (!isDocsPanelOpen()) {
-                vscode.window.showInformationMessage('MaterialX Playground: open Node Documentation first to filter it by the current file.');
+        // design note on updateDocsFilter above) -- but only once the docs
+        // panel is open. docsFilterAutoEnabled defaults to true, so on a
+        // cold start (panel not open yet) the filter isn't actually
+        // showing anywhere: toggle on whether it's CURRENTLY visible
+        // (auto-enabled AND the panel is open), not by blindly flipping
+        // docsFilterAutoEnabled -- that would immediately turn a
+        // default-true flag off on the very first press and do nothing
+        // (the bug this replaced). First press: open the docs panel if
+        // needed and show the chip. Second press: clear it.
+        vscode.commands.registerCommand('materialxPlayground.filterDocsByFile', async () => {
+            const currentlyShowing = docsFilterAutoEnabled && isDocsPanelOpen();
+            if (currentlyShowing) {
+                docsFilterAutoEnabled = false;
+                postDocsFilter(null, null);
                 return;
             }
-            if (docsFilterAutoEnabled) updateDocsFilter(activeMtlxDocument(), true);
-            else postDocsFilter(null, null);
+            docsFilterAutoEnabled = true;
+            // Captured before opening -- see the same note on openDocs above.
+            const filterDoc = activeMtlxDocument();
+            if (!isDocsPanelOpen()) await openDocsPanel(context, '#!docs', vscode.ViewColumn.Active);
+            updateDocsFilter(filterDoc, true);
         }),
         // materialxPlayground.pickFile (E10b): hidden from the Command
         // Palette (package.json), invoked only by the "Browse for

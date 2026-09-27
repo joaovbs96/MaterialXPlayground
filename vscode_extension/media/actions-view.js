@@ -285,11 +285,21 @@
 
         const licenseBox = document.createElement('div');
         licenseBox.className = 'mtlx-about-license-box';
-        if (about.license) {
-            const pre = document.createElement('pre');
-            pre.className = 'mtlx-about-license-text';
-            pre.textContent = about.license;
-            licenseBox.appendChild(pre);
+        const paragraphs = Array.isArray(about.licenseParagraphs) ? about.licenseParagraphs : [];
+        if (paragraphs.length) {
+            paragraphs.forEach((text) => {
+                const p = document.createElement('p');
+                p.className = 'mtlx-about-license-text';
+                p.textContent = text;
+                licenseBox.appendChild(p);
+            });
+        } else if (about.license) {
+            // Fallback for a host payload with the raw string but no
+            // pre-split paragraphs (shouldn't happen from a real host).
+            const p = document.createElement('p');
+            p.className = 'mtlx-about-license-text';
+            p.textContent = about.license;
+            licenseBox.appendChild(p);
         } else {
             const msg = document.createElement('div');
             msg.className = 'mtlx-about-license-missing';

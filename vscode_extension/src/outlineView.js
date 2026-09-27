@@ -67,6 +67,16 @@ class MtlxOutlineProvider {
             ? outlineModel.buildOutlineTree(this._document.getText())
             : { roots: [], byId: new Map() };
         this._onDidChangeTreeData.fire();
+        this._updateVisibleContext();
+    }
+
+    // Drives the materialxPlayground.outlineVisible context key
+    // (package.json's `when` on the view itself): hidden entirely, not
+    // just a viewsWelcome message, whenever there's no active .mtlx
+    // document or it parsed to zero top-level elements.
+    _updateVisibleContext() {
+        const visible = !!this._document && this._tree.roots.length > 0;
+        vscode.commands.executeCommand('setContext', 'materialxPlayground.outlineVisible', visible);
     }
 
     getChildren(node) {

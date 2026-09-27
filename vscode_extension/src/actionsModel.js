@@ -12,14 +12,16 @@
 // examples card grid embedded directly below it in the same webview
 // (media/actions-view.js), remembered via the webview state API. `toggle`
 // marks which panel a row shows/hides; every other row keeps its plain
-// `command`.
+// `command`. It's last in the list (not first) so opening the examples
+// grid never pushes the other action buttons around -- they're all above
+// it already.
 const ROWS = [
-    { id: 'newFromExample', label: 'New Material from Example', icon: 'sparkles', variant: 'primary', toggle: 'examples' },
     { id: 'newDocument', label: 'New MaterialX Document', icon: 'file-plus', variant: 'default', command: 'materialxPlayground.newDocument' },
     { id: 'openDocs', label: 'Node Library Documentation', icon: 'book', variant: 'default', command: 'materialxPlayground.openDocs' },
     { id: 'openInGraphEditor', label: 'Open in Graph Editor', icon: 'share', variant: 'default', command: 'materialxPlayground.openInGraphEditor', requiresDocument: true },
     { id: 'openInMaterialViewer', label: 'Open in Material Viewer', icon: 'eye', variant: 'default', command: 'materialxPlayground.openInMaterialViewer', requiresDocument: true },
     { id: 'filterDocsByFile', label: 'Filter Node Docs by Current File', icon: 'color-filter', variant: 'secondary', command: 'materialxPlayground.filterDocsByFile' },
+    { id: 'newFromExample', label: 'New Material from Example', icon: 'sparkles', variant: 'primary', toggle: 'examples' },
 ];
 
 // buildActionRows(hasActiveDocument): the two "Open in ..." rows are
@@ -59,6 +61,45 @@ const STATIC_LIBRARIES = [
     { name: 'MaterialX logo (Academy Software Foundation)', licenseUrl: 'https://github.com/AcademySoftwareFoundation/artwork' },
 ];
 
+// reflowLicenseText: turns a hard-wrapped license file's text into an
+// array of paragraph strings, so the About overlay can render it as
+// normal wrapping text instead of the file's own ~80-column line breaks.
+// Paragraphs are separated by blank lines; the lines within one are
+// joined with a single space (collapsing the file's leading indent),
+// which already keeps every numbered section ("1. Definitions.") and
+// list item ("(a) ...") on its own line in a well-formed license file --
+// they're blank-line-separated in the source too. The one case blank
+// lines alone don't cover is a centered title block (e.g. "Apache
+// License" / "Version 2.0, January 2004" / a URL, stacked with no blank
+// lines between them): a line indented past TITLE_INDENT is treated as
+// its own paragraph even without a blank line around it.
+const TITLE_INDENT = 15;
+function reflowLicenseText(text) {
+    if (!text) return [];
+    const lines = String(text).replace(/\r\n/g, '\n').split('\n');
+    const paragraphs = [];
+    let current = [];
+    const flush = () => {
+        if (current.length) {
+            paragraphs.push(current.join(' ').replace(/\s+/g, ' ').trim());
+            current = [];
+        }
+    };
+    for (const rawLine of lines) {
+        const trimmed = rawLine.trim();
+        if (!trimmed) { flush(); continue; }
+        const indent = rawLine.length - rawLine.trimStart().length;
+        if (indent >= TITLE_INDENT) {
+            flush();
+            paragraphs.push(trimmed);
+            continue;
+        }
+        current.push(trimmed);
+    }
+    flush();
+    return paragraphs.filter(Boolean);
+}
+
 // buildAboutData: pure assembly of the About overlay's payload from
 // already-resolved inputs -- actionsView.js reads the extension/vscode/
 // MaterialX versions and the vendor-deps registry from disk, this stays
@@ -95,8 +136,9 @@ function buildAboutData({ extensionVersion, vscodeVersion, mtlxTag, vendorDeps, 
             affiliation: 'This extension is an independent, open-source project and is not officially affiliated with MaterialX or the Academy Software Foundation. In the event of any discrepancies, the specification in the official MaterialX repository remains the definitive source of truth.',
         },
         license: license || null,
+        licenseParagraphs: license ? reflowLicenseText(license) : [],
         licenseError: !!licenseError,
     };
 }
 
-module.exports = { buildActionRows, isValidMessageType, buildAboutData };
+module.exports = { buildActionRows, isValidMessageType, buildAboutData, reflowLicenseText };

@@ -48,6 +48,7 @@ if (TEST_TRANSPORT) {
     const sceneCancelListeners = [];
     const pixelListeners = [];
     const graphSelectionListeners = [];
+    const docsFilterListeners = [];
     const errors = [];
     // Error toasts the host itself raised, plus unhandled rejections in the
     // extension host (the lifecycle smoke asserts "Webview is disposed" never shows).
@@ -107,6 +108,11 @@ if (TEST_TRANSPORT) {
         emitGraphSelectionReport(report) {
             for (const listener of graphSelectionListeners) listener(report);
         },
+        // 'mtlx-test-docs-filter': the docs panel's file-filter chip state
+        // (js/docs-app.jsx's __mtlxDocsFilterState), W1 filterDocsByFile.
+        emitDocsFilterReport(report) {
+            for (const listener of docsFilterListeners) listener(report);
+        },
         emitHostError(text) { hostErrors.push(text); },
         emitError(text) {
             errors.push(text);
@@ -132,6 +138,16 @@ if (TEST_TRANSPORT) {
             triggerGraphClick(uriStr, nodeId) { postToDocumentPanel(uriStr, { type: 'mtlx-test-trigger-graph-click', id: nodeId }); },
             onGraphSelectionReport(listener) { graphSelectionListeners.push(listener); },
             isDocsPanelOpen() { return !!docsPanelInfo; },
+            // Asks the docs panel (not the active editor -- the docs panel
+            // is its own webview, never in activePanelInfo) to report its
+            // file-filter chip state (bootstrap.js's
+            // handleTestTriggerDocsFilter / __mtlxDocsFilterState).
+            triggerDocsFilter() {
+                if (docsPanelInfo && !docsPanelInfo.life.disposed) {
+                    docsPanelInfo.life.post({ type: 'mtlx-test-trigger-docs-filter' });
+                }
+            },
+            onDocsFilterReport(listener) { docsFilterListeners.push(listener); },
             onSaveResult(listener) { saveResultListeners.push(listener); },
             // Makes handleSaveFile skip vscode.window.showSaveDialog and
             // write straight into `dir` (a plain fs path) instead -- lets
@@ -609,6 +625,12 @@ function wireCommonWebviewMessages(webview, outputChannel, documentUri, life) {
         if (!msg) return;
         if (msg.type === 'ready') {
             if (life) replayLogTo(life, documentName);
+            // W1: this IS the docs panel and a filter was set (possibly
+            // before this exact 'ready' arrived) -- replay it now that
+            // the page's docs-app.jsx listener is guaranteed to exist.
+            if (life && docsPanelInfo && docsPanelInfo.life === life && lastDocsFilter) {
+                life.post(Object.assign({ type: 'mtlx-docs-filter' }, lastDocsFilter));
+            }
             return; // sendUpdate/sendScene's own 'ready' handling lives elsewhere
         }
         if (msg.type === 'mtlx-error') {
@@ -637,6 +659,8 @@ function wireCommonWebviewMessages(webview, outputChannel, documentUri, life) {
             if (testHooks) testHooks.emitPixelReport(msg.report || null);
         } else if (msg.type === 'mtlx-test-graph-selection') {
             if (testHooks) testHooks.emitGraphSelectionReport(msg.report || null);
+        } else if (msg.type === 'mtlx-test-docs-filter') {
+            if (testHooks) testHooks.emitDocsFilterReport(msg.report || null);
         } else if (msg.type === 'mtlx-save-file') {
             await handleSaveFile(webview, msg, documentUri);
         }
@@ -752,6 +776,14 @@ function redoActiveGraph() {
 // bootstrap.js) on every subsequent call.
 let docsPanelInfo = null; // { panel } | null
 
+// W1: the last filter postDocsFilter was asked to send, so a docs panel
+// that was JUST created (extension.js opens it and applies the filter in
+// the same command handler, before the webview has even navigated/loaded
+// bootstrap.js) doesn't silently lose it -- wireCommonWebviewMessages's
+// 'ready' handling below replays this once the page really is ready to
+// receive it, the same pattern E21's log ring buffer uses.
+let lastDocsFilter = null; // { file, categories } | null
+
 async function openDocsPanel(context, hash, viewColumn) {
     if (docsPanelInfo && !docsPanelInfo.life.disposed) {
         const { panel, life } = docsPanelInfo;
@@ -787,8 +819,9 @@ function isDocsPanelOpen() {
 // categories: null clears the filter (see bootstrap.js's handleDocsFilter
 // and js/docs-app.jsx's onHostFilter).
 function postDocsFilter(file, categories) {
+    lastDocsFilter = { file: file || null, categories: categories || null };
     if (!isDocsPanelOpen()) return;
-    docsPanelInfo.life.post({ type: 'mtlx-docs-filter', file: file || null, categories: categories || null });
+    docsPanelInfo.life.post(Object.assign({ type: 'mtlx-docs-filter' }, lastDocsFilter));
 }
 
 class MaterialXEditorProvider {

@@ -526,12 +526,24 @@
             // detail null clears it, otherwise { file, categories }. Any
             // host (or a future non-VS Code one) can dispatch this.
             React.useEffect(() => {
-                const onHostFilter = (e) => {
-                    const d = e && e.detail;
+                const applyHostFilter = (d) => {
                     if (!d || d.categories == null) { setFileFilter(null); return; }
                     setFileFilter({ file: d.file || '', categories: Array.isArray(d.categories) ? d.categories : [] });
                 };
+                const onHostFilter = (e) => {
+                    applyHostFilter(e && e.detail);
+                    if (window.__mtlxPendingDocsFilter === (e && e.detail)) delete window.__mtlxPendingDocsFilter;
+                };
                 window.addEventListener('mtlx-docs-filter', onHostFilter);
+                // The host may have posted the filter (e.g. right after
+                // opening this panel) before this effect ran, in which
+                // case the window event above already fired into the
+                // void. bootstrap.js keeps the last one in
+                // __mtlxPendingDocsFilter for exactly this case.
+                if (window.__mtlxPendingDocsFilter) {
+                    applyHostFilter(window.__mtlxPendingDocsFilter);
+                    delete window.__mtlxPendingDocsFilter;
+                }
                 return () => window.removeEventListener('mtlx-docs-filter', onHostFilter);
             }, []);
             // Reads locally picked .mtlx file(s) from the sidebar's hidden
@@ -709,6 +721,31 @@
                     Object.values(gs).forEach(ns => { n += Object.keys(ns).length; }));
                 return n;
             }, [treeData, forceOpen]);
+
+            // VS Code test seam (mirrors graph-app.jsx's
+            // __mtlxGraphSelectionState): the file-filter chip state plus
+            // the filtered tree's node count, read by bootstrap.js on a
+            // 'mtlx-test-trigger-docs-filter' request.
+            const fileFilterRef = React.useRef(fileFilter);
+            fileFilterRef.current = fileFilter;
+            const treeDataRef = React.useRef(treeData);
+            treeDataRef.current = treeData;
+            React.useEffect(() => {
+                if (!IN_VSCODE) return undefined;
+                window.__mtlxDocsFilterState = () => {
+                    const ff = fileFilterRef.current;
+                    let nodeCount = 0;
+                    Object.values(treeDataRef.current || {}).forEach(gs =>
+                        Object.values(gs).forEach(ns => { nodeCount += Object.keys(ns).length; }));
+                    return {
+                        active: !!ff,
+                        file: ff ? ff.file : null,
+                        categoryCount: ff ? ff.categories.length : 0,
+                        nodeCount,
+                    };
+                };
+                return () => { delete window.__mtlxDocsFilterState; };
+            }, []);
 
             // Expand/collapse the whole (visible) tree at once.
             const expandAll = () => {

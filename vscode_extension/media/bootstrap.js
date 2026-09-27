@@ -452,11 +452,27 @@
 
     // 'mtlx-docs-filter' (W1): the host's node-category filter for the Node
     // Library Documentation panel, keyed to the active .mtlx document.
-    // js/docs-app.jsx listens for this exact window event name/shape.
+    // js/docs-app.jsx listens for this exact window event name/shape. Also
+    // kept in __mtlxPendingDocsFilter (same pattern as __mtlxPendingSelect
+    // above) since the host sends this right after opening a fresh docs
+    // panel, before the React app has mounted and attached its listener --
+    // without this the very first filter after a cold open was lost.
     function handleDocsFilter(msg) {
-        window.dispatchEvent(new CustomEvent('mtlx-docs-filter', {
-            detail: { file: msg.file || null, categories: Array.isArray(msg.categories) ? msg.categories : null },
-        }));
+        var detail = { file: msg.file || null, categories: Array.isArray(msg.categories) ? msg.categories : null };
+        window.__mtlxPendingDocsFilter = detail;
+        window.dispatchEvent(new CustomEvent('mtlx-docs-filter', { detail: detail }));
+    }
+
+    // Test-transport only: reports the docs page's file-filter chip state
+    // (js/docs-app.jsx's __mtlxDocsFilterState), so a smoke scenario can
+    // assert the actual page state instead of just "a message was sent".
+    function handleTestTriggerDocsFilter(msg) {
+        if (!isTransportTest || !vscodeApi) return;
+        var get = window.__mtlxDocsFilterState;
+        vscodeApi.postMessage({
+            type: 'mtlx-test-docs-filter',
+            report: typeof get === 'function' ? get() : { error: 'docs page not mounted' },
+        });
     }
 
     // Test-transport only: reports the webview's current location.hash,
@@ -1237,6 +1253,7 @@
         if (msg.type === 'mtlx-test-trigger-graph-save') { handleTestTriggerGraphSave(msg); return; }
         if (msg.type === 'mtlx-test-trigger-material-preview') { handleTestTriggerMaterialPreview(msg); return; }
         if (msg.type === 'mtlx-test-trigger-about') { handleTestTriggerAbout(msg); return; }
+        if (msg.type === 'mtlx-test-trigger-docs-filter') { handleTestTriggerDocsFilter(msg); return; }
         if (msg.type === 'mtlx-switch-view') { handleSwitchView(msg); return; }
         if (msg.type === 'mtlx-test-trigger-view-hash') { handleTestTriggerViewHash(msg); return; }
         if (msg.type === 'mtlx-test-trigger-full-width') { handleTestTriggerFullWidth(msg); return; }
