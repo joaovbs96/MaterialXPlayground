@@ -162,8 +162,15 @@
     function render(rows) {
         root.textContent = '';
         // Consecutive `layout: 'half'` rows share one CSS-grid wrapper (two
-        // columns); a non-half row (or the end of the list) closes it.
+        // columns); a non-half row (or the end of the list) closes it. An
+        // odd-sized group's last row gets `span-full` so it is never left
+        // alone next to an empty grid cell.
         let gridWrap = null;
+        let groupRows = [];
+        const closeGroup = () => {
+            if (groupRows.length % 2 === 1) groupRows[groupRows.length - 1].classList.add('span-full');
+            groupRows = [];
+        };
         for (const row of rows) {
             if (row.layout === 'half') {
                 if (!gridWrap) {
@@ -172,11 +179,13 @@
                     root.appendChild(gridWrap);
                 }
             } else {
+                closeGroup();
                 gridWrap = null;
             }
 
             const wrap = document.createElement('div');
             wrap.className = 'mtlx-action-row' + (row.layout === 'half' ? ' half' : '');
+            if (row.layout === 'half') groupRows.push(wrap);
 
             const btn = document.createElement('button');
             btn.type = 'button';
@@ -184,6 +193,7 @@
             btn.disabled = !!row.disabled;
             btn.setAttribute('aria-label', row.label + (row.description ? '. ' + row.description : ''));
             if (row.description) btn.title = row.description;
+            else if (row.shortLabel) btn.title = row.label;
 
             const icon = document.createElement('span');
             icon.className = 'mtlx-action-icon';
@@ -192,7 +202,7 @@
 
             const label = document.createElement('span');
             label.className = 'mtlx-action-label';
-            label.textContent = row.label;
+            label.textContent = (row.layout === 'half' && row.shortLabel) ? row.shortLabel : row.label;
             btn.appendChild(label);
 
             if (row.toggle === 'examples') {
@@ -221,6 +231,7 @@
             (gridWrap || root).appendChild(wrap);
             if (row.toggle === 'examples') root.appendChild(examplesPanel);
         }
+        closeGroup();
     }
 
     // ---- About overlay -------------------------------------------------

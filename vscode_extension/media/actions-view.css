@@ -35,15 +35,15 @@ body {
     min-width: 0;
 }
 
-.mtlx-action-row.half .mtlx-action-btn {
-    align-items: flex-start;
-    height: 100%;
+/* An odd-sized run of half rows leaves its last row spanning both grid
+   columns, so it is never a lone half-width cell next to empty space. */
+.mtlx-action-row.half.span-full {
+    grid-column: 1 / -1;
 }
 
-.mtlx-action-row.half .mtlx-action-label {
-    white-space: normal;
-    overflow-wrap: break-word;
-    line-height: 1.25;
+.mtlx-action-row.half .mtlx-action-btn {
+    align-items: center;
+    height: 100%;
 }
 
 .mtlx-action-btn {
@@ -231,17 +231,17 @@ body {
     position: absolute;
     top: 26px;
     right: 0;
+    max-width: calc(100vw - 24px);
     min-width: 190px;
     z-index: 60;
     display: flex;
     flex-direction: column;
     gap: 1px;
     padding: 4px;
-    background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
-    color: var(--vscode-menu-foreground, var(--vscode-foreground));
+    background: var(--vscode-menu-background, var(--vscode-dropdown-background, var(--vscode-editorWidget-background)));
+    color: var(--vscode-menu-foreground, var(--vscode-dropdown-foreground, var(--vscode-foreground)));
     border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border));
-    border-radius: 4px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    border-radius: 5px;
 }
 
 .mtlx-more-menu[hidden] {

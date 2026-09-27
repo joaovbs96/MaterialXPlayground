@@ -75,6 +75,29 @@ test('buildActionRows: layout is "half" for every row except newFromExample', ()
     }
 });
 
+test('buildActionRows: every half-layout row carries a shortLabel, full label unchanged', () => {
+    const rows = actionsModel.buildActionRows(true);
+    const expected = {
+        newDocument: 'New Document',
+        openDocs: 'Node Docs',
+        openInGraphEditor: 'Graph Editor',
+        openInMaterialViewer: 'Material Viewer',
+        filterDocsByFile: 'Filter Docs by File',
+    };
+    for (const row of rows) {
+        if (row.layout !== 'half') continue;
+        assert.equal(row.shortLabel, expected[row.id]);
+        assert.ok(row.label.length > row.shortLabel.length);
+    }
+});
+
+test('buildActionRows: newFromExample (full width) has no shortLabel', () => {
+    const rows = actionsModel.buildActionRows(true);
+    const row = rows.find((r) => r.id === 'newFromExample');
+    assert.equal(row.shortLabel, null);
+    assert.equal(row.label, 'New Material from Example');
+});
+
 test('isValidMessageType: accepts the known set, rejects anything else', () => {
     for (const type of ['ready', 'run', 'toggleExamples', 'about', 'github', 'rendered', 'openHelpLink']) {
         assert.equal(actionsModel.isValidMessageType(type), true);

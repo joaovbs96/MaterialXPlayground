@@ -19,12 +19,15 @@
 // css); everything else (including newFromExample, deliberately last and
 // full width so its examples panel below it never fights a neighbor for
 // width) renders full width, unchanged from before.
+// `shortLabel` is what a half-width row shows in the button itself (the
+// half column is too narrow for the full label without wrapping); `label`
+// stays the full text and is always what aria-label/title expose.
 const ROWS = [
-    { id: 'newDocument', label: 'New MaterialX Document', icon: 'file-plus', variant: 'default', command: 'materialxPlayground.newDocument', layout: 'half' },
-    { id: 'openDocs', label: 'Node Library Documentation', icon: 'book', variant: 'default', command: 'materialxPlayground.openDocs', layout: 'half' },
-    { id: 'openInGraphEditor', label: 'Open in Graph Editor', icon: 'share', variant: 'default', command: 'materialxPlayground.openInGraphEditor', requiresDocument: true, layout: 'half' },
-    { id: 'openInMaterialViewer', label: 'Open in Material Viewer', icon: 'eye', variant: 'default', command: 'materialxPlayground.openInMaterialViewer', requiresDocument: true, layout: 'half' },
-    { id: 'filterDocsByFile', label: 'Filter Node Docs by Current File', icon: 'color-filter', variant: 'secondary', command: 'materialxPlayground.filterDocsByFile', requiresDocument: true, layout: 'half' },
+    { id: 'newDocument', label: 'New MaterialX Document', shortLabel: 'New Document', icon: 'file-plus', variant: 'default', command: 'materialxPlayground.newDocument', layout: 'half' },
+    { id: 'openDocs', label: 'Node Library Documentation', shortLabel: 'Node Docs', icon: 'book', variant: 'default', command: 'materialxPlayground.openDocs', layout: 'half' },
+    { id: 'openInGraphEditor', label: 'Open in Graph Editor', shortLabel: 'Graph Editor', icon: 'share', variant: 'default', command: 'materialxPlayground.openInGraphEditor', requiresDocument: true, layout: 'half' },
+    { id: 'openInMaterialViewer', label: 'Open in Material Viewer', shortLabel: 'Material Viewer', icon: 'eye', variant: 'default', command: 'materialxPlayground.openInMaterialViewer', requiresDocument: true, layout: 'half' },
+    { id: 'filterDocsByFile', label: 'Filter Node Docs by Current File', shortLabel: 'Filter Docs by File', icon: 'color-filter', variant: 'secondary', command: 'materialxPlayground.filterDocsByFile', requiresDocument: true, layout: 'half' },
     { id: 'newFromExample', label: 'New Material from Example', icon: 'sparkles', variant: 'primary', toggle: 'examples' },
 ];
 
@@ -37,6 +40,7 @@ function buildActionRows(hasActiveDocument) {
         return {
             id: row.id,
             label: row.label,
+            shortLabel: row.shortLabel || null,
             icon: row.icon,
             variant: row.variant,
             layout: row.layout || null,
