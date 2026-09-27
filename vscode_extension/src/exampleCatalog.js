@@ -74,15 +74,6 @@ function entry(def) {
 // --- MaterialX Playground examples (materials/) ---
 const PLAYGROUND_DEFS = [
     {
-        id: 'playground-open-pbr-default',
-        label: 'OpenPBR Default',
-        shadingModel: 'open_pbr_surface',
-        source: SOURCE_PLAYGROUND,
-        license: 'MaterialX Playground (repository license)',
-        destName: 'open_pbr_default',
-        mtlxPath: 'materials/open_pbr_default.mtlx',
-    },
-    {
         id: 'playground-standard-surface-carpaint-to-openpbr',
         label: 'Standard Surface Car Paint (converted to OpenPBR)',
         shadingModel: 'open_pbr_surface',
@@ -150,6 +141,13 @@ const EXAMPLES_DEFS = [
         shadingModel: 'standard_surface',
         destName: 'standard_surface_marble_solid',
         mtlxPath: 'vendor/materialx/resources/Materials/Examples/StandardSurface/standard_surface_marble_solid.mtlx',
+    },
+    {
+        id: 'example-open-pbr-default',
+        label: 'OpenPBR Default',
+        shadingModel: 'open_pbr_surface',
+        destName: 'open_pbr_default',
+        mtlxPath: 'vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_default.mtlx',
     },
     {
         id: 'example-open-pbr-aluminum-brushed',

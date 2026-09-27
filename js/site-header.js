@@ -434,28 +434,35 @@
             '<div id="mtlx-header-bar" class="mtlx-header-bar' + DESKTOP_TITLEBAR_CLASS + DESKTOP_MAC_CLASS + '">' +
 
                 // Brand: logo mark + site title, linking to the shell's
-                // home view (#!home). Under VS Code there's no home to
-                // link to, so it renders as a <span> instead of an <a>.
-                '<' + (window.__MTLX_VSCODE__ ? 'span' : 'a') +
-                    (window.__MTLX_VSCODE__ ? '' : ' href="' + (IS_SHELL ? '#!home' : 'index.html') + '"') +
+                // home view (#!home). Dropped entirely under VS Code: the
+                // extension's sidebar (Actions view) now carries the
+                // brand mark, and there's no home view for it to link to
+                // here. Removing it also naturally left-aligns the page
+                // tabs (no more flex sibling ahead of them) -- see
+                // .mtlx-header-bar's layout comment in site-header.css.
+                (window.__MTLX_VSCODE__ ? '' :
+                '<a href="' + (IS_SHELL ? '#!home' : 'index.html') + '"' +
                     ' class="mtlx-brand" title="' + SITE_TITLE + '">' +
                     '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" class="mtlx-brand-icon">' +
                         LOGO_PATHS +
                     '</svg>' +
                     '<span class="mtlx-brand-title">' + SITE_TITLE + '</span>' +
-                '</' + (window.__MTLX_VSCODE__ ? 'span' : 'a') + '>' +
+                '</a>') +
 
                 // Page tabs (desktop only \u2014 the long labels don't fit
                 // alongside the right-side links on narrow screens; the
                 // hamburger + mobile panel below covers mobile).
                 '<nav id="mtlx-nav-desktop" class="mtlx-nav-desktop" aria-label="Site">' + tabs + '</nav>' +
 
-                // Right: About + GitHub repo widget, desktop only. CSS
+                // Right: About + GitHub repo widget, desktop only, dropped
+                // entirely under VS Code -- both now live in the
+                // extension's sidebar (Actions view) instead. CSS
                 // white-space:nowrap (container + children) forces
                 // overflow horizontal, which measure() below relies on.
                 // The version pill that used to live here is gone; the
                 // version itself is still tracked (window.MTLX_HEADER_VERSION,
                 // filled in by setVer() below) for js/shell.jsx's AboutDialog.
+                (window.__MTLX_VSCODE__ ? '' :
                 '<div id="mtlx-nav-right" class="mtlx-nav-right">' +
                     // About button, immediately left of the GitHub widget.
                     // Dispatches an event for js/shell.jsx's AboutDialog to
@@ -498,7 +505,7 @@
                             ICON_SETTINGS +
                         '</button>'
                     : '') +
-                '</div>' +
+                '</div>') +
 
                 // Hamburger: mobile only, toggles #mtlx-mobile-menu below.
                 // .mtlx-nav-toggle sets align-self:center: the bar is
@@ -518,6 +525,10 @@
             // toggled by the hamburger, closed by hashchange or link click.
             '<div id="mtlx-mobile-menu" class="mtlx-mobile-menu">' +
                 '<nav class="mtlx-mobile-nav" aria-label="Site (mobile)">' + mobileTabs + '</nav>' +
+                // Mobile copies of the About/GitHub links, dropped under VS
+                // Code same as the desktop cluster above (both now live in
+                // the extension's sidebar instead).
+                (window.__MTLX_VSCODE__ ? '' :
                 '<div class="mtlx-mobile-links">' +
                     // .mtlx-mobile-link-brand adds a flex row (icon + text)
                     // over .mtlx-mobile-link's flat styling, kept separate
@@ -546,7 +557,7 @@
                             '<span id="mtlx-source-facts-mobile" class="mtlx-source-facts"></span>' +
                         '</span>' +
                     '</a>' +
-                '</div>' +
+                '</div>') +
             '</div>' +
         '</header>';
 
@@ -752,8 +763,11 @@
     var scheduleMeasure = function () {};
     var headerBar = document.getElementById('mtlx-header-bar');
     var navDesktop = document.getElementById('mtlx-nav-desktop');
+    // Absent under VS Code (the About/GitHub cluster is dropped there,
+    // see the brand/right-cluster markup above) -- every use below
+    // guards on it so the measured collapse still runs off just the tabs.
     var navRight = document.getElementById('mtlx-nav-right');
-    if (headerBar && navDesktop && navRight && navToggle) {
+    if (headerBar && navDesktop && navToggle) {
         var rafId = null;
         // Window Controls Overlay reserves space behind the native min/max/
         // close buttons; scrollWidth can't see content that merely spills
@@ -776,7 +790,7 @@
             closeAllMenus();
             headerBar.classList.remove('is-compact');
             navDesktop.style.display = 'flex';
-            navRight.style.display = 'flex';
+            if (navRight) navRight.style.display = 'flex';
             navToggle.style.display = 'none';
             var overflow = headerBar.scrollWidth > headerBar.clientWidth || overlayOverflow();
             if (overflow) {
@@ -785,7 +799,7 @@
             }
             if (overflow) {
                 navDesktop.style.display = 'none';
-                navRight.style.display = 'none';
+                if (navRight) navRight.style.display = 'none';
                 navToggle.style.display = 'flex';
                 // Don't fight the mobile panel's own open/closed state —
                 // collapsing to hamburger shouldn't force the panel open.
@@ -794,7 +808,7 @@
                 // so narrow (sub-768px) widths still collapse even though
                 // the bar "fits" (the stylesheet or is-compact did that).
                 navDesktop.style.display = '';
-                navRight.style.display = '';
+                if (navRight) navRight.style.display = '';
                 navToggle.style.display = '';
                 // Expanding back to the full desktop nav: force the
                 // mobile panel closed so it can't be left open underneath

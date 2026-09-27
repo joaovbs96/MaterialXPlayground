@@ -275,6 +275,20 @@ function setPendingInitialView(uriStr, hash) {
     pendingInitialView.set(uriStr, hash);
 }
 
+// panelIconPath(extensionUri): the colored Playground logo (light/dark
+// variants, same files package.json's command icons use) for a webview
+// tab's icon. Shared by every panel this extension opens -- the custom
+// editor below, the docs/gallery panels, and the USD Scene Viewer
+// (sceneProvider.js) -- so every tab (other than the plain .mtlx text
+// editor, which keeps the bowtie file icon from the language
+// contribution) shows the same brand mark.
+function panelIconPath(extensionUri) {
+    return {
+        light: vscode.Uri.joinPath(extensionUri, 'vscode_extension', 'media', 'playground-light.svg'),
+        dark: vscode.Uri.joinPath(extensionUri, 'vscode_extension', 'media', 'playground-dark.svg'),
+    };
+}
+
 // Reads vscode_extension/media/webview.html and substitutes its
 // ${placeholder} tokens. Shared by resolveCustomTextEditor (the real
 // custom editor, backed by a document) and renderStaticHtml (the
@@ -747,10 +761,11 @@ async function openDocsPanel(context, hash, viewColumn) {
     }
     const panel = vscode.window.createWebviewPanel(
         'materialxPlayground.docs',
-        'MaterialX: Node Documentation',
+        'MaterialX Playground: Node Documentation',
         viewColumn,
         { retainContextWhenHidden: true }
     );
+    panel.iconPath = panelIconPath(context.extensionUri);
     // Recorded (and its dispose hook registered) before the render awaits, so
     // a panel closed mid-render is never revealed or posted to later.
     const info = { panel, life: panelLifecycle(panel) };
@@ -786,6 +801,7 @@ class MaterialXEditorProvider {
         // flips life.disposed, and every later step checks it.
         const life = panelLifecycle(webviewPanel);
         const webview = life.webview;
+        webviewPanel.iconPath = panelIconPath(this.context.extensionUri);
         try {
             const uriKey = document.uri.toString();
             // The materialxPlayground.defaultView setting picks which view is
@@ -1182,6 +1198,7 @@ module.exports = {
     redoActiveGraph,
     openDocsPanel,
     isDocsPanelOpen,
+    panelIconPath,
     postDocsFilter,
     getSharedOutputChannel,
     logLine,

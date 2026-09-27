@@ -13,6 +13,7 @@ const exampleCatalog = require('./exampleCatalog');
 const galleryModel = require('./exampleGalleryModel');
 const newFromExample = require('./newFromExample');
 const { errMsg } = require('./util');
+const { panelIconPath } = require('./editorProvider');
 
 const VIEW_TYPE = 'materialxPlayground.exampleGallery';
 
@@ -66,8 +67,8 @@ function withThumbUris(webview, extensionUri, groups) {
 
 // buildResolvedGroups: exampleGalleryModel.buildGalleryData plus this
 // webview's own asWebviewUri thumbnails, in one call. Shared by this
-// panel and examplesView.js's sidebar view so neither duplicates the
-// catalog/manifest/thumbnail wiring.
+// panel and actionsView.js's embedded examples grid so neither duplicates
+// the catalog/manifest/thumbnail wiring.
 function buildResolvedGroups(webview, extensionUri) {
     const materials = loadGalleryMaterials(extensionUri);
     const baseGroups = galleryModel.buildGalleryData(exampleCatalog.getCatalog(), materials);
@@ -135,6 +136,7 @@ async function openGallery(context, explorerFolderUri) {
             localResourceRoots: [context.extensionUri],
         }
     );
+    panel.iconPath = panelIconPath(context.extensionUri);
 
     const groups = buildResolvedGroups(panel.webview, context.extensionUri);
 

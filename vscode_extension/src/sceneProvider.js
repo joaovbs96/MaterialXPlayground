@@ -18,7 +18,7 @@ const path = require('path');
 const docScanner = require('./docScanner');
 const textureStamp = require('./textureStamp');
 const usdFileSet = require('./usdFileSet');
-const { buildHtml, panelLifecycle, wireCommonWebviewMessages, trackScenePanel, getSharedOutputChannel, logLine, showHostError, RELOAD_DEBOUNCE_MS, sceneTestHooks } = require('./editorProvider');
+const { buildHtml, panelLifecycle, wireCommonWebviewMessages, trackScenePanel, getSharedOutputChannel, logLine, showHostError, RELOAD_DEBOUNCE_MS, sceneTestHooks, panelIconPath } = require('./editorProvider');
 const { errMsg } = require('./util');
 
 const VIEW_TYPE = 'materialxPlayground.sceneViewer';
@@ -62,6 +62,7 @@ class UsdSceneProvider {
         // Before any await: see panelLifecycle in editorProvider.js.
         const life = panelLifecycle(webviewPanel);
         const webview = life.webview;
+        webviewPanel.iconPath = panelIconPath(this.context.extensionUri);
         try {
             const containmentRoot = docScanner.containmentRoot(uri);
             if (!await buildHtml(this.context, webview, '#!scene', false, containmentRoot, true, life.isLive)) return;

@@ -885,15 +885,17 @@ async function scenarioActionsView(ctx) {
     return { pass: state.resolved && idsOk, resolved: state.resolved, rowIds: state.rowIds };
 }
 
-// Scenario: examplesView -- the materialxPlayground.examples sidebar view
-// lists every catalog entry (14) as a card, same as the gallery panel, and
-// a card click runs the same creation flow through the exact validated
+// Scenario: actionsExamples -- the "New Material from Example" catalog is
+// now embedded directly in the Actions webview (below its button), not a
+// separate materialxPlayground.examples view: every catalog entry (14)
+// renders as a card regardless of the panel's expanded state, and a card
+// click runs the same creation flow through the exact validated
 // _handleMessage() a real click would. No Explorer folder here, so the
 // target folder comes from the active .mtlx editor (opened first, below),
 // matching resolveTargetFolder's own precedence chain in newFromExample.js.
-async function scenarioExamplesView(ctx) {
-    const examples = ctx.testApi.examples;
-    if (!examples) return { pass: false, error: 'testApi.examples is missing' };
+async function scenarioActionsExamples(ctx) {
+    const actions = ctx.testApi.actions;
+    if (!actions) return { pass: false, error: 'testApi.actions is missing' };
 
     const uri = vscode.Uri.file(ctx.fixtures.mainMtlxPath);
     const doc = await vscode.workspace.openTextDocument(uri);
@@ -902,17 +904,24 @@ async function scenarioExamplesView(ctx) {
     const destAbs = path.join(path.dirname(ctx.fixtures.mainMtlxPath), 'standard_surface_gold.mtlx');
     let newMtlxUri = null;
     try {
-        // The sidebar container may already be open (the actions view
-        // scenario just revealed it), in which case every view in it,
-        // including this one, already resolved and rendered before this
-        // call -- waitForRendered() returns that buffered report instead
-        // of waiting for a 'rendered' event that already happened.
-        await examples.focus();
-        const rendered = await examples.waitForRendered(20000);
+        // The sidebar container may already be open (another scenario may
+        // have revealed it), in which case the view already resolved and
+        // rendered before this call -- waitForExamplesRendered() returns
+        // that buffered report instead of waiting for an event that
+        // already happened.
+        await actions.focus();
+        const rendered = await actions.waitForExamplesRendered(20000);
         const cardCountOk = rendered.cardCount === 14;
 
+        // The toggle button reveals the panel (aria-expanded/state), never
+        // opening a separate gallery tab as a side effect.
+        const galleryOpenBefore = ctx.testApi.gallery.isOpen();
+        await actions.toggleExamples(true);
+        const toggleOk = actions.getState().examplesExpanded === true;
+        const galleryUnaffected = ctx.testApi.gallery.isOpen() === galleryOpenBefore;
+
         const errorsBefore = ctx.testApi.getErrors().length;
-        await examples.triggerCard('example-standard-surface-gold');
+        await actions.triggerCard('example-standard-surface-gold');
         await new Promise((r) => setTimeout(r, 8000)); // let materialxPlayground.open's panel boot
         const newErrors = ctx.testApi.getErrors().length - errorsBefore;
 
@@ -920,8 +929,8 @@ async function scenarioExamplesView(ctx) {
         const fileExists = fs.existsSync(destAbs);
 
         return {
-            pass: examples.isResolved() && cardCountOk && fileExists && newErrors === 0,
-            resolved: examples.isResolved(), cardCount: rendered.cardCount, fileExists, newErrors,
+            pass: cardCountOk && toggleOk && galleryUnaffected && fileExists && newErrors === 0,
+            cardCount: rendered.cardCount, toggleOk, galleryUnaffected, fileExists, newErrors,
         };
     } finally {
         if (newMtlxUri) await closeTabsForUri(newMtlxUri);
@@ -930,27 +939,39 @@ async function scenarioExamplesView(ctx) {
     }
 }
 
-// Scenario: actionsExamplesFocus -- the Actions view's "New Material from
-// Example" button now runs materialxPlayground.examples.focus (reveal and
-// focus the Examples view) instead of materialxPlayground.newFromExample,
-// so it never opens the gallery tab. Drives the row through actionsView's
-// own validated _handleMessage(), same as a real click.
-async function scenarioActionsExamplesFocus(ctx) {
+// Scenario: actionsAbout -- the "?" button's About overlay data, computed
+// entirely by the host (actionsView.js's _buildAbout, backed by
+// actionsModel.js's buildAboutData): a real vX.Y.Z extension version, the
+// stamped MaterialX tag (never hand-typed -- see js/gen/mtlx-version.json),
+// and at least one credited third-party library.
+async function scenarioActionsAbout(ctx) {
     const actions = ctx.testApi.actions;
-    const examples = ctx.testApi.examples;
-    if (!actions || !examples) return { pass: false, error: 'testApi.actions or testApi.examples is missing' };
+    if (!actions) return { pass: false, error: 'testApi.actions is missing' };
 
     await actions.focus();
     await new Promise((r) => setTimeout(r, 2000)); // let the actions view resolve
-    const galleryOpenBefore = ctx.testApi.gallery.isOpen();
-    await actions.triggerRow('newFromExample');
-    await new Promise((r) => setTimeout(r, 3000)); // let the examples view resolve
-    const resolved = examples.isResolved();
-    // The button must never open the gallery tab itself -- whatever state
-    // it was already in (another scenario may have opened it) must not
-    // change as a side effect of this row.
-    const galleryUnaffected = ctx.testApi.gallery.isOpen() === galleryOpenBefore;
-    return { pass: resolved && galleryUnaffected, resolved, galleryUnaffected };
+    const about = await actions.getAboutData();
+    const versionOk = typeof about.extensionVersionText === 'string' && about.extensionVersionText.indexOf('v') === 0;
+    const mtlxOk = typeof about.mtlxVersion === 'string' && about.mtlxVersion.indexOf('v') === 0;
+    const creditsOk = Array.isArray(about.vendorEntries) && about.vendorEntries.length > 0;
+    const requestCounted = actions.getState().aboutRequests > 0;
+    return { pass: versionOk && mtlxOk && creditsOk && requestCounted, about, requestCounted };
+}
+
+// Scenario: actionsGithub -- the GitHub button posts a validated 'github'
+// message; the host's TEST_TRANSPORT gate short-circuits the real
+// vscode.env.openExternal call (see actionsView.js), so this never opens a
+// real browser, but still proves the click reached the handler.
+async function scenarioActionsGithub(ctx) {
+    const actions = ctx.testApi.actions;
+    if (!actions) return { pass: false, error: 'testApi.actions is missing' };
+
+    await actions.focus();
+    await new Promise((r) => setTimeout(r, 2000)); // let the actions view resolve
+    const before = actions.getState().githubOpens;
+    await actions.triggerGithub();
+    const after = actions.getState().githubOpens;
+    return { pass: after === before + 1, before, after };
 }
 
 // Scenario: aboutLicense -- opens the About dialog on the already-open
@@ -1517,8 +1538,9 @@ async function run() {
         if (want('newFromExample')) { out.scenarios.newFromExample = await scenarioNewFromExample(ctx); writeOut(); }
         if (want('galleryPanel')) { out.scenarios.galleryPanel = await scenarioGalleryPanel(ctx); writeOut(); }
         if (want('actionsView')) { out.scenarios.actionsView = await scenarioActionsView(ctx); writeOut(); }
-        if (want('examplesView')) { out.scenarios.examplesView = await scenarioExamplesView(ctx); writeOut(); }
-        if (want('actionsExamplesFocus')) { out.scenarios.actionsExamplesFocus = await scenarioActionsExamplesFocus(ctx); writeOut(); }
+        if (want('actionsExamples')) { out.scenarios.actionsExamples = await scenarioActionsExamples(ctx); writeOut(); }
+        if (want('actionsAbout')) { out.scenarios.actionsAbout = await scenarioActionsAbout(ctx); writeOut(); }
+        if (want('actionsGithub')) { out.scenarios.actionsGithub = await scenarioActionsGithub(ctx); writeOut(); }
         if (want('aboutLicense')) { out.scenarios.aboutLicense = await scenarioAboutLicense(ctx); writeOut(); }
         if (want('fullWidth')) { out.scenarios.fullWidth = await scenarioFullWidth(ctx); writeOut(); }
         if (want('openViewCommands')) { out.scenarios.openViewCommands = await scenarioOpenViewCommands(ctx); writeOut(); }

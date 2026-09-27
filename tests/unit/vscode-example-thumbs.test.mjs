@@ -45,8 +45,6 @@ const FIXTURE_MATERIALS = [
         docPath: 'materials/standard_surface_carpaint_to_openpbr.mtlx',
     },
     {
-        // Same basename as the catalog's playground open_pbr_default entry,
-        // but a different source file (vendor's own OpenPbr example).
         id: 'open_pbr_default',
         origin: 'materialx',
         docPath: 'resources/Materials/Examples/OpenPbr/open_pbr_default.mtlx',
@@ -74,9 +72,9 @@ test('galleryIdFor: matches playground and vendor entries whose id equals the ba
     assert.equal(newFromExample.galleryIdFor(FIXTURE_MATERIALS, glass), 'open_pbr_glass');
 });
 
-test('galleryIdFor: same basename but a different source file yields no icon', () => {
-    const example = exampleCatalog.getExample('playground-open-pbr-default');
-    assert.equal(newFromExample.galleryIdFor(FIXTURE_MATERIALS, example), null);
+test('galleryIdFor: OpenPBR Default resolves to its vendor gallery entry', () => {
+    const example = exampleCatalog.getExample('example-open-pbr-default');
+    assert.equal(newFromExample.galleryIdFor(FIXTURE_MATERIALS, example), 'open_pbr_default');
 });
 
 test('galleryIdFor: against the real gallery/manifest.json, every catalog entry maps as expected', (t) => {
@@ -91,8 +89,8 @@ test('galleryIdFor: against the real gallery/manifest.json, every catalog entry 
         mapping[example.id] = newFromExample.galleryIdFor(materials, example);
     }
     assert.equal(mapping['playground-christmas-tree-ornament'], 'AnimatedChristmasTreeOrnament');
-    assert.equal(mapping['playground-open-pbr-default'], null);
+    assert.equal(mapping['example-open-pbr-default'], 'open_pbr_default');
     const withIcon = Object.values(mapping).filter((id) => id !== null).length;
-    assert.equal(withIcon, 13);
+    assert.equal(withIcon, 14);
     assert.equal(Object.keys(mapping).length, 14);
 });

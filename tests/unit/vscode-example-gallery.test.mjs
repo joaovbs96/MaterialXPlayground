@@ -54,7 +54,7 @@ test('buildGalleryData: thumbId set only for entries the fixture manifest matche
     const ornament = allCards.find((c) => c.id === 'playground-christmas-tree-ornament');
     const rug = allCards.find((c) => c.id === 'playground-motley-patchwork-rug');
     const glass = allCards.find((c) => c.id === 'example-open-pbr-glass');
-    const untouched = allCards.find((c) => c.id === 'playground-open-pbr-default');
+    const untouched = allCards.find((c) => c.id === 'example-open-pbr-default');
     assert.equal(ornament.thumbId, 'AnimatedChristmasTreeOrnament');
     assert.equal(rug.thumbId, 'Motley_Patchwork_Rug');
     assert.equal(glass.thumbId, 'open_pbr_glass');

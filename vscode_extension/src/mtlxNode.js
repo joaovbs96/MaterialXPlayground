@@ -403,4 +403,7 @@ module.exports = {
     validateWithEnv,
     consumeInitError,
     getParseFailureCount,
+    // Exported so actionsView.js's About overlay can read the stamped
+    // MaterialX version without hand-typing or duplicating this lookup.
+    getDefaultMtlxVersion,
 };

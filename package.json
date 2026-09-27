@@ -406,12 +406,6 @@
           "when": "true"
         },
         {
-          "id": "materialxPlayground.examples",
-          "name": "Examples",
-          "type": "webview",
-          "when": "true"
-        },
-        {
           "id": "materialxPlayground.outline",
           "name": "Outline",
           "when": "true"

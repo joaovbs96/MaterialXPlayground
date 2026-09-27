@@ -102,3 +102,240 @@ body {
     color: var(--vscode-descriptionForeground);
     padding-left: 24px;
 }
+
+.mtlx-action-chevron {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    margin-left: auto;
+    transition: transform 0.1s ease;
+}
+
+.mtlx-action-chevron svg {
+    width: 14px;
+    height: 14px;
+    display: block;
+}
+
+.mtlx-action-chevron.is-open {
+    transform: rotate(180deg);
+}
+
+/* ---- Sidebar header: brand + About/GitHub toolbar buttons ------------ */
+.mtlx-sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 2px 2px 8px;
+    margin-bottom: 6px;
+    border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-widget-border));
+}
+
+.mtlx-sidebar-brand {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.mtlx-sidebar-logo {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+}
+
+.mtlx-sidebar-title {
+    font-size: inherit;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mtlx-sidebar-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: 0 0 auto;
+}
+
+/* Icon buttons sized/styled like VS Code's own action-bar toolbar
+   buttons: 22x22 box, 16px glyph, toolbar hover, focusBorder outline. */
+.mtlx-toolbar-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--vscode-foreground);
+    cursor: pointer;
+}
+
+.mtlx-toolbar-btn svg {
+    width: 16px;
+    height: 16px;
+    display: block;
+}
+
+.mtlx-toolbar-btn:hover {
+    background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+.mtlx-toolbar-btn:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: -1px;
+}
+
+/* ---- Embedded examples panel (below "New Material from Example") ----- */
+.mtlx-examples-panel {
+    margin: 2px 0 10px;
+    padding-left: 2px;
+}
+
+.mtlx-examples-panel[hidden] {
+    display: none;
+}
+
+.mtlx-ex-toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 4px 0 10px;
+}
+
+.mtlx-ex-group {
+    margin-bottom: 12px;
+}
+
+.mtlx-ex-group-heading {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--vscode-descriptionForeground);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    padding: 2px 0 6px;
+}
+
+.mtlx-ex-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    gap: 8px;
+}
+
+/* ---- About overlay: covers the sidebar's own content, not the whole
+   VS Code window (js/shell.jsx's AboutDialog covers the app instead). */
+.mtlx-about-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+    overflow-y: auto;
+}
+
+.mtlx-about-overlay[hidden] {
+    display: none;
+}
+
+.mtlx-about-panel {
+    background: var(--vscode-editorWidget-background);
+    border: 1px solid var(--vscode-widget-border);
+    box-shadow: 0 4px 16px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.4));
+    border-radius: 4px;
+    margin: 4px;
+    padding: 10px 12px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+}
+
+.mtlx-about-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.mtlx-about-title {
+    font-weight: 600;
+    font-size: inherit;
+}
+
+.mtlx-about-versions {
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.mtlx-about-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    font-size: 12px;
+}
+
+.mtlx-about-link {
+    color: var(--vscode-textLink-foreground);
+}
+
+.mtlx-about-link:hover {
+    color: var(--vscode-textLink-activeForeground);
+}
+
+.mtlx-about-disclaimer {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.mtlx-about-disclaimer p {
+    margin: 0;
+}
+
+.mtlx-about-credits {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.mtlx-about-credits-label {
+    color: var(--vscode-foreground);
+}
+
+.mtlx-about-license-label {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.mtlx-about-license-box {
+    flex: 1 1 auto;
+    min-height: 80px;
+    max-height: 40vh;
+    overflow-y: auto;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 3px;
+    padding: 6px 8px;
+    background: var(--vscode-editor-background);
+}
+
+.mtlx-about-license-text {
+    margin: 0;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 10.5px;
+    white-space: pre-wrap;
+}
+
+.mtlx-about-license-missing {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+}
