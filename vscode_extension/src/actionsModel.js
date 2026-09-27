@@ -15,16 +15,20 @@
 // `command`. It's last in the list (not first) so opening the examples
 // grid never pushes the other action buttons around -- they're all above
 // it already.
+// `layout: 'half'` rows render two per row in a CSS grid (actions-view.js/
+// css); everything else (including newFromExample, deliberately last and
+// full width so its examples panel below it never fights a neighbor for
+// width) renders full width, unchanged from before.
 const ROWS = [
-    { id: 'newDocument', label: 'New MaterialX Document', icon: 'file-plus', variant: 'default', command: 'materialxPlayground.newDocument' },
-    { id: 'openDocs', label: 'Node Library Documentation', icon: 'book', variant: 'default', command: 'materialxPlayground.openDocs' },
-    { id: 'openInGraphEditor', label: 'Open in Graph Editor', icon: 'share', variant: 'default', command: 'materialxPlayground.openInGraphEditor', requiresDocument: true },
-    { id: 'openInMaterialViewer', label: 'Open in Material Viewer', icon: 'eye', variant: 'default', command: 'materialxPlayground.openInMaterialViewer', requiresDocument: true },
-    { id: 'filterDocsByFile', label: 'Filter Node Docs by Current File', icon: 'color-filter', variant: 'secondary', command: 'materialxPlayground.filterDocsByFile' },
+    { id: 'newDocument', label: 'New MaterialX Document', icon: 'file-plus', variant: 'default', command: 'materialxPlayground.newDocument', layout: 'half' },
+    { id: 'openDocs', label: 'Node Library Documentation', icon: 'book', variant: 'default', command: 'materialxPlayground.openDocs', layout: 'half' },
+    { id: 'openInGraphEditor', label: 'Open in Graph Editor', icon: 'share', variant: 'default', command: 'materialxPlayground.openInGraphEditor', requiresDocument: true, layout: 'half' },
+    { id: 'openInMaterialViewer', label: 'Open in Material Viewer', icon: 'eye', variant: 'default', command: 'materialxPlayground.openInMaterialViewer', requiresDocument: true, layout: 'half' },
+    { id: 'filterDocsByFile', label: 'Filter Node Docs by Current File', icon: 'color-filter', variant: 'secondary', command: 'materialxPlayground.filterDocsByFile', requiresDocument: true, layout: 'half' },
     { id: 'newFromExample', label: 'New Material from Example', icon: 'sparkles', variant: 'primary', toggle: 'examples' },
 ];
 
-// buildActionRows(hasActiveDocument): the two "Open in ..." rows are
+// buildActionRows(hasActiveDocument): rows marked requiresDocument are
 // disabled (no command, a description) when no MaterialX document is
 // active; everything else is always available.
 function buildActionRows(hasActiveDocument) {
@@ -35,6 +39,7 @@ function buildActionRows(hasActiveDocument) {
             label: row.label,
             icon: row.icon,
             variant: row.variant,
+            layout: row.layout || null,
             toggle: row.toggle || null,
             command: disabled ? null : (row.command || null),
             disabled,
@@ -46,8 +51,42 @@ function buildActionRows(hasActiveDocument) {
 // Every message type the actions webview may ever send. actionsView.js's
 // _handleMessage rejects anything else before any per-type handling runs
 // -- 'run' additionally validates its own id against known rows/card ids,
-// 'github' never trusts a URL from the message itself.
-const MESSAGE_TYPES = new Set(['ready', 'run', 'toggleExamples', 'about', 'github', 'rendered']);
+// 'github'/'openHelpLink' never trust a URL from the message itself.
+const MESSAGE_TYPES = new Set(['ready', 'run', 'toggleExamples', 'about', 'github', 'rendered', 'openHelpLink']);
+
+// The three header overflow-menu items (Tutorials, Report an Issue,
+// What's New); actionsView.js's _handleMessage rejects any other id.
+const HELP_LINK_IDS = new Set(['tutorials', 'reportIssue', 'whatsNew']);
+function isValidHelpLinkId(id) {
+    return typeof id === 'string' && HELP_LINK_IDS.has(id);
+}
+
+// A readable OS name for the "Report an issue" prefilled body, from
+// Node's process.platform. Pure so it's directly unit-testable.
+function platformLabel(nodePlatform) {
+    if (nodePlatform === 'win32') return 'Windows';
+    if (nodePlatform === 'darwin') return 'macOS';
+    if (nodePlatform === 'linux') return 'Linux';
+    return nodePlatform || 'unknown';
+}
+
+// buildIssueUrl: a GitHub "new issue" URL with a title/body prefilled
+// from the same version facts the About overlay shows, everything
+// URL-encoded. `platform` is already a readable label (platformLabel).
+function buildIssueUrl({ repoUrl, extensionVersionText, vscodeVersion, mtlxVersion, platform }) {
+    const title = 'Issue with MaterialX Playground ' + (extensionVersionText || '');
+    const body = [
+        '**Describe the issue**',
+        '',
+        '',
+        '---',
+        'Extension: ' + (extensionVersionText || 'n/a'),
+        'VS Code: ' + (vscodeVersion || 'n/a'),
+        'MaterialX: ' + (mtlxVersion || 'n/a'),
+        'OS: ' + (platform || 'n/a'),
+    ].join('\n');
+    return repoUrl + '/issues/new?title=' + encodeURIComponent(title.trim()) + '&body=' + encodeURIComponent(body);
+}
 function isValidMessageType(type) {
     return typeof type === 'string' && MESSAGE_TYPES.has(type);
 }
@@ -141,4 +180,7 @@ function buildAboutData({ extensionVersion, vscodeVersion, mtlxTag, vendorDeps, 
     };
 }
 
-module.exports = { buildActionRows, isValidMessageType, buildAboutData, reflowLicenseText };
+module.exports = {
+    buildActionRows, isValidMessageType, buildAboutData, reflowLicenseText,
+    isValidHelpLinkId, platformLabel, buildIssueUrl,
+};

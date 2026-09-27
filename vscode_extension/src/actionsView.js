@@ -34,6 +34,9 @@ const KNOWN_COMMANDS = new Set(
 // GitHub button's message payload is never used to build this URL.
 const REPO_URL = 'https://github.com/joaovbs96/MaterialXPlayground';
 const ISSUES_URL = REPO_URL + '/issues';
+// The Learn/Tutorials MkDocs subsite, published beside the app itself
+// (js/site-header.js's LINKS.site) at a fixed '/learn/' path.
+const TUTORIALS_URL = 'https://joaovbs96.github.io/MaterialXPlayground/learn/';
 
 function getNonce() {
     return crypto.randomBytes(16).toString('base64');
@@ -83,6 +86,8 @@ class MtlxActionsViewProvider {
         this._examplesExpanded = false;
         this._aboutRequests = 0;
         this._githubOpens = 0;
+        this._helpOpens = { tutorials: 0, reportIssue: 0, whatsNew: 0 };
+        this._helpLinks = null;
     }
 
     setActiveDocument(document) {
@@ -105,14 +110,32 @@ class MtlxActionsViewProvider {
         });
     }
 
+    // Built alongside the About payload (same version facts), cached so
+    // the 'openHelpLink' handler below never has to re-derive a URL from
+    // whatever the webview sent it.
+    _buildHelpLinks(about) {
+        return {
+            tutorialsUrl: TUTORIALS_URL,
+            issueUrl: actionsModel.buildIssueUrl({
+                repoUrl: REPO_URL,
+                extensionVersionText: about.extensionVersionText,
+                vscodeVersion: about.vscodeVersion,
+                mtlxVersion: about.mtlxVersion,
+                platform: actionsModel.platformLabel(process.platform),
+            }),
+        };
+    }
+
     _postState() {
         if (!this._view) return;
         this._groups = exampleGallery.buildResolvedGroups(this._view.webview, this._context.extensionUri);
+        const about = this._buildAbout();
+        this._helpLinks = this._buildHelpLinks(about);
         this._view.webview.postMessage({
             type: 'state',
             rows: actionsModel.buildActionRows(this._hasActiveDocument),
             examplesGroups: this._groups,
-            about: this._buildAbout(),
+            about,
         });
     }
 
@@ -164,6 +187,19 @@ class MtlxActionsViewProvider {
             // TEST_TRANSPORT never actually opens a browser -- the smoke
             // run only needs to confirm the intent reached this handler.
             if (!TEST_TRANSPORT) vscode.env.openExternal(vscode.Uri.parse(REPO_URL));
+            return;
+        }
+        if (msg.type === 'openHelpLink') {
+            if (!actionsModel.isValidHelpLinkId(msg.id) || !this._helpLinks) return;
+            this._helpOpens[msg.id] += 1;
+            if (msg.id === 'tutorials') {
+                if (!TEST_TRANSPORT) vscode.env.openExternal(vscode.Uri.parse(this._helpLinks.tutorialsUrl));
+            } else if (msg.id === 'reportIssue') {
+                if (!TEST_TRANSPORT) vscode.env.openExternal(vscode.Uri.parse(this._helpLinks.issueUrl));
+            } else if (msg.id === 'whatsNew') {
+                const changelogUri = vscode.Uri.joinPath(this._context.extensionUri, 'CHANGELOG.md');
+                vscode.commands.executeCommand('markdown.showPreview', changelogUri);
+            }
             return;
         }
         if (msg.type !== 'run' || typeof msg.id !== 'string') return;
@@ -238,6 +274,8 @@ if (TEST_TRANSPORT) {
                 examplesExpanded: activeProvider ? activeProvider._examplesExpanded : false,
                 aboutRequests: activeProvider ? activeProvider._aboutRequests : 0,
                 githubOpens: activeProvider ? activeProvider._githubOpens : 0,
+                helpOpens: activeProvider ? Object.assign({}, activeProvider._helpOpens) : { tutorials: 0, reportIssue: 0, whatsNew: 0 },
+                helpLinks: activeProvider ? activeProvider._helpLinks : null,
             };
         },
         // Drives the GitHub button through the same validated
@@ -246,6 +284,12 @@ if (TEST_TRANSPORT) {
         async triggerGithub() {
             if (!activeProvider) throw new Error('the actions view is not resolved');
             await activeProvider._handleMessage({ type: 'github' });
+        },
+        // Drives one of the overflow menu's three help links through the
+        // same validated _handleMessage() a real click would.
+        async triggerHelpLink(id) {
+            if (!activeProvider) throw new Error('the actions view is not resolved');
+            await activeProvider._handleMessage({ type: 'openHelpLink', id });
         },
         // Bypasses the webview's own DOM, but goes through the exact same
         // validated _handleMessage() a real row click would.

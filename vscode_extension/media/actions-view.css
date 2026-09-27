@@ -22,6 +22,30 @@ body {
     gap: 2px;
 }
 
+/* Two half-width rows per visual row (task L): a grid wrapper holds every
+   consecutive run of `layout: 'half'` rows, auto-placing two columns. */
+.mtlx-action-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.mtlx-action-row.half {
+    min-width: 0;
+}
+
+.mtlx-action-row.half .mtlx-action-btn {
+    align-items: flex-start;
+    height: 100%;
+}
+
+.mtlx-action-row.half .mtlx-action-label {
+    white-space: normal;
+    overflow-wrap: break-word;
+    line-height: 1.25;
+}
+
 .mtlx-action-btn {
     display: flex;
     align-items: center;
@@ -189,6 +213,66 @@ body {
 .mtlx-toolbar-btn:focus-visible {
     outline: 1px solid var(--vscode-focusBorder);
     outline-offset: -1px;
+}
+
+/* ---- Header overflow menu ("..."): Tutorials / Report an Issue / What's
+   New, kept out of the toolbar row itself so it never overflows a narrow
+   sidebar (task H). Styled like a native VS Code context menu. */
+.mtlx-more-wrap {
+    position: relative;
+}
+
+.mtlx-more-glyph {
+    font-size: 16px;
+    line-height: 1;
+}
+
+.mtlx-more-menu {
+    position: absolute;
+    top: 26px;
+    right: 0;
+    min-width: 190px;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 4px;
+    background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
+    color: var(--vscode-menu-foreground, var(--vscode-foreground));
+    border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border));
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.mtlx-more-menu[hidden] {
+    display: none;
+}
+
+.mtlx-more-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.mtlx-more-item svg {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+}
+
+.mtlx-more-item:hover,
+.mtlx-more-item:focus-visible {
+    background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
+    color: var(--vscode-menu-selectionForeground, var(--vscode-foreground));
+    outline: none;
 }
 
 /* ---- Embedded examples panel (below "New Material from Example") ----- */

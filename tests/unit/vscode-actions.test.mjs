@@ -35,31 +35,32 @@ test('buildActionRows: only newFromExample carries a toggle field', () => {
     }
 });
 
-test('buildActionRows: no active document disables the two "Open in ..." rows', () => {
+test('buildActionRows: no active document disables the three document-scoped rows', () => {
     const rows = actionsModel.buildActionRows(false);
-    const graph = rows.find((r) => r.id === 'openInGraphEditor');
-    const viewer = rows.find((r) => r.id === 'openInMaterialViewer');
-    assert.equal(graph.disabled, true);
-    assert.equal(graph.command, null);
-    assert.equal(graph.description, 'Open a MaterialX file first');
-    assert.equal(viewer.disabled, true);
-    assert.equal(viewer.command, null);
+    for (const id of ['openInGraphEditor', 'openInMaterialViewer', 'filterDocsByFile']) {
+        const row = rows.find((r) => r.id === id);
+        assert.equal(row.disabled, true);
+        assert.equal(row.command, null);
+        assert.equal(row.description, 'Open a MaterialX file first');
+    }
 });
 
-test('buildActionRows: active document enables the two "Open in ..." rows', () => {
+test('buildActionRows: active document enables the three document-scoped rows', () => {
     const rows = actionsModel.buildActionRows(true);
     const graph = rows.find((r) => r.id === 'openInGraphEditor');
     const viewer = rows.find((r) => r.id === 'openInMaterialViewer');
+    const filter = rows.find((r) => r.id === 'filterDocsByFile');
     assert.equal(graph.disabled, false);
     assert.equal(graph.command, 'materialxPlayground.openInGraphEditor');
     assert.equal(graph.description, undefined);
     assert.equal(viewer.command, 'materialxPlayground.openInMaterialViewer');
+    assert.equal(filter.command, 'materialxPlayground.filterDocsByFile');
 });
 
 test('buildActionRows: other rows are always enabled regardless of document', () => {
     for (const hasDoc of [false, true]) {
         const rows = actionsModel.buildActionRows(hasDoc);
-        for (const id of ['newFromExample', 'newDocument', 'openDocs', 'filterDocsByFile']) {
+        for (const id of ['newFromExample', 'newDocument', 'openDocs']) {
             const row = rows.find((r) => r.id === id);
             assert.equal(row.disabled, false);
         }
@@ -67,13 +68,64 @@ test('buildActionRows: other rows are always enabled regardless of document', ()
     }
 });
 
+test('buildActionRows: layout is "half" for every row except newFromExample', () => {
+    const rows = actionsModel.buildActionRows(true);
+    for (const row of rows) {
+        assert.equal(row.layout, row.id === 'newFromExample' ? null : 'half');
+    }
+});
+
 test('isValidMessageType: accepts the known set, rejects anything else', () => {
-    for (const type of ['ready', 'run', 'toggleExamples', 'about', 'github', 'rendered']) {
+    for (const type of ['ready', 'run', 'toggleExamples', 'about', 'github', 'rendered', 'openHelpLink']) {
         assert.equal(actionsModel.isValidMessageType(type), true);
     }
     for (const type of ['open', 'toggle', 'exec', '', undefined, null, 123, '__proto__']) {
         assert.equal(actionsModel.isValidMessageType(type), false);
     }
+});
+
+test('isValidHelpLinkId: accepts the three overflow-menu ids, rejects anything else', () => {
+    for (const id of ['tutorials', 'reportIssue', 'whatsNew']) {
+        assert.equal(actionsModel.isValidHelpLinkId(id), true);
+    }
+    for (const id of ['github', '', undefined, null, 123, '__proto__']) {
+        assert.equal(actionsModel.isValidHelpLinkId(id), false);
+    }
+});
+
+test('platformLabel: maps the three known Node platforms, passes through/falls back otherwise', () => {
+    assert.equal(actionsModel.platformLabel('win32'), 'Windows');
+    assert.equal(actionsModel.platformLabel('darwin'), 'macOS');
+    assert.equal(actionsModel.platformLabel('linux'), 'Linux');
+    assert.equal(actionsModel.platformLabel('freebsd'), 'freebsd');
+    assert.equal(actionsModel.platformLabel(undefined), 'unknown');
+});
+
+test('buildIssueUrl: a GitHub new-issue URL with an encoded, version-stamped title and body', () => {
+    const url = actionsModel.buildIssueUrl({
+        repoUrl: 'https://github.com/joaovbs96/MaterialXPlayground',
+        extensionVersionText: 'v2026.8.11',
+        vscodeVersion: '1.95.0',
+        mtlxVersion: 'v1.39.5',
+        platform: 'Windows',
+    });
+    assert.ok(url.startsWith('https://github.com/joaovbs96/MaterialXPlayground/issues/new?title='));
+    const params = new URLSearchParams(url.split('?')[1]);
+    assert.ok(params.get('title').includes('v2026.8.11'));
+    const body = params.get('body');
+    assert.ok(body.includes('Extension: v2026.8.11'));
+    assert.ok(body.includes('VS Code: 1.95.0'));
+    assert.ok(body.includes('MaterialX: v1.39.5'));
+    assert.ok(body.includes('OS: Windows'));
+});
+
+test('buildIssueUrl: falls back to "n/a" for missing version facts', () => {
+    const url = actionsModel.buildIssueUrl({ repoUrl: 'https://example.com/repo' });
+    const body = new URLSearchParams(url.split('?')[1]).get('body');
+    assert.ok(body.includes('Extension: n/a'));
+    assert.ok(body.includes('VS Code: n/a'));
+    assert.ok(body.includes('MaterialX: n/a'));
+    assert.ok(body.includes('OS: n/a'));
 });
 
 test('buildAboutData: skips vscode:false vendor entries, keeps the rest', () => {

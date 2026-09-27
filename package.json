@@ -269,6 +269,34 @@
         "title": "Open Settings",
         "category": "MaterialX Playground",
         "icon": "$(gear)"
+      },
+      {
+        "command": "materialxPlayground.openFileRef",
+        "title": "Open Reference",
+        "category": "MaterialX Playground"
+      },
+      {
+        "command": "materialxPlayground.replaceFileRef",
+        "title": "Replace...",
+        "category": "MaterialX Playground",
+        "icon": "$(replace)"
+      },
+      {
+        "command": "materialxPlayground.revealFileRefInExplorer",
+        "title": "Reveal in Explorer",
+        "category": "MaterialX Playground",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "materialxPlayground.openRecentItem",
+        "title": "Open Recent Item",
+        "category": "MaterialX Playground"
+      },
+      {
+        "command": "materialxPlayground.clearRecent",
+        "title": "Clear",
+        "category": "MaterialX Playground",
+        "icon": "$(clear-all)"
       }
     ],
     "keybindings": [
@@ -358,6 +386,26 @@
         {
           "command": "materialxPlayground.openSettings",
           "when": "false"
+        },
+        {
+          "command": "materialxPlayground.openFileRef",
+          "when": "false"
+        },
+        {
+          "command": "materialxPlayground.replaceFileRef",
+          "when": "false"
+        },
+        {
+          "command": "materialxPlayground.revealFileRefInExplorer",
+          "when": "false"
+        },
+        {
+          "command": "materialxPlayground.openRecentItem",
+          "when": "false"
+        },
+        {
+          "command": "materialxPlayground.clearRecent",
+          "when": "false"
         }
       ],
       "editor/context": [
@@ -419,6 +467,23 @@
           "command": "materialxPlayground.openSettings",
           "when": "view == materialxPlayground.outline",
           "group": "navigation"
+        },
+        {
+          "command": "materialxPlayground.clearRecent",
+          "when": "view == materialxPlayground.recent",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "materialxPlayground.replaceFileRef",
+          "when": "view == materialxPlayground.files",
+          "group": "inline@1"
+        },
+        {
+          "command": "materialxPlayground.revealFileRefInExplorer",
+          "when": "view == materialxPlayground.files && viewItem == mtlxFileRefFound",
+          "group": "inline@2"
         }
       ],
       "editor/title/context": [
@@ -462,9 +527,27 @@
           "when": "true"
         },
         {
+          "id": "materialxPlayground.files",
+          "name": "Files",
+          "when": "materialxPlayground.filesVisible"
+        },
+        {
+          "id": "materialxPlayground.insertNode",
+          "name": "Insert Node",
+          "type": "webview",
+          "when": "true",
+          "initialSize": 1,
+          "visibility": "collapsed"
+        },
+        {
           "id": "materialxPlayground.outline",
           "name": "Outline",
           "when": "materialxPlayground.outlineVisible"
+        },
+        {
+          "id": "materialxPlayground.recent",
+          "name": "Recent",
+          "when": "materialxPlayground.recentVisible"
         }
       ]
     },

@@ -83,6 +83,22 @@ function outsideRefMtlxDoc() {
         '</materialx>\n';
 }
 
+// files_demo.mtlx: one found texture ref (../textures/basecolor.png,
+// already generated above) and one missing one -- the Files view smoke
+// fixture (found/missing rows; the outside-workspace/skipped case is
+// already covered by outside_ref.mtlx above).
+function filesDemoMtlxDoc() {
+    return '<?xml version="1.0"?>\n' +
+        '<materialx version="1.39">\n' +
+        '  <image name="img_found" type="color3">\n' +
+        '    <input name="file" type="filename" value="../textures/basecolor.png" />\n' +
+        '  </image>\n' +
+        '  <image name="img_missing" type="color3">\n' +
+        '    <input name="file" type="filename" value="../textures/does_not_exist.png" />\n' +
+        '  </image>\n' +
+        '</materialx>\n';
+}
+
 // validation_error.mtlx: well-formed XML (tier 1 clean) but a semantic
 // type mismatch tier 1 cannot see -- base_color is declared color3 by
 // standard_surface's nodedef, given type="float" here. Only the deeper
@@ -442,10 +458,12 @@ async function generateSmokeFixtures(fixturesDir) {
     const outsideMtlxPath = path.join(matDir, 'outside_ref.mtlx');
     const validationMtlxPath = path.join(matDir, 'validation_error.mtlx');
     const hoverMtlxPath = path.join(matDir, 'hover.mtlx');
+    const filesDemoMtlxPath = path.join(matDir, 'files_demo.mtlx');
     fs.writeFileSync(mainMtlxPath, mainMtlxDoc());
     fs.writeFileSync(outsideMtlxPath, outsideRefMtlxDoc());
     fs.writeFileSync(validationMtlxPath, validationErrorMtlxDoc());
     fs.writeFileSync(hoverMtlxPath, hoverMtlxDoc());
+    fs.writeFileSync(filesDemoMtlxPath, filesDemoMtlxDoc());
     const usdDir = path.join(wsDir, 'usdscene');
     for (const sub of ['scene', 'layers', 'textures']) fs.mkdirSync(path.join(usdDir, sub), { recursive: true });
     const usdRootPath = path.join(usdDir, 'scene', 'root.usda');
@@ -584,7 +602,7 @@ async function generateSmokeFixtures(fixturesDir) {
 
     return {
         fixturesDir, wsDir, texDir, matDir, outsideDir, manifest,
-        mainMtlxPath, outsideMtlxPath, validationMtlxPath, hoverMtlxPath, usdRootPath, usdMtlxRootPath,
+        mainMtlxPath, outsideMtlxPath, validationMtlxPath, hoverMtlxPath, filesDemoMtlxPath, usdRootPath, usdMtlxRootPath,
         autoOpenUsdaPath, autoOpenUsdzPath,
         gltfRootPath, glbRootPath, objRootPath,
         noSiblingsRootPath, noSiblingUnrelatedPaths,

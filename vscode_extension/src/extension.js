@@ -23,6 +23,9 @@ const exampleGallery = require('./exampleGallery');
 const newDocument = require('./newDocument');
 const outlineView = require('./outlineView');
 const actionsView = require('./actionsView');
+const filesView = require('./filesView');
+const insertNodeView = require('./insertNodeView');
+const recentView = require('./recentView');
 const outlineModel = require('./outlineModel');
 const filePicker = require('./filePicker');
 const sceneProvider = require('./sceneProvider');
@@ -455,6 +458,21 @@ function activate(context) {
         getActiveDocument: activeMtlxDocument,
         onDidChangeActiveDocument: onDidChangeActiveMtlxDocument,
     });
+
+    // materialxPlayground.files: the active document's own texture/
+    // xi:include references, found/missing/skipped (filesView.js).
+    filesView.register(context, {
+        getActiveDocument: activeMtlxDocument,
+        onDidChangeActiveDocument: onDidChangeActiveMtlxDocument,
+    });
+
+    // materialxPlayground.insertNode: search + insert a node element at
+    // the cursor of the active MaterialX text editor (insertNodeView.js).
+    insertNodeView.register(context);
+
+    // materialxPlayground.recent: last 10 .mtlx/scene files opened in our
+    // own views (recentView.js); recorded below wherever those opens happen.
+    const recent = recentView.register(context);
 
     // exampleGallery.js needs the extension context for its test API only
     // (a real user session reaches it through newFromExample.js's own
@@ -977,7 +995,17 @@ function activate(context) {
         // rescanAutoOpenAfterTrust, it covers both this and the
         // playground's own auto-open, so it isn't repeated here.
         vscode.window.tabGroups.onDidChangeTabs((e) => {
-            for (const tab of e.opened) maybeAutoOpenSceneTab(tab);
+            for (const tab of e.opened) {
+                maybeAutoOpenSceneTab(tab);
+                // materialxPlayground.recent: a Scene Viewer tab opening is
+                // the only signal for a scene file (it's a plain
+                // CustomEditorProvider, so even a text-editable .usda never
+                // creates a TextDocument for the viewer itself).
+                const input = tab.input;
+                if (input instanceof vscode.TabInputCustom && input.viewType === sceneProvider.VIEW_TYPE && input.uri.scheme === 'file') {
+                    recent.record(input.uri, 'scene');
+                }
+            }
             for (const tab of e.closed) {
                 const input = tab.input;
                 if (!input || !(input.uri instanceof vscode.Uri) || !sceneProvider.isSceneUri(input.uri)) continue;
@@ -1000,7 +1028,13 @@ function activate(context) {
 
     context.subscriptions.push(
         vscode.workspace.onDidOpenTextDocument((doc) => {
-            if (doc.languageId === 'mtlx') runValidation(doc);
+            if (doc.languageId !== 'mtlx') return;
+            runValidation(doc);
+            // materialxPlayground.recent: covers both a plain text editor
+            // AND the playground custom editor (materialxPlayground.editor
+            // is a CustomTextEditorProvider, backed by this same
+            // TextDocument either way).
+            if (doc.uri.scheme === 'file') recent.record(doc.uri, 'mtlx');
         }),
         vscode.workspace.onDidChangeTextDocument((e) => {
             if (e.document.languageId !== 'mtlx') return;
@@ -1058,6 +1092,9 @@ function activate(context) {
     const merged = Object.assign({}, testApi || {});
     if (exampleGallery.testApi) merged.gallery = exampleGallery.testApi;
     if (actionsView.testApi) merged.actions = actionsView.testApi;
+    if (filesView.testApi) merged.files = filesView.testApi;
+    if (insertNodeView.testApi) merged.insertNode = insertNodeView.testApi;
+    if (recentView.testApi) merged.recent = recentView.testApi;
     return Object.keys(merged).length ? { _test: merged } : undefined;
 }
 

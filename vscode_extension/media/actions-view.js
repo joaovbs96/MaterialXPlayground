@@ -19,13 +19,26 @@
         share: '<path d="M3 12a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M15 6a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M15 18a3 3 0 1 0 6 0a3 3 0 1 0 -6 0"/><path d="M8.7 10.7l6.6 -3.4"/><path d="M8.7 13.3l6.6 3.4"/>',
         eye: '<path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M21 12c-2.4 4 -5.4 6 -9 6c-3.6 0 -6.6 -2 -9 -6c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6"/>',
         'color-filter': '<path d="M13.58 13.79c.27 .68 .42 1.43 .42 2.21c0 1.77 -.77 3.37 -2 4.46a5.93 5.93 0 0 1 -4 1.54c-3.31 0 -6 -2.69 -6 -6c0 -2.76 1.88 -5.1 4.42 -5.79" /><path d="M17.58 10.21c2.54 .69 4.42 3.03 4.42 5.79c0 3.31 -2.69 6 -6 6a5.93 5.93 0 0 1 -4 -1.54" /><path d="M6 8a6 6 0 1 0 12 0a6 6 0 1 0 -12 0" />',
+        'external-link': '<path d="M12 6h-6a2 2 0 0 0 -2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-6"/><path d="M11 13l9 -9"/><path d="M15 4h5v5"/>',
+        'alert-triangle': '<path d="M12 9v4"/><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0"/><path d="M12 16h.01"/>',
+        'file-text': '<path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z"/><path d="M9 9l1 0"/><path d="M9 13l6 0"/><path d="M9 17l6 0"/>',
     };
     const CHEVRON_PATH = '<path d="M6 9l6 6l6 -6"/>';
     const CLOSE_PATH = '<path d="M18 6l-12 12" /><path d="M6 6l12 12" />';
 
+    // The header overflow menu's three items: id (posted back to the
+    // host), icon key and label. Order here is the render order.
+    const HELP_LINKS = [
+        { id: 'tutorials', icon: 'external-link', label: 'Tutorials' },
+        { id: 'reportIssue', icon: 'alert-triangle', label: 'Report an Issue' },
+        { id: 'whatsNew', icon: 'file-text', label: "What's New" },
+    ];
+
     const root = document.getElementById('root');
     const aboutBtn = document.getElementById('mtlx-about-btn');
     const githubBtn = document.getElementById('mtlx-github-btn');
+    const moreBtn = document.getElementById('mtlx-more-btn');
+    const moreWrap = document.querySelector('.mtlx-more-wrap');
     const aboutOverlay = document.getElementById('mtlx-about-overlay');
 
     let latestState = null; // last 'state' message, for the About overlay
@@ -148,9 +161,22 @@
     // ---- Action rows -------------------------------------------------
     function render(rows) {
         root.textContent = '';
+        // Consecutive `layout: 'half'` rows share one CSS-grid wrapper (two
+        // columns); a non-half row (or the end of the list) closes it.
+        let gridWrap = null;
         for (const row of rows) {
+            if (row.layout === 'half') {
+                if (!gridWrap) {
+                    gridWrap = document.createElement('div');
+                    gridWrap.className = 'mtlx-action-grid';
+                    root.appendChild(gridWrap);
+                }
+            } else {
+                gridWrap = null;
+            }
+
             const wrap = document.createElement('div');
-            wrap.className = 'mtlx-action-row';
+            wrap.className = 'mtlx-action-row' + (row.layout === 'half' ? ' half' : '');
 
             const btn = document.createElement('button');
             btn.type = 'button';
@@ -192,7 +218,7 @@
                 note.textContent = row.description;
                 wrap.appendChild(note);
             }
-            root.appendChild(wrap);
+            (gridWrap || root).appendChild(wrap);
             if (row.toggle === 'examples') root.appendChild(examplesPanel);
         }
     }
@@ -354,6 +380,65 @@
     githubBtn.addEventListener('click', () => {
         vscode.postMessage({ type: 'github' });
     });
+
+    // ---- Header overflow menu ("...": Tutorials / Report an Issue /
+    // What's New) -- built once, native-menu keyboard behavior (Escape
+    // closes and returns focus, Up/Down cycles items, outside click closes).
+    const moreMenu = document.createElement('div');
+    moreMenu.id = 'mtlx-more-menu';
+    moreMenu.className = 'mtlx-more-menu';
+    moreMenu.setAttribute('role', 'menu');
+    moreMenu.setAttribute('aria-label', 'More Actions');
+    moreMenu.hidden = true;
+    moreBtn.setAttribute('aria-controls', 'mtlx-more-menu');
+    for (const link of HELP_LINKS) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'mtlx-more-item';
+        item.setAttribute('role', 'menuitem');
+        item.dataset.help = link.id;
+        const icon = document.createElement('span');
+        icon.className = 'mtlx-action-icon';
+        icon.innerHTML = iconSvg(link.icon);
+        item.appendChild(icon);
+        const label = document.createElement('span');
+        label.textContent = link.label;
+        item.appendChild(label);
+        item.addEventListener('click', () => {
+            setMoreOpen(false);
+            moreBtn.focus();
+            vscode.postMessage({ type: 'openHelpLink', id: link.id });
+        });
+        moreMenu.appendChild(item);
+    }
+    moreWrap.appendChild(moreMenu);
+
+    let moreOpen = false;
+    function onDocClickForMore(e) {
+        if (!moreMenu.contains(e.target) && e.target !== moreBtn) setMoreOpen(false);
+    }
+    function onMoreKeydown(e) {
+        const items = Array.from(moreMenu.querySelectorAll('.mtlx-more-item'));
+        const idx = items.indexOf(document.activeElement);
+        if (e.key === 'Escape') { e.preventDefault(); setMoreOpen(false); moreBtn.focus(); return; }
+        if (e.key === 'ArrowDown') { e.preventDefault(); items[(idx + 1) % items.length].focus(); return; }
+        if (e.key === 'ArrowUp') { e.preventDefault(); items[(idx - 1 + items.length) % items.length].focus(); return; }
+    }
+    function setMoreOpen(open, focusFirst) {
+        moreOpen = open;
+        moreMenu.hidden = !open;
+        moreBtn.setAttribute('aria-expanded', String(open));
+        if (open) {
+            document.addEventListener('keydown', onMoreKeydown);
+            document.addEventListener('click', onDocClickForMore, true);
+            const items = moreMenu.querySelectorAll('.mtlx-more-item');
+            if (focusFirst && items.length) items[0].focus();
+        } else {
+            document.removeEventListener('keydown', onMoreKeydown);
+            document.removeEventListener('click', onDocClickForMore, true);
+        }
+    }
+    moreBtn.addEventListener('click', () => setMoreOpen(!moreOpen, true));
 
     window.addEventListener('message', (event) => {
         const msg = event.data;

@@ -1621,6 +1621,90 @@ async function scenarioSelectionSync(ctx) {
     }
 }
 
+// Scenario: filesView -- opening files_demo.mtlx (one found texture ref,
+// one missing one) populates materialxPlayground.files with a "found" row
+// (a resolved uri) and a "missing" row (a reason, no uri), via
+// docScanner.scan's structured refs (docScanner.js) and filesView.js's
+// async, debounced rebuild.
+async function scenarioFilesView(ctx) {
+    const filesApi = ctx.testApi.files;
+    if (!filesApi) return { pass: false, error: 'testApi.files is missing' };
+
+    const uri = vscode.Uri.file(ctx.fixtures.filesDemoMtlxPath);
+    try {
+        const doc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(doc, { preview: false });
+
+        const refs = await waitForValue(() => {
+            const r = filesApi.getRefs();
+            return r.length >= 2 ? r : null;
+        }, 15000);
+
+        const found = refs && refs.find((r) => r.value.endsWith('basecolor.png'));
+        const missing = refs && refs.find((r) => r.value.endsWith('does_not_exist.png'));
+        const foundOk = !!found && found.status === 'found' && !!found.uri;
+        const missingOk = !!missing && missing.status === 'missing' && !missing.uri && typeof missing.reason === 'string';
+
+        return { pass: foundOk && missingOk, refs };
+    } finally {
+        await closeTabsForUri(uri);
+    }
+}
+
+// Scenario: insertNode -- an untitled .mtlx document (no fixture file
+// needed) gets a uniquely-named "constant" node inserted at the cursor via
+// testApi.insertNode.insert(), the same path a real click/Enter takes
+// (insertNodeView.js's _insert -> mtlxCompletions.buildNodeElementSnippet).
+async function scenarioInsertNode(ctx) {
+    const insertApi = ctx.testApi.insertNode;
+    if (!insertApi) return { pass: false, error: 'testApi.insertNode is missing' };
+
+    const content = '<?xml version="1.0"?>\n<materialx version="1.39">\n\n</materialx>\n';
+    const doc = await vscode.workspace.openTextDocument({ language: 'mtlx', content });
+    const editor = await vscode.window.showTextDocument(doc, { preview: false });
+    try {
+        const blankLine = doc.getText().split('\n').findIndex((l, i) => i > 0 && l === '');
+        editor.selection = new vscode.Selection(blankLine, 0, blankLine, 0);
+
+        const hasEditor = await waitForValue(() => (insertApi.hasEditor() ? true : null), 8000);
+        await insertApi.insert('constant', 'color3');
+        const text = await waitForValue(() => (doc.getText().includes('<constant ') ? doc.getText() : null), 8000);
+
+        const nameMatch = text && /<constant name="([^"]+)" type="color3">/.exec(text);
+        const closedOk = !!text && text.includes('</constant>');
+        return { pass: !!hasEditor && !!nameMatch && closedOk, nameMatch: nameMatch && nameMatch[1] };
+    } finally {
+        await closeTabsForUri(doc.uri);
+    }
+}
+
+// Scenario: recentView -- opening a .mtlx file records it at the front of
+// materialxPlayground.recent (extension.js's onDidOpenTextDocument hook
+// into recentView.js), and Clear empties the list.
+async function scenarioRecentView(ctx) {
+    const recentApi = ctx.testApi.recent;
+    if (!recentApi) return { pass: false, error: 'testApi.recent is missing' };
+
+    const uri = vscode.Uri.file(ctx.fixtures.hoverMtlxPath);
+    try {
+        const doc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(doc, { preview: false });
+
+        const items = await waitForValue(() => {
+            const list = recentApi.getItems();
+            return list.length && list[0].uri === uri.toString() ? list : null;
+        }, 10000);
+        const listedOk = !!items && items[0].kind === 'mtlx';
+
+        await recentApi.clear();
+        const cleared = await waitForValue(() => (recentApi.getItems().length === 0 ? true : null), 5000);
+
+        return { pass: listedOk && !!cleared, items };
+    } finally {
+        await closeTabsForUri(uri);
+    }
+}
+
 async function run() {
     const fixturesDir = process.env.MTLX_SMOKE_FIXTURES;
     const resultsFile = process.env.MTLX_SMOKE_RESULTS_FILE;
@@ -1642,6 +1726,7 @@ async function run() {
             outsideMtlxPath: path.join(wsDir, 'mat', 'outside_ref.mtlx'),
             validationMtlxPath: path.join(wsDir, 'mat', 'validation_error.mtlx'),
             hoverMtlxPath: path.join(wsDir, 'mat', 'hover.mtlx'),
+            filesDemoMtlxPath: path.join(wsDir, 'mat', 'files_demo.mtlx'),
             matDir: path.join(wsDir, 'mat'),
             usdRootPath: path.join(wsDir, 'usdscene', 'scene', 'root.usda'),
             usdMtlxRootPath: path.join(wsDir, 'usdmtlx', 'scene', 'mtlx_card.usda'),
@@ -1745,6 +1830,9 @@ async function run() {
         if (want('lifecycleCloseReopen')) { out.scenarios.lifecycleCloseReopen = await scenarioLifecycleCloseReopen(ctx); writeOut(); }
         if (want('textureSwap')) { out.scenarios.textureSwap = await scenarioTextureSwap(ctx); writeOut(); }
         if (want('selectionSync')) { out.scenarios.selectionSync = await scenarioSelectionSync(ctx); writeOut(); }
+        if (want('filesView')) { out.scenarios.filesView = await scenarioFilesView(ctx); writeOut(); }
+        if (want('insertNode')) { out.scenarios.insertNode = await scenarioInsertNode(ctx); writeOut(); }
+        if (want('recentView')) { out.scenarios.recentView = await scenarioRecentView(ctx); writeOut(); }
     } catch (e) {
         out.fatalError = String((e && e.stack) || e);
         log('FATAL: ' + (e && e.message || e));

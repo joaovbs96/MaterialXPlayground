@@ -483,3 +483,73 @@ test('containmentRoot: non-file scheme with no workspace folder is null', () => 
 
   assert.equal(root, null);
 });
+
+test('refs: found texture, missing texture and a resolved xi:include, in document order', async () => {
+  const ws = await mkTmpDir();
+  try {
+    const matDir = path.join(ws, 'mat');
+    const texDir = path.join(ws, 'textures');
+    await fsp.mkdir(matDir, { recursive: true });
+    await fsp.mkdir(texDir, { recursive: true });
+    await fsp.writeFile(path.join(texDir, 'ok.png'), Buffer.from([1, 2, 3]));
+    await fsp.writeFile(path.join(matDir, 'lib.mtlx'), '<materialx version="1.39"></materialx>');
+    const docPath = path.join(matDir, 'scene.mtlx');
+    const xml = '<materialx version="1.39">\n'
+      + '  <xi:include href="lib.mtlx" />\n'
+      + '  <image name="img_ok" type="color3">\n'
+      + '    <input name="file" type="filename" value="../textures/ok.png" />\n'
+      + '  </image>\n'
+      + '  <image name="img_missing" type="color3">\n'
+      + '    <input name="file" type="filename" value="../textures/missing.png" />\n'
+      + '  </image>\n'
+      + '</materialx>';
+    await fsp.writeFile(docPath, xml);
+
+    const { deps } = makeDeps(ws);
+    const result = await _scanWith(deps, uriFromFsPath(docPath), xml);
+
+    assert.equal(result.refs.length, 3);
+    const [include, found, missing] = result.refs;
+    assert.equal(include.value, 'lib.mtlx');
+    assert.equal(include.status, 'found');
+    assert.ok(include.uri);
+    assert.equal(include.line, 1);
+
+    assert.equal(found.value, '../textures/ok.png');
+    assert.equal(found.status, 'found');
+    assert.ok(found.uri);
+    assert.equal(xml.slice(found.offset, found.endOffset), '../textures/ok.png');
+
+    assert.equal(missing.value, '../textures/missing.png');
+    assert.equal(missing.status, 'missing');
+    assert.equal(missing.uri, undefined);
+    assert.equal(typeof missing.reason, 'string');
+  } finally {
+    await fsp.rm(ws, { recursive: true, force: true });
+  }
+});
+
+test('refs: an outside-workspace texture ref is "skipped", not "missing"', async () => {
+  const ws = await mkTmpDir();
+  const outside = await mkTmpDir();
+  try {
+    const matDir = path.join(ws, 'mat');
+    await fsp.mkdir(matDir, { recursive: true });
+    await fsp.writeFile(path.join(outside, 'secret.png'), Buffer.from([1]));
+    const rel = path.posix.relative(toPosix(matDir), toPosix(outside)) + '/secret.png';
+    const docPath = path.join(matDir, 'scene.mtlx');
+    const xml = '<materialx version="1.39"><image name="i" type="color3">'
+      + '<input name="file" type="filename" value="' + rel + '" /></image></materialx>';
+    await fsp.writeFile(docPath, xml);
+
+    const { deps } = makeDeps(ws);
+    const result = await _scanWith(deps, uriFromFsPath(docPath), xml);
+
+    assert.equal(result.refs.length, 1);
+    assert.equal(result.refs[0].status, 'skipped');
+    assert.equal(result.refs[0].uri, undefined);
+  } finally {
+    await fsp.rm(ws, { recursive: true, force: true });
+    await fsp.rm(outside, { recursive: true, force: true });
+  }
+});
