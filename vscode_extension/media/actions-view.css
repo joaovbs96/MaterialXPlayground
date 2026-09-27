@@ -1,0 +1,104 @@
+/* actions-view.css: styling for the materialxPlayground.actions webview
+   view. Uses VS Code theme variables only, no hardcoded colors, so it
+   matches light/dark/high-contrast themes automatically. */
+body {
+    margin: 0;
+    padding: 8px;
+    font-family: var(--vscode-font-family);
+    font-size: var(--vscode-font-size, 13px);
+    color: var(--vscode-foreground);
+    background: transparent;
+}
+
+#root {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.mtlx-action-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.mtlx-action-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 10px;
+    border-radius: 3px;
+    border: 1px solid transparent;
+    font-family: inherit;
+    font-size: inherit;
+    text-align: left;
+    cursor: pointer;
+    background: transparent;
+    color: var(--vscode-foreground);
+}
+
+.mtlx-action-btn.default {
+    background: transparent;
+    border: 1px solid var(--vscode-button-secondaryBackground, transparent);
+}
+
+.mtlx-action-btn.primary {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    border-color: transparent;
+}
+
+.mtlx-action-btn.primary:hover:not(:disabled) {
+    background: var(--vscode-button-hoverBackground);
+}
+
+.mtlx-action-btn.secondary {
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    border-color: transparent;
+}
+
+.mtlx-action-btn.secondary:hover:not(:disabled) {
+    background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
+}
+
+.mtlx-action-btn.default:hover:not(:disabled) {
+    background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+.mtlx-action-btn:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: 2px;
+}
+
+.mtlx-action-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.mtlx-action-icon {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+}
+
+.mtlx-action-icon svg {
+    width: 16px;
+    height: 16px;
+    display: block;
+}
+
+.mtlx-action-label {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mtlx-action-note {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    padding-left: 24px;
+}

@@ -388,6 +388,7 @@
         {
           "id": "materialxPlayground.actions",
           "name": "Actions",
+          "type": "webview",
           "when": "true"
         }
       ]

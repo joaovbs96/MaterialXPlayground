@@ -8,13 +8,15 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const actionsModel = require('../../vscode_extension/src/actionsModel.js');
 
-test('buildActionRows: six rows, in the specified order, with icons', () => {
+test('buildActionRows: six rows, in the specified order, with icons and variants', () => {
     const rows = actionsModel.buildActionRows(false);
     assert.deepEqual(rows.map((r) => r.id), [
         'newFromExample', 'newDocument', 'openDocs',
         'openInGraphEditor', 'openInMaterialViewer', 'filterDocsByFile',
     ]);
     assert.equal(rows.find((r) => r.id === 'openDocs').icon, 'book');
+    assert.equal(rows.find((r) => r.id === 'newFromExample').variant, 'primary');
+    assert.equal(rows.find((r) => r.id === 'filterDocsByFile').variant, 'secondary');
 });
 
 test('buildActionRows: no active document disables the two "Open in ..." rows', () => {
@@ -23,7 +25,7 @@ test('buildActionRows: no active document disables the two "Open in ..." rows', 
     const viewer = rows.find((r) => r.id === 'openInMaterialViewer');
     assert.equal(graph.disabled, true);
     assert.equal(graph.command, null);
-    assert.equal(graph.description, 'no MaterialX file open');
+    assert.equal(graph.description, 'Open a MaterialX file first');
     assert.equal(viewer.disabled, true);
     assert.equal(viewer.command, null);
 });

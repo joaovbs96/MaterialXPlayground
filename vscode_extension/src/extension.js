@@ -19,6 +19,7 @@ const hoverProvider = require('./hoverProvider');
 const symbolProviders = require('./symbolProviders');
 const completionProvider = require('./completionProvider');
 const newFromExample = require('./newFromExample');
+const exampleGallery = require('./exampleGallery');
 const newDocument = require('./newDocument');
 const outlineView = require('./outlineView');
 const actionsView = require('./actionsView');
@@ -410,13 +411,18 @@ function activate(context) {
     });
     registerSelectionSync(context, outline);
 
-    // materialxPlayground.actions (activity bar container): a TreeView of
-    // action rows (actionsView.js/actionsModel.js), the "Open in ..." rows
-    // tracking activeMtlxDocument().
+    // materialxPlayground.actions (activity bar container): a webview view
+    // of action buttons (actionsView.js/actionsModel.js), the "Open in
+    // ..." rows tracking activeMtlxDocument().
     actionsView.register(context, {
         getActiveDocument: activeMtlxDocument,
         onDidChangeActiveDocument: onDidChangeActiveMtlxDocument,
     });
+
+    // exampleGallery.js needs the extension context for its test API only
+    // (a real user session reaches it through newFromExample.js's own
+    // command handler, which has its own context already).
+    exampleGallery.register(context);
 
     const provider = new MaterialXEditorProvider(context);
 
@@ -979,8 +985,12 @@ function activate(context) {
     // extension host's own environment before activation, never true for
     // a real user session. Exposes the direct-texture-read transport's
     // test hooks to the stress-test harness driving this Extension
-    // Development Host; undefined otherwise, same as before this feature.
-    return testApi ? { _test: testApi } : undefined;
+    // Development Host, plus (when present) exampleGallery.js's own test
+    // hooks under `.gallery`; undefined otherwise, same as before.
+    const merged = Object.assign({}, testApi || {});
+    if (exampleGallery.testApi) merged.gallery = exampleGallery.testApi;
+    if (actionsView.testApi) merged.actions = actionsView.testApi;
+    return Object.keys(merged).length ? { _test: merged } : undefined;
 }
 
 function deactivate() {

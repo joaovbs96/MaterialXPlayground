@@ -153,31 +153,12 @@ async function copyExample(extensionUri, example, targetFolder) {
     return newMtlxUri;
 }
 
-// arg1/arg2: an Explorer folder Uri, no arguments (Command Palette), or
-// (exampleId, targetFolderUri) for programmatic use, which skips both
-// the QuickPick and the folder-resolution prompt.
-async function handleCommand(context, arg1, arg2) {
+// createFromExample: the actual copy-and-open flow, shared by every
+// caller (old QuickPick, the gallery panel's card click, and any future
+// programmatic caller) once an example is already chosen. targetFolderUri
+// wins over explorerFolderUri/resolveTargetFolder's own precedence chain.
+async function createFromExample(context, example, explorerFolderUri, targetFolderUri) {
     try {
-        let example = null;
-        let explorerFolderUri = null;
-        let targetFolderUri = null;
-
-        if (typeof arg1 === 'string') {
-            example = exampleCatalog.getExample(arg1);
-            if (!example) {
-                vscode.window.showErrorMessage('MaterialX Playground: unknown example id "' + arg1 + '".');
-                return;
-            }
-            if (arg2 instanceof vscode.Uri) targetFolderUri = arg2;
-        } else if (arg1 instanceof vscode.Uri) {
-            explorerFolderUri = arg1;
-        }
-
-        if (!example) {
-            example = await pickExample(context.extensionUri);
-            if (!example) return; // user cancelled the QuickPick
-        }
-
         const folder = targetFolderUri || await resolveTargetFolder(explorerFolderUri);
         if (!folder) return; // user cancelled the folder dialog
 
@@ -190,10 +171,39 @@ async function handleCommand(context, arg1, arg2) {
     }
 }
 
+// arg1/arg2: (exampleId, targetFolderUri) for programmatic use (the
+// gallery panel's card click) skips both the gallery and the folder-
+// resolution prompt; an Explorer folder Uri or no arguments (Command
+// Palette, sidebar button) opens the gallery panel instead of copying
+// anything directly. exampleGallery.js is required lazily here (it
+// requires this module back, for createFromExample/galleryIdFor) so
+// neither module's top-level exports need to be ready before the other's.
+async function handleCommand(context, arg1, arg2) {
+    if (typeof arg1 === 'string') {
+        const example = exampleCatalog.getExample(arg1);
+        if (!example) {
+            vscode.window.showErrorMessage('MaterialX Playground: unknown example id "' + arg1 + '".');
+            return;
+        }
+        await createFromExample(context, example, null, arg2 instanceof vscode.Uri ? arg2 : null);
+        return;
+    }
+
+    const explorerFolderUri = arg1 instanceof vscode.Uri ? arg1 : null;
+    try {
+        await require('./exampleGallery').openGallery(context, explorerFolderUri);
+    } catch (err) {
+        // Fallback for a host that can't render webviews at all.
+        const example = await pickExample(context.extensionUri);
+        if (!example) return; // user cancelled the QuickPick
+        await createFromExample(context, example, explorerFolderUri, null);
+    }
+}
+
 function register(context) {
     context.subscriptions.push(
         vscode.commands.registerCommand(COMMAND_ID, (arg1, arg2) => handleCommand(context, arg1, arg2))
     );
 }
 
-module.exports = { register, COMMAND_ID, galleryIdFor };
+module.exports = { register, COMMAND_ID, galleryIdFor, createFromExample, pickExample, resolveTargetFolder };

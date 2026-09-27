@@ -1,15 +1,19 @@
 // actionsModel.js: pure row list for the materialxPlayground.actions view.
 // No vscode dependency, same split as outlineModel.js/outlineView.js, so
 // the row shape is unit-testable without booting the extension host.
+// The webview-based actionsView.js renders these rows as full-width
+// buttons; `icon` is a js/shared/ui-commons.js icon key (inlined as SVG
+// path data in media/actions-view.js, no icon font) and `variant` picks
+// the button's visual weight.
 'use strict';
 
 const ROWS = [
-    { id: 'newFromExample', label: 'New Material from Example', icon: 'sparkle', command: 'materialxPlayground.newFromExample' },
-    { id: 'newDocument', label: 'New MaterialX Document', icon: 'new-file', command: 'materialxPlayground.newDocument' },
-    { id: 'openDocs', label: 'Node Library Documentation', icon: 'book', command: 'materialxPlayground.openDocs' },
-    { id: 'openInGraphEditor', label: 'Open in Graph Editor', icon: 'type-hierarchy-sub', command: 'materialxPlayground.openInGraphEditor', requiresDocument: true },
-    { id: 'openInMaterialViewer', label: 'Open in Material Viewer', icon: 'eye', command: 'materialxPlayground.openInMaterialViewer', requiresDocument: true },
-    { id: 'filterDocsByFile', label: 'Filter Node Docs by Current File', icon: 'filter', command: 'materialxPlayground.filterDocsByFile' },
+    { id: 'newFromExample', label: 'New Material from Example', icon: 'sparkles', variant: 'primary', command: 'materialxPlayground.newFromExample' },
+    { id: 'newDocument', label: 'New MaterialX Document', icon: 'file-plus', variant: 'default', command: 'materialxPlayground.newDocument' },
+    { id: 'openDocs', label: 'Node Library Documentation', icon: 'book', variant: 'default', command: 'materialxPlayground.openDocs' },
+    { id: 'openInGraphEditor', label: 'Open in Graph Editor', icon: 'share', variant: 'default', command: 'materialxPlayground.openInGraphEditor', requiresDocument: true },
+    { id: 'openInMaterialViewer', label: 'Open in Material Viewer', icon: 'eye', variant: 'default', command: 'materialxPlayground.openInMaterialViewer', requiresDocument: true },
+    { id: 'filterDocsByFile', label: 'Filter Node Docs by Current File', icon: 'color-filter', variant: 'secondary', command: 'materialxPlayground.filterDocsByFile' },
 ];
 
 // buildActionRows(hasActiveDocument): the two "Open in ..." rows are
@@ -22,9 +26,10 @@ function buildActionRows(hasActiveDocument) {
             id: row.id,
             label: row.label,
             icon: row.icon,
+            variant: row.variant,
             command: disabled ? null : row.command,
             disabled,
-            description: disabled ? 'no MaterialX file open' : undefined,
+            description: disabled ? 'Open a MaterialX file first' : undefined,
         };
     });
 }

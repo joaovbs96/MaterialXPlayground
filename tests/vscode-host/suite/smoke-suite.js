@@ -831,6 +831,60 @@ async function scenarioNewFromExample(ctx) {
     return { pass: out.singleFile.pass && out.textured.pass, singleFile: out.singleFile, textured: out.textured };
 }
 
+// Scenario: galleryPanel -- materialxPlayground.newFromExample now opens
+// the "New Material from Example" webview panel (not the old QuickPick),
+// listing every catalog entry (14) as a card, and a card click runs the
+// same creation flow the (id, targetFolder) command form always has, all
+// through exampleGallery.js's own test API (ctx.testApi.gallery), which
+// goes through the same validated message handler a real webview click
+// would (never a raw command string built from the message).
+async function scenarioGalleryPanel(ctx) {
+    const gallery = ctx.testApi.gallery;
+    if (!gallery) return { pass: false, error: 'testApi.gallery is missing' };
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtlx-smoke-gallery-'));
+    let newMtlxUri = null;
+    try {
+        await gallery.open(tmpDir);
+        const isOpen = gallery.isOpen();
+        const rendered = await gallery.waitForRendered(20000);
+        const cardCountOk = rendered.cardCount === 14;
+
+        const errorsBefore = ctx.testApi.getErrors().length;
+        await gallery.triggerCard('example-standard-surface-gold');
+        await new Promise((r) => setTimeout(r, 8000)); // let materialxPlayground.open's panel boot
+        const newErrors = ctx.testApi.getErrors().length - errorsBefore;
+
+        const destAbs = path.join(tmpDir, 'standard_surface_gold.mtlx');
+        newMtlxUri = vscode.Uri.file(destAbs);
+        const fileExists = fs.existsSync(destAbs);
+
+        return {
+            pass: isOpen && cardCountOk && fileExists && newErrors === 0,
+            isOpen, cardCount: rendered.cardCount, fileExists, newErrors,
+        };
+    } finally {
+        if (newMtlxUri) await closeTabsForUri(newMtlxUri);
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { /* best effort */ }
+    }
+}
+
+// Scenario: actionsView -- the materialxPlayground.actions sidebar view is
+// now a WebviewView (was a TreeView); focusing it makes VS Code call
+// resolveWebviewView, and the row list it would render matches
+// actionsModel.js's six ids in order.
+async function scenarioActionsView(ctx) {
+    const actions = ctx.testApi.actions;
+    if (!actions) return { pass: false, error: 'testApi.actions is missing' };
+
+    await actions.focus();
+    await new Promise((r) => setTimeout(r, 3000)); // let the view resolve
+    const state = actions.getState();
+    const expectedIds = ['newFromExample', 'newDocument', 'openDocs', 'openInGraphEditor', 'openInMaterialViewer', 'filterDocsByFile'];
+    const idsOk = JSON.stringify(state.rowIds) === JSON.stringify(expectedIds);
+    return { pass: state.resolved && idsOk, resolved: state.resolved, rowIds: state.rowIds };
+}
+
 // Scenario: aboutLicense -- opens the About dialog on the already-open
 // custom editor panel (reuses scenarioEditorSession's tab) and checks the
 // license loader falls back from LICENSE to vsce's renamed LICENSE.txt
@@ -1393,6 +1447,8 @@ async function run() {
         if (want('sceneLoadCancel')) { out.scenarios.sceneLoadCancel = await scenarioSceneLoadCancel(ctx); writeOut(); }
         if (want('sceneFormatAutoOpen')) { out.scenarios.sceneFormatAutoOpen = await scenarioSceneFormatAutoOpen(ctx); writeOut(); }
         if (want('newFromExample')) { out.scenarios.newFromExample = await scenarioNewFromExample(ctx); writeOut(); }
+        if (want('galleryPanel')) { out.scenarios.galleryPanel = await scenarioGalleryPanel(ctx); writeOut(); }
+        if (want('actionsView')) { out.scenarios.actionsView = await scenarioActionsView(ctx); writeOut(); }
         if (want('aboutLicense')) { out.scenarios.aboutLicense = await scenarioAboutLicense(ctx); writeOut(); }
         if (want('fullWidth')) { out.scenarios.fullWidth = await scenarioFullWidth(ctx); writeOut(); }
         if (want('openViewCommands')) { out.scenarios.openViewCommands = await scenarioOpenViewCommands(ctx); writeOut(); }
