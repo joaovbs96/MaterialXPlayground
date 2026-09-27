@@ -48,6 +48,7 @@ function toNode(sym, parentId, usedAtLevel, byId) {
         name: sym.name,
         detail: sym.detail,
         kind: sym.kind,
+        tag: sym.tag,
         range: sym.range,
         selectionRange: sym.selectionRange,
         children: [],
@@ -96,9 +97,70 @@ function pathAt(text, pos) {
     return hit ? hit.id : null;
 }
 
+// Selection sync (E18). Paths are Outline ids ("NG_main/tinted/in1"); '' is
+// the document root. syncPathAt is pathAt plus '' when the cursor sits on
+// the <materialx> start line, so blank lines between elements stay inert.
+function syncPathAt(text, pos) {
+    const hit = pathAt(text, pos);
+    if (hit) return hit;
+    const top = mtlxSymbols.materialxRoot(mtlxSymbols.scanElements(text).root);
+    return top && top.tag === 'materialx' && top.range.start.line === pos.line ? '' : null;
+}
+
+function isMaterialNode(node) {
+    return node.kind === 'node' && (/material$/.test(node.tag || '') || / : material$/.test(node.detail || ''));
+}
+
+function ancestry(tree, node) {
+    const chain = [];
+    for (let cur = node; cur; cur = cur.parentId ? tree.byId.get(cur.parentId) : null) chain.unshift(cur);
+    return chain;
+}
+
+// Outline path -> Graph Editor target { scope, id } (scope '' = document
+// root, else a top-level nodegraph); inputs resolve to their owning node,
+// the root to the first material. null when the graph shows no such card.
+function graphTargetForPath(tree, nodePath) {
+    if (nodePath === '' || nodePath == null) {
+        const mat = tree.roots.find(isMaterialNode);
+        return mat ? { scope: '', id: 'n:' + mat.name } : null;
+    }
+    const node = tree.byId.get(nodePath);
+    if (!node) return null;
+    const chain = ancestry(tree, node);
+    const top = chain[0];
+    if (top.kind === 'nodegraph') {
+        if (chain.length === 1) return { scope: '', id: 'g:' + top.name };
+        const child = chain[1];
+        const prefix = child.kind === 'output' ? 'o:' : child.kind === 'input' ? 'i:' : 'n:';
+        return { scope: top.name, id: prefix + child.name };
+    }
+    if (top.kind === 'nodedef') return { scope: '', id: 'd:' + top.name };
+    if (top.kind === 'output') return chain.length === 1 ? { scope: '', id: 'o:' + top.name } : null;
+    if (top.kind === 'node') return { scope: '', id: 'n:' + top.name };
+    return null;
+}
+
+// Graph Editor selection { scope, id } -> Outline path ("NG_main/tinted").
+function pathForGraphSelection(scope, id) {
+    const m = /^[nogid]:(.+)$/.exec(String(id || ''));
+    if (!m) return null;
+    return scope ? scope + '/' + m[1] : m[1];
+}
+
+// Range to select in the text for a path reported by the graph, or null.
+function rangeForPath(tree, nodePath) {
+    const node = nodePath ? tree.byId.get(nodePath) : null;
+    return node ? (node.selectionRange || node.range) : null;
+}
+
 module.exports = {
     buildOutlineTree,
     findDeepestAt,
     pathAt,
+    syncPathAt,
+    graphTargetForPath,
+    pathForGraphSelection,
+    rangeForPath,
     iconForKind,
 };

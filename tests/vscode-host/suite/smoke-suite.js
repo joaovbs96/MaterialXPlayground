@@ -1204,6 +1204,86 @@ async function scenarioTextureSwap(ctx) {
     }
 }
 
+// Scenario: selectionSync (E18) -- a text cursor move inside a nodegraph node
+// selects that node in the Graph Editor (entering the scope), a graph click
+// moves the text selection, and syncSelection=false stops the text -> graph leg.
+async function scenarioSelectionSync(ctx) {
+    const uri = vscode.Uri.file(ctx.fixtures.selSyncMtlxPath);
+    const uriStr = uri.toString();
+    const cfg = vscode.workspace.getConfiguration('materialxPlayground');
+    const prevDefaultView = cfg.inspect('defaultView')?.globalValue;
+    const prevSync = cfg.inspect('syncSelection')?.globalValue;
+    const out = {};
+    const state = async (predicate, timeoutMs) => {
+        const deadline = Date.now() + timeoutMs;
+        let last = null;
+        while (Date.now() < deadline) {
+            const from = ctx.graphSelectionReports.length;
+            ctx.testApi.triggerGraphSelection(uriStr);
+            last = await waitForValue(() => ctx.graphSelectionReports.slice(from).find((r) => r && !('clicked' in r)), 3000).catch(() => null);
+            if (last && predicate(last)) return { ok: true, state: last };
+            await new Promise((r) => setTimeout(r, 400));
+        }
+        return { ok: false, state: last };
+    };
+    const hasPanel = () => vscode.window.tabGroups.all.some((g) => g.tabs.some((t) =>
+        t.input instanceof vscode.TabInputCustom && t.input.uri.toString() === uriStr));
+    try {
+        await cfg.update('defaultView', 'graph', vscode.ConfigurationTarget.Global);
+        await cfg.update('syncSelection', true, vscode.ConfigurationTarget.Global);
+        const doc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, preview: false });
+        const lines = doc.getText().split('\n');
+        const lineOf = (needle) => lines.findIndex((l) => l.includes(needle));
+        // autoOpenPlayground normally opens the playground beside the text.
+        await waitForValue(() => hasPanel() || null, 8000).catch(() => null);
+        if (!hasPanel()) {
+            await vscode.commands.executeCommand('vscode.openWith', uri, VIEW_TYPE, { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true });
+        }
+        const loaded = await state((r) => r.loaded && r.cardCount > 0, 90000);
+        out.loaded = loaded.ok;
+        if (!loaded.ok) { out.pass = false; out.loadedState = loaded.state; return out; }
+        await new Promise((r) => setTimeout(r, 1500));
+        const editorFor = () => vscode.window.visibleTextEditors.find((e) => e.document.uri.toString() === uriStr);
+
+        // Text -> graph: cursor inside tinted's in1 input.
+        const in1Line = lineOf('name="in1"');
+        editorFor().selection = new vscode.Selection(in1Line, 10, in1Line, 10);
+        const textToGraph = await state((r) => r.scope === 'NG_main' && r.selectedId === 'n:tinted', 20000);
+        out.textToGraph = { ok: textToGraph.ok, state: textToGraph.state };
+
+        // Graph -> text: a user click on the base card selects its name in the text.
+        const baseLine = lineOf('name="base"');
+        const clickFrom = ctx.graphSelectionReports.length;
+        ctx.testApi.triggerGraphClick(uriStr, 'n:base');
+        const click = await waitForValue(() => ctx.graphSelectionReports.slice(clickFrom).find((r) => r && ('clicked' in r || r.error)), 10000).catch(() => null);
+        const moved = await waitForValue(() => {
+            const ed = editorFor();
+            return ed && ed.selection.start.line === baseLine ? ed.selection : null;
+        }, 10000).catch(() => null);
+        const selText = moved ? editorFor().document.getText(moved) : null;
+        // No echo: the host's own text selection must not re-drive the graph.
+        await new Promise((r) => setTimeout(r, 1200));
+        const afterClick = await state((r) => r.selectedId === 'n:base', 5000);
+        out.graphToText = { ok: !!moved && selText === 'base' && afterClick.ok, click, line: moved ? moved.start.line : null, expectedLine: baseLine, selText, afterClick: afterClick.state };
+
+        // Setting off: a cursor move no longer changes the graph.
+        await cfg.update('syncSelection', false, vscode.ConfigurationTarget.Global);
+        const srLine = lineOf('name="SR_test"');
+        editorFor().selection = new vscode.Selection(srLine, 6, srLine, 6);
+        await new Promise((r) => setTimeout(r, 1500));
+        const off = await state(() => true, 5000);
+        out.settingOff = { ok: !!off.state && off.state.scope === 'NG_main' && off.state.selectedId === 'n:base', state: off.state };
+
+        out.pass = out.loaded && out.textToGraph.ok && out.graphToText.ok && out.settingOff.ok;
+        return out;
+    } finally {
+        try { await cfg.update('defaultView', prevDefaultView, vscode.ConfigurationTarget.Global); } catch (e) { /* best effort */ }
+        try { await cfg.update('syncSelection', prevSync, vscode.ConfigurationTarget.Global); } catch (e) { /* best effort */ }
+        await closeTabsForUri(uri);
+    }
+}
+
 async function run() {
     const fixturesDir = process.env.MTLX_SMOKE_FIXTURES;
     const resultsFile = process.env.MTLX_SMOKE_RESULTS_FILE;
@@ -1239,6 +1319,7 @@ async function run() {
             swapTexPath: path.join(wsDir, 'texswap', 'tex.png'),
             swapRedPath: path.join(fixturesDir, 'texswap-src', 'red.png'),
             swapBluePath: path.join(fixturesDir, 'texswap-src', 'blue.png'),
+            selSyncMtlxPath: path.join(wsDir, 'selsync', 'sync.mtlx'),
             wsDir,
         };
 
@@ -1271,7 +1352,9 @@ async function run() {
         testApi.onViewHashReport((r) => { viewHashReports.push(r); });
         const pixelReports = [];
         if (testApi.onPixelReport) testApi.onPixelReport((r) => { pixelReports.push(r); });
-        const ctx = { fixtures, extensionUri: ext.extensionUri, extensionRoot, testApi, allReports, sceneReports, sceneRounds, sceneCancelReports, graphSaves, previewReports, aboutReports, fullWidthReports, viewHashReports, pixelReports };
+        const graphSelectionReports = [];
+        if (testApi.onGraphSelectionReport) testApi.onGraphSelectionReport((r) => { graphSelectionReports.push(r); });
+        const ctx = { fixtures, extensionUri: ext.extensionUri, extensionRoot, testApi, allReports, sceneReports, sceneRounds, sceneCancelReports, graphSaves, previewReports, aboutReports, fullWidthReports, viewHashReports, pixelReports, graphSelectionReports };
 
         const extraScene = process.env.MTLX_SMOKE_EXTRA_SCENE;
         if (extraScene) {
@@ -1315,6 +1398,7 @@ async function run() {
         if (want('openViewCommands')) { out.scenarios.openViewCommands = await scenarioOpenViewCommands(ctx); writeOut(); }
         if (want('lifecycleCloseReopen')) { out.scenarios.lifecycleCloseReopen = await scenarioLifecycleCloseReopen(ctx); writeOut(); }
         if (want('textureSwap')) { out.scenarios.textureSwap = await scenarioTextureSwap(ctx); writeOut(); }
+        if (want('selectionSync')) { out.scenarios.selectionSync = await scenarioSelectionSync(ctx); writeOut(); }
     } catch (e) {
         out.fatalError = String((e && e.stack) || e);
         log('FATAL: ' + (e && e.message || e));

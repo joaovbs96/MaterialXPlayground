@@ -47,6 +47,7 @@ if (TEST_TRANSPORT) {
     const sceneRoundListeners = [];
     const sceneCancelListeners = [];
     const pixelListeners = [];
+    const graphSelectionListeners = [];
     const errors = [];
     // Error toasts the host itself raised, plus unhandled rejections in the
     // extension host (the lifecycle smoke asserts "Webview is disposed" never shows).
@@ -103,6 +104,9 @@ if (TEST_TRANSPORT) {
         emitPixelReport(report) {
             for (const listener of pixelListeners) listener(report);
         },
+        emitGraphSelectionReport(report) {
+            for (const listener of graphSelectionListeners) listener(report);
+        },
         emitHostError(text) { hostErrors.push(text); },
         emitError(text) {
             errors.push(text);
@@ -122,6 +126,11 @@ if (TEST_TRANSPORT) {
             // Centre pixel of the active panel's viewer (bootstrap.js handleTestTriggerPixel).
             triggerPixel(x, y) { postToActivePanel({ type: 'mtlx-test-trigger-pixel', x, y }); },
             onPixelReport(listener) { pixelListeners.push(listener); },
+            // Selection sync (E18): graph selection state of the playground for
+            // uriStr, and a simulated user click on a graph node card.
+            triggerGraphSelection(uriStr) { postToDocumentPanel(uriStr, { type: 'mtlx-test-trigger-graph-selection' }); },
+            triggerGraphClick(uriStr, nodeId) { postToDocumentPanel(uriStr, { type: 'mtlx-test-trigger-graph-click', id: nodeId }); },
+            onGraphSelectionReport(listener) { graphSelectionListeners.push(listener); },
             isDocsPanelOpen() { return !!docsPanelInfo; },
             onSaveResult(listener) { saveResultListeners.push(listener); },
             // Makes handleSaveFile skip vscode.window.showSaveDialog and
@@ -221,6 +230,29 @@ let testSaveTargetDir = null;
 // playground tab for a file and reuse it instead of opening a second one.
 // Populated in resolveCustomTextEditor, cleared on panel dispose.
 const panelsByUri = new Map();
+// Same keys, the panel's lifecycle (guarded post), for selection sync.
+const livesByUri = new Map();
+
+// Selection sync (E18): Graph Editor user selections as { uri, path }. A plain
+// listener list, not vscode.EventEmitter, so the unit-test stubs still load.
+const graphSelectionListeners = new Set();
+function onDidSelectInGraph(listener) {
+    graphSelectionListeners.add(listener);
+    return { dispose: () => graphSelectionListeners.delete(listener) };
+}
+function fireGraphSelection(event) {
+    for (const listener of graphSelectionListeners) {
+        try { listener(event); } catch (e) { console.error('[MaterialX Playground] selection sync', e); }
+    }
+}
+
+// Posts to the playground panel open for uriStr; false when none is open.
+function postToDocumentPanel(uriStr, message) {
+    const life = livesByUri.get(uriStr);
+    if (!life || life.disposed) return false;
+    life.post(message);
+    return true;
+}
 
 // One-shot override for the initial view a freshly created panel opens
 // on, keyed by the same uriKey as panelsByUri -- set by
@@ -589,6 +621,8 @@ function wireCommonWebviewMessages(webview, outputChannel, documentUri, life) {
             if (testHooks) testHooks.emitSceneCancelReport(msg.report || null);
         } else if (msg.type === 'mtlx-test-pixel') {
             if (testHooks) testHooks.emitPixelReport(msg.report || null);
+        } else if (msg.type === 'mtlx-test-graph-selection') {
+            if (testHooks) testHooks.emitGraphSelectionReport(msg.report || null);
         } else if (msg.type === 'mtlx-save-file') {
             await handleSaveFile(webview, msg, documentUri);
         }
@@ -796,6 +830,7 @@ class MaterialXEditorProvider {
             // openInGraphEditor/openInMaterialViewer find and reuse this
             // panel later without needing their own tab-scan.
             panelsByUri.set(uriKey, webviewPanel);
+            livesByUri.set(uriKey, life);
             life.track(webviewPanel.onDidChangeViewState(() => {
                 if (webviewPanel.active) {
                     activePanelInfo = { panel: webviewPanel, document };
@@ -950,6 +985,11 @@ class MaterialXEditorProvider {
                     sendUpdate();
                     return;
                 }
+                if (msg.type === 'mtlx-selection') {
+                    // Graph Editor user selection (E18), path or null for a cleared one.
+                    fireGraphSelection({ uri: document.uri, path: typeof msg.path === 'string' ? msg.path : null });
+                    return;
+                }
                 if (msg.type === 'mtlx-save') {
                     const xml = typeof msg.xml === 'string' ? msg.xml : '';
                     // Skip the WorkspaceEdit entirely when the text is
@@ -1093,6 +1133,7 @@ class MaterialXEditorProvider {
                 if (panelsByUri.get(uriKey) === webviewPanel) {
                     panelsByUri.delete(uriKey);
                 }
+                if (livesByUri.get(uriKey) === life) livesByUri.delete(uriKey);
             });
         } catch (err) {
             if (life.disposed) return; // closed while resolving: nothing left to report
@@ -1149,6 +1190,9 @@ module.exports = {
     // materialxPlayground.openInGraphEditor/openInMaterialViewer (extension.js).
     getPanelForUri,
     setPendingInitialView,
+    // Selection sync (E18, extension.js).
+    postToDocumentPanel,
+    onDidSelectInGraph,
     // null unless MTLX_TEST_TRANSPORT=1 (see TEST_TRANSPORT above):
     // extension.js's activate() surfaces this as its return value's
     // `_test` field, for the stress-test harness only.

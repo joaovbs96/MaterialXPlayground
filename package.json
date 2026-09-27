@@ -441,6 +441,11 @@
           "default": true,
           "description": "Automatically open the MaterialX Playground beside the text editor whenever a .mtlx file is opened. Triggers once per file open; closing the playground won't re-trigger it until the file itself is closed and reopened."
         },
+        "materialxPlayground.syncSelection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Keep the text cursor, the MaterialX Outline and the Graph Editor selection in sync."
+        },
         "materialxPlayground.autoOpenSceneViewer": {
           "type": "boolean",
           "default": true,

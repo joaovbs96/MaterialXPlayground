@@ -11,7 +11,7 @@
 
 const path = require('path');
 const vscode = require('vscode');
-const { MaterialXEditorProvider, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel, isDocsPanelOpen, postDocsFilter, getSharedOutputChannel, logLine, disposeSharedOutputChannel, getPanelForUri, setPendingInitialView, testApi } = require('./editorProvider');
+const { MaterialXEditorProvider, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel, isDocsPanelOpen, postDocsFilter, getSharedOutputChannel, logLine, disposeSharedOutputChannel, getPanelForUri, setPendingInitialView, postToDocumentPanel, onDidSelectInGraph, testApi } = require('./editorProvider');
 const mtlxSymbols = require('./mtlxSymbols');
 const validator = require('./validator');
 const { ValidationClient } = require('./validationClient');
@@ -21,6 +21,7 @@ const completionProvider = require('./completionProvider');
 const newFromExample = require('./newFromExample');
 const newDocument = require('./newDocument');
 const outlineView = require('./outlineView');
+const outlineModel = require('./outlineModel');
 const filePicker = require('./filePicker');
 const sceneProvider = require('./sceneProvider');
 const usdFileSet = require('./usdFileSet');
@@ -133,6 +134,82 @@ function fireActiveMtlxDocumentChangeIfNeeded() {
     lastActiveMtlxDocumentUri = uri;
     activeMtlxDocumentEmitter.fire(doc);
     updateDocsFilter(doc, true);
+}
+
+// Selection sync (E18, materialxPlayground.syncSelection): text cursor moves
+// and Outline picks select the element in the Graph Editor; graph picks
+// select it in the Outline and the visible text editor, never taking focus.
+const SELECTION_SYNC_DEBOUNCE_MS = 150;
+// A selection we set ourselves is ignored when its echo arrives this soon.
+const HOST_SELECTION_ECHO_MS = 1000;
+
+function selectionKey(sel) {
+    return sel.start.line + ':' + sel.start.character + '-' + sel.end.line + ':' + sel.end.character;
+}
+
+function registerSelectionSync(context, outline) {
+    const enabled = () => getSetting('syncSelection') !== false;
+    // uri -> last path the graph was sent or reported (dedupes cursor moves
+    // inside one element); uri -> { key, at } of the host's own selection.
+    const lastPath = new Map();
+    const hostSelections = new Map();
+    let timer = null;
+
+    const postPath = (document, nodePath, force) => {
+        if (nodePath == null || document.isClosed) return;
+        const key = document.uri.toString();
+        if (!getPanelForUri(key)) return;
+        if (!force && lastPath.get(key) === nodePath) return;
+        const target = outlineModel.graphTargetForPath(outlineModel.buildOutlineTree(document.getText()), nodePath);
+        if (!target) return;
+        if (postToDocumentPanel(key, { type: 'mtlx-select', path: nodePath, scope: target.scope, id: target.id })) {
+            lastPath.set(key, nodePath);
+        }
+    };
+
+    const onGraphSelection = ({ uri, path: nodePath }) => {
+        const key = uri.toString();
+        lastPath.set(key, nodePath);
+        if (!enabled() || !nodePath) return;
+        const document = vscode.workspace.textDocuments.find((d) => d.uri.toString() === key);
+        if (!document) return;
+        const r = outlineModel.rangeForPath(outlineModel.buildOutlineTree(document.getText()), nodePath);
+        if (!r) return; // unknown path (e.g. a library graph): ignored
+        const active = activeMtlxDocument();
+        if (active && active.uri.toString() === key) outline.revealPath(nodePath);
+        const range = new vscode.Range(r.start.line, r.start.character, r.end.line, r.end.character);
+        const sel = new vscode.Selection(range.start, range.end);
+        for (const editor of vscode.window.visibleTextEditors) {
+            if (editor.document.uri.toString() !== key) continue;
+            hostSelections.set(key, { key: selectionKey(sel), at: Date.now() });
+            editor.selection = sel;
+            editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+        }
+    };
+
+    context.subscriptions.push(
+        onDidSelectInGraph(onGraphSelection),
+        vscode.window.onDidChangeTextEditorSelection((e) => {
+            if (!enabled()) return;
+            const document = e.textEditor.document;
+            if (document.languageId !== 'mtlx' || !e.selections[0]) return;
+            const key = document.uri.toString();
+            if (!getPanelForUri(key)) return;
+            const mark = hostSelections.get(key);
+            if (mark && Date.now() - mark.at < HOST_SELECTION_ECHO_MS && mark.key === selectionKey(e.selections[0])) return;
+            const pos = e.selections[0].active;
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(() => {
+                timer = null;
+                if (document.isClosed) return;
+                postPath(document, outlineModel.syncPathAt(document.getText(), { line: pos.line, character: pos.character }), false);
+            }, SELECTION_SYNC_DEBOUNCE_MS);
+        }),
+        outline.onDidSelectPath(({ path: nodePath, document }) => {
+            if (enabled() && document) postPath(document, nodePath, true);
+        }),
+        { dispose: () => { if (timer) clearTimeout(timer); } }
+    );
 }
 
 // materialxPlayground.autoOpenPlayground bookkeeping (see maybeAutoOpen() in
@@ -326,10 +403,11 @@ function activate(context) {
     // materialxPlayground.outline (activity bar container): tracks
     // whichever document activeMtlxDocument() currently reports, see that
     // function's own comment (outlineView.js).
-    outlineView.register(context, {
+    const outline = outlineView.register(context, {
         getActiveDocument: activeMtlxDocument,
         onDidChangeActiveDocument: onDidChangeActiveMtlxDocument,
     });
+    registerSelectionSync(context, outline);
 
     // materialxPlayground.actions (activity bar container): an always-
     // empty tree so its contributed viewsWelcome buttons (package.json)

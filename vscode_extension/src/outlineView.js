@@ -25,6 +25,20 @@ class MtlxOutlineProvider {
         this._tree = { roots: [], byId: new Map() };
         this._timer = null;
         this._treeView = null;
+        // id -> time of our own reveal(select: true), so the selection event
+        // it causes is not mistaken for a user pick (onDidSelectPath).
+        this._programmatic = new Map();
+    }
+
+    markProgrammatic(id) {
+        this._programmatic.set(id, Date.now());
+    }
+
+    // True (and consumed) when this selection came from our own reveal.
+    consumeProgrammatic(id) {
+        const at = this._programmatic.get(id);
+        this._programmatic.delete(id);
+        return at !== undefined && Date.now() - at < 1500;
     }
 
     setTreeView(treeView) {
@@ -82,7 +96,10 @@ class MtlxOutlineProvider {
 
     revealPath(nodePath) {
         const node = this._tree.byId.get(nodePath);
-        if (node && this._treeView) this._treeView.reveal(node, { select: true, focus: false, expand: true });
+        if (!node || !this._treeView) return;
+        this.markProgrammatic(node.id);
+        Promise.resolve(this._treeView.reveal(node, { select: true, focus: false, expand: true }))
+            .catch(() => { /* best effort: a race with a tree rebuild is not fatal */ });
     }
 
     // pathAt/nodeAt take the vscode document/position directly (unlike
@@ -125,8 +142,8 @@ async function revealNode(document, node) {
 // getActiveDocument() returns extension.js's current activeMtlxDocument()
 // (or null); onDidChangeActiveDocument is that same module's event, fired
 // whenever the answer changes. Returns { revealPath, onDidSelectPath,
-// pathAt } for a later batch to wire graph-editor selection sync against,
-// per this round's brief (not implemented here).
+// pathAt }: onDidSelectPath fires (path, document) when the USER picks an
+// Outline item, never for the reveals this module does itself.
 function register(context, { getActiveDocument, onDidChangeActiveDocument }) {
     const provider = new MtlxOutlineProvider();
     provider.setActiveDocument(getActiveDocument());
@@ -142,6 +159,12 @@ function register(context, { getActiveDocument, onDidChangeActiveDocument }) {
     context.subscriptions.push(
         treeView,
         onDidChangeActiveDocument((doc) => provider.setActiveDocument(doc)),
+        treeView.onDidChangeSelection((e) => {
+            const node = e.selection && e.selection[0];
+            if (!node || e.selection.length !== 1) return;
+            if (provider.consumeProgrammatic(node.id)) return;
+            provider._onDidSelectPath.fire({ path: node.id, document: provider._document });
+        }),
         vscode.workspace.onDidChangeTextDocument((e) => provider.scheduleRefresh(e.document)),
         vscode.commands.registerCommand('materialxPlayground.revealOutlineNode', (node) => {
             revealNode(getActiveDocument(), node);
@@ -154,7 +177,7 @@ function register(context, { getActiveDocument, onDidChangeActiveDocument }) {
             if (!pos) return;
             const node = provider.nodeAt(active, pos);
             if (!node) return;
-            provider._onDidSelectPath.fire(node.id);
+            provider.markProgrammatic(node.id);
             followingCursor = true;
             Promise.resolve(treeView.reveal(node, { select: true, focus: false, expand: true }))
                 .catch(() => { /* best effort: a race with a tree rebuild is not fatal */ })

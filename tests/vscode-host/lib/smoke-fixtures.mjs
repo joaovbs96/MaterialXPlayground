@@ -553,6 +553,33 @@ async function generateSmokeFixtures(fixturesDir) {
         '',
     ].join('\n'));
 
+    // selectionSync: a nodegraph with two nodes plus a shader and material.
+    const selSyncDir = path.join(wsDir, 'selsync');
+    fs.mkdirSync(selSyncDir, { recursive: true });
+    const selSyncMtlxPath = path.join(selSyncDir, 'sync.mtlx');
+    fs.writeFileSync(selSyncMtlxPath, [
+        '<?xml version="1.0"?>',
+        '<materialx version="1.39">',
+        '  <nodegraph name="NG_main">',
+        '    <constant name="base" type="color3">',
+        '      <input name="value" type="color3" value="0.8, 0.2, 0.1" />',
+        '    </constant>',
+        '    <multiply name="tinted" type="color3">',
+        '      <input name="in1" type="color3" nodename="base" />',
+        '      <input name="in2" type="color3" value="0.5, 0.5, 0.5" />',
+        '    </multiply>',
+        '    <output name="out" type="color3" nodename="tinted" />',
+        '  </nodegraph>',
+        '  <standard_surface name="SR_test" type="surfaceshader">',
+        '    <input name="base_color" type="color3" nodegraph="NG_main" output="out" />',
+        '  </standard_surface>',
+        '  <surfacematerial name="M_test" type="material">',
+        '    <input name="surfaceshader" type="surfaceshader" nodename="SR_test" />',
+        '  </surfacematerial>',
+        '</materialx>',
+        '',
+    ].join('\n'));
+
     fs.writeFileSync(path.join(fixturesDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
 
     return {
@@ -563,6 +590,7 @@ async function generateSmokeFixtures(fixturesDir) {
         noSiblingsRootPath, noSiblingUnrelatedPaths,
         missingRootPath,
         swapMtlxPath, swapTexPath, swapRedPath, swapBluePath,
+        selSyncMtlxPath,
     };
 }
 

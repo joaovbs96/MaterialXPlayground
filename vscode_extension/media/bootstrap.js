@@ -326,6 +326,48 @@
         if (!vscodeApi) return;
         vscodeApi.postMessage({ type: 'mtlx-sync', xml: xml });
     };
+
+    // Selection sync (E18). js/graph-app.jsx calls this only from USER
+    // selection handlers (never for a host 'mtlx-select'), so no echo loop;
+    // path is the element name path ("NG_main/tinted") or null when cleared.
+    window.__mtlxNotifySelection = function (path) {
+        if (!vscodeApi) return;
+        vscodeApi.postMessage({ type: 'mtlx-selection', path: typeof path === 'string' ? path : null });
+    };
+
+    // Host 'mtlx-select' { path, scope, id }: kept in __mtlxPendingSelect for a
+    // graph view that mounts later, and dispatched to a mounted one.
+    function handleSelect(msg) {
+        var detail = { path: String(msg.path || ''), scope: String(msg.scope || ''), id: String(msg.id || '') };
+        if (!detail.id) return;
+        window.__mtlxPendingSelect = detail;
+        window.dispatchEvent(new CustomEvent('mtlx-select', { detail: detail }));
+    }
+
+    // Test-transport only: the graph's selection state (graph-app.jsx's
+    // __mtlxGraphSelectionState), and a real DOM click on one node card.
+    function handleTestTriggerGraphSelection() {
+        if (!isTransportTest || !vscodeApi) return;
+        var get = window.__mtlxGraphSelectionState;
+        vscodeApi.postMessage({ type: 'mtlx-test-graph-selection', report: typeof get === 'function' ? get() : { error: 'graph not mounted' } });
+    }
+    function handleTestTriggerGraphClick(msg) {
+        if (!isTransportTest || !vscodeApi) return;
+        var id = String(msg.id || '');
+        var cards = document.querySelectorAll('.react-flow__node');
+        var hit = null;
+        for (var i = 0; i < cards.length; i++) { if (cards[i].getAttribute('data-id') === id) { hit = cards[i]; break; } }
+        if (!hit) {
+            vscodeApi.postMessage({ type: 'mtlx-test-graph-selection', report: { error: 'no card ' + id, clicked: false } });
+            return;
+        }
+        var r = hit.getBoundingClientRect();
+        var opts = { bubbles: true, cancelable: true, button: 0, clientX: r.left + 8, clientY: r.top + 8, view: window };
+        hit.dispatchEvent(new MouseEvent('mousedown', opts));
+        hit.dispatchEvent(new MouseEvent('mouseup', opts));
+        hit.dispatchEvent(new MouseEvent('click', opts));
+        vscodeApi.postMessage({ type: 'mtlx-test-graph-selection', report: { clicked: id } });
+    }
     document.addEventListener('keydown', function (event) {
         var isSaveChord = (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey
             && (event.key === 's' || event.key === 'S');
@@ -1204,6 +1246,9 @@
         if (msg.type === 'mtlx-test-trigger-scene-cancel') { handleTestTriggerSceneCancel(msg); return; }
         if (msg.type === 'mtlx-log') { handleMtlxLog(msg); return; }
         if (msg.type === 'mtlx-docs-filter') { handleDocsFilter(msg); return; }
+        if (msg.type === 'mtlx-select') { handleSelect(msg); return; }
+        if (msg.type === 'mtlx-test-trigger-graph-selection') { handleTestTriggerGraphSelection(msg); return; }
+        if (msg.type === 'mtlx-test-trigger-graph-click') { handleTestTriggerGraphClick(msg); return; }
         if (msg.type !== 'mtlx-open') return;
         handleOpen(msg);
     }, false);

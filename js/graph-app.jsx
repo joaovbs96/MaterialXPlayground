@@ -2374,6 +2374,8 @@
                     setPreviewSel((prev) =>
                         (prev && prev.id === node.id && prev.scope === scope) ? prev : { scope, id: node.id });
                 }
+                // A modifier click extends a multi-selection: nothing single to sync.
+                if (!(evt && (evt.shiftKey || evt.ctrlKey || evt.metaKey))) notifyHostSelection(node.id);
             };
 
             // Click an edge → select it (Del disconnects); click the pane →
@@ -2402,6 +2404,92 @@
                         n.selected ? Object.assign({}, n, { selected: false }) : n),
                 }));
             };
+
+            // ---- Selection sync with the VS Code host (E18, bootstrap.js).
+            // Only USER picks are reported (onNodeClick, pane click, node
+            // list); host 'mtlx-select' goes through focusNode, which never reports.
+            const notifyHostSelection = (id) => {
+                if (!IN_VSCODE || typeof window.__mtlxNotifySelection !== 'function') return;
+                const m = id ? /^[nogid]:(.+)$/.exec(id) : null;
+                if (id && !m) return;
+                window.__mtlxNotifySelection(m ? (scopeRef.current ? scopeRef.current + '/' + m[1] : m[1]) : null);
+            };
+            const onPaneClick = () => {
+                clearSelection();
+                notifyHostSelection(null);
+            };
+            const selectedIdRef = React.useRef(selectedId);
+            selectedIdRef.current = selectedId;
+            // Pans only when the card is not fully inside the canvas; keeps the zoom.
+            const panIntoViewIfNeeded = (id) => {
+                const inst = rfInstRef.current;
+                const host = canvasHostRef.current;
+                if (!inst || !host || typeof inst.getNode !== 'function') return;
+                const n = inst.getNode(id);
+                if (!n || !n.width || !n.height) return;
+                const vp = inst.getViewport();
+                const rect = host.getBoundingClientRect();
+                const pos = n.positionAbsolute || n.position;
+                const x0 = pos.x * vp.zoom + vp.x;
+                const y0 = pos.y * vp.zoom + vp.y;
+                if (x0 >= 0 && y0 >= 0 && x0 + n.width * vp.zoom <= rect.width && y0 + n.height * vp.zoom <= rect.height) return;
+                inst.setCenter(pos.x + n.width / 2, pos.y + n.height / 2, { zoom: vp.zoom, duration: 300 });
+            };
+            // Host 'mtlx-select' { scope, id }: enters the scope if needed and
+            // selects the card; unknown targets are ignored. False = no document yet.
+            const applyHostSelect = (detail) => {
+                const p = parsedRef.current;
+                if (!p) return false;
+                const target = String(detail.scope || '');
+                let id = String(detail.id || '');
+                if (!id) return true;
+                if (target && !((p.nodegraphs && p.nodegraphs.indexOf(target) !== -1)
+                        || (p.functionalGraphs && p.functionalGraphs.indexOf(target) !== -1))) return true;
+                if (target !== scopeRef.current) {
+                    scopeOriginRef.current = null;
+                    pendingScopeSelectRef.current = id;
+                    changeScope(target);
+                    return true;
+                }
+                const nodes = flowRef.current.nodes || [];
+                let node = nodes.find((n) => n.id === id);
+                if (!node && id.indexOf('d:') === 0) node = nodes.find((n) => n.data && n.data.nodedef === id.slice(2));
+                if (!node) return true;
+                id = node.id;
+                if (selectedIdRef.current === id && node.selected) return true;
+                focusNode(id, false);
+                panIntoViewIfNeeded(id);
+                return true;
+            };
+            const applyHostSelectRef = React.useRef(applyHostSelect);
+            applyHostSelectRef.current = applyHostSelect;
+            React.useEffect(() => {
+                if (!IN_VSCODE) return undefined;
+                const consume = (detail) => {
+                    if (detail && applyHostSelectRef.current(detail) && window.__mtlxPendingSelect === detail) {
+                        delete window.__mtlxPendingSelect;
+                    }
+                };
+                const onSelect = (e) => consume(e.detail);
+                window.addEventListener('mtlx-select', onSelect);
+                window.__mtlxGraphSelectionState = () => ({
+                    loaded: !!parsedRef.current,
+                    scope: scopeRef.current,
+                    selectedId: selectedIdRef.current,
+                    selectedCards: (flowRef.current.nodes || []).filter((n) => n.selected).map((n) => n.id),
+                    cardCount: (flowRef.current.nodes || []).length,
+                });
+                return () => {
+                    window.removeEventListener('mtlx-select', onSelect);
+                    delete window.__mtlxGraphSelectionState;
+                };
+            }, []);
+            // A select that arrived before the document (or this view) was ready.
+            React.useEffect(() => {
+                if (IN_VSCODE && parsed && window.__mtlxPendingSelect && applyHostSelectRef.current(window.__mtlxPendingSelect)) {
+                    delete window.__mtlxPendingSelect;
+                }
+            }, [parsed]);
 
             // ---- Right-click context menus --------------------------------
             // Selection rule, as every desktop node editor does it: right-
@@ -7550,7 +7638,7 @@
                                     setSortKey={setScopeListSort}
                                     sortDir={scopeListDir}
                                     setSortDir={setScopeListDir}
-                                    onSelect={(id) => focusNode(id, true)}
+                                    onSelect={(id) => { focusNode(id, true); notifyHostSelection(id); }}
                                     onOpen={(name) => changeScope(name)}
                                     onOpenImpl={(implGraph, id) => openImplGraph(implGraph, id)}
                                     onCollapse={() => setLeftOpen(false)}
@@ -7606,7 +7694,7 @@
                                     onPaneContextMenu={onPaneContextMenu}
                                     onNodeClick={onNodeClick}
                                     onEdgeClick={onEdgeClick}
-                                    onPaneClick={clearSelection}
+                                    onPaneClick={onPaneClick}
                                     onConnect={onConnect}
                                     onConnectStart={onConnectStart}
                                     onConnectEnd={onConnectEnd}
