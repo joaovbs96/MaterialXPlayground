@@ -421,7 +421,7 @@ export async function loadObjStage({ files, rootPath, signal, onProgress } = {})
 
   if (!meshRecords.length) throw new Error("No renderable meshes in " + root);
   if (normalsRecomputed) {
-    warnings.push("OBJ has no normals; smooth normals were computed (60 degree crease)");
+    warnings.push("[info] OBJ has no normals; smooth normals were computed (60 degree crease)");
   }
 
   report("extract-geometry", 1, 1, "Extracted meshes");

@@ -3,6 +3,8 @@
 // parse path (loadObjStage) needs a browser and is exercised by Playwright.
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import fs from 'node:fs';
+import url from 'node:url';
 
 import {
   findMtllibNames,
@@ -84,4 +86,12 @@ test('resolveMtlTexturePath: no record or no path returns null', () => {
   const byBase = basenameIndexOf(files.keys());
   assert.equal(resolveMtlTexturePath(null, 'a', 'b', files, byBase), null);
   assert.equal(resolveMtlTexturePath({}, 'a', 'b', files, byBase), null);
+});
+
+test('no-normals warning is tagged [info] so Diagnostics does not count it', () => {
+  const src = fs.readFileSync(
+    url.fileURLToPath(new URL('../../js/usd/obj-stage-loader.js', import.meta.url)),
+    'utf8'
+  );
+  assert.match(src, /warnings\.push\("\[info\] OBJ has no normals/);
 });
