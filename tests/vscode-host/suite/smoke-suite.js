@@ -876,7 +876,10 @@ async function scenarioSceneTreePreview(ctx) {
 
 // Scenario: materialxPlayground.newFromExample, called with explicit
 // (exampleId, targetFolderUri) args to skip the QuickPick/folder-picker
-// UI. Proves a byte-for-byte copy from the PACKAGED exampleCatalog.js.
+// UI. Proves a byte-for-byte copy from the PACKAGED exampleCatalog.js,
+// then runs the SAME command again against the same target: no overwrite
+// prompt, the second copy lands at "<name>_1" (folder suffixed, original
+// filenames kept, for the textured case), and the first copy is untouched.
 async function scenarioNewFromExample(ctx) {
     const catalog = require(path.join(ctx.extensionRoot, 'vscode_extension', 'src', 'exampleCatalog.js'));
     const cases = [
@@ -884,63 +887,87 @@ async function scenarioNewFromExample(ctx) {
         { id: 'playground-motley-patchwork-rug', kind: 'textured' },
     ];
 
+    // Verifies a byte-for-byte copy landed at destName (single:
+    // "<destName>.mtlx", textured: "<destName>/" with original relative
+    // names inside), then the usual open result: a text tab AND a
+    // Playground custom-editor tab for the new file, text tab active.
+    async function verifyCopy(tmpDir, example, destName) {
+        const mismatches = [];
+        let newMtlxUri = null;
+        for (const f of example.files) {
+            const srcAbs = path.join(ctx.extensionRoot, ...f.from.split('/'));
+            const destAbs = example.hasTextures
+                ? path.join(tmpDir, destName, ...f.rel.split('/'))
+                : path.join(tmpDir, destName + '.mtlx');
+            if (f === example.files[0]) newMtlxUri = vscode.Uri.file(destAbs);
+            if (!fs.existsSync(destAbs)) { mismatches.push(f.rel + ': missing at ' + destAbs); continue; }
+            const srcHash = await sha256File(srcAbs);
+            const destHash = await sha256File(destAbs);
+            if (srcHash !== destHash) mismatches.push(f.rel + ': sha256 mismatch');
+        }
+
+        let tabCheck = { textTabs: 0, customTabs: 0, textTabActive: false };
+        if (newMtlxUri) {
+            const uriStr = newMtlxUri.toString();
+            const allTabs = vscode.window.tabGroups.all.flatMap((g) => g.tabs);
+            const textTabs = allTabs.filter((t) => t.input instanceof vscode.TabInputText
+                && t.input.uri.toString() === uriStr);
+            const customTabs = allTabs.filter((t) => t.input instanceof vscode.TabInputCustom
+                && t.input.viewType === 'materialxPlayground.editor'
+                && t.input.uri.toString() === uriStr);
+            tabCheck = {
+                textTabs: textTabs.length,
+                customTabs: customTabs.length,
+                textTabActive: textTabs.length === 1 && textTabs[0].isActive,
+            };
+        }
+        const tabsOk = tabCheck.textTabs === 1 && tabCheck.customTabs === 1 && tabCheck.textTabActive;
+        return { newMtlxUri, mismatches, tabCheck, tabsOk };
+    }
+
     const out = {};
     for (const { id, kind } of cases) {
         const example = catalog.getExample(id);
         const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtlx-smoke-newfromexample-'));
         const targetUri = vscode.Uri.file(tmpDir);
-        const errorsBefore = ctx.testApi.getErrors().length;
-        let newMtlxUri = null;
+        let firstUri = null;
+        let secondUri = null;
 
         try {
             await vscode.commands.executeCommand('materialxPlayground.newFromExample', id, targetUri);
-
             // Generous window for the text editor to open and the
             // auto-open listener (extension.js's maybeAutoOpen) to place
-            // the Playground beside it, then forward any errors.
+            // the Playground beside it.
             await new Promise((r) => setTimeout(r, 10000));
-            const newErrors = ctx.testApi.getErrors().length - errorsBefore;
+            const first = await verifyCopy(tmpDir, example, example.destName);
+            firstUri = first.newMtlxUri;
 
-            const mismatches = [];
-            for (const f of example.files) {
-                const srcAbs = path.join(ctx.extensionRoot, ...f.from.split('/'));
-                const destAbs = example.hasTextures
-                    ? path.join(tmpDir, example.destName, ...f.rel.split('/'))
-                    : path.join(tmpDir, example.destName + '.mtlx');
-                if (f === example.files[0]) newMtlxUri = vscode.Uri.file(destAbs);
-                if (!fs.existsSync(destAbs)) { mismatches.push(f.rel + ': missing at ' + destAbs); continue; }
-                const srcHash = await sha256File(srcAbs);
-                const destHash = await sha256File(destAbs);
-                if (srcHash !== destHash) mismatches.push(f.rel + ': sha256 mismatch');
-            }
+            const firstMtlxAbs = example.hasTextures
+                ? path.join(tmpDir, example.destName, example.files[0].rel)
+                : path.join(tmpDir, example.destName + '.mtlx');
+            const firstHashBefore = await sha256File(firstMtlxAbs);
 
-            // Same result as opening the file from the Explorer: a text
-            // tab AND a Playground custom-editor tab for the new file,
-            // with the text tab active (has focus).
-            let tabCheck = { textTabs: 0, customTabs: 0, textTabActive: false };
-            if (newMtlxUri) {
-                const uriStr = newMtlxUri.toString();
-                const allTabs = vscode.window.tabGroups.all.flatMap((g) => g.tabs);
-                const textTabs = allTabs.filter((t) => t.input instanceof vscode.TabInputText
-                    && t.input.uri.toString() === uriStr);
-                const customTabs = allTabs.filter((t) => t.input instanceof vscode.TabInputCustom
-                    && t.input.viewType === 'materialxPlayground.editor'
-                    && t.input.uri.toString() === uriStr);
-                tabCheck = {
-                    textTabs: textTabs.length,
-                    customTabs: customTabs.length,
-                    textTabActive: textTabs.length === 1 && textTabs[0].isActive,
-                };
-            }
-            const tabsOk = tabCheck.textTabs === 1 && tabCheck.customTabs === 1 && tabCheck.textTabActive;
+            const errorsBeforeSecond = ctx.testApi.getErrors().length;
+            await vscode.commands.executeCommand('materialxPlayground.newFromExample', id, targetUri);
+            await new Promise((r) => setTimeout(r, 10000));
+            const newErrors = ctx.testApi.getErrors().length - errorsBeforeSecond;
 
-            const errorSample = ctx.testApi.getErrors().slice(errorsBefore, errorsBefore + 3);
+            const second = await verifyCopy(tmpDir, example, example.destName + '_1');
+            secondUri = second.newMtlxUri;
+            const firstUntouched = (await sha256File(firstMtlxAbs)) === firstHashBefore;
+
+            const errorSample = ctx.testApi.getErrors().slice(errorsBeforeSecond, errorsBeforeSecond + 3);
             out[kind] = {
-                pass: mismatches.length === 0 && newErrors === 0 && tabsOk,
-                id, mismatches, newErrors, errorSample, fileCount: example.files.length, tabCheck,
+                pass: first.mismatches.length === 0 && first.tabsOk
+                    && second.mismatches.length === 0 && second.tabsOk
+                    && firstUntouched && newErrors === 0,
+                id, newErrors, errorSample, fileCount: example.files.length,
+                firstMismatches: first.mismatches, secondMismatches: second.mismatches,
+                firstTabCheck: first.tabCheck, secondTabCheck: second.tabCheck, firstUntouched,
             };
         } finally {
-            if (newMtlxUri) await closeTabsForUri(newMtlxUri);
+            if (secondUri) await closeTabsForUri(secondUri);
+            if (firstUri) await closeTabsForUri(firstUri);
             try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { /* best effort */ }
         }
     }

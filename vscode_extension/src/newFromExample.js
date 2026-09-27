@@ -7,6 +7,7 @@ const vscode = require('vscode');
 const fs = require('fs');
 const exampleCatalog = require('./exampleCatalog');
 const { errMsg } = require('./util');
+const { nextFreeExampleName } = require('./nextFreeExampleName');
 
 const COMMAND_ID = 'materialxPlayground.newFromExample';
 
@@ -120,37 +121,55 @@ async function pathExists(uri) {
     }
 }
 
-// Copies example.files into targetFolder, returning the new .mtlx's Uri
-// (or null if the user declined to overwrite). Single-file examples land
-// at "<target>/<name>.mtlx"; textured ones land under "<target>/<name>/".
+// destUrisFor: every path a copy under destName would write. Single-file
+// examples land at "<target>/<name>.mtlx"; textured ones land under
+// "<target>/<name>/" with each file's original relative name kept, so
+// only the folder itself needs a numeric suffix, never a texture name.
+function destUrisFor(targetFolder, example, single, destName) {
+    return example.files.map((file) => ({
+        file,
+        destUri: single
+            ? vscode.Uri.joinPath(targetFolder, destName + '.mtlx')
+            : vscode.Uri.joinPath(targetFolder, destName, ...file.rel.split('/')),
+    }));
+}
+
+// Copies example.files into targetFolder, returning the new .mtlx's Uri.
+// Never overwrites: if <name>(.mtlx|/) already exists, picks the smallest
+// free "<name>_N" instead. Re-checks every path immediately before
+// writing, and retries at the next number if something appeared in the
+// meantime, so a race never overwrites an existing file or texture.
 async function copyExample(extensionUri, example, targetFolder) {
     const single = !example.hasTextures;
-    const destLabel = single ? example.destName + '.mtlx' : example.destName + '/';
-    const checkUri = single
-        ? vscode.Uri.joinPath(targetFolder, example.destName + '.mtlx')
-        : vscode.Uri.joinPath(targetFolder, example.destName);
 
-    if (await pathExists(checkUri)) {
-        const choice = await vscode.window.showWarningMessage(
-            'MaterialX Playground: "' + destLabel + '" already exists in the destination folder.',
-            { modal: true },
-            'Overwrite'
-        );
-        if (choice !== 'Overwrite') return null;
+    async function anyExists(destName) {
+        for (const { destUri } of destUrisFor(targetFolder, example, single, destName)) {
+            if (await pathExists(destUri)) return true;
+        }
+        return false;
     }
 
-    let newMtlxUri = null;
-    for (const file of example.files) {
-        const srcUri = vscode.Uri.joinPath(extensionUri, ...file.from.split('/'));
-        const bytes = await vscode.workspace.fs.readFile(srcUri);
-        const destUri = single
-            ? vscode.Uri.joinPath(targetFolder, example.destName + '.mtlx')
-            : vscode.Uri.joinPath(targetFolder, example.destName, ...file.rel.split('/'));
-        await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(destUri, '..'));
-        await vscode.workspace.fs.writeFile(destUri, bytes);
-        if (file === example.files[0]) newMtlxUri = destUri;
+    let startAt = 0;
+    for (;;) {
+        const picked = await nextFreeExampleName(example.destName, anyExists, startAt);
+        const entries = destUrisFor(targetFolder, example, single, picked.name);
+
+        let collided = false;
+        for (const { destUri } of entries) {
+            if (await pathExists(destUri)) { collided = true; break; }
+        }
+        if (collided) { startAt = picked.n + 1; continue; }
+
+        let newMtlxUri = null;
+        for (const { file, destUri } of entries) {
+            const srcUri = vscode.Uri.joinPath(extensionUri, ...file.from.split('/'));
+            const bytes = await vscode.workspace.fs.readFile(srcUri);
+            await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(destUri, '..'));
+            await vscode.workspace.fs.writeFile(destUri, bytes);
+            if (file === example.files[0]) newMtlxUri = destUri;
+        }
+        return newMtlxUri;
     }
-    return newMtlxUri;
 }
 
 // createFromExample: the actual copy-and-open flow, shared by every
@@ -163,7 +182,6 @@ async function createFromExample(context, example, explorerFolderUri, targetFold
         if (!folder) return; // user cancelled the folder dialog
 
         const newUri = await copyExample(context.extensionUri, example, folder);
-        if (!newUri) return; // user declined to overwrite
 
         // Open the .mtlx TEXT editor, same as double-clicking it in the
         // Explorer. That fires onDidChangeActiveTextEditor, which is what
