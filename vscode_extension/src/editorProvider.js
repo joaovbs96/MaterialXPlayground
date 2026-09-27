@@ -1146,6 +1146,21 @@ class MaterialXEditorProvider {
                             + errMsg(err)
                         );
                     }
+                    return;
+                }
+                if (msg.type === 'mtlx-open-text') {
+                    // "Open Text Editor" toolbar/menu action: open or reveal
+                    // this document's plain text editor beside the
+                    // Playground, same as outlineView.js's revealNode.
+                    try {
+                        const visible = vscode.window.visibleTextEditors.find(
+                            (e) => e.document.uri.toString() === uriKey
+                        );
+                        const viewColumn = visible ? visible.viewColumn : vscode.ViewColumn.Beside;
+                        await vscode.window.showTextDocument(document, { viewColumn, preserveFocus: false });
+                    } catch (err) {
+                        showHostError('MaterialX Playground: failed to open the text editor: ' + errMsg(err));
+                    }
                 }
             }));
 

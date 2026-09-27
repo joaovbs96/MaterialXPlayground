@@ -21,18 +21,17 @@ function isUnsafeRef(ref) {
 
 const INCLUDE_EXTENSIONS = new Set(['mtlx']);
 
-// Matches js/mtlx-engine.js bindDroppedTextures's ext switch: explicit
-// branches for ktx2 (line 4615) and exr/hdr/tif/tiff (line 4633), plus a
-// generic image fallback (lines 4649, 4682) covering png/jpg/jpeg/gif/bmp/webp.
-const TEXTURE_EXTENSIONS = new Set([
-    'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'exr', 'hdr', 'tif', 'tiff', 'ktx2'
-]);
+// Single source of truth: js/shared/texture-formats.js (also mirrors
+// js/mtlx-engine.js bindDroppedTextures's decodable ext switch).
+const { MTLX_TEXTURE_EXTS } = require('../../js/shared/texture-formats.js');
+const TEXTURE_EXTENSIONS = new Set(MTLX_TEXTURE_EXTS);
 
 // Scene file sets (usdFileSet.js): USD layers, glTF/GLB/OBJ roots and their
 // side files (buffers, materials), MaterialX documents, and every image type
-// the Scene Viewer's texture loaders decode.
+// the Scene Viewer's texture loaders decode. TGA has no decoder (see
+// texture-formats.js) so it is deliberately not included.
 const SCENE_EXTENSIONS = new Set([
-    'usd', 'usda', 'usdc', 'usdz', 'gltf', 'glb', 'obj', 'bin', 'mtl', 'mtlx', 'tga', ...TEXTURE_EXTENSIONS
+    'usd', 'usda', 'usdc', 'usdz', 'gltf', 'glb', 'obj', 'bin', 'mtl', 'mtlx', ...TEXTURE_EXTENSIONS
 ]);
 
 function extOf(ref) {

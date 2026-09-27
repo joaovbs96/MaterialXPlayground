@@ -47,6 +47,8 @@
 !vendor/three/**
 !vendor/usd-webview-bindings/**
 !vendor/utif/**
+!vendor/xml-formatter/**
+!vendor/xml-parser-xo/**
 # END vendor-deps
 # vendor/materialx/ ships only what the webview/extension host reach:
 # manifest, license, spec docs, one fallback material, plus the curated

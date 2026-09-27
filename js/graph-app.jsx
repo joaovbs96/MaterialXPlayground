@@ -3847,6 +3847,13 @@
                 setXmlDialogOpen(true);
             };
 
+            // Same toolbar/menu action, split by host: VS Code already has a
+            // real text editor for this file, so open that instead of the
+            // read-only XML dialog (web/desktop have no such editor).
+            const openXmlOrTextEditor = IN_VSCODE
+                ? () => { if (window.__mtlxOpenTextEditor) window.__mtlxOpenTextEditor(); }
+                : openXmlDialog;
+
             // Background validation: recomputes validateStatus from
             // docXmlRef's cached text via validateMtlxXml, which builds a
             // THROWAWAY doc — parsed.doc itself gets healed on serialize.
@@ -7199,10 +7206,13 @@
                         ? 'No autosaved sessions to restore.'
                         : 'Browse and restore a previous editing session recovered from autosave',
                 },
-                !IN_VSCODE && { separator: true },
-                IN_ELECTRON && {
+                { separator: true },
+                (IN_ELECTRON || IN_VSCODE) && {
                     label: 'Save', icon: 'file-download', keys: 'Ctrl+S', disabled: !parsed || docReadOnly,
-                    onSelect: () => doSaveInApp(false),
+                    onSelect: () => {
+                        if (IN_VSCODE) { if (window.__mtlxRequestGraphSave) window.__mtlxRequestGraphSave(); return; }
+                        doSaveInApp(false);
+                    },
                     title: docReadOnly ? 'View only: export a copy instead' : 'Save the current document to its file (or choose a location if it has none yet)',
                 },
                 IN_ELECTRON && {
@@ -7230,8 +7240,10 @@
                 },
                 { separator: true },
                 {
-                    label: 'View .mtlx XML', icon: 'code', disabled: !parsed, onSelect: openXmlDialog,
-                    title: 'View the raw MaterialX XML for the current document',
+                    label: IN_VSCODE ? 'Open Text Editor' : 'View .mtlx XML', icon: 'code', disabled: !parsed,
+                    onSelect: openXmlOrTextEditor,
+                    title: IN_VSCODE ? 'Open this document\'s text editor beside the Node Graph view'
+                        : 'View the raw MaterialX XML for the current document',
                 },
                 IN_ELECTRON && { separator: true },
                 IN_ELECTRON && {
@@ -7496,6 +7508,16 @@
                                 className={BTN_MENUBAR}
                             >
                                 <MtlxIcon name="arrow-forward-up" className="w-3.5 h-3.5" />
+                            </button>
+                            <div className="w-px h-5 bg-gray-700 shrink-0" aria-hidden="true" />
+                            <button
+                                onClick={openXmlOrTextEditor}
+                                disabled={!parsed}
+                                title={IN_VSCODE ? 'Open Text Editor' : 'View .mtlx XML'}
+                                aria-label={IN_VSCODE ? 'Open Text Editor' : 'View .mtlx XML'}
+                                className={BTN_MENUBAR + (parsed ? '' : ' opacity-50 cursor-not-allowed')}
+                            >
+                                <MtlxIcon name="code" className="w-3.5 h-3.5" />
                             </button>
                         </div>
 

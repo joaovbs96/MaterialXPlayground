@@ -10,29 +10,56 @@
 // register() takes vscode as a parameter instead, so the whole file
 // (including provider wiring) can be tested without a real host.
 //
-// xml-formatter isn't in the committed vendor registry yet (a later
-// batch adds vendor/xml-formatter/ via scripts/vendor-deps.mjs, per
-// the file map in gate-results.md).
+// xml-formatter and its one runtime dependency, xml-parser-xo, ship via
+// scripts/vendor-deps.mjs as two FLAT, separate vendor dirs (no nested
+// node_modules: that would land under .gitignore's blanket "node_modules/"
+// rule and never get committed to a clean clone). loadVendoredXmlFormatter
+// below is a tiny contained module loader that remaps xml-formatter's own
+// require('xml-parser-xo') to the vendored file, without patching it.
 //
-// Until then, resolveXmlFormatter() also checks
-// MTLX_XML_FORMATTER_DIR, which tests point at
-// scratchpad/fmt-spike/node_modules.
+// resolveXmlFormatter() also checks MTLX_XML_FORMATTER_DIR, a test-only
+// override still used by the fmt-spike scratch install comparison (a real
+// npm install there, so a plain require() already resolves it).
 'use strict';
 
 const path = require('path');
+const fs = require('fs');
+const Module = require('module');
 
-// Resolves the xml-formatter CJS entry point: tries the committed
-// vendor path, then an env-var override (test-only, points at the
-// spike's scratch install). Returns null, never throws (caller decides).
+// Loads xmlFormatterPath as its own Module instance, with its require()
+// overridden so the bare specifier 'xml-parser-xo' resolves to
+// xmlParserXoPath; every other specifier falls through to the real
+// Module.prototype.require. Never edits the vendored file on disk.
+function loadVendoredXmlFormatter(xmlFormatterPath, xmlParserXoPath) {
+    const source = fs.readFileSync(xmlFormatterPath, 'utf8');
+    const mod = new Module(xmlFormatterPath, module);
+    mod.filename = xmlFormatterPath;
+    mod.paths = Module._nodeModulePaths(path.dirname(xmlFormatterPath));
+    mod.require = (request) => (
+        request === 'xml-parser-xo' ? require(xmlParserXoPath) : Module.prototype.require.call(mod, request)
+    );
+    mod._compile(source, xmlFormatterPath);
+    return mod.exports;
+}
+
+// Resolves the xml-formatter CJS entry point: tries the committed vendor
+// files (through the contained loader above), then an env-var override
+// (test-only, points at the spike's scratch install). Returns null, never
+// throws (caller decides).
 function resolveXmlFormatter() {
-    const candidates = [];
-    candidates.push(path.join(__dirname, '..', '..', 'vendor', 'xml-formatter', 'dist', 'cjs', 'index.js'));
-    const override = process.env.MTLX_XML_FORMATTER_DIR;
-    if (override) candidates.push(path.join(override, 'xml-formatter'));
-    for (const candidate of candidates) {
+    const vendorDir = path.join(__dirname, '..', '..', 'vendor');
+    const xmlFormatterPath = path.join(vendorDir, 'xml-formatter', 'index.js');
+    const xmlParserXoPath = path.join(vendorDir, 'xml-parser-xo', 'index.js');
+    if (fs.existsSync(xmlFormatterPath) && fs.existsSync(xmlParserXoPath)) {
         try {
-            return require(candidate);
-        } catch (e) { /* try the next candidate */ }
+            return loadVendoredXmlFormatter(xmlFormatterPath, xmlParserXoPath);
+        } catch (e) { /* fall through to the override below */ }
+    }
+    const override = process.env.MTLX_XML_FORMATTER_DIR;
+    if (override) {
+        try {
+            return require(path.join(override, 'xml-formatter'));
+        } catch (e) { /* unavailable */ }
     }
     return null;
 }
@@ -304,5 +331,8 @@ module.exports = {
     formatMtlx,
     register,
     // Exposed for tests only.
-    _internal: { detectEol, detectSelfClosingSpace, findEnclosingElement, resolveXmlFormatter, pickBlankPlaceholder },
+    _internal: {
+        detectEol, detectSelfClosingSpace, findEnclosingElement, resolveXmlFormatter, pickBlankPlaceholder,
+        loadVendoredXmlFormatter,
+    },
 };

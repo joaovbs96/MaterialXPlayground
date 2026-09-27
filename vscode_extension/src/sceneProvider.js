@@ -20,6 +20,7 @@ const textureStamp = require('./textureStamp');
 const usdFileSet = require('./usdFileSet');
 const { buildHtml, panelLifecycle, wireCommonWebviewMessages, trackScenePanel, getSharedOutputChannel, logLine, showHostError, RELOAD_DEBOUNCE_MS, sceneTestHooks, panelIconPath } = require('./editorProvider');
 const { errMsg } = require('./util');
+const { MTLX_TEXTURE_EXTS } = require('../../js/shared/texture-formats.js');
 
 const VIEW_TYPE = 'materialxPlayground.sceneViewer';
 // The ONE place the set of auto-openable/openable scene extensions lives.
@@ -27,6 +28,12 @@ const VIEW_TYPE = 'materialxPlayground.sceneViewer';
 // indirectly through isSceneUri, so adding an extension here is the only
 // change needed for it to be picked up there too.
 const SCENE_EXTENSIONS = ['.usd', '.usda', '.usdc', '.usdz', '.gltf', '.glb', '.obj'];
+// Non-texture scene extensions plus every decodable image extension
+// (single source of truth: js/shared/texture-formats.js). TGA has no
+// decoder so it is deliberately not included.
+const SCENE_LIKE_RE = new RegExp(
+    '\\.(usda?|usdc|usdz|gltf|glb|obj|bin|mtl|mtlx|' + MTLX_TEXTURE_EXTS.join('|') + ')$', 'i'
+);
 const SAVE_REFUSED = 'Graph edits to a scene material cannot be saved into the scene file. Use Export .mtlx in the Graph Editor to save the material as a separate file.';
 // On-demand rounds (missing files the loaded scene asked for) are capped per
 // open or reload by the usdFileSet session (MAX_MISSING_ROUNDS there).
@@ -237,7 +244,7 @@ class UsdSceneProvider {
                 if (suspended) return;
                 if (changedUri) {
                     const inSet = currentUris.has(changedUri.toString());
-                    const scenelike = /\.(usda?|usdc|usdz|gltf|glb|obj|bin|mtl|mtlx|png|jpe?g|gif|bmp|webp|tga|exr|hdr|tiff?|ktx2)$/i.test(changedUri.path);
+                    const scenelike = SCENE_LIKE_RE.test(changedUri.path);
                     if (!inSet && !scenelike) return;
                 }
                 if (debounceTimer) clearTimeout(debounceTimer);

@@ -6,13 +6,14 @@
 // DocumentRangeFormattingEditProvider wiring, tested against a
 // minimal fake 'vscode' (formatter.js takes vscode as a parameter).
 //
-// The dependency (xml-formatter) isn't in the committed vendor
-// registry yet, so tests point MTLX_XML_FORMATTER_DIR at
-// scratchpad/fmt-spike/node_modules and skip gracefully if absent.
+// xml-formatter ships via vendor/xml-formatter/ (scripts/vendor-deps.mjs).
+// Tests still point MTLX_XML_FORMATTER_DIR at the fmt-spike scratch
+// install when present, and skip gracefully if neither is available.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
@@ -271,4 +272,75 @@ test('range formatting outside any element returns no edits', (t) => {
     const { rangeProvider } = registerFake();
     const edits = rangeProvider.provideDocumentRangeFormattingEdits(doc, range, { tabSize: 2, insertSpaces: true });
     assert.deepEqual(edits, []);
+});
+
+// --- loadVendoredXmlFormatter: the contained loader that remaps the flat
+// vendor/xml-formatter and vendor/xml-parser-xo dirs (no nested
+// node_modules -- that would fall under .gitignore's blanket rule and
+// never reach a clean clone) back into a working require graph. ---
+
+function writeTempModule(dir, name, source) {
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, source);
+    return file;
+}
+
+test('loadVendoredXmlFormatter maps the bare "xml-parser-xo" specifier to the vendored file', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtlx-fmt-loader-'));
+    try {
+        const parserPath = writeTempModule(dir, 'parser.js', 'module.exports = { MARK: "fake-parser" };\n');
+        const formatterPath = writeTempModule(dir, 'formatter.js', [
+            'const xp = require("xml-parser-xo");',
+            'module.exports = function () { return xp.MARK; };',
+        ].join('\n'));
+        const loaded = formatter._internal.loadVendoredXmlFormatter(formatterPath, parserPath);
+        assert.equal(loaded(), 'fake-parser');
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('loadVendoredXmlFormatter lets every other specifier fall through to real require', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtlx-fmt-loader-'));
+    try {
+        const parserPath = writeTempModule(dir, 'parser.js', 'module.exports = {};\n');
+        const formatterPath = writeTempModule(dir, 'formatter.js', [
+            'const p = require("path");', // a real Node builtin, not remapped
+            'require("xml-parser-xo");', // still resolves, just unused here
+            'module.exports = function () { return typeof p.join; };',
+        ].join('\n'));
+        const loaded = formatter._internal.loadVendoredXmlFormatter(formatterPath, parserPath);
+        assert.equal(loaded(), 'function');
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('loadVendoredXmlFormatter does not leak its fake stub into the real "xml-parser-xo" resolution', () => {
+    // xml-parser-xo is also a real devDependency (root node_modules), so a
+    // bare require('xml-parser-xo') from this test always succeeds either
+    // way -- the containment this checks is that the loader's remapping
+    // for ONE formatter module never pollutes that real, shared resolution
+    // with its fake stand-in.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtlx-fmt-loader-'));
+    try {
+        const parserPath = writeTempModule(dir, 'parser.js', 'module.exports = { MARK: "fake-parser-should-not-leak" };\n');
+        const formatterPath = writeTempModule(dir, 'formatter.js', 'module.exports = {};\n');
+        formatter._internal.loadVendoredXmlFormatter(formatterPath, parserPath);
+        const real = require('xml-parser-xo');
+        assert.notEqual(real && real.MARK, 'fake-parser-should-not-leak');
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+test('loadVendoredXmlFormatter propagates a require error for an unresolvable specifier', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtlx-fmt-loader-'));
+    try {
+        const parserPath = writeTempModule(dir, 'parser.js', 'module.exports = {};\n');
+        const formatterPath = writeTempModule(dir, 'formatter.js', 'require("this-module-does-not-exist-anywhere");\n');
+        assert.throws(() => formatter._internal.loadVendoredXmlFormatter(formatterPath, parserPath));
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
 });

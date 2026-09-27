@@ -5748,6 +5748,12 @@ const parseModelRoot = async (ext, data, label, opts) => {
         objectUrls.push(u);
     });
 
+    // createImageBitmap subset of the decodable set (excludes the dedicated
+    // exr/hdr/tif/tiff/ktx2 decoders). Single source of truth:
+    // js/shared/texture-formats.js.
+    const bitmapExts = window.MTLX_TEXTURE_EXTS.filter((e) => window.MTLX_DEDICATED_DECODER_EXTS.indexOf(e) === -1);
+    const bitmapExtRe = new RegExp('\\.(' + bitmapExts.join('|') + ')$', 'i');
+
     // Redirects sidecar (.bin) requests to their object URL and swallows
     // every texture request with a blank PNG; anything else (buffer
     // fetches with no sidecar) passes through to fail into the triage below.
@@ -5758,7 +5764,7 @@ const parseModelRoot = async (ext, data, label, opts) => {
         try { decoded = decodeURIComponent(base); } catch (e) { /* not percent-encoded */ }
         if (sidecarUrls[base]) return sidecarUrls[base];
         if (sidecarUrls[decoded]) return sidecarUrls[decoded];
-        if (/\.(png|jpe?g|webp|gif|bmp)$/i.test(decoded)) return CUSTOM_GEOM_BLANK_PNG;
+        if (bitmapExtRe.test(decoded)) return CUSTOM_GEOM_BLANK_PNG;
         return url;
     });
 

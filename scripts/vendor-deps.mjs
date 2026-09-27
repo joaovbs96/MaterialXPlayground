@@ -192,4 +192,22 @@ export const VENDOR_DEPS = [
     vscode: false,
     module: { entry: "JsMxslc.js", kind: "emscripten-esm" },
   },
+  {
+    id: "xml-formatter",
+    name: "xml-formatter",
+    // vscode_extension/src/formatter.js's .mtlx re-indent formatter, loaded
+    // through its own contained loader (its require('xml-parser-xo') is
+    // remapped there) -- no nested node_modules (that would land under
+    // .gitignore's blanket "node_modules/" rule and never get committed).
+    source: { npm: "xml-formatter", files: { "dist/cjs/index.js": "index.js", LICENSE: "LICENSE.txt" } },
+    license: { url: "https://github.com/chrisbottin/xml-formatter/blob/HEAD/LICENSE", file: "LICENSE.txt" },
+  },
+  {
+    id: "xml-parser-xo",
+    name: "xml-parser-xo",
+    // xml-formatter's one runtime dependency. Flat, own top-level vendor
+    // dir (see the loader note above), not nested inside xml-formatter's.
+    source: { npm: "xml-parser-xo", files: { "dist/cjs/index.js": "index.js", LICENSE: "LICENSE.txt" } },
+    license: { url: "https://github.com/chrisbottin/xml-parser/blob/HEAD/LICENSE", file: "LICENSE.txt" },
+  },
 ];

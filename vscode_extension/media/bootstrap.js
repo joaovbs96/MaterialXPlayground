@@ -312,6 +312,9 @@
                 postError('Save failed: ' + String((e && e.message) || e));
             });
     }
+    // Exposed so js/graph-app.jsx's File > Save menu item can trigger the
+    // same path as the Ctrl+S chord / materialxPlayground.saveGraph command.
+    window.__mtlxRequestGraphSave = requestGraphSave;
 
     // Called by js/graph-app.jsx's flushUndoSnapshot whenever a coalesced
     // graph edit settles (350ms debounce, collapsing e.g. a slider drag into
@@ -333,6 +336,14 @@
     window.__mtlxNotifySelection = function (path) {
         if (!vscodeApi) return;
         vscodeApi.postMessage({ type: 'mtlx-selection', path: typeof path === 'string' ? path : null });
+    };
+
+    // "Open Text Editor" toolbar/menu action (js/graph-app.jsx): asks the
+    // host to open or reveal this document's plain text editor beside the
+    // Node Graph view.
+    window.__mtlxOpenTextEditor = function () {
+        if (!vscodeApi) return;
+        vscodeApi.postMessage({ type: 'mtlx-open-text' });
     };
 
     // Host 'mtlx-select' { path, scope, id }: kept in __mtlxPendingSelect for a

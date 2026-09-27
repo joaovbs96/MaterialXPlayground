@@ -107,5 +107,17 @@ window.MTLX_VENDOR_DEPS = {
     "name": "UTIF.js",
     "version": "3.1.0",
     "licenseUrl": "https://github.com/photopea/UTIF.js/blob/HEAD/LICENSE"
+  },
+  "xml-formatter": {
+    "dir": "xml-formatter",
+    "name": "xml-formatter",
+    "version": "3.7.0",
+    "licenseUrl": "https://github.com/chrisbottin/xml-formatter/blob/HEAD/LICENSE"
+  },
+  "xml-parser-xo": {
+    "dir": "xml-parser-xo",
+    "name": "xml-parser-xo",
+    "version": "4.1.6",
+    "licenseUrl": "https://github.com/chrisbottin/xml-parser/blob/HEAD/LICENSE"
   }
 };

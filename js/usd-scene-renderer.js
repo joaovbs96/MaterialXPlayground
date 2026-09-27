@@ -9,8 +9,10 @@
 // engine's getDisplayTransform persistence idiom (js/mtlx-engine.js:1601-1629).
 // Formats the engine's exr/hdr/tif loaders decode whole (never resized by
 // createImageBitmap, unlike the bounded PNG/JPEG path). Single source of
-// truth: js/shared/texture-formats.js.
-const UNBOUNDED_TEXTURE_EXTENSIONS = window.MTLX_DEDICATED_DECODER_EXTS;
+// truth: js/shared/texture-formats.js. Guarded so this file still evaluates
+// under Node (unit tests, a future host require) where there is no window.
+const UNBOUNDED_TEXTURE_EXTENSIONS = (typeof window !== 'undefined' && window.MTLX_DEDICATED_DECODER_EXTS)
+    || (typeof require === 'function' && require('./shared/texture-formats.js').MTLX_DEDICATED_DECODER_EXTS) || [];
 
 const SCENE_TEXTURE_MAX_SIZE_KEY = 'mtlx_scene_texture_size';
 // Original is unbounded (Infinity internally); persisted as the string
@@ -703,8 +705,10 @@ const sceneFileMap = (files, stage) => {
         // explicit ArrayBuffer slice or second JS heap allocation.
         const canonical = String(entry.path).replace(/\\/g, '/');
         const ext = canonical.split('.').pop().toLowerCase();
-        // Single source of truth: js/shared/texture-formats.js.
-        const typeByExtension = window.MTLX_TEXTURE_MIME;
+        // Single source of truth: js/shared/texture-formats.js. Same window/
+        // require/globalThis guard as UNBOUNDED_TEXTURE_EXTENSIONS above.
+        const typeByExtension = (typeof window !== 'undefined' && window.MTLX_TEXTURE_MIME)
+            || (typeof require === 'function' && require('./shared/texture-formats.js').MTLX_TEXTURE_MIME) || {};
         // Preserve the user's authored file when the Worker also returns a
         // composed/generated payload at the same path. Stage assets remain a
         // fallback for references that were not part of the original upload.

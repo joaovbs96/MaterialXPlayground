@@ -72,7 +72,9 @@
     "reactflow": "11.11.4",
     "three": "0.128.0",
     "three-147": "npm:three@0.147.0",
-    "utif": "3.1.0"
+    "utif": "3.1.0",
+    "xml-formatter": "3.7.0",
+    "xml-parser-xo": "4.1.6"
   },
   "categories": [
     "Visualization",
@@ -472,7 +474,8 @@
           "other": "on",
           "comments": "off",
           "strings": "on"
-        }
+        },
+        "editor.defaultFormatter": "MaterialXPlayground.materialx-playground"
       }
     },
     "configuration": {

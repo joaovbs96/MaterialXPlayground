@@ -286,6 +286,56 @@ async function scenarioLanguageFeatures(ctx) {
     }
 }
 
+// Scenario: Format Document (formatter.js, registered as the default
+// formatter for 'mtlx' via package.json configurationDefaults) against
+// the PACKAGED vendor/xml-formatter. Deliberately messy indentation on a
+// small fixture, so formatting has visible work to do: re-indents,
+// leaves attribute values untouched, and a second format is a no-op.
+async function scenarioFormatter(ctx) {
+    const fixturePath = path.join(ctx.fixtures.matDir, 'messy.mtlx');
+    const messyText = [
+        '<?xml version="1.0"?>',
+        '<materialx version="1.39">',
+        '<nodegraph name="NG1">',
+        '<input name="amount" type="float" value="0.5" />',
+        '  <constant name="c1" type="color3">',
+        '<input name="value" type="color3" value="0.2, 0.4, 0.8" />',
+        '</constant>',
+        '</nodegraph>',
+        '</materialx>',
+        '',
+    ].join('\n');
+    fs.mkdirSync(path.dirname(fixturePath), { recursive: true });
+    fs.writeFileSync(fixturePath, messyText);
+    const uri = vscode.Uri.file(fixturePath);
+
+    try {
+        const doc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(doc, { preview: false });
+
+        await vscode.commands.executeCommand('editor.action.formatDocument');
+        await new Promise((r) => setTimeout(r, 500));
+        const formattedOnce = doc.getText();
+
+        await vscode.commands.executeCommand('editor.action.formatDocument');
+        await new Promise((r) => setTimeout(r, 500));
+        const formattedTwice = doc.getText();
+
+        const amountLine = (formattedOnce.split('\n').find((l) => l.includes('name="amount"')) || '');
+        const reindented = amountLine !== '<input name="amount" type="float" value="0.5" />' && /^\s+</.test(amountLine);
+        const valuesUnchanged = formattedOnce.includes('value="0.5"') && formattedOnce.includes('value="0.2, 0.4, 0.8"');
+        const idempotent = formattedTwice === formattedOnce;
+
+        return {
+            pass: reindented && valuesUnchanged && idempotent,
+            reindented, valuesUnchanged, idempotent, amountLine,
+        };
+    } finally {
+        await closeTabsForUri(uri);
+        try { fs.unlinkSync(fixturePath); } catch (e) { /* best effort cleanup */ }
+    }
+}
+
 // Scenario: auto-complete -- vscode.executeCompletionItemProvider against
 // the PACKAGED completionProvider.js/mtlxCompletions.js, at a handful of
 // real positions inside one small fixture: after '<' (node categories +
@@ -1666,6 +1716,7 @@ async function run() {
         if (want('validationWorker')) { out.scenarios.validationWorker = await scenarioValidationWorker(ctx); writeOut(); }
         if (want('hoverDocs')) { out.scenarios.hoverDocs = await scenarioHoverDocs(ctx); writeOut(); }
         if (want('languageFeatures')) { out.scenarios.languageFeatures = await scenarioLanguageFeatures(ctx); writeOut(); }
+        if (want('formatter')) { out.scenarios.formatter = await scenarioFormatter(ctx); writeOut(); }
         if (want('completion')) { out.scenarios.completion = await scenarioCompletion(ctx); writeOut(); }
         if (want('boundary')) { out.scenarios.boundary = await scenarioBoundary(ctx); writeOut(); }
         if (want('settingsFallback')) { out.scenarios.settingsFallback = await scenarioSettingsFallback(ctx); writeOut(); }

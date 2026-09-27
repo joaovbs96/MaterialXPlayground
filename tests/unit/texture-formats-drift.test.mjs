@@ -21,18 +21,10 @@ const EXCLUDED_FILES = [
     path.join(root, 'js', 'shared', 'texture-formats.js'),
 ];
 
-// Known offenders this batch does not own. Each is a real hard-coded list,
-// left alone on purpose:
-//   - vscode_extension/src/refPolicy.js, sceneProvider.js, extension.js:
-//     host consumers of the new module, removed by the host batch.
-//   - js/mtlx-engine.js: outside this batch's ownership list; reported to
-//     the caller instead of edited.
-const KNOWN_OFFENDERS = [
-    path.join(root, 'vscode_extension', 'src', 'refPolicy.js'),
-    path.join(root, 'vscode_extension', 'src', 'sceneProvider.js'),
-    path.join(root, 'vscode_extension', 'src', 'extension.js'),
-    path.join(root, 'js', 'mtlx-engine.js'),
-];
+// refPolicy.js, sceneProvider.js, extension.js and mtlx-engine.js's image
+// regex all now derive from js/shared/texture-formats.js (host batch), so
+// the guard covers them too. No offenders left.
+const KNOWN_OFFENDERS = [];
 
 // Includes the literal regex-shorthand spellings ("jpe?g", "tiff?") some
 // existing regex literals use, so the '?' inside them (a literal character

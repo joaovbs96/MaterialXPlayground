@@ -87,6 +87,16 @@
       "id": "utif",
       "kind": "npm",
       "version": "3.1.0"
+    },
+    {
+      "id": "xml-formatter",
+      "kind": "npm",
+      "version": "3.7.0"
+    },
+    {
+      "id": "xml-parser-xo",
+      "kind": "npm",
+      "version": "4.1.6"
     }
   ],
   "entries": [
@@ -558,6 +568,34 @@
       "source": "utif@3.1.0",
       "sha256": "e3e76115f49571e39624c3316a76b3c4c5b2c5ca518dfec4b66a9f7af8c6d059",
       "bytes": 58271
+    },
+    {
+      "path": "xml-formatter/LICENSE.txt",
+      "dep": "xml-formatter",
+      "source": "xml-formatter@3.7.0",
+      "sha256": "4238a9875508fe834330dba5027591a09bc73d3c305d7e8c3e188791bac8ed4e",
+      "bytes": 1107
+    },
+    {
+      "path": "xml-formatter/index.js",
+      "dep": "xml-formatter",
+      "source": "xml-formatter@3.7.0",
+      "sha256": "886a4056cf4f166c768abc43790bdfbc4ebb575ffab562a3d2f560bcc9be81a7",
+      "bytes": 7533
+    },
+    {
+      "path": "xml-parser-xo/LICENSE.txt",
+      "dep": "xml-parser-xo",
+      "source": "xml-parser-xo@4.1.6",
+      "sha256": "683055697f20cf810f6b1fea84acc6aa6781a4e945e476e41e18df61139529ef",
+      "bytes": 1108
+    },
+    {
+      "path": "xml-parser-xo/index.js",
+      "dep": "xml-parser-xo",
+      "source": "xml-parser-xo@4.1.6",
+      "sha256": "e5b7bcbf445fcdd0158fd6b56c5004dd028695736b1051b246c1e062dfd1208e",
+      "bytes": 6326
     }
   ]
 }

@@ -30,6 +30,8 @@ const usdFileSet = require('./usdFileSet');
 const docScanner = require('./docScanner');
 const { errMsg } = require('./util');
 const { getSetting } = require('./settingsHost');
+const { MTLX_TEXTURE_EXTS } = require('../../js/shared/texture-formats.js');
+const formatter = require('./formatter');
 
 // Diagnostics + status bar are created once in activate() but read/
 // written from the module-scope helpers below (toVsDiagnostics,
@@ -423,6 +425,10 @@ function activate(context) {
     // materialxPlayground.newDocument: opens an untitled .mtlx document
     // seeded with the mtlxdoc snippet skeleton (newDocument.js).
     newDocument.register(context);
+
+    // Format Document / Format Selection for .mtlx (formatter.js), the
+    // package.json-declared default formatter for the language.
+    formatter.register(context, vscode);
 
     // USD Scene Viewer custom editor for .usd/.usda/.usdc/.usdz plus the
     // materialxPlayground.openScene command (sceneProvider.js).
@@ -906,7 +912,7 @@ function activate(context) {
                     canSelectMany: false,
                     defaultUri,
                     filters: {
-                        Images: ['png', 'jpg', 'jpeg', 'tif', 'tiff', 'exr', 'hdr', 'ktx2'],
+                        Images: MTLX_TEXTURE_EXTS,
                         'All Files': ['*'],
                     },
                     title: 'MaterialX Playground: choose a texture file',
