@@ -4567,6 +4567,7 @@ const MtlxMessagesButton = ({
     "aria-haspopup": "dialog",
     "aria-expanded": open,
     title: 'Messages: ' + (total ? total + ' logged' : 'none'),
+    "aria-label": "Messages",
     onClick: () => setOpen(o => !o),
     className: className || BTN_TOOLBAR
   }, /*#__PURE__*/React.createElement("span", {
@@ -4576,7 +4577,7 @@ const MtlxMessagesButton = ({
     className: "w-3.5 h-3.5"
   })), showLabel && /*#__PURE__*/React.createElement("span", {
     className: "whitespace-nowrap"
-  }, "Messages"), showLabel && topSeverity && grouped[topSeverity].length ? /*#__PURE__*/React.createElement("span", {
+  }, "Messages"), topSeverity && grouped[topSeverity].length ? /*#__PURE__*/React.createElement("span", {
     className: 'text-[10px] font-mono font-normal tabular-nums bg-gray-900/60 border border-gray-700 rounded-full px-1.5 ' + MTLX_MSG_SEVERITY_STYLE[topSeverity].text
   }, grouped[topSeverity].length) : null), popover && ReactDOM.createPortal(popover, fullscreenPortalRoot()));
 };
