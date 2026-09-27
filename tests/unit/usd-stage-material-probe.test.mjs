@@ -16,7 +16,8 @@ function loadHelpers() {
       .replace('import "../shared/mesh-subdivision.js";', '')
       .replace('const RUNTIME_DIR = new URL("../../vendor/usd-webview-bindings/", import.meta.url);', 'const RUNTIME_DIR = null;')
     + '\nthis.__helpers = { buildMaterialProbeLayer, materialRecordIsBare, probeMaterialPayloads,'
-    + ' readUsdzEntries, rewritePackageTextureRefs, resolveInlinePackageTextures };';
+    + ' readUsdzEntries, rewritePackageTextureRefs, resolveInlinePackageTextures,'
+    + ' relationshipChainHasNoBinding, dropFallbackMaterialBindings };';
   const context = {
     ArrayBuffer, Blob, DataView, Float32Array, Float64Array, Int32Array, Map, Math,
     Number, Set, TextDecoder, TextEncoder, Uint8Array, Uint32Array, URL,
@@ -32,6 +33,7 @@ function loadHelpers() {
 const {
   buildMaterialProbeLayer, materialRecordIsBare, probeMaterialPayloads,
   readUsdzEntries, rewritePackageTextureRefs, resolveInlinePackageTextures,
+  relationshipChainHasNoBinding, dropFallbackMaterialBindings,
 } = loadHelpers();
 // Objects built inside the vm context have their own prototype; compare plain copies.
 const plain = (value) => JSON.parse(JSON.stringify(value));
@@ -279,4 +281,58 @@ test('inline networks are rewritten and each package entry is published once', (
   assert.equal(new Set(result.transfer).size, result.transfer.length, 'no buffer is transferred twice');
   assert.ok(!result.transfer.includes(xml.buffer), 'the replaced bytes are not transferred');
   assert.equal(zip.byteLength > 0, true, 'the package bytes are never detached');
+});
+
+test('USD asset overrides on a package material point at the published keys too', () => {
+  // The glove regression: the renderer applies these over the document, so a
+  // relative "@0/bc.jpg@" undid the rewritten document path and textures went missing.
+  const zip = writeZip([{ name: '0/bc.jpg', data: Buffer.from([1]) }, { name: '0/n.jpg', data: Buffer.from([2]) }]);
+  const packages = new Map([['glove.usdz', { data: zip, entries: readUsdzEntries(zip) }]]);
+  const record = {
+    path: '/g/mtl/new', sourceAsset: '__inline_new.mtlx',
+    overrides: [
+      { node: 'basecolor', input: 'file', value: '@0/bc.jpg@' },
+      { node: 'normal_1', input: 'file', value: '@/glove.usdz[0/n.jpg]@' },
+      { node: 'roughness', input: 'sourceColorSpace', value: 'raw' },
+      { node: 'other', input: 'file', value: '@0/missing.jpg@' },
+    ],
+  };
+  const result = { assets: [], transfer: [] };
+  resolveInlinePackageTextures(result, [record], packages);
+  assert.deepEqual(record.overrides.map((override) => override.value),
+    ['@glove.usdz[0/bc.jpg]@', '@glove.usdz[0/n.jpg]@', 'raw', '@0/missing.jpg@']);
+  assert.deepEqual(result.assets.map((asset) => asset.path).sort(), ['glove.usdz[0/bc.jpg]', 'glove.usdz[0/n.jpg]']);
+});
+
+// --- fallback bindings ---------------------------------------------------
+
+const chainOf = (...entries) => entries.map(([path, relationships]) => ({ path, relationships }));
+
+test('a relationship chain without any material binding means the mesh is unbound', () => {
+  const proxy = { name: 'proxyPrim', isMaterialBinding: false };
+  assert.equal(relationshipChainHasNoBinding(chainOf(['/World/Unbound', [proxy]], ['/World', [proxy]])), true);
+  assert.equal(relationshipChainHasNoBinding(chainOf(['/World/Bound', [{ name: 'material:binding', isMaterialBinding: true, targets: ['/L/M'] }]])), false);
+  // A binding on an ancestor (variant or collection) keeps the native material.
+  assert.equal(relationshipChainHasNoBinding(chainOf(['/G/geo', []], ['/G', [{ name: 'material:binding:collection:all' }]])), false);
+  assert.equal(relationshipChainHasNoBinding([]), false, 'no answer keeps the native result');
+});
+
+test('only meshes the runtime gave a fallback material lose it', () => {
+  const chains = {
+    '/World/Bound': chainOf(['/World/Bound', [{ name: 'material:binding', isMaterialBinding: true }]], ['/World', []]),
+    '/World/Unbound': chainOf(['/World/Unbound', []], ['/World', []]),
+  };
+  const api = { inspectPrimRelationships: (root, primPath) => chains[primPath] };
+  const meshes = [
+    { path: '/World/Bound', materialPath: '/World/Looks/Used', material: { path: '/World/Looks/Used' } },
+    { path: '/World/Unbound', materialPath: '/World/Looks/Used', material: { path: '/World/Looks/Used' } },
+    { path: '/World/Inst/__instances__/p0', instanceOwnerPath: '/World/Inst', materialPath: '/World/Looks/Used' },
+    { path: '/World/NoMaterial' },
+  ];
+  assert.equal(dropFallbackMaterialBindings(api, 'unbound.usda', meshes), 1);
+  assert.equal(meshes[0].materialPath, '/World/Looks/Used');
+  assert.equal(meshes[1].materialPath, undefined);
+  assert.equal(meshes[1].material, undefined);
+  assert.equal(meshes[2].materialPath, '/World/Looks/Used', 'instanced meshes are left as drawn');
+  assert.equal(dropFallbackMaterialBindings({}, 'a.usda', meshes), 0, 'no inspector, no change');
 });

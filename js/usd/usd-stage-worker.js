@@ -2588,6 +2588,34 @@ function probeMaterialPayloads(api, root, result) {
   return out;
 }
 
+// --- Fallback bindings ---------------------------------------------------
+// The native draw gives a mesh with no material binding anywhere in its ancestry
+// the stage's material anyway. Pure: true when the InspectPrimRelationships chain
+// (the prim and its ancestors) carries no material binding relationship at all.
+function relationshipChainHasNoBinding(chain) {
+  const entries = arrayItems(chain);
+  if (!entries.length) return false;
+  return entries.every(entry => arrayItems(entry?.relationships).every(relationship =>
+    relationship?.isMaterialBinding !== true && !/^material:binding/.test(String(relationship?.name ?? ""))));
+}
+
+// Clears the material of drawn meshes that bind none, so they render neutral grey
+// and never open another mesh's material. Instanced meshes are left as drawn.
+function dropFallbackMaterialBindings(api, root, meshes) {
+  if (typeof api.inspectPrimRelationships !== "function") return 0;
+  let dropped = 0;
+  for (const mesh of meshes) {
+    if (!mesh?.path || mesh.instanceOwnerPath || !(text(mesh.materialPath) ?? text(mesh.material?.path))) continue;
+    let chain;
+    try { chain = api.inspectPrimRelationships(root, mesh.path); } catch { continue; }
+    if (!relationshipChainHasNoBinding(chain)) continue;
+    delete mesh.materialPath;
+    delete mesh.material;
+    dropped++;
+  }
+  return dropped;
+}
+
 // --- USDZ package entries ------------------------------------------------
 // Pure: stored entries of a USDZ (zip) from its central directory, as
 // Map<innerPath, { offset, size }> with offset at the entry's data. Empty on
@@ -2622,10 +2650,27 @@ function readUsdzEntries(bytes) {
   return entries;
 }
 
-// Pure: points filename values of a native inline document at the package entry
-// they name, as "<package>[<entry>]" (the key the worker publishes package files
-// under). Takes an anchored "/<package>[<entry>]" or a relative entry path that
-// exactly one package holds. `packages` maps package path to its entry names.
+// Pure: the package entry an asset path names, as { pkg, inner, key } with key
+// "<package>[<entry>]" (the path package files are published under), or null.
+// Takes "/<package>[<entry>]" or a relative entry path exactly one package holds.
+function packageAssetRef(value, packages) {
+  const text = String(value ?? "");
+  if (!text || !packages?.size || /^[a-z]+:/i.test(text) || /<UDIM>|&lt;/i.test(text)) return null;
+  const anchored = /^\/?([^[\]]+)\[([^[\]]+)\]$/.exec(text);
+  if (anchored) {
+    const pkg = normalizePath(anchored[1]);
+    const inner = normalizePath(anchored[2]);
+    return packages.get(pkg)?.has(inner) ? { pkg, inner, key: `${pkg}[${inner}]` } : null;
+  }
+  if (/[[\]]/.test(text) || text.startsWith("/")) return null;
+  const inner = normalizePath(text);
+  const owners = [];
+  for (const [pkg, names] of packages) if (names.has(inner)) owners.push(pkg);
+  return owners.length === 1 ? { pkg: owners[0], inner, key: `${owners[0]}[${inner}]` } : null;
+}
+
+// Pure: points filename values of a native inline document at package keys.
+// `packages` maps package path to its entry names.
 function rewritePackageTextureRefs(xml, packages) {
   const refs = [];
   const source = String(xml ?? "");
@@ -2634,36 +2679,50 @@ function rewritePackageTextureRefs(xml, packages) {
   const rewritten = source.replace(/<[^>]*\btype\s*=\s*(["'])filename\1[^>]*>/gi, tag => tag.replace(
     /\bvalue\s*=\s*(["'])(.*?)\1/i,
     (whole, quote, value) => {
-      if (!value || /^[a-z]+:/i.test(value) || /<UDIM>|&lt;/i.test(value)) return whole;
-      const anchored = /^\/?([^[\]]+)\[([^[\]]+)\]$/.exec(value);
-      if (anchored) {
-        const pkg = normalizePath(anchored[1]);
-        const inner = normalizePath(anchored[2]);
-        if (!packages.get(pkg)?.has(inner)) return whole;
-        const key = `${pkg}[${inner}]`;
-        refs.push({ pkg, inner, key });
-        return `value=${quote}${key}${quote}`;
-      }
-      if (/[[\]]/.test(value) || value.startsWith("/")) return whole;
-      const inner = normalizePath(value);
-      const owners = [];
-      for (const [pkg, names] of packages) if (names.has(inner)) owners.push(pkg);
-      if (owners.length !== 1) return whole;
-      const key = `${owners[0]}[${inner}]`;
-      refs.push({ pkg: owners[0], inner, key });
-      return `value=${quote}${key}${quote}`;
+      const ref = packageAssetRef(value, packages);
+      if (!ref) return whole;
+      refs.push(ref);
+      return `value=${quote}${ref.key}${quote}`;
     },
   ));
   return { xml: rewritten, refs };
 }
 
-// Applies rewritePackageTextureRefs to every native inline network and publishes
-// the package entries it now names (the native payload omits some of them).
+// Pure: points USD asset overrides ("@0/x.jpg@", applied over the document by the
+// renderer) at package keys too; left relative they undo the document's paths.
+function rewritePackageOverrideRefs(overrides, packages) {
+  const refs = [];
+  if (!Array.isArray(overrides)) return refs;
+  for (const override of overrides) {
+    const match = /^@(.*)@$/.exec(String(override?.value ?? "").trim());
+    const ref = match ? packageAssetRef(match[1], packages) : null;
+    if (!ref) continue;
+    override.value = `@${ref.key}@`;
+    refs.push(ref);
+  }
+  return refs;
+}
+
+// Points every inline network and USD asset override at package keys and publishes
+// the package entries they now name (the native payload omits some of them).
 function resolveInlinePackageTextures(result, records, packages) {
   if (!packages.size) return;
   const names = new Map(Array.from(packages, ([pkg, info]) => [pkg, info.entries]));
   const known = new Set(result.assets.map(asset => asset.path));
+  const publish = refs => {
+    for (const { pkg, key, inner } of refs) {
+      if (known.has(key)) continue;
+      const info = packages.get(pkg);
+      const entry = info.entries.get(inner);
+      // slice, not subarray: the package bytes may be cached and must not be detached.
+      const data = info.data.slice(entry.offset, entry.offset + entry.size);
+      known.add(key);
+      result.assets.push({ path: key, data: data.buffer });
+      result.transfer.push(data.buffer);
+    }
+  };
   for (const material of records) {
+    publish(rewritePackageOverrideRefs(material.overrides, names));
     const mx = material.materialX;
     if (!mx?.data || !String(material.sourceAsset ?? "").startsWith("__inline_")) continue;
     let xml;
@@ -2677,16 +2736,7 @@ function resolveInlinePackageTextures(result, records, packages) {
     const stale = result.transfer.indexOf(oldBuffer);
     if (stale >= 0) result.transfer.splice(stale, 1);
     result.transfer.push(bytes.buffer);
-    for (const { pkg, key, inner } of refs) {
-      if (known.has(key)) continue;
-      const info = packages.get(pkg);
-      const entry = info.entries.get(inner);
-      // slice, not subarray: the package bytes may be cached and must not be detached.
-      const data = info.data.slice(entry.offset, entry.offset + entry.size);
-      known.add(key);
-      result.assets.push({ path: key, data: data.buffer });
-      result.transfer.push(data.buffer);
-    }
+    publish(refs);
   }
 }
 
@@ -3038,6 +3088,7 @@ async function load(request) {
       mesh.castsShadow = readMeshCastsShadow(api, root, mesh.path);
     }
   }
+  const fallbackBindingCount = dropFallbackMaterialBindings(api, root, drawSnapshot.meshes);
   postMessage({ id: request.id, type: "progress", value: { phase: "extract-materials", done: 0, total: 0, fraction: 0.8, message: "Extracting material payloads" } });
   const payloads = api.extractMaterialPayloads(root);
   // Payload material/texture views have the same lifetime as draw views.  Do
@@ -3159,6 +3210,9 @@ async function load(request) {
   const result = copyStageResult(summary, drawSnapshot, payloadSnapshot, cameras, lights, stageMetrics);
   result.materialPrims = collectMaterialPrims(graph);
   result.warnings.push(...stageMetrics.warnings, ...volumeWarnings);
+  if (fallbackBindingCount) {
+    result.warnings.push(`[info] ${fallbackBindingCount} mesh${fallbackBindingCount === 1 ? " has" : "es have"} no material binding (the USD runtime had assigned another material to it)`);
+  }
   const materialProbe = probeMaterialPayloads(api, root, result);
   result.warnings.push(...materialProbe.warnings);
   const connectionWarnedLayers = new Set();
