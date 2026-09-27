@@ -7467,7 +7467,7 @@
                                     ref={importInputRef}
                                     type="file"
                                     multiple
-                                    accept=".mtlx,.mxsl,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
+                                    accept={'.mtlx,.mxsl,.zip,' + window.textureAccept()}
                                     className="hidden"
                                     onChange={onPickImportFiles}
                                 />

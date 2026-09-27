@@ -1671,7 +1671,7 @@
                         <div className="space-y-1">
                             <FilePickerField
                                 value={cur}
-                                accept=".png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
+                                accept={window.textureAccept()}
                                 icon="file"
                                 mono
                                 disabled={loading}

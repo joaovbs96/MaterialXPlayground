@@ -6,7 +6,8 @@
         // Extracted verbatim from material-viewer.html's inline script;
         // original 8-space indentation preserved as-is.
 
-        const IMG_EXT = /\.(png|jpe?g|webp|gif|bmp|tga|exr|hdr|tif+)$/i;
+        // Single source of truth: js/shared/texture-formats.js (window global).
+        const IMG_EXT = window.textureExtRegex();
 
         // Geometry names this component actually knows how to render —
         // mirrors ViewportControls' own default `geomList` (js/shared/
@@ -1367,7 +1368,7 @@
                                     placeholder="No document loaded"
                                     multiple
                                     icon="files"
-                                    accept=".mtlx,.mxsl,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff,.ktx2"
+                                    accept={'.mtlx,.mxsl,.zip,' + window.textureAccept()}
                                     onFiles={onPickFileList}
                                 />
                             </div>

@@ -8,8 +8,9 @@
 // from the UDIM tile size (which stays fixed per scene). Mirrors the
 // engine's getDisplayTransform persistence idiom (js/mtlx-engine.js:1601-1629).
 // Formats the engine's exr/hdr/tif loaders decode whole (never resized by
-// createImageBitmap, unlike the bounded PNG/JPEG path).
-const UNBOUNDED_TEXTURE_EXTENSIONS = ['exr', 'hdr', 'tif', 'tiff', 'ktx2'];
+// createImageBitmap, unlike the bounded PNG/JPEG path). Single source of
+// truth: js/shared/texture-formats.js.
+const UNBOUNDED_TEXTURE_EXTENSIONS = window.MTLX_DEDICATED_DECODER_EXTS;
 
 const SCENE_TEXTURE_MAX_SIZE_KEY = 'mtlx_scene_texture_size';
 // Original is unbounded (Infinity internally); persisted as the string
@@ -702,11 +703,8 @@ const sceneFileMap = (files, stage) => {
         // explicit ArrayBuffer slice or second JS heap allocation.
         const canonical = String(entry.path).replace(/\\/g, '/');
         const ext = canonical.split('.').pop().toLowerCase();
-        const typeByExtension = {
-            png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
-            tif: 'image/tiff', tiff: 'image/tiff', exr: 'image/x-exr', hdr: 'image/vnd.radiance',
-            ktx2: 'image/ktx2',
-        };
+        // Single source of truth: js/shared/texture-formats.js.
+        const typeByExtension = window.MTLX_TEXTURE_MIME;
         // Preserve the user's authored file when the Worker also returns a
         // composed/generated payload at the same path. Stage assets remain a
         // fallback for references that were not part of the original upload.

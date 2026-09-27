@@ -3929,7 +3929,7 @@
                                     placeholder="Drop scene files or choose"
                                     multiple
                                     icon="files"
-                                    accept=".usd,.usda,.usdc,.usdz,.glb,.gltf,.obj,.mtl,.bin,.mtlx,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff,.ktx2"
+                                    accept={'.usd,.usda,.usdc,.usdz,.glb,.gltf,.obj,.mtl,.bin,.mtlx,' + window.textureAccept()}
                                     onFiles={chooseFiles}
                                     inputTestId="usd-scene-file-picker"
                                 />

@@ -122,6 +122,10 @@
          script, no transform needed (js/shared/ui-commons.js is JSX-free). -->
     <script src="js/shared/ui-commons.js"></script>
 
+    <!-- Single source of truth for decodable texture extensions; embed/gen/
+         viewer-app.js (precompiled from js/viewer-app.jsx) consumes it. -->
+    <script src="js/shared/texture-formats.js"></script>
+
     <!-- 360 GIF turntable recording: plain scripts, used by
          RecordGifDialog (js/shared/mtlx-ui.jsx) on demand. -->
     <script src="js/shared/gif-encoder.js"></script>

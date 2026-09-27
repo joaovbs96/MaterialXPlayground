@@ -838,12 +838,12 @@
                                 onClear={() => commitFilename('')}
                                 icon="file"
                                 disabled={readOnly}
-                                accept=".png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
+                                accept={window.textureAccept()}
                                 onChoose={() => { if (fileInputRef.current) fileInputRef.current.click(); }}
                             />
                             <input
                                 ref={fileInputRef}
-                                type="file" accept=".png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
+                                type="file" accept={window.textureAccept()}
                                 className="hidden"
                                 onChange={(e) => {
                                     const f = e.target.files && e.target.files[0];
