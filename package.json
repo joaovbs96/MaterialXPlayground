@@ -177,31 +177,46 @@
       {
         "command": "materialxPlayground.openScene",
         "title": "MaterialX Playground: Open in Scene Viewer",
-        "icon": "$(open-preview)",
+        "icon": {
+          "light": "./vscode_extension/media/playground-light.svg",
+          "dark": "./vscode_extension/media/playground-dark.svg"
+        },
         "enablement": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i"
       },
       {
         "command": "materialxPlayground.open",
         "title": "MaterialX Playground: Open MaterialX Document",
         "icon": {
-          "light": "./vscode_extension/media/mtlx-file-light.svg",
-          "dark": "./vscode_extension/media/mtlx-file-dark.svg"
+          "light": "./vscode_extension/media/playground-light.svg",
+          "dark": "./vscode_extension/media/playground-dark.svg"
         },
         "enablement": "resourceExtname == .mtlx"
       },
       {
         "command": "materialxPlayground.openInGraphEditor",
         "title": "MaterialX Playground: Open in Graph Editor",
+        "icon": {
+          "light": "./vscode_extension/media/playground-light.svg",
+          "dark": "./vscode_extension/media/playground-dark.svg"
+        },
         "enablement": "resourceExtname == .mtlx"
       },
       {
         "command": "materialxPlayground.openInMaterialViewer",
         "title": "MaterialX Playground: Open in Material Viewer",
+        "icon": {
+          "light": "./vscode_extension/media/playground-light.svg",
+          "dark": "./vscode_extension/media/playground-dark.svg"
+        },
         "enablement": "resourceExtname == .mtlx"
       },
       {
         "command": "materialxPlayground.openDocs",
-        "title": "MaterialX Playground: Open Node Library Documentation"
+        "title": "MaterialX Playground: Open Node Library Documentation",
+        "icon": {
+          "light": "./vscode_extension/media/playground-light.svg",
+          "dark": "./vscode_extension/media/playground-dark.svg"
+        }
       },
       {
         "command": "materialxPlayground.filterDocsByFile",
@@ -222,7 +237,11 @@
       },
       {
         "command": "materialxPlayground.newFromExample",
-        "title": "MaterialX Playground: New Material from Example"
+        "title": "MaterialX Playground: New Material from Example",
+        "icon": {
+          "light": "./vscode_extension/media/playground-light.svg",
+          "dark": "./vscode_extension/media/playground-dark.svg"
+        }
       },
       {
         "command": "materialxPlayground.newDocument",
