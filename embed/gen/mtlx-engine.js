@@ -2785,7 +2785,10 @@ const normalizeBackdropMode=v=>v==='environment'||v==='none'||v==='studio-dark'?
 let onGlLost=null,onGlRestored=null;let resizeObs=null;// While true the canvas keeps its current drawing buffer and the
 // browser scales it to the CSS box. Lets a pane drag rescale the
 // image smoothly instead of reallocating GL every frame.
-let resizeSuspended=false;let syncSizeRef=function(){/* set once the canvas sizing closure exists */};// Turntable/GIF capture state: non-null while beginCapture()/endCapture()
+let resizeSuspended=false;let syncSizeRef=function(){/* set once the canvas sizing closure exists */};// setUniforms/renderFrame are declared later in this same function,
+// after an await point; a ResizeObserver firing before then would
+// hit their TDZ, so syncSize's resize-frame render checks this first.
+let renderPathReady=false;// Turntable/GIF capture state: non-null while beginCapture()/endCapture()
 // bracket an off-screen render at a caller-chosen fixed resolution.
 let captureState=null;let __captureCanvas=null,__captureCtx=null;let controls=null;let stopped=false;// Reused by snapshotPixels below, avoids a fresh canvas/2D-context
 // allocation on every readback call.
@@ -3061,7 +3064,16 @@ fitQuadToAspect(w/h);return;}camera.aspect=w/h;// fullScene only: resize can fli
 recomputeCameraFov();camera.updateProjectionMatrix();};// Keeps the drawing buffer + aspect in sync with layout
 // (panel reflow, mobile rotation/resize), without this
 // the sphere stretches on any reflow.
-const syncSize=()=>{if(resizeSuspended)return;const w=canvas.clientWidth||cw;const h=canvas.clientHeight||ch;applySize(w,h);};syncSizeRef=syncSize;if(window.ResizeObserver){resizeObs=new ResizeObserver(syncSize);resizeObs.observe(canvas);}// Image-based lighting for lit surfaces/BSDFs AND/OR
+const syncSize=()=>{if(resizeSuspended||stopped)return;const w=canvas.clientWidth||cw;const h=canvas.clientHeight||ch;applySize(w,h);// setSize() above clears the drawing buffer
+// (preserveDrawingBuffer:false) and this callback runs
+// after the frame's rAF work, so without a render here
+// a cleared buffer gets composited: one visible flicker
+// frame per resize. Render through the SAME path as a
+// normal animate() tick, including paused/inactive
+// views (they'd otherwise stay blank until reactivated).
+// One extra render on top of animate()'s own next frame
+// is acceptable; there's no dedupe mechanism to hook into.
+if(!renderPathReady)return;setUniforms();renderFrame();};syncSizeRef=syncSize;if(window.ResizeObserver){resizeObs=new ResizeObserver(syncSize);resizeObs.observe(canvas);}// Image-based lighting for lit surfaces/BSDFs AND/OR
 // scene-mode's glTF meshes (always lit via PMREM, even
 // under an unlit material). Fetched ONCE at shell level.
 if(needsLighting||sceneInst){const env=envOverride||(await getEnvironment());if(!isMounted()){disposePartial();return null;}// Independent of envRadiance/etc. below: scene-mode's
@@ -3366,7 +3378,9 @@ updateStudioFloor();}// renderFrame, the ONE render entry point for this view,
 const renderFrame=()=>{const peelActive=FORCE_TRANSPARENCY&&viewIsTransparent&&!!mesh;// Idempotent transition (syncMeshMaterialMode is the
 // other call site), flips scene built-ins' toneMapped.
 const wantLinear=peelActive&&peelLinearOk;if(sceneLinearOn!==wantLinear){setSceneLinear(wantLinear);sceneLinearOn=wantLinear;}if(!peelActive){renderer.render(scene,camera);return;}// byte-identical to the old path
-peelPipeline.render(scene,camera,[mesh]);};const animate=ts=>{if(stopped||!aliveFn())return;reqId=requestAnimationFrame(animate);// Idempotent per rAF timestamp: every view ticking this
+peelPipeline.render(scene,camera,[mesh]);};// From here on syncSize's resize-triggered render is safe
+// to call (setUniforms/renderFrame both exist above).
+renderPathReady=true;const animate=ts=>{if(stopped||!aliveFn())return;reqId=requestAnimationFrame(animate);// Idempotent per rAF timestamp: every view ticking this
 // frame reads the same MTLX_CLOCK value. Runs before
 // controls.update() (syncs a peer) and the paused return.
 clockTick(ts);if(controls){// Before update(): OrbitControls clamps phi in there,

@@ -4332,6 +4332,255 @@ const MtlxMenu = ({
   return /*#__PURE__*/React.createElement(React.Fragment, null, trigger, popover && ReactDOM.createPortal(popover, fullscreenPortalRoot()));
 };
 
+// Shared message log (Graph Editor + Material Viewer "Messages" button, all
+// hosts). Lives here rather than a standalone file: mtlx-ui.jsx is already a
+// babelScript dependency of every view that needs it, so no VIEW_DEPS/index.html
+// wiring is required. Capped ring buffer; identical consecutive text (same
+// severity+source) collapses into one entry with a repeat count.
+const MTLX_MESSAGES_CAP = 200;
+let mtlxMessageStore = [];
+const mtlxMessageSubs = new Set();
+const mtlxNotifyMessages = () => {
+  mtlxMessageSubs.forEach(fn => {
+    try {
+      fn();
+    } catch (e) {/* subscriber's problem */}
+  });
+};
+const mtlxPushMessage = entry => {
+  const severity = ['error', 'warning', 'info'].indexOf(entry && entry.severity) !== -1 ? entry.severity : 'info';
+  const text = String(entry && entry.text || '').trim();
+  if (!text) return;
+  const source = entry && entry.source || null;
+  const last = mtlxMessageStore[mtlxMessageStore.length - 1];
+  if (last && last.text === text && last.severity === severity && last.source === source) {
+    last.repeat += 1;
+    last.time = entry && entry.time || Date.now();
+  } else {
+    mtlxMessageStore = mtlxMessageStore.concat([{
+      severity,
+      text,
+      source,
+      time: entry && entry.time || Date.now(),
+      repeat: 1
+    }]);
+    if (mtlxMessageStore.length > MTLX_MESSAGES_CAP) mtlxMessageStore = mtlxMessageStore.slice(mtlxMessageStore.length - MTLX_MESSAGES_CAP);
+  }
+  mtlxNotifyMessages();
+};
+const mtlxClearMessages = source => {
+  mtlxMessageStore = source ? mtlxMessageStore.filter(m => m.source !== source) : [];
+  mtlxNotifyMessages();
+};
+
+// Non-React producers (a plain-JS error handler, or later the VS Code host
+// bridge relaying its Output channel) push through this event instead of
+// reaching into window.MtlxMessages directly. Contract: detail is
+// {severity, text, source}; the extension host will use source: 'extension'.
+window.addEventListener('mtlx-app-message', e => {
+  if (e && e.detail) mtlxPushMessage(e.detail);
+});
+window.MtlxMessages = {
+  push: mtlxPushMessage,
+  clear: mtlxClearMessages,
+  list: () => mtlxMessageStore,
+  subscribe: fn => {
+    mtlxMessageSubs.add(fn);
+    return () => mtlxMessageSubs.delete(fn);
+  }
+};
+const MTLX_MSG_SEVERITY_STYLE = {
+  error: {
+    icon: 'alert-triangle',
+    text: 'text-red-300/90',
+    label: 'Errors'
+  },
+  warning: {
+    icon: 'alert-triangle',
+    text: 'text-amber-300/90',
+    label: 'Warnings'
+  },
+  info: {
+    icon: 'info-circle',
+    text: 'text-gray-400',
+    label: 'Info'
+  }
+};
+const MTLX_MSG_ORDER = ['error', 'warning', 'info'];
+
+// Shared "Messages" button for the Graph Editor and Material Viewer toolbars:
+// worst-severity icon plus a count (muted check, no count, when empty), and a
+// popover that groups entries by severity with a per-group copy button.
+// Mirrors js/usd-scene-app.jsx's Diagnostics button/popover (not shared code,
+// that file is owned by another batch) so all three tools read the same way.
+// `sources`, when given, filters the shared log to those source tags only.
+const MtlxMessagesButton = ({
+  sources,
+  className,
+  idPrefix,
+  showLabel = true
+}) => {
+  const prefix = idPrefix || 'mtlx-messages';
+  const [all, setAll] = React.useState(() => window.MtlxMessages.list());
+  React.useEffect(() => window.MtlxMessages.subscribe(() => setAll(window.MtlxMessages.list())), []);
+  const messages = sources ? all.filter(m => sources.indexOf(m.source) !== -1) : all;
+  const [open, setOpen] = React.useState(false);
+  const [openGroups, setOpenGroups] = React.useState({
+    error: true,
+    warning: true,
+    info: false
+  });
+  const btnRef = React.useRef(null);
+  const popRef = React.useRef(null);
+  const [pos, setPos] = React.useState(null);
+  useEscapeToClose(() => setOpen(false), open);
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const place = () => {
+      const rect = btnRef.current ? btnRef.current.getBoundingClientRect() : null;
+      if (!rect) return;
+      const width = Math.min(320, window.innerWidth - 16);
+      const left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8));
+      const maxHeight = Math.max(120, Math.min(window.innerHeight * 0.6, rect.bottom - 12));
+      setPos({
+        left,
+        width,
+        maxHeight,
+        top: rect.bottom + 4
+      });
+    };
+    place();
+    window.addEventListener('resize', place);
+    return () => window.removeEventListener('resize', place);
+  }, [open]);
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const onDown = e => {
+      if (popRef.current && popRef.current.contains(e.target)) return;
+      if (btnRef.current && btnRef.current.contains(e.target)) return;
+      setOpen(false);
+    };
+    window.addEventListener('pointerdown', onDown);
+    return () => window.removeEventListener('pointerdown', onDown);
+  }, [open]);
+  const grouped = {
+    error: [],
+    warning: [],
+    info: []
+  };
+  messages.forEach(m => {
+    (grouped[m.severity] || grouped.info).push(m);
+  });
+  const topSeverity = MTLX_MSG_ORDER.find(s => grouped[s].length) || null;
+  const total = messages.length;
+  const copyGroup = severity => {
+    const text = grouped[severity].map(m => m.repeat > 1 ? m.text + ' (x' + m.repeat + ')' : m.text).join('\n');
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(() => {});
+  };
+  const popover = open ? /*#__PURE__*/React.createElement("div", {
+    ref: popRef,
+    role: "dialog",
+    "aria-label": "Messages",
+    id: prefix + '-popover',
+    style: Object.assign({
+      position: 'fixed',
+      zIndex: 9999
+    }, pos || {}),
+    className: "flex flex-col bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex-none flex items-center gap-2 px-3 py-2 border-b border-gray-700"
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: "alert-triangle",
+    className: "w-4 h-4 text-gray-400 shrink-0"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 min-w-0 flex flex-col"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-[13px] font-semibold text-gray-200 truncate"
+  }, "Messages"), /*#__PURE__*/React.createElement("span", {
+    className: "text-[11px] text-gray-500 truncate"
+  }, total ? total + ' message' + (total === 1 ? '' : 's') : 'No messages')), total > 0 && /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    title: "Clear",
+    onClick: () => window.MtlxMessages.clear(sources && sources.length === 1 ? sources[0] : undefined),
+    className: "shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-gray-600 text-gray-400 hover:text-gray-200 hover:bg-gray-700"
+  }, "Clear"), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    "aria-label": "Close",
+    onClick: () => setOpen(false),
+    className: "shrink-0 p-1 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700"
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: "x",
+    className: "w-3.5 h-3.5"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1 min-h-0 overflow-y-auto custom-scrollbar px-3 py-1.5"
+  }, total === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "text-[11px] text-gray-500 py-2"
+  }, "Nothing logged yet.") : MTLX_MSG_ORDER.filter(s => grouped[s].length).map(severity => {
+    const style = MTLX_MSG_SEVERITY_STYLE[severity];
+    const groupOpen = !!openGroups[severity];
+    return /*#__PURE__*/React.createElement("div", {
+      key: severity,
+      className: "border-t border-gray-700/70 first:border-t-0"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "w-full flex items-center gap-1.5 py-1.5 px-1 -mx-1 rounded hover:bg-gray-800/60"
+    }, /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => setOpenGroups(p => ({
+        ...p,
+        [severity]: !p[severity]
+      })),
+      "aria-expanded": groupOpen,
+      className: "flex-1 min-w-0 flex items-center gap-1.5 text-left"
+    }, /*#__PURE__*/React.createElement(MtlxIcon, {
+      name: groupOpen ? 'chevron-down' : 'chevron-right',
+      className: "w-3.5 h-3.5 shrink-0 text-gray-500"
+    }), /*#__PURE__*/React.createElement(MtlxIcon, {
+      name: style.icon,
+      className: 'w-3.5 h-3.5 shrink-0 ' + style.text
+    }), /*#__PURE__*/React.createElement("span", {
+      className: 'text-[10px] font-semibold uppercase tracking-[0.08em] ' + style.text
+    }, style.label), /*#__PURE__*/React.createElement("span", {
+      className: "ml-auto text-[10px] font-mono tabular-nums text-gray-400 bg-gray-800 border border-gray-700 rounded-full px-1.5 py-0.5"
+    }, grouped[severity].length)), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      onClick: () => copyGroup(severity),
+      title: 'Copy all ' + grouped[severity].length + ' line(s)',
+      className: "shrink-0 p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-gray-700"
+    }, /*#__PURE__*/React.createElement(MtlxIcon, {
+      name: "copy",
+      className: "w-3.5 h-3.5"
+    }))), groupOpen && /*#__PURE__*/React.createElement("div", {
+      className: "pb-2 pl-5 space-y-1"
+    }, grouped[severity].map((m, i) => /*#__PURE__*/React.createElement("div", {
+      key: i,
+      className: "text-[11px] text-gray-300 break-words font-mono"
+    }, m.text, m.repeat > 1 ? /*#__PURE__*/React.createElement("span", {
+      className: "text-gray-500"
+    }, ' (x' + m.repeat + ')') : null, m.source ? /*#__PURE__*/React.createElement("span", {
+      className: "text-gray-600"
+    }, ' [' + m.source + ']') : null))));
+  }))) : null;
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+    ref: btnRef,
+    type: "button",
+    id: prefix + '-button',
+    "aria-haspopup": "dialog",
+    "aria-expanded": open,
+    title: 'Messages: ' + (total ? total + ' logged' : 'none'),
+    onClick: () => setOpen(o => !o),
+    className: className || BTN_TOOLBAR
+  }, /*#__PURE__*/React.createElement("span", {
+    className: 'inline-flex ' + (topSeverity ? MTLX_MSG_SEVERITY_STYLE[topSeverity].text : 'text-gray-500')
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: topSeverity ? MTLX_MSG_SEVERITY_STYLE[topSeverity].icon : 'check',
+    className: "w-3.5 h-3.5"
+  })), showLabel && /*#__PURE__*/React.createElement("span", {
+    className: "whitespace-nowrap"
+  }, "Messages"), showLabel && topSeverity && grouped[topSeverity].length ? /*#__PURE__*/React.createElement("span", {
+    className: 'text-[10px] font-mono font-normal tabular-nums bg-gray-900/60 border border-gray-700 rounded-full px-1.5 ' + MTLX_MSG_SEVERITY_STYLE[topSeverity].text
+  }, grouped[topSeverity].length) : null), popover && ReactDOM.createPortal(popover, fullscreenPortalRoot()));
+};
+
 // The site ships production React with no error boundaries — one render
 // throw anywhere unmounts the ENTIRE app. This wraps the docs page's 3D
 // preview so a crash degrades to an inline error card instead.
@@ -4389,6 +4638,7 @@ Object.assign(window, {
   MtlxMenu,
   MtlxMenuBar,
   PreviewErrorBoundary,
+  MtlxMessagesButton,
   fullscreenPortalRoot,
   BTN_MENUBAR,
   HUD_PILL,
