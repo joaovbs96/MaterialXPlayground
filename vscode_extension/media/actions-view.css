@@ -41,6 +41,14 @@ body {
     grid-column: 1 / -1;
 }
 
+/* Below this width two short labels no longer fit side by side without
+   truncating; drop to one button per row instead. */
+@media (max-width: 260px) {
+    .mtlx-action-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
 .mtlx-action-row.half .mtlx-action-btn {
     align-items: center;
     height: 100%;
@@ -65,7 +73,7 @@ body {
 
 .mtlx-action-btn.default {
     background: transparent;
-    border: 1px solid var(--vscode-button-secondaryBackground, transparent);
+    border: 1px solid var(--vscode-widget-border);
 }
 
 .mtlx-action-btn.primary {
@@ -81,7 +89,7 @@ body {
 .mtlx-action-btn.secondary {
     background: var(--vscode-button-secondaryBackground);
     color: var(--vscode-button-secondaryForeground);
-    border-color: transparent;
+    border: 1px solid var(--vscode-widget-border);
 }
 
 .mtlx-action-btn.secondary:hover:not(:disabled) {
@@ -238,7 +246,7 @@ body {
     flex-direction: column;
     gap: 1px;
     padding: 4px;
-    background: var(--vscode-menu-background, var(--vscode-dropdown-background, var(--vscode-editorWidget-background)));
+    background: var(--vscode-menu-background, var(--vscode-dropdown-background, var(--vscode-editorWidget-background, var(--vscode-sideBar-background, var(--vscode-editor-background)))));
     color: var(--vscode-menu-foreground, var(--vscode-dropdown-foreground, var(--vscode-foreground)));
     border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border));
     border-radius: 5px;
