@@ -7555,6 +7555,7 @@
                                 <button
                                     onClick={openAddSearch}
                                     disabled={scopeLocked}
+                                    aria-label="Add Node"
                                     title={scopeLocked ? 'View only' : 'Add a node from the standard library (shortcut: Tab)'}
                                     className={BTN_MENUBAR + (scopeLocked ? ' opacity-50 cursor-not-allowed' : '')}
                                 >
@@ -7567,6 +7568,7 @@
                                 <button
                                     onClick={() => deleteSelectionRef.current()}
                                     disabled={!canDelete || scopeLocked}
+                                    aria-label="Delete Nodes"
                                     title={scopeLocked ? 'View only' : canDelete
                                         ? 'Delete the selected node(s) and disconnect the selected edge(s) (Del)'
                                         : 'Select nodes or edges to delete'}
@@ -7597,7 +7599,7 @@
                                     <span className="gtb-label">Validate</span>
                                 </button>
                             )}
-                            <MtlxMessagesButton idPrefix="graph-messages" sources={['graph']} className={BTN_MENUBAR} />
+                            <MtlxMessagesButton idPrefix="graph-messages" sources={['graph']} className={BTN_MENUBAR} showLabel={false} />
                             <button
                                 onClick={() => setHelpOpen(true)}
                                 title="Help & Keybinds"
