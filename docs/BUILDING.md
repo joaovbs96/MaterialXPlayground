@@ -147,6 +147,10 @@ The diff after `npm run build` touches `scripts/vendor-deps.mjs`, `vendor/vendor
 3. Untrack the old default: add its `js/materialx/<oldVersion>/` line to `.gitignore`, then `git rm -r --cached js/materialx/<oldVersion>/`.
 4. Run `npm run build` then `npm run check`.
 
+## Preset picker thumbnails in the .vsix
+
+`gallery/` is otherwise forbidden from the extension (too large: 50+ full-res renders). `release.yml`'s `package` job runs `scripts/gallery-shots.mjs --prune-ids-auto` after staging the offline zip but before `vsce package`, trimming the already-populated `gallery/manifest.json` and `gallery/thumbs/` down to the Material Viewer presets (`MTLX_PRESETS`) plus the `vscode_extension/src/exampleCatalog.js` entries, at their original resolution. `.vscodeignore` allows only `gallery/manifest.json` and `gallery/thumbs/*.jpg`; `scripts/check-vsix-files.mjs`'s `isForbiddenGalleryPath` rejects anything else under `gallery/`. Both files are optional: a plain checkout with no gallery data ships the extension with letter-placeholder icons. The desktop app is unaffected: `electron/scripts/lib/ensure-gallery.mjs` already ships the full gallery for its own Material Gallery view.
+
 ## Publishing to the VS Code Marketplace
 
 `.github/workflows/publish-marketplace.yml` is a manual `workflow_dispatch` that publishes the exact `.vsix` GitHub already attached to a release. It never rebuilds anything. Run it with **"Use workflow from"** set to the release's tag (not a branch), and only after `release.yml`'s `upload` job has attached that tag's `.vsix` to the release. The same `verify` job feeds two independent publish jobs, `publish` (Marketplace) and `publish-openvsx` (Open VSX); either can succeed while the other fails, and both can be re-run separately.

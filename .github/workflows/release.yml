@@ -335,6 +335,16 @@ jobs:
           path: ${{ runner.temp }}/${{ steps.pkg.outputs.name }}.zip
           if-no-files-found: error
 
+      # The offline zip above already has its own full copy of gallery/ (it
+      # was rsynced before this point); this trims the repo-root gallery/ in
+      # place so the .vsix ships only the preset picker's own materials
+      # (exampleCatalog.js union MTLX_PRESETS - see --prune-ids-auto's doc
+      # comment), at original resolution, not the whole 50+ material gallery.
+      - name: Trim gallery for the .vsix
+        run: |
+          node scripts/gallery-shots.mjs --prune-ids-auto
+          echo "vsix gallery thumbnails: $(ls gallery/thumbs 2>/dev/null | wc -l)" | tee -a "$GITHUB_STEP_SUMMARY"
+
       # Installed from the lockfile into RUNNER_TEMP, not the certified tree,
       # with install scripts off, the same locked tool the publish workflow uses.
       - name: Copy the locked vsce manifest
@@ -374,7 +384,10 @@ jobs:
           echo "$L" | grep -q 'extension/vendor/vendor-manifest.json' || { echo "::error::vendor/vendor-manifest.json missing"; exit 1; }
           # Vendor dirs that must not ship come from the registry (deps with vscode: false).
           NOSHIP="$(node -e 'globalThis.window={};require(require("path").resolve("js/gen/vendor-deps.js"));console.log(Object.values(window.MTLX_VENDOR_DEPS).filter((d)=>d.vscode===false).map((d)=>d.dir).join("|"))')"
-          if echo "$L" | grep -qE "extension/(node_modules|scripts|tests|electron|docs|embed|gallery|\\.github|vendor/($NOSHIP))/"; then echo "::error::ignored dirs leaked into the vsix"; exit 1; fi
+          if echo "$L" | grep -qE "extension/(node_modules|scripts|tests|electron|docs|embed|\\.github|vendor/($NOSHIP))/"; then echo "::error::ignored dirs leaked into the vsix"; exit 1; fi
+          # gallery/ is allowed only as the trimmed manifest plus original-resolution
+          # thumbnails (see .vscodeignore, scripts/check-vsix-files.mjs's isForbiddenGalleryPath).
+          if echo "$L" | grep -E '^extension/gallery/' | grep -vE '^extension/gallery/(manifest\.json|thumbs/[^/]+\.jpg)$' | grep -q .; then echo "::error::unexpected gallery/ file leaked into the vsix"; exit 1; fi
           # Negative: only the six-file keep-list ships from vendor/materialx/ (scripts/check-vsix-files.mjs's
           # MATERIALX_KEEP_LIST). The full upstream snapshot, especially resources/Images/, must not leak in.
           if echo "$L" | grep -q 'extension/vendor/materialx/resources/Images/'; then echo "::error::vendor/materialx/resources/Images leaked into the vsix"; exit 1; fi

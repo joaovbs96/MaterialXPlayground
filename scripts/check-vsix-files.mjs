@@ -154,7 +154,6 @@ const FORBIDDEN_PREFIXES = [
   "electron/",
   "docs/",
   "embed/",
-  "gallery/",
   ".github/",
   ".claude/",
   ...VENDOR_FORBIDDEN,
@@ -163,6 +162,18 @@ const FORBIDDEN_PREFIXES = [
     .map((v) => `js/materialx/${v}/`),
 ];
 const FORBIDDEN_FILES = ["CLAUDE.md"];
+
+// gallery/ is mostly forbidden too, but the package job trims it down to
+// exactly two allowed shapes before `vsce package` runs (see .vscodeignore
+// and scripts/gallery-shots.mjs's --prune-ids): the trimmed manifest, and
+// its thumbnails at original resolution. Both are optional (absent on a
+// plain checkout), so they are checked here, not added to RUNTIME_ASSETS.
+function isForbiddenGalleryPath(p) {
+  if (!p.startsWith("gallery/")) return false;
+  if (p === "gallery/manifest.json") return false;
+  if (/^gallery\/thumbs\/[^/]+\.jpg$/.test(p)) return false;
+  return true;
+}
 
 /** Every file package.json's manifest points at: the extension host entry
  * point, the icon, the language configuration/grammar, and every source
@@ -318,7 +329,8 @@ function main() {
       (p) =>
         FORBIDDEN_FILES.includes(p) ||
         FORBIDDEN_PREFIXES.some((prefix) => p.startsWith(prefix)) ||
-        isForbiddenMaterialxPath(p)
+        isForbiddenMaterialxPath(p) ||
+        isForbiddenGalleryPath(p)
     )
     .sort();
   const renameProblems = checkRenamedRootFileFallbacks();

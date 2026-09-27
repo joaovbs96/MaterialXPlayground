@@ -17,6 +17,7 @@
 // Usage: node scripts/gallery-shots.mjs [--manifest <path>] [--out <dir>]
 //                                       [--limit N] [--only <id>] [--jobs N]
 //                                       [--reuse-from <url>] [--reuse-only]
+//                                       [--prune-ids <id,id,...>] [--prune-ids-auto]
 //
 // --reuse-from makes a deploy incremental: it reads the manifest already
 // published at that site and re-downloads every thumbnail whose material
@@ -30,8 +31,26 @@
 // zip and the desktop app want real tiles but must not spend 13s a piece
 // re-rendering what the site already published. Materials with no
 // published tile keep the gallery's placeholder, exactly as before.
+//
+// --prune-ids trims an ALREADY populated <out> (manifest.json plus
+// thumbs/) down to exactly the given ids: no network, no browser. It
+// rewrites manifest.json to list only those materials (ids absent from
+// the manifest are skipped, not an error) and deletes every thumb file
+// not in the set. Used by the .vsix packaging step: the full gallery is
+// too large to ship in the extension, but a handful of preset/example
+// thumbnails at original resolution are worth it.
+//
+// --prune-ids-auto computes that id set itself: the union of
+// vscode_extension/src/exampleCatalog.js's destNames (the "New Material
+// from Example" catalog) and js/shared/mtlx-ui.jsx's MTLX_PRESETS entries
+// (the preset picker's no-manifest fallback list, read as text since that
+// file is JSX). This keeps the .vsix's preset picker listing the SAME
+// materials it lists with no manifest at all (MTLX_PRESETS) or with the
+// full manifest on the web - only pruned to a subset never shrinks what
+// the picker shows, just what gets a real thumbnail vs. a placeholder.
 
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, readdir, unlink } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
@@ -41,6 +60,7 @@ import { startServer } from "../tests/embed/lib/server.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, "..");
+const require = createRequire(import.meta.url);
 
 const HARNESS_PATH = "/tests/embed/fixtures/harness.html";
 // Scaled by --jobs below: N workers sharing the CPU inflate each
@@ -82,6 +102,8 @@ function parseArgs(argv) {
   let jobs = 1;
   let reuseFrom = null;
   let reuseOnly = false;
+  let pruneIds = null;
+  let pruneIdsAuto = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--manifest" && argv[i + 1]) {
@@ -98,9 +120,78 @@ function parseArgs(argv) {
       reuseFrom = String(argv[++i]).replace(/\/+$/, "");
     } else if (arg === "--reuse-only") {
       reuseOnly = true;
+    } else if (arg === "--prune-ids" && argv[i + 1]) {
+      pruneIds = String(argv[++i]).split(",").map((s) => s.trim()).filter(Boolean);
+    } else if (arg === "--prune-ids-auto") {
+      pruneIdsAuto = true;
     }
   }
-  return { manifestPath, outDir, limit, only, jobs, reuseFrom, reuseOnly };
+  return { manifestPath, outDir, limit, only, jobs, reuseFrom, reuseOnly, pruneIds, pruneIdsAuto };
+}
+
+/** Rewrites <outDir>/manifest.json to list only `ids`, and deletes every
+ * file under <outDir>/thumbs not named "<id>.jpg" for one of them. Pure
+ * filesystem, no network/browser: prunes a gallery already populated by
+ * an earlier build-gallery.mjs + gallery-shots.mjs run. */
+async function pruneGallery(manifestPath, outDir, ids) {
+  const wanted = new Set(ids);
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  const kept = (manifest.materials || []).filter((m) => wanted.has(m.id));
+  const keptIds = new Set(kept.map((m) => m.id));
+  const missing = ids.filter((id) => !keptIds.has(id));
+
+  await writeFile(path.join(outDir, "manifest.json"), JSON.stringify({ ...manifest, materials: kept }, null, 2) + "\n");
+
+  const thumbsDir = path.join(outDir, "thumbs");
+  let removed = 0;
+  let keptThumbs = 0;
+  let entries = [];
+  try {
+    entries = await readdir(thumbsDir);
+  } catch (e) {
+    entries = []; // no thumbs/ at all: nothing to prune
+  }
+  for (const name of entries) {
+    const id = name.replace(/\.jpg$/i, "");
+    if (keptIds.has(id) && name.toLowerCase().endsWith(".jpg")) {
+      keptThumbs++;
+    } else {
+      await unlink(path.join(thumbsDir, name)).catch(() => {});
+      removed++;
+    }
+  }
+
+  log(`gallery prune: manifest trimmed to ${kept.length} material(s), ${keptThumbs} thumbnail(s) kept, ${removed} removed.`);
+  if (missing.length) log(`prune: ${missing.length} id(s) had no manifest entry (no thumbnail shipped): ${missing.join(", ")}`);
+}
+
+/** Gallery ids referenced by js/shared/mtlx-ui.jsx's MTLX_PRESETS array: the
+ * preset picker's fallback list when no manifest ships at all. Parsed as
+ * text (the file is JSX, not requireable from plain Node) - each entry's
+ * `path`/`src` value's basename minus ".mtlx" IS its gallery id, the same
+ * rule scripts/build-gallery.mjs uses. */
+async function mtlxPresetGalleryIds() {
+  const text = await readFile(path.join(REPO_ROOT, "js", "shared", "mtlx-ui.jsx"), "utf8");
+  const start = text.indexOf("const MTLX_PRESETS = [");
+  if (start === -1) return [];
+  const end = text.indexOf("\n];", start);
+  const block = text.slice(start, end === -1 ? undefined : end);
+  const ids = [];
+  const re = /(?:path|src):\s*'([^']+)'/g;
+  let m;
+  while ((m = re.exec(block))) ids.push(m[1].split("/").pop().replace(/\.mtlx$/i, ""));
+  return ids;
+}
+
+/** The id set --prune-ids-auto keeps: exampleCatalog.js's destNames union
+ * MTLX_PRESETS' ids, so the .vsix's preset picker (manifest mode) never
+ * lists fewer materials than either its own fallback (no manifest) or the
+ * full web manifest would. */
+async function autoPruneIds() {
+  const { getCatalog } = require(path.join(REPO_ROOT, "vscode_extension", "src", "exampleCatalog.js"));
+  const catalogIds = getCatalog().map((e) => e.destName);
+  const presetIds = await mtlxPresetGalleryIds();
+  return [...new Set([...catalogIds, ...presetIds])];
 }
 
 /** Races `promise` against a timeout, rejecting with a labeled error if
@@ -193,7 +284,13 @@ async function captureOne(context, baseURL, outDir, material) {
 }
 
 async function main() {
-  const { manifestPath, outDir, limit, only, jobs, reuseFrom, reuseOnly } = parseArgs(process.argv.slice(2));
+  const { manifestPath, outDir, limit, only, jobs, reuseFrom, reuseOnly, pruneIds, pruneIdsAuto } = parseArgs(process.argv.slice(2));
+
+  if (pruneIds || pruneIdsAuto) {
+    const ids = pruneIdsAuto ? await autoPruneIds() : pruneIds;
+    await pruneGallery(manifestPath, outDir, ids);
+    return;
+  }
 
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   let materials = manifest.materials;

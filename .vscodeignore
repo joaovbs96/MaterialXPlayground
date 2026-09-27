@@ -67,3 +67,9 @@
 !vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_carpaint.mtlx
 !vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_velvet.mtlx
 !vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_pearl.mtlx
+# Preset picker thumbnails: the release package job trims gallery/ down to
+# exactly the example catalog's ids before packaging (see scripts/gallery-shots.mjs's
+# --prune-ids). Original resolution, not resized; both files are optional
+# (missing on a plain checkout, which falls back to letter placeholders).
+!gallery/manifest.json
+!gallery/thumbs/*.jpg

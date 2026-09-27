@@ -4,22 +4,58 @@
 'use strict';
 
 const vscode = require('vscode');
+const fs = require('fs');
 const exampleCatalog = require('./exampleCatalog');
 const { errMsg } = require('./util');
 
 const COMMAND_ID = 'materialxPlayground.newFromExample';
 
+// The trimmed gallery/manifest.json the release package job ships (see
+// scripts/gallery-shots.mjs's --prune-ids-auto), or [] when missing/absent
+// (plain checkout, or an id-basename collision means no gallery entry).
+function loadGalleryMaterials(extensionUri) {
+    try {
+        const raw = fs.readFileSync(vscode.Uri.joinPath(extensionUri, 'gallery', 'manifest.json').fsPath, 'utf8');
+        return JSON.parse(raw).materials || [];
+    } catch (e) {
+        return [];
+    }
+}
+
+// A catalog entry's gallery id, ONLY when a manifest entry's OWN source
+// file matches example.mtlxPath exactly - two different files can share a
+// basename (e.g. this catalog's "materials/open_pbr_default.mtlx" vs. the
+// gallery's own "open_pbr_default" id, vendor's unrelated OpenPbr example),
+// and picking by basename alone would show the wrong preview image.
+function galleryIdFor(materials, example) {
+    const base = example.mtlxPath.split('/').pop().replace(/\.mtlx$/i, '');
+    const entry = materials.find((m) => m.id === base);
+    if (!entry) return null;
+    const entryPath = entry.origin === 'materialx' ? 'vendor/materialx/' + entry.docPath : entry.docPath;
+    return entryPath === example.mtlxPath ? entry.id : null;
+}
+
+function exampleIconPath(extensionUri, materials, example) {
+    const id = galleryIdFor(materials, example);
+    if (!id) return null;
+    const uri = vscode.Uri.joinPath(extensionUri, 'gallery', 'thumbs', id + '.jpg');
+    return fs.existsSync(uri.fsPath) ? uri : null;
+}
+
 // QuickPick grouped by source, using QuickPickItemKind.Separator rows as
 // group headers (insertion order == exampleCatalog's definition order, so
 // "MaterialX Playground" lists before "MaterialX Examples").
-async function pickExample() {
+async function pickExample(extensionUri) {
+    const materials = loadGalleryMaterials(extensionUri);
     const bySource = new Map();
     for (const example of exampleCatalog.getCatalog()) {
         if (!bySource.has(example.source)) bySource.set(example.source, []);
+        const iconPath = exampleIconPath(extensionUri, materials, example);
         bySource.get(example.source).push({
             label: example.label,
             description: example.shadingModel,
             detail: example.license,
+            iconPath: iconPath || undefined,
             example,
         });
     }
@@ -40,8 +76,11 @@ async function pickExample() {
 }
 
 // Target folder precedence: the invoked-on folder, else the active
-// .mtlx file's folder, else the first workspace folder, else ask via
-// showOpenDialog. Returns null only when the user cancels the dialog.
+// .mtlx file's folder, else the active Playground custom-editor tab's file
+// (activeTextEditor is undefined while a webview tab has focus, same gap
+// extension.js's activeMtlxDocument() closes), else the first workspace
+// folder, else ask via showOpenDialog. Returns null only when the user
+// cancels the dialog.
 async function resolveTargetFolder(explorerFolderUri) {
     if (explorerFolderUri instanceof vscode.Uri) return explorerFolderUri;
 
@@ -49,6 +88,14 @@ async function resolveTargetFolder(explorerFolderUri) {
     if (active && active.document && active.document.uri.scheme === 'file'
         && /\.mtlx$/i.test(active.document.uri.fsPath)) {
         return vscode.Uri.joinPath(active.document.uri, '..');
+    }
+
+    const tabGroup = vscode.window.tabGroups.activeTabGroup;
+    const tab = tabGroup && tabGroup.activeTab;
+    const input = tab && tab.input;
+    if (input instanceof vscode.TabInputCustom && input.viewType === 'materialxPlayground.editor'
+        && input.uri && input.uri.scheme === 'file') {
+        return vscode.Uri.joinPath(input.uri, '..');
     }
 
     const folders = vscode.workspace.workspaceFolders;
@@ -127,7 +174,7 @@ async function handleCommand(context, arg1, arg2) {
         }
 
         if (!example) {
-            example = await pickExample();
+            example = await pickExample(context.extensionUri);
             if (!example) return; // user cancelled the QuickPick
         }
 

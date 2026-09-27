@@ -1582,8 +1582,36 @@ const makeEStoredSampler = (env, envExposure, envMatrix, keyDirWorld) => {
     };
 };
 
-const sceneNeutralMaterial = (label) => new THREE.MeshNormalMaterial({
+// One shared grey matcap (a softly lit sphere, linear values): the fallback reads as
+// neutral grey with visible form and needs no three lights, which scenes may lack.
+let sceneNeutralMatcap = null;
+const sceneNeutralMatcapTexture = () => {
+    if (sceneNeutralMatcap) return sceneNeutralMatcap;
+    const size = 64;
+    const data = new Uint8Array(size * size * 4);
+    const light = new THREE.Vector3(-0.35, 0.55, 0.76).normalize();
+    for (let j = 0; j < size; j += 1) {
+        for (let i = 0; i < size; i += 1) {
+            const x = (i + 0.5) / size * 2 - 1;
+            const y = (j + 0.5) / size * 2 - 1;
+            const z = Math.sqrt(Math.max(0, 1 - x * x - y * y));
+            const lit = 0.5 + 0.5 * (x * light.x + y * light.y + z * light.z);
+            const value = Math.round(255 * (0.05 + 0.3 * lit));
+            const o = (j * size + i) * 4;
+            data[o] = value; data[o + 1] = value; data[o + 2] = value; data[o + 3] = 255;
+        }
+    }
+    sceneNeutralMatcap = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+    sceneNeutralMatcap.name = 'USD neutral grey matcap';
+    // DataTexture defaults to nearest filtering, which bands the shading.
+    sceneNeutralMatcap.magFilter = THREE.LinearFilter;
+    sceneNeutralMatcap.minFilter = THREE.LinearFilter;
+    sceneNeutralMatcap.needsUpdate = true;
+    return sceneNeutralMatcap;
+};
+const sceneNeutralMaterial = (label) => new THREE.MeshMatcapMaterial({
     name: 'USD unsupported material: ' + String(label || 'unknown'),
+    matcap: sceneNeutralMatcapTexture(),
 });
 
 // Small, fast, non-cryptographic hash (djb2) that folds a long string
@@ -2642,6 +2670,30 @@ const createMtlxSceneView = async ({
     // Resolved MaterialX document per material path, for the graph/shaderball
     // preview panel: { xml, name, materialName, sourceAsset }.
     const materialDocuments = new Map();
+    // Materials no mesh binds (stage.unboundMaterials): documents built on request
+    // for the preview panel only, never compiled. In-flight builds are shared.
+    const unboundMaterialRecords = new Map(sceneArray(stage && stage.unboundMaterials)
+        .filter((record) => record && record.path).map((record) => [String(record.path), record]));
+    const pendingMaterialDocuments = new Map();
+    const buildUnboundMaterialDocument = (key) => {
+        if (!pendingMaterialDocuments.has(key)) {
+            const record = unboundMaterialRecords.get(key);
+            pendingMaterialDocuments.set(key, (async () => {
+                if (!mxEnv) throw new Error('the MaterialX runtime is not ready');
+                const built = await loadRenderable(record);
+                // Only the serialized document is kept; the parsed one is not needed.
+                if (built && built.document) {
+                    documents.delete(built.document);
+                    try { built.document.delete && built.document.delete(); } catch (e) {}
+                }
+                if (!materialDocuments.has(key)) throw new Error('no document was produced');
+            })().catch((error) => {
+                pendingMaterialDocuments.delete(key);
+                throw error;
+            }));
+        }
+        return pendingMaterialDocuments.get(key);
+    };
     // fileMap minus .mtlx sources and hidden side files, same filter as
     // looseFilesFrom in js/shared/mtlx-ui.jsx.
     const looseSceneFiles = (map) => {
@@ -7057,6 +7109,8 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             applyMaterialEnvironment();
         };
         rebuildGeometryDerivedState(true, true);
+        // Set once renderFrame exists; resize() runs before that during setup.
+        let renderAfterResize = null;
         const resize = () => {
             if (!renderer || !container || resizeSuspended) return;
             const w = Math.max(1, container.clientWidth || 640);
@@ -7064,6 +7118,8 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             renderer.setSize(w, h, false);
             camera.aspect = w / h;
             camera.updateProjectionMatrix();
+            // setSize cleared the drawing buffer; draw now so a cleared frame never presents.
+            if (renderAfterResize) renderAfterResize();
         };
         // Auto-framing measures displaced meshes at their undisplaced positions,
         // so a stage frames the same whether displacement is on or off at load.
@@ -7907,6 +7963,18 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             raf = requestAnimationFrame(render);
         };
         const startLoop = () => { if (!raf && !stopped && active) render(); };
+        // Same draw as one loop tick minus the camera/clock advance; renderFrame itself
+        // skips while asleep, and captures never reach here (resizeSuspended).
+        renderAfterResize = () => {
+            if (stopped || !active || captureState) return;
+            try {
+                if (environmentBridge && environmentBridge.update) environmentBridge.update();
+                renderFrame();
+                drawSelectionOverlay();
+            } catch (e) {
+                console.warn('[usd-scene] resize frame failed', e);
+            }
+        };
         if (window.UsdScenePost) {
             presentationPipeline = window.UsdScenePost.create(renderer, {
                 getDisplayTransform: () => sceneDisplayTransform,
@@ -8237,6 +8305,7 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
             const next = on !== false;
             if (next === environmentLightingEnabled) return environmentLightingEnabled;
             environmentLightingEnabled = next;
+            if (environmentBridge && environmentBridge.setLightingEnabled) environmentBridge.setLightingEnabled(next);
             if (shadowsEnabled) { updateShadowMap(); applyShadowMatrix(); }
             applyMaterialEnvironment();
             return environmentLightingEnabled;
@@ -8626,6 +8695,19 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
                 for (const entry of SCENE_COMPILE_CACHE.values()) bytes += entry.bytes;
                 return { entries: SCENE_COMPILE_CACHE.size, bytes, hits: sceneCompileCacheHits, misses: sceneCompileCacheMisses };
             },
+            // Async getMaterialDocument that also builds the document of a material no
+            // mesh binds (stage.unboundMaterials), without compiling it. Resolves null
+            // for an unknown path; rejects when that material's document cannot be built.
+            ensureMaterialDocument: async (materialPath) => {
+                const key = String(materialPath || '');
+                if (stopped || !key) return null;
+                if (!materialDocuments.has(key)) {
+                    if (!unboundMaterialRecords.has(key)) return null;
+                    await buildUnboundMaterialDocument(key);
+                }
+                return stopped ? null : handle.getMaterialDocument(key);
+            },
+            getUnboundMaterialPaths: () => Array.from(unboundMaterialRecords.keys()),
             // Resolved document plus the loose files it references, for the
             // graph/shaderball preview panel. UDIM refs match every file
             // starting with the prefix before <UDIM>.

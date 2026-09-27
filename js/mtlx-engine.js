@@ -10562,6 +10562,10 @@ const createMtlxRenderView = async ({
     // image smoothly instead of reallocating GL every frame.
     let resizeSuspended = false;
     let syncSizeRef = function () { /* set once the canvas sizing closure exists */ };
+    // setUniforms/renderFrame are declared later in this same function,
+    // after an await point; a ResizeObserver firing before then would
+    // hit their TDZ, so syncSize's resize-frame render checks this first.
+    let renderPathReady = false;
     // Turntable/GIF capture state: non-null while beginCapture()/endCapture()
     // bracket an off-screen render at a caller-chosen fixed resolution.
     let captureState = null;
@@ -11150,10 +11154,22 @@ const createMtlxRenderView = async ({
                 // (panel reflow, mobile rotation/resize), without this
                 // the sphere stretches on any reflow.
                 const syncSize = () => {
-                    if (resizeSuspended) return;
+                    if (resizeSuspended || stopped) return;
                     const w = canvas.clientWidth || cw;
                     const h = canvas.clientHeight || ch;
                     applySize(w, h);
+                    // setSize() above clears the drawing buffer
+                    // (preserveDrawingBuffer:false) and this callback runs
+                    // after the frame's rAF work, so without a render here
+                    // a cleared buffer gets composited: one visible flicker
+                    // frame per resize. Render through the SAME path as a
+                    // normal animate() tick, including paused/inactive
+                    // views (they'd otherwise stay blank until reactivated).
+                    // One extra render on top of animate()'s own next frame
+                    // is acceptable; there's no dedupe mechanism to hook into.
+                    if (!renderPathReady) return;
+                    setUniforms();
+                    renderFrame();
                 };
                 syncSizeRef = syncSize;
                 if (window.ResizeObserver) {
@@ -12147,6 +12163,9 @@ const createMtlxRenderView = async ({
                     if (!peelActive) { renderer.render(scene, camera); return; } // byte-identical to the old path
                     peelPipeline.render(scene, camera, [mesh]);
                 };
+                // From here on syncSize's resize-triggered render is safe
+                // to call (setUniforms/renderFrame both exist above).
+                renderPathReady = true;
 
                 const animate = (ts) => {
                     if (stopped || !aliveFn()) return;
