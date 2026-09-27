@@ -373,7 +373,7 @@
       "activitybar": [
         {
           "id": "materialxPlayground",
-          "title": "MaterialX",
+          "title": "MaterialX Playground",
           "icon": "./vscode_extension/media/mtlx-activitybar.svg"
         }
       ]
@@ -393,10 +393,6 @@
       ]
     },
     "viewsWelcome": [
-      {
-        "view": "materialxPlayground.actions",
-        "contents": "[New Material from Example](command:materialxPlayground.newFromExample)\n[New MaterialX Document](command:materialxPlayground.newDocument)\n[Node Library Documentation](command:materialxPlayground.openDocs)\n[Open in Graph Editor](command:materialxPlayground.openInGraphEditor)\n[Open in Material Viewer](command:materialxPlayground.openInMaterialViewer)"
-      },
       {
         "view": "materialxPlayground.outline",
         "contents": "Open a .mtlx file to see its outline here."

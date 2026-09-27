@@ -21,6 +21,7 @@ const completionProvider = require('./completionProvider');
 const newFromExample = require('./newFromExample');
 const newDocument = require('./newDocument');
 const outlineView = require('./outlineView');
+const actionsView = require('./actionsView');
 const outlineModel = require('./outlineModel');
 const filePicker = require('./filePicker');
 const sceneProvider = require('./sceneProvider');
@@ -409,15 +410,13 @@ function activate(context) {
     });
     registerSelectionSync(context, outline);
 
-    // materialxPlayground.actions (activity bar container): an always-
-    // empty tree so its contributed viewsWelcome buttons (package.json)
-    // are always what's shown.
-    context.subscriptions.push(
-        vscode.window.registerTreeDataProvider('materialxPlayground.actions', {
-            onDidChangeTreeData: undefined,
-            getChildren: () => [],
-        })
-    );
+    // materialxPlayground.actions (activity bar container): a TreeView of
+    // action rows (actionsView.js/actionsModel.js), the "Open in ..." rows
+    // tracking activeMtlxDocument().
+    actionsView.register(context, {
+        getActiveDocument: activeMtlxDocument,
+        onDidChangeActiveDocument: onDidChangeActiveMtlxDocument,
+    });
 
     const provider = new MaterialXEditorProvider(context);
 
