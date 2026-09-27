@@ -2,7 +2,7 @@
 // (activity bar container). Last 10 .mtlx/scene files opened in our own
 // views, kept in context.globalState so it survives a window reload, most
 // recent first. extension.js calls the returned `record(uri, kind)` on
-// every .mtlx text-document open and every Scene Viewer tab open -- this
+// every .mtlx text, Playground or Scene Viewer tab open -- this
 // module never scans for opens itself.
 'use strict';
 

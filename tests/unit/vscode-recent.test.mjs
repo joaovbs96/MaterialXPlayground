@@ -7,7 +7,7 @@ import test from 'node:test';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { pushRecentEntry } = require('../../vscode_extension/src/recentModel.js');
+const { pushRecentEntry, recentKindForTab } = require('../../vscode_extension/src/recentModel.js');
 
 test('pushRecentEntry: a new entry goes to the front', () => {
     const list = [{ uri: 'a', label: 'a.mtlx', kind: 'mtlx', time: 1 }];
@@ -37,4 +37,28 @@ test('pushRecentEntry: capped at maxItems, dropping the oldest', () => {
 test('pushRecentEntry: an empty/undefined list starts fresh', () => {
     const next = pushRecentEntry(undefined, { uri: 'a', label: 'a.mtlx', kind: 'scene', time: 1 }, 10);
     assert.deepEqual(next, [{ uri: 'a', label: 'a.mtlx', kind: 'scene', time: 1 }]);
+});
+
+// Regression: the list was fed by onDidOpenTextDocument, which never fires
+// again for a still-cached document, so a reopened file stayed put. Every
+// tab open now records, so a reopen after other opens moves it to the front.
+test('recentKindForTab + pushRecentEntry: a reopened text tab moves back to the front', () => {
+    const tab = (p) => ({ input: 'text', scheme: 'file', path: p });
+    let list = [];
+    for (const p of ['/ws/hover.mtlx', '/ws/messy.mtlx', '/ws/files_demo.mtlx', '/ws/hover.mtlx']) {
+        const kind = recentKindForTab(tab(p));
+        assert.equal(kind, 'mtlx');
+        list = pushRecentEntry(list, { uri: p, label: p, kind, time: 0 }, 10);
+    }
+    assert.deepEqual(list.map((e) => e.uri), ['/ws/hover.mtlx', '/ws/files_demo.mtlx', '/ws/messy.mtlx']);
+});
+
+test('recentKindForTab: Playground and Scene Viewer tabs, other tabs ignored', () => {
+    assert.equal(recentKindForTab({ input: 'custom', viewType: 'materialxPlayground.editor', scheme: 'file', path: '/a.mtlx' }), 'mtlx');
+    assert.equal(recentKindForTab({ input: 'custom', viewType: 'materialxPlayground.sceneViewer', scheme: 'file', path: '/a.usda' }), 'scene');
+    assert.equal(recentKindForTab({ input: 'custom', viewType: 'other.editor', scheme: 'file', path: '/a.mtlx' }), null);
+    assert.equal(recentKindForTab({ input: 'text', scheme: 'file', path: '/a.MTLX' }), 'mtlx');
+    assert.equal(recentKindForTab({ input: 'text', scheme: 'file', path: '/a.usda' }), null);
+    assert.equal(recentKindForTab({ input: 'text', scheme: 'untitled', path: 'Untitled-1.mtlx' }), null);
+    assert.equal(recentKindForTab(null), null);
 });

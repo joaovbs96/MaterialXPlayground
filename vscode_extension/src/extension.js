@@ -26,6 +26,7 @@ const actionsView = require('./actionsView');
 const filesView = require('./filesView');
 const insertNodeView = require('./insertNodeView');
 const recentView = require('./recentView');
+const { recentKindForTab } = require('./recentModel');
 const outlineModel = require('./outlineModel');
 const filePicker = require('./filePicker');
 const sceneProvider = require('./sceneProvider');
@@ -997,13 +998,17 @@ function activate(context) {
         vscode.window.tabGroups.onDidChangeTabs((e) => {
             for (const tab of e.opened) {
                 maybeAutoOpenSceneTab(tab);
-                // materialxPlayground.recent: a Scene Viewer tab opening is
-                // the only signal for a scene file (it's a plain
-                // CustomEditorProvider, so even a text-editable .usda never
-                // creates a TextDocument for the viewer itself).
+                // materialxPlayground.recent: every tab open (text, Playground
+                // or Scene Viewer) moves its file to the front, even when the
+                // TextDocument was still cached and fired no open event.
                 const input = tab.input;
-                if (input instanceof vscode.TabInputCustom && input.viewType === sceneProvider.VIEW_TYPE && input.uri.scheme === 'file') {
-                    recent.record(input.uri, 'scene');
+                const isText = input instanceof vscode.TabInputText;
+                if (isText || input instanceof vscode.TabInputCustom) {
+                    const kind = recentKindForTab({
+                        input: isText ? 'text' : 'custom', viewType: input.viewType,
+                        scheme: input.uri.scheme, path: input.uri.path,
+                    });
+                    if (kind) recent.record(input.uri, kind);
                 }
             }
             for (const tab of e.closed) {
@@ -1030,11 +1035,6 @@ function activate(context) {
         vscode.workspace.onDidOpenTextDocument((doc) => {
             if (doc.languageId !== 'mtlx') return;
             runValidation(doc);
-            // materialxPlayground.recent: covers both a plain text editor
-            // AND the playground custom editor (materialxPlayground.editor
-            // is a CustomTextEditorProvider, backed by this same
-            // TextDocument either way).
-            if (doc.uri.scheme === 'file') recent.record(doc.uri, 'mtlx');
         }),
         vscode.workspace.onDidChangeTextDocument((e) => {
             if (e.document.languageId !== 'mtlx') return;

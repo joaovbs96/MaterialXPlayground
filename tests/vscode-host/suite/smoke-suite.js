@@ -1678,30 +1678,42 @@ async function scenarioInsertNode(ctx) {
     }
 }
 
-// Scenario: recentView -- opening a .mtlx file records it at the front of
-// materialxPlayground.recent (extension.js's onDidOpenTextDocument hook
-// into recentView.js), and Clear empties the list.
+// Scenario: recentView -- every .mtlx tab open records its file at the
+// front of materialxPlayground.recent, including a REOPEN of a file already
+// in the list, and Clear empties it. Asserts only the order its own opens
+// produce, so a list already populated by earlier scenarios is fine.
 async function scenarioRecentView(ctx) {
     const recentApi = ctx.testApi.recent;
     if (!recentApi) return { pass: false, error: 'testApi.recent is missing' };
 
-    const uri = vscode.Uri.file(ctx.fixtures.hoverMtlxPath);
-    try {
+    const a = vscode.Uri.file(ctx.fixtures.hoverMtlxPath);
+    const b = vscode.Uri.file(ctx.fixtures.validationMtlxPath);
+    const open = async (uri) => {
         const doc = await vscode.workspace.openTextDocument(uri);
         await vscode.window.showTextDocument(doc, { preview: false });
-
-        const items = await waitForValue(() => {
-            const list = recentApi.getItems();
-            return list.length && list[0].uri === uri.toString() ? list : null;
-        }, 10000);
-        const listedOk = !!items && items[0].kind === 'mtlx';
+    };
+    const frontIs = (first, second) => waitForValue(() => {
+        const list = recentApi.getItems();
+        return list.length >= 2 && list[0].uri === first.toString() && list[1].uri === second.toString() ? list : null;
+    }, 10000);
+    try {
+        await open(a);
+        await open(b);
+        const afterOpens = await frontIs(b, a);
+        // Reopen a: its tab closes, but the TextDocument may stay cached.
+        await closeTabsForUri(a);
+        await open(a);
+        const afterReopen = await frontIs(a, b);
+        const items = afterReopen || recentApi.getItems();
+        const listedOk = !!afterOpens && !!afterReopen && items[0].kind === 'mtlx';
 
         await recentApi.clear();
         const cleared = await waitForValue(() => (recentApi.getItems().length === 0 ? true : null), 5000);
 
-        return { pass: listedOk && !!cleared, items };
+        return { pass: listedOk && !!cleared, afterOpens: !!afterOpens, afterReopen: !!afterReopen, items: items.map((e) => e.label) };
     } finally {
-        await closeTabsForUri(uri);
+        await closeTabsForUri(a);
+        await closeTabsForUri(b);
     }
 }
 
