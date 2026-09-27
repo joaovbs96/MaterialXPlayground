@@ -204,6 +204,11 @@
         "title": "MaterialX Playground: Open Node Library Documentation"
       },
       {
+        "command": "materialxPlayground.filterDocsByFile",
+        "title": "Filter Node Docs by Current File",
+        "category": "MaterialX Playground"
+      },
+      {
         "command": "materialxPlayground.saveGraph",
         "title": "MaterialX Playground: Save Node Graph to File"
       },

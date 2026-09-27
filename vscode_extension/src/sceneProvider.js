@@ -16,6 +16,7 @@
 const vscode = require('vscode');
 const path = require('path');
 const docScanner = require('./docScanner');
+const textureStamp = require('./textureStamp');
 const usdFileSet = require('./usdFileSet');
 const { buildHtml, panelLifecycle, wireCommonWebviewMessages, trackScenePanel, getSharedOutputChannel, logLine, showHostError, RELOAD_DEBOUNCE_MS, sceneTestHooks } = require('./editorProvider');
 const { errMsg } = require('./util');
@@ -65,7 +66,7 @@ class UsdSceneProvider {
             const containmentRoot = docScanner.containmentRoot(uri);
             if (!await buildHtml(this.context, webview, '#!scene', false, containmentRoot, true, life.isLive)) return;
             trackScenePanel(webviewPanel);
-            life.track(wireCommonWebviewMessages(webview, undefined, uri));
+            life.track(wireCommonWebviewMessages(webview, undefined, uri, life));
 
             let seq = 0;
             let lastSignature = null;
@@ -88,7 +89,9 @@ class UsdSceneProvider {
 
             const deps = docScanner.defaultDeps();
             const staticScan = () => !sceneTestHooks || sceneTestHooks.sceneStaticScan !== false;
-            const log = (text) => logLine(getSharedOutputChannel(), text);
+            // severity defaults to 'info' (E21: forwarded as 'mtlx-log' to
+            // every live webview, tagged to this scene's file name).
+            const log = (text, severity) => logLine(getSharedOutputChannel(), text, severity, name);
             // A scan lives until a newer scan starts; a sent set (and its
             // on-demand rounds) until a newer set is sent. A dropped rescan
             // (nothing changed) therefore never cancels the rounds.
@@ -116,16 +119,22 @@ class UsdSceneProvider {
                 };
             };
 
-            const postSet = (mySeq, snap) => {
+            // '?v=' cache-buster via textureStamp.js (E20), same mechanism
+            // editorProvider.js uses for the .mtlx editor's own textures: a
+            // same-size, same-mtime replacement (e.g. an Explorer copy that
+            // preserves the timestamp) still bumps ctime, so the webview's
+            // resource cache doesn't keep serving the old bytes.
+            const postSet = async (mySeq, snap) => {
                 currentUris = new Set(snap.files.map((f) => f.uri.toString()));
                 const fileUrls = {};
                 const mtimes = {};
                 const sizes = {};
-                for (const f of snap.files) {
-                    fileUrls[f.rel] = webview.asWebviewUri(f.uri).toString() + '?v=' + f.mtime + '-' + f.size;
+                await Promise.all(snap.files.map(async (f) => {
+                    const ctimeNs = await textureStamp.changeTimeNs(f.uri);
+                    fileUrls[f.rel] = textureStamp.versionedUrl(webview.asWebviewUri(f.uri).toString(), { mtime: f.mtime, size: f.size, ctimeNs });
                     mtimes[f.rel] = f.mtime;
                     sizes[f.rel] = f.size;
-                }
+                }));
                 // throttleMs: test-only, see testApi.setSceneFetchThrottle in
                 // editorProvider.js; 0/undefined outside TEST_TRANSPORT.
                 const throttleMs = sceneTestHooks ? sceneTestHooks.sceneFetchThrottleMs : 0;
@@ -155,7 +164,7 @@ class UsdSceneProvider {
                     if (!live()) return;
                     const joined = snap.warnings.join('\n');
                     if (snap.warnings.length && joined !== lastLoggedWarnings) {
-                        for (const warning of snap.warnings) log(uri.fsPath + ': ' + warning);
+                        for (const warning of snap.warnings) log(uri.fsPath + ': ' + warning, 'warning');
                     }
                     lastLoggedWarnings = joined;
                     const signature = snap.root + '\n' + snap.files.map((f) => f.rel + '|' + f.size + '|' + f.mtime).join('\n');
@@ -192,14 +201,14 @@ class UsdSceneProvider {
                     result = await session.resolveMissing(msg.missing, sentBaseUri);
                 } catch (err) {
                     if (!(err && err.cancelled) && live()) {
-                        log(uri.fsPath + ': looking up missing files failed: ' + errMsg(err));
+                        log(uri.fsPath + ': looking up missing files failed: ' + errMsg(err), 'error');
                         reply(0, 0);
                     }
                     return;
                 }
                 if (!live()) return;
                 if (result.limited) {
-                    if (roundLimitLoggedSeq !== mySeq) log(uri.fsPath + ': stopped looking for missing files after ' + session.maxRounds + ' rounds.');
+                    if (roundLimitLoggedSeq !== mySeq) log(uri.fsPath + ': stopped looking for missing files after ' + session.maxRounds + ' rounds.', 'warning');
                     roundLimitLoggedSeq = mySeq;
                     reply(0, 0);
                     return;
@@ -208,8 +217,8 @@ class UsdSceneProvider {
                 round = result.round;
                 const snap = session.snapshot();
                 const addedRels = result.added.map((f) => snap.relOf(f.uri)).sort();
-                if (addedRels.length) log(uri.fsPath + ': round ' + round + ' added ' + addedRels.length + ' referenced file(s) (' + formatMegabytes(result.added.reduce((sum, f) => sum + f.size, 0)) + '): ' + listForLog(addedRels));
-                if (result.stillMissing.length) log(uri.fsPath + ': round ' + round + ' could not find ' + result.stillMissing.length + ' referenced file(s): ' + listForLog(result.stillMissing));
+                if (addedRels.length) log(uri.fsPath + ': round ' + round + ' added ' + addedRels.length + ' referenced file(s) (' + formatMegabytes(result.added.reduce((sum, f) => sum + f.size, 0)) + '): ' + listForLog(addedRels), 'info');
+                if (result.stillMissing.length) log(uri.fsPath + ': round ' + round + ' could not find ' + result.stillMissing.length + ' referenced file(s): ' + listForLog(result.stillMissing), 'warning');
                 if (sceneTestHooks) sceneTestHooks.emitSceneRound({ seq: mySeq, round, ms: Date.now() - startedAt, files: snap.files.length, bytes: snap.totalBytes, added: addedRels, stillMissing: result.stillMissing });
                 reply(result.added.length, result.stillMissing.length);
                 if (!result.added.length) return;
@@ -257,7 +266,7 @@ class UsdSceneProvider {
                     cancelledUpTo = seq;
                     suspended = true;
                     if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
-                    log(uri.fsPath + ': scene loading cancelled.');
+                    log(uri.fsPath + ': scene loading cancelled.', 'info');
                 } else if (msg.type === 'mtlx-scene-reload') {
                     suspended = false;
                     sendScene(true);

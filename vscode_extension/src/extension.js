@@ -11,7 +11,8 @@
 
 const path = require('path');
 const vscode = require('vscode');
-const { MaterialXEditorProvider, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel, getSharedOutputChannel, logLine, disposeSharedOutputChannel, getPanelForUri, setPendingInitialView, testApi } = require('./editorProvider');
+const { MaterialXEditorProvider, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel, isDocsPanelOpen, postDocsFilter, getSharedOutputChannel, logLine, disposeSharedOutputChannel, getPanelForUri, setPendingInitialView, testApi } = require('./editorProvider');
+const mtlxSymbols = require('./mtlxSymbols');
 const validator = require('./validator');
 const { ValidationClient } = require('./validationClient');
 const hoverProvider = require('./hoverProvider');
@@ -66,6 +67,61 @@ const activeMtlxDocumentEmitter = new vscode.EventEmitter();
 const onDidChangeActiveMtlxDocument = activeMtlxDocumentEmitter.event;
 let lastActiveMtlxDocumentUri = null;
 
+// W1: element tags that are MaterialX structure/graph-plumbing, never node
+// categories -- mirrors js/docs-app.jsx's own MTLX_STRUCTURAL_TAGS (kept in
+// sync by hand; that copy also excludes these from its local-file picker's
+// scan, so a VS Code-driven filter and a browser-picked-file filter agree
+// on what counts as a category).
+const DOCS_FILTER_STRUCTURAL_TAGS = new Set([
+    'materialx', 'nodegraph', 'nodedef', 'nodegraphoutput', 'input', 'output',
+    'token', 'member', 'implementation', 'typedef', 'attributedef', 'attributeset',
+    'targetdef', 'unitdef', 'unittypedef', 'unit', 'propertyset', 'property',
+    'propertyassign', 'variantset', 'variant', 'variantassign', 'geominfo',
+    'geomprop', 'geomattr', 'geomattrvalue', 'collection', 'collectionadd',
+    'collectionremove', 'look', 'lookgroup', 'materialassign', 'visibility', 'backdrop',
+    'xi:include',
+]);
+
+// W1: node categories referenced by a .mtlx document's text, for the docs
+// panel's file-based filter (js/docs-app.jsx's `mtlx-docs-filter` window
+// event contract). Built on mtlxSymbols.scanElements's tolerant element
+// tree (same scanner the outline/hover/completion providers use) rather
+// than a standalone regex, so a malformed/in-progress edit is tolerated
+// the same way everywhere.
+function categoriesFromMtlxText(text) {
+    const { root } = mtlxSymbols.scanElements(String(text || ''));
+    const tags = new Set();
+    mtlxSymbols.walkAll(root, (node) => {
+        if (!node.tag) return;
+        const tag = node.tag.toLowerCase();
+        if (!DOCS_FILTER_STRUCTURAL_TAGS.has(tag)) tags.add(tag);
+    });
+    return Array.from(tags);
+}
+
+// W1: whether the docs panel's file filter currently tracks the active
+// .mtlx document automatically (the default -- see the design note on
+// updateDocsFilter below) or was turned off by the
+// materialxPlayground.filterDocsByFile toggle command.
+let docsFilterAutoEnabled = true;
+let docsFilterDebounce = null;
+
+// Sends (or clears) the docs panel's file filter for the given document,
+// only bothering if the docs panel is actually open right now. `immediate`
+// skips the debounce (active-document switches; the toggle command).
+function updateDocsFilter(document, immediate) {
+    if (!isDocsPanelOpen()) return;
+    if (docsFilterDebounce) { clearTimeout(docsFilterDebounce); docsFilterDebounce = null; }
+    const send = () => {
+        if (!docsFilterAutoEnabled) return;
+        if (!document || document.languageId !== 'mtlx') { postDocsFilter(null, null); return; }
+        const file = path.basename(document.fileName);
+        postDocsFilter(file, categoriesFromMtlxText(document.getText()));
+    };
+    if (immediate) send();
+    else docsFilterDebounce = setTimeout(send, 300);
+}
+
 // Fires onDidChangeActiveMtlxDocument only when activeMtlxDocument()'s
 // answer actually changed (by uri), so switching focus between two
 // editors on the SAME .mtlx file, or an event that doesn't actually
@@ -76,6 +132,7 @@ function fireActiveMtlxDocumentChangeIfNeeded() {
     if (uri === lastActiveMtlxDocumentUri) return;
     lastActiveMtlxDocumentUri = uri;
     activeMtlxDocumentEmitter.fire(doc);
+    updateDocsFilter(doc, true);
 }
 
 // materialxPlayground.autoOpenPlayground bookkeeping (see maybeAutoOpen() in
@@ -152,12 +209,12 @@ async function runValidation(document) {
         if (result.status === 'ok') {
             items = result.items || [];
             if (result.tier2Warning) {
-                logLine(getSharedOutputChannel(), 'MaterialX semantic validation (tier 2) is unavailable: ' + result.tier2Warning);
+                logLine(getSharedOutputChannel(), 'MaterialX semantic validation (tier 2) is unavailable: ' + result.tier2Warning, 'warning', path.basename(document.fileName));
             }
         } else {
             if (!loggedClientFailure) {
                 loggedClientFailure = true;
-                logLine(getSharedOutputChannel(), 'MaterialX validation worker unavailable (' + result.reason + '); falling back to tier 1 only.');
+                logLine(getSharedOutputChannel(), 'MaterialX validation worker unavailable (' + result.reason + '); falling back to tier 1 only.', 'warning', path.basename(document.fileName));
             }
             // A 4 MB+ tier-1 scan on the host thread defeats the point
             // of the worker existing at all, so skip it too.
@@ -666,9 +723,29 @@ function activate(context) {
                     ? '#/' + encodeURIComponent(String(category)) + (sigOk ? '?sig=' + encodeURIComponent(sig) : '')
                     : '#!docs';
                 await openDocsPanel(context, hash, vscode.ViewColumn.Active);
+                // W1: opened from a .mtlx context (hover link, explorer, or
+                // just the active editor) -- send the current filter right
+                // away instead of waiting for the next document-change event.
+                updateDocsFilter(activeMtlxDocument(), true);
             } catch (err) {
                 vscode.window.showErrorMessage('MaterialX Playground: failed to open node documentation — ' + errMsg(err));
             }
+        }),
+        // W1: manual override for the docs panel's file-based filter, which
+        // otherwise tracks the active .mtlx document automatically (see the
+        // design note on updateDocsFilter above). Toggling this off clears
+        // the filter and stops the automatic tracking until toggled back on
+        // -- useful when the auto-applied filter (shown as a dismissable
+        // chip in the sidebar) is in the way and the file/document keeps
+        // changing under the user.
+        vscode.commands.registerCommand('materialxPlayground.filterDocsByFile', () => {
+            docsFilterAutoEnabled = !docsFilterAutoEnabled;
+            if (!isDocsPanelOpen()) {
+                vscode.window.showInformationMessage('MaterialX Playground: open Node Documentation first to filter it by the current file.');
+                return;
+            }
+            if (docsFilterAutoEnabled) updateDocsFilter(activeMtlxDocument(), true);
+            else postDocsFilter(null, null);
         }),
         // materialxPlayground.pickFile (E10b): hidden from the Command
         // Palette (package.json), invoked only by the "Browse for
@@ -783,6 +860,10 @@ function activate(context) {
                 debounceTimers.delete(key);
                 runValidation(e.document);
             }, VALIDATE_DEBOUNCE_MS));
+            // W1: only the ACTIVE document's edits move the docs filter --
+            // an edit in a background tab shouldn't change what's showing.
+            const active = activeMtlxDocument();
+            if (active && active.uri.toString() === key) updateDocsFilter(active, false);
         }),
         vscode.workspace.onDidCloseTextDocument((doc) => {
             const key = doc.uri.toString();
@@ -828,6 +909,7 @@ function activate(context) {
 function deactivate() {
     for (const timer of debounceTimers.values()) clearTimeout(timer);
     debounceTimers.clear();
+    if (docsFilterDebounce) clearTimeout(docsFilterDebounce);
     autoOpenedUris.clear();
     autoOpenedSceneUris.clear();
     return validationClient ? validationClient.dispose() : undefined;
