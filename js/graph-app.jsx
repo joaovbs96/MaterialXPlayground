@@ -419,6 +419,12 @@
             };
             const [status, setStatus] = React.useState('Loading the default document…');
             const [error, setError] = React.useState(null);
+            // Feeds the shared Messages button: every setError call (parse
+            // failures, external-edit banners, rename/definition guards, ...)
+            // lands in the log too, not just the inline error banner.
+            React.useEffect(() => {
+                if (error) window.MtlxMessages.push({ severity: 'error', text: error, source: 'graph' });
+            }, [error]);
             const [dragOver, setDragOver] = React.useState(false);
             const [busy, setBusy] = React.useState(false);
             // Optimistic overlay for scope transitions (can take a beat on
@@ -3332,7 +3338,12 @@
             // Save and Ctrl+S always write identical content.
             const doSaveInApp = async (forceDialog) => {
                 if (!parsed || !IN_ELECTRON || !window.mtlxDesktop) return false;
-                if (docReadOnlyRef.current) return false; // view-only: export a copy instead
+                if (docReadOnlyRef.current) {
+                    // Silent otherwise (the amber "View only" strip already
+                    // explains the lock); the Messages log gets a line too.
+                    window.MtlxMessages.push({ severity: 'warning', text: 'View only: use Export .mtlx to save a copy.', source: 'graph' });
+                    return false;
+                }
                 if (typeof window.__mtlxGetGraphXml !== 'function') {
                     setStatus('Save failed: graph view is not ready.');
                     return false;
@@ -5023,12 +5034,20 @@
                     // node (or collapsed nodegraph) — feed it from the new
                     // node's matching output.
                     const existingName = pending.nodeId.slice(2);
-                    const existingEl = pending.nodeId.indexOf('g:') === 0
-                        ? (docChild(doc, existingName) || mxSafe(() => doc.getNodeGraph(existingName), null))
-                        : mxSafe(() => created.container.getNode(existingName), null);
-                    if (!existingEl) return;
-                    point = ensureTypedInput(doc, existingEl, pending.port, pending.portType);
-                    if (!point) return;
+                    if (pending.nodeId.indexOf('o:') === 0) {
+                        // An <output> target is itself the connection point
+                        // (same resolution as connectionPoint's 'o:' branch).
+                        point = mxSafe(() => created.container.getOutput(existingName), null)
+                            || mxSafe(() => created.container.getChild(existingName), null);
+                        if (!point) return;
+                    } else {
+                        const existingEl = pending.nodeId.indexOf('g:') === 0
+                            ? (docChild(doc, existingName) || mxSafe(() => doc.getNodeGraph(existingName), null))
+                            : mxSafe(() => created.container.getNode(existingName), null);
+                        if (!existingEl) return;
+                        point = ensureTypedInput(doc, existingEl, pending.port, pending.portType);
+                        if (!point) return;
+                    }
                     const outs = created.outputs || [];
                     const outMatch = outs.find((o) => o.type === pending.portType) || outs[0];
                     writeConnSource(point, created.id, outMatch && outMatch.name, outs);
@@ -7490,6 +7509,7 @@
                                     <span className="gtb-label">Validate</span>
                                 </button>
                             )}
+                            <MtlxMessagesButton idPrefix="graph-messages" sources={['graph']} className={BTN_MENUBAR} />
                             <button
                                 onClick={() => setHelpOpen(true)}
                                 title="Help & Keybinds"
@@ -7687,15 +7707,15 @@
                                 </ReactFlowComp>
                             </div>
 
-                            {/* Explicit view-only notice: a full-width strip
-                                pinned above every other HUD element (which
-                                shift down to top-9 while this is showing). */}
+                            {/* View-only notice: inset strip above the HUD, which
+                                shifts down to top-14 while it shows; min-w-0 lets
+                                the text wrap instead of overflowing. */}
                             {scopeLocked && (
-                                <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-center gap-2 px-3 py-1 bg-amber-900/40 border-b border-amber-700/50 text-[11px] text-amber-200 backdrop-blur">
-                                    <MtlxIcon name="lock" className="w-3.5 h-3.5" />
+                                <div className="absolute top-2 left-2 right-2 z-20 flex flex-wrap items-center justify-center gap-2 px-3 py-1.5 bg-amber-900/40 border border-amber-700/50 rounded-md text-[11px] text-amber-200 backdrop-blur">
+                                    <MtlxIcon name="lock" className="w-3.5 h-3.5 shrink-0" />
                                     {docReadOnly ? (
                                         <>
-                                            <span>
+                                            <span className="min-w-0">
                                                 {'View only: material from ' + (docReadOnlySource || 'a scene') + '. Export .mtlx to save an editable copy.'}
                                             </span>
                                             <button
@@ -7706,7 +7726,7 @@
                                             </button>
                                         </>
                                     ) : (
-                                        <span>View only: {scope} is part of the standard library and cannot be edited.</span>
+                                        <span className="min-w-0">View only: {scope} is part of the standard library and cannot be edited.</span>
                                     )}
                                 </div>
                             )}
@@ -7715,7 +7735,7 @@
                                 the scope select share one anchored row so
                                 they never stack on top of each other. */}
                             {parsed && (!leftOpen || scopeOptions.length > 0) && (
-                                <div className={'absolute left-2 z-30 flex items-center gap-2 ' + (scopeLocked ? 'top-9' : 'top-2')}>
+                                <div className={'absolute left-2 z-30 flex items-center gap-2 ' + (scopeLocked ? 'top-14' : 'top-2')}>
                                     {!leftOpen && (
                                         <button
                                             onClick={() => setLeftOpen(true)}
@@ -7751,7 +7771,7 @@
 
                             {/* Error banner, centered along the top */}
                             {error && (
-                                <div className={'absolute left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg ' + (scopeLocked ? 'top-9' : 'top-2')}>
+                                <div className={'absolute left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg ' + (scopeLocked ? 'top-14' : 'top-2')}>
                                     {error}
                                 </div>
                             )}
@@ -7763,7 +7783,7 @@
                                 <button
                                     onClick={goUpScope}
                                     title={scope + ' (Backspace)'}
-                                    className={HUD_PILL + ' absolute left-1/2 -translate-x-1/2 z-30 max-w-[16rem] ' + (scopeLocked ? 'top-9' : 'top-2')}
+                                    className={HUD_PILL + ' absolute left-1/2 -translate-x-1/2 z-30 max-w-[16rem] ' + (scopeLocked ? 'top-14' : 'top-2')}
                                 >
                                     <MtlxIcon name="arrow-left" className="w-3.5 h-3.5 shrink-0" />
                                     <span className="truncate">Leave {scope}</span>
@@ -7820,7 +7840,7 @@
                             <button
                                 onClick={() => setParamsOpen(true)}
                                 title="Expand the preview panel"
-                                className={HUD_PILL + ' absolute right-2 z-30 ' + (scopeLocked ? 'top-9' : 'top-2')}
+                                className={HUD_PILL + ' absolute right-2 z-30 ' + (scopeLocked ? 'top-14' : 'top-2')}
                             >
                                 <MtlxIcon name="chevrons-left" className="w-3.5 h-3.5" />
                                 <span>Preview Panel</span>

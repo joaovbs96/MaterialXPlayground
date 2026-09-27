@@ -17,6 +17,47 @@
         const EMPTY_TABLES = [];
         const EMPTY_COLUMNS = [];
 
+        // MaterialX structural/graph-plumbing elements: never node
+        // categories, so the file-filter tag scan below (and its unit
+        // test) always drops them regardless of what's in the library.
+        const MTLX_STRUCTURAL_TAGS = new Set([
+            'materialx', 'nodegraph', 'nodedef', 'nodegraphoutput', 'input', 'output',
+            'token', 'member', 'implementation', 'typedef', 'attributedef', 'attributeset',
+            'targetdef', 'unitdef', 'unittypedef', 'unit', 'propertyset', 'property',
+            'propertyassign', 'variantset', 'variant', 'variantassign', 'geominfo',
+            'geomprop', 'geomattr', 'geomattrvalue', 'collection', 'collectionadd',
+            'collectionremove', 'look', 'lookgroup', 'materialassign', 'visibility', 'backdrop',
+        ]);
+
+        // Pure, unit-testable (tests/unit/docs-file-filter.test.mjs): scans a
+        // .mtlx document's raw text for element tag names with a plain
+        // regex, no XML parser and no WASM. Returns the distinct tags that
+        // aren't MaterialX structural elements: candidate node categories,
+        // which the caller then intersects against the loaded node library.
+        function scanMtlxFileTags(text) {
+            const tags = new Set();
+            const re = /<\s*([A-Za-z_][\w.]*)\b/g;
+            let m;
+            const str = String(text || '');
+            while ((m = re.exec(str))) {
+                const tag = m[1].toLowerCase();
+                if (!MTLX_STRUCTURAL_TAGS.has(tag)) tags.add(tag);
+            }
+            return Array.from(tags);
+        }
+
+        // Intersects scanMtlxFileTags' output against the loaded node
+        // library (jsonData: { lib: { group: { name: info } } }), so the
+        // file filter only ever narrows to real, known categories.
+        function categoriesFromFileTags(tags, jsonData) {
+            if (!jsonData || !tags || !tags.length) return [];
+            const known = new Set();
+            Object.values(jsonData).forEach((groups) =>
+                Object.values(groups).forEach((nodes) =>
+                    Object.keys(nodes).forEach((name) => known.add(name))));
+            return tags.filter((t) => known.has(t));
+        }
+
         const matchSigHintToGroups = (groups, hint) => {
             if (!groups || !groups.length || !hint || !hint.out) return -1;
 
@@ -43,6 +84,32 @@
                 if (satisfiesAll) return idx;
             }
             return candidates[0];
+        };
+
+        // Given a node's sigGroups (genData.nodes[name].sigGroups) and the
+        // active out:/in: type-filter tokens, returns the index of the
+        // FIRST group satisfying both (same rule as categoryMatchesTypeFilters
+        // below, but returning the winning index instead of a boolean), or
+        // -1 when no filter is active or none matches.
+        const findMatchingSigIndex = (sigGroups, outType, inType) => {
+            if (!outType && !inType) return -1;
+            if (!sigGroups || !sigGroups.length) return -1;
+            for (let i = 0; i < sigGroups.length; i++) {
+                const sg = sigGroups[i];
+                if (outType) {
+                    const outOk = (sg.type && sg.type.toLowerCase() === outType.toLowerCase())
+                        || (sg.versions || []).some((v) => v.outputTypes
+                            && Object.values(v.outputTypes).some((t) => t && t.toLowerCase() === outType.toLowerCase()));
+                    if (!outOk) continue;
+                }
+                if (inType) {
+                    const inOk = (sg.versions || []).some((v) => v.inputTypes
+                        && Object.values(v.inputTypes).some((t) => t && t.toLowerCase() === inType.toLowerCase()));
+                    if (!inOk) continue;
+                }
+                return i;
+            }
+            return -1;
         };
 
         // Computes the next pendingSigRef value for a freshly resolved
@@ -141,6 +208,11 @@
             // hash would wipe a hint it can no longer see. Consumption
             // clears it, and matching is guarded by node name.
             const pendingVerRef = React.useRef(null);
+            // Set by selectNodeFromSidebar (below) when out:/in: type
+            // filters are active: {name, index} for the FIRST signature of
+            // that node matching them, consumed by the reset effect right
+            // below instead of the default sigIndex 0.
+            const pendingSigIndexRef = React.useRef(null);
             const [jsonData, setJsonData] = React.useState(null);
             const [selectedNode, setSelectedNode] = React.useState(null);
             // Which signature (port table) of the selected node is shown:
@@ -157,7 +229,14 @@
                 const sameNode = selectedNode && prevSelNameRef.current === selectedNode.name;
                 prevSelNameRef.current = selectedNode && selectedNode.name;
                 if (sameNode) return;
-                setSigIndex(0);
+                const pendingIdx = pendingSigIndexRef.current;
+                if (pendingIdx && selectedNode && pendingIdx.name === selectedNode.name) {
+                    pendingSigIndexRef.current = null;
+                    setSigIndex(pendingIdx.index);
+                } else {
+                    pendingSigIndexRef.current = null;
+                    setSigIndex(0);
+                }
                 // A pending sig hint targets ONE specific node by name;
                 // if this selection is for a different node (e.g. a
                 // sidebar click raced the hint before consumption), drop it.
@@ -437,6 +516,37 @@
             // md+-only Node Library panel collapse; ephemeral, no localStorage
             // (site panel-collapse policy).
             const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
+            // File-based tree filter (js/docs/sidebar.jsx's "Filter by
+            // file" picker, or a host's `mtlx-docs-filter` event): null
+            // (no filter), else { file: label, categories: string[] }
+            // already intersected against the loaded library. AND'd with
+            // the text/type filters below in treeData.
+            const [fileFilter, setFileFilter] = React.useState(null);
+            // The VS Code host drives this filter itself once wired up:
+            // detail null clears it, otherwise { file, categories }. Any
+            // host (or a future non-VS Code one) can dispatch this.
+            React.useEffect(() => {
+                const onHostFilter = (e) => {
+                    const d = e && e.detail;
+                    if (!d || d.categories == null) { setFileFilter(null); return; }
+                    setFileFilter({ file: d.file || '', categories: Array.isArray(d.categories) ? d.categories : [] });
+                };
+                window.addEventListener('mtlx-docs-filter', onHostFilter);
+                return () => window.removeEventListener('mtlx-docs-filter', onHostFilter);
+            }, []);
+            // Reads locally picked .mtlx file(s) from the sidebar's hidden
+            // <input type=file>: plain text + regex tag scan, no WASM.
+            const pickFileFilter = async (fileList) => {
+                const files = Array.from(fileList || []);
+                if (!files.length) return;
+                const texts = await Promise.all(files.map((f) => f.text()));
+                const tags = new Set();
+                texts.forEach((t) => scanMtlxFileTags(t).forEach((tag) => tags.add(tag)));
+                const categories = categoriesFromFileTags(Array.from(tags), jsonData);
+                const label = files.length === 1 ? files[0].name : `${files.length} files`;
+                setFileFilter({ file: label, categories });
+            };
+            const clearFileFilter = () => setFileFilter(null);
             const [searchQuery, setSearchQuery] = React.useState('');
             // Pulls out:<type>/in:<type> tokens (case-insensitive) from the
             // search box; whatever's left is the plain name substring.
@@ -508,6 +618,20 @@
                     return true;
                 });
             }, [genData, searchTokens]);
+            // Sidebar tree clicks (js/docs/sidebar.jsx) go through here
+            // instead of the raw setSelectedNode setter: when out:/in:
+            // filters are active, open the first signature matching them
+            // (mirrors the `?sig=` hint mechanism) instead of resetting
+            // to signature 0. No filters active: behavior unchanged.
+            const selectNodeFromSidebar = React.useCallback((sel) => {
+                const { outType, inType } = searchTokens;
+                if (outType || inType) {
+                    const entry = genData && genData.nodes[sel.name];
+                    const idx = findMatchingSigIndex(entry && entry.sigGroups, outType, inType);
+                    if (idx > 0) pendingSigIndexRef.current = { name: sel.name, index: idx };
+                }
+                setSelectedNode(sel);
+            }, [genData, searchTokens]);
             // Global 3D-preview switch, persisted across sessions so slow
             // machines stay preview-free. localStorage is best-effort
             // (private mode etc. throws), default is ON.
@@ -552,7 +676,8 @@
             const treeData = React.useMemo(() => {
                 if (!jsonData) return jsonData;
                 const { name: query, outType, inType } = searchTokens;
-                if (docFilter === 'all' && !query && !outType && !inType) return jsonData;
+                const fileCats = fileFilter && fileFilter.categories ? new Set(fileFilter.categories) : null;
+                if (docFilter === 'all' && !query && !outType && !inType && !fileCats) return jsonData;
                 const filtered = {};
                 Object.entries(jsonData).forEach(([lib, groups]) => {
                     Object.entries(groups).forEach(([group, nodes]) => {
@@ -562,6 +687,7 @@
                             if (docFilter === 'documented' && isUndocumented(info)) return;
                             if (query && !name.toLowerCase().includes(query)) return;
                             if ((outType || inType) && !categoryMatchesTypeFilters(name)) return;
+                            if (fileCats && !fileCats.has(name)) return;
                             kept[name] = info;
                         });
                         if (Object.keys(kept).length > 0) {
@@ -571,7 +697,7 @@
                     });
                 });
                 return filtered;
-            }, [jsonData, docFilter, searchTokens, categoryMatchesTypeFilters]);
+            }, [jsonData, docFilter, searchTokens, categoryMatchesTypeFilters, fileFilter]);
 
             // While searching, show all matches regardless of stored
             // expansion state; clearing the query restores the prior state.
@@ -843,7 +969,7 @@
                                     expandedGroups={expandedGroups}
                                     toggleGroup={toggleGroup}
                                     selectedNode={selectedNode}
-                                    setSelectedNode={setSelectedNode}
+                                    setSelectedNode={selectNodeFromSidebar}
                                     stats={stats}
                                     applyDocFilter={applyDocFilter}
                                     showPreviews={showPreviews}
@@ -851,6 +977,10 @@
                                     onShowHelp={() => setShowHelp(true)}
                                     collapsed={sidebarCollapsed}
                                     onCollapse={() => setSidebarCollapsed(true)}
+                                    fileFilter={fileFilter}
+                                    onPickFiles={pickFileFilter}
+                                    onClearFileFilter={clearFileFilter}
+                                    showFilePicker={!IN_VSCODE}
                                 />
                             )}
 

@@ -183,7 +183,10 @@
       {
         "command": "materialxPlayground.open",
         "title": "MaterialX Playground: Open MaterialX Document",
-        "icon": "$(open-preview)",
+        "icon": {
+          "light": "./vscode_extension/media/mtlx-file-light.svg",
+          "dark": "./vscode_extension/media/mtlx-file-dark.svg"
+        },
         "enablement": "resourceExtname == .mtlx"
       },
       {
@@ -215,6 +218,14 @@
       {
         "command": "materialxPlayground.newFromExample",
         "title": "MaterialX Playground: New Material from Example"
+      },
+      {
+        "command": "materialxPlayground.newDocument",
+        "title": "MaterialX Playground: New MaterialX Document"
+      },
+      {
+        "command": "materialxPlayground.pickFile",
+        "title": "MaterialX Playground: Browse for File"
       }
     ],
     "keybindings": [
@@ -279,6 +290,9 @@
           "command": "materialxPlayground.newFromExample"
         },
         {
+          "command": "materialxPlayground.newDocument"
+        },
+        {
           "command": "materialxPlayground.saveGraph",
           "when": "false"
         },
@@ -288,6 +302,10 @@
         },
         {
           "command": "materialxPlayground.redoGraph",
+          "when": "false"
+        },
+        {
+          "command": "materialxPlayground.pickFile",
           "when": "false"
         }
       ],
@@ -318,6 +336,11 @@
           "group": "materialxPlayground"
         }
       ],
+      "file/newFile": [
+        {
+          "command": "materialxPlayground.newDocument"
+        }
+      ],
       "editor/title/context": [
         {
           "command": "materialxPlayground.openScene",
@@ -340,6 +363,48 @@
           "group": "materialxPlayground"
         }
       ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "materialxPlayground",
+          "title": "MaterialX",
+          "icon": "./vscode_extension/media/mtlx-activitybar.svg"
+        }
+      ]
+    },
+    "views": {
+      "materialxPlayground": [
+        {
+          "id": "materialxPlayground.outline",
+          "name": "Outline",
+          "when": "true"
+        },
+        {
+          "id": "materialxPlayground.actions",
+          "name": "Actions",
+          "when": "true"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "materialxPlayground.actions",
+        "contents": "[New Material from Example](command:materialxPlayground.newFromExample)\n[New MaterialX Document](command:materialxPlayground.newDocument)\n[Node Library Documentation](command:materialxPlayground.openDocs)\n[Open in Graph Editor](command:materialxPlayground.openInGraphEditor)\n[Open in Material Viewer](command:materialxPlayground.openInMaterialViewer)"
+      },
+      {
+        "view": "materialxPlayground.outline",
+        "contents": "Open a .mtlx file to see its outline here."
+      }
+    ],
+    "configurationDefaults": {
+      "[mtlx]": {
+        "editor.quickSuggestions": {
+          "other": "on",
+          "comments": "off",
+          "strings": "on"
+        }
+      }
     },
     "configuration": {
       "title": "MaterialX Playground",

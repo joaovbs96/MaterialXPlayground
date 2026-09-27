@@ -17,7 +17,7 @@ const vscode = require('vscode');
 const path = require('path');
 const docScanner = require('./docScanner');
 const usdFileSet = require('./usdFileSet');
-const { buildHtml, wireCommonWebviewMessages, trackScenePanel, getSharedOutputChannel, logLine, RELOAD_DEBOUNCE_MS, sceneTestHooks } = require('./editorProvider');
+const { buildHtml, panelLifecycle, wireCommonWebviewMessages, trackScenePanel, getSharedOutputChannel, logLine, showHostError, RELOAD_DEBOUNCE_MS, sceneTestHooks } = require('./editorProvider');
 const { errMsg } = require('./util');
 
 const VIEW_TYPE = 'materialxPlayground.sceneViewer';
@@ -58,12 +58,14 @@ class UsdSceneProvider {
     async resolveCustomEditor(document, webviewPanel) {
         const uri = document.uri;
         const name = path.basename(uri.path);
-        const webview = webviewPanel.webview;
+        // Before any await: see panelLifecycle in editorProvider.js.
+        const life = panelLifecycle(webviewPanel);
+        const webview = life.webview;
         try {
             const containmentRoot = docScanner.containmentRoot(uri);
-            await buildHtml(this.context, webview, '#!scene', false, containmentRoot, true);
+            if (!await buildHtml(this.context, webview, '#!scene', false, containmentRoot, true, life.isLive)) return;
             trackScenePanel(webviewPanel);
-            const commonSub = wireCommonWebviewMessages(webview, undefined, uri);
+            life.track(wireCommonWebviewMessages(webview, undefined, uri));
 
             let seq = 0;
             let lastSignature = null;
@@ -79,7 +81,7 @@ class UsdSceneProvider {
             let sentSeq = 0; // seq of the last set posted: the one the webview loads
             let cancelledUpTo = 0; // Cancel stops every scan and round up to this seq
             let suspended = false; // after Cancel, file changes wait for Reload
-            let disposed = false;
+            const isDisposed = () => life.disposed;
             let missingChain = Promise.resolve();
             // Files found on demand, re-checked on every rescan of this panel.
             const knownExtras = new Map();
@@ -90,8 +92,8 @@ class UsdSceneProvider {
             // A scan lives until a newer scan starts; a sent set (and its
             // on-demand rounds) until a newer set is sent. A dropped rescan
             // (nothing changed) therefore never cancels the rounds.
-            const scanLive = (mySeq) => () => !disposed && mySeq === seq && mySeq > cancelledUpTo;
-            const setLive = (mySeq) => () => !disposed && mySeq === sentSeq && mySeq > cancelledUpTo;
+            const scanLive = (mySeq) => () => !isDisposed() && mySeq === seq && mySeq > cancelledUpTo;
+            const setLive = (mySeq) => () => !isDisposed() && mySeq === sentSeq && mySeq > cancelledUpTo;
 
             // Collection progress, at most one message per PROGRESS_INTERVAL_MS.
             const progressPoster = (mySeq) => {
@@ -100,7 +102,7 @@ class UsdSceneProvider {
                 let last = 0;
                 const flush = () => {
                     timer = null;
-                    if (pending && mySeq === seq && !disposed) webview.postMessage(Object.assign({ type: 'mtlx-scene-progress', seq: mySeq }, pending));
+                    if (pending && mySeq === seq && !isDisposed()) life.post(Object.assign({ type: 'mtlx-scene-progress', seq: mySeq }, pending));
                     pending = null;
                     last = Date.now();
                 };
@@ -127,7 +129,7 @@ class UsdSceneProvider {
                 // throttleMs: test-only, see testApi.setSceneFetchThrottle in
                 // editorProvider.js; 0/undefined outside TEST_TRANSPORT.
                 const throttleMs = sceneTestHooks ? sceneTestHooks.sceneFetchThrottleMs : 0;
-                webview.postMessage({ type: 'mtlx-open-scene', seq: mySeq, round, name, root: snap.root, fileUrls, mtimes, sizes, totalBytes: snap.totalBytes, throttleMs });
+                life.post({ type: 'mtlx-open-scene', seq: mySeq, round, name, root: snap.root, fileUrls, mtimes, sizes, totalBytes: snap.totalBytes, throttleMs });
                 watchFolder(snap.baseUri);
             };
 
@@ -171,14 +173,14 @@ class UsdSceneProvider {
                 } catch (err) {
                     if (progress) progress.stop();
                     if ((err && err.cancelled) || !live()) return;
-                    vscode.window.showErrorMessage('MaterialX Playground: failed to load "' + name + '": ' + errMsg(err));
+                    showHostError('MaterialX Playground: failed to load "' + name + '": ' + errMsg(err));
                 }
             };
 
             // One on-demand round: resolve what the loaded scene reported
             // missing and resend the set when that found anything new.
             const resolveMissing = async (msg) => {
-                const reply = (added, stillMissing) => webview.postMessage({
+                const reply = (added, stillMissing) => life.post({
                     type: 'mtlx-scene-missing-result', seq: msg.seq, requestId: msg.requestId, added, stillMissing,
                 });
                 const mySeq = sentSeq;
@@ -234,6 +236,7 @@ class UsdSceneProvider {
             // One recursive watcher on the file set's base folder, rebuilt
             // only when a rescan moves that base.
             const watchFolder = (baseUri) => {
+                if (isDisposed()) return;
                 if (watchedBase && watchedBase.toString() === baseUri.toString()) return;
                 if (watcher) watcher.dispose();
                 watchedBase = baseUri;
@@ -243,7 +246,7 @@ class UsdSceneProvider {
                 watcher.onDidDelete(schedule);
             };
 
-            const messageSub = webview.onDidReceiveMessage((msg) => {
+            life.track(webview.onDidReceiveMessage((msg) => {
                 if (!msg) return;
                 if (msg.type === 'ready') {
                     sendScene(true);
@@ -261,22 +264,20 @@ class UsdSceneProvider {
                 } else if (msg.type === 'mtlx-save') {
                     // Never written into the USD file: the graph came from a
                     // material inside the stage, not from this document.
-                    webview.postMessage({ type: 'mtlx-save-result', ok: false, error: SAVE_REFUSED });
+                    life.post({ type: 'mtlx-save-result', ok: false, error: SAVE_REFUSED });
                     vscode.window.showWarningMessage('MaterialX Playground: ' + SAVE_REFUSED);
                 }
                 // 'mtlx-sync' (live graph edits) is ignored for the same reason.
-            });
+            }));
 
-            webviewPanel.onDidDispose(() => {
-                disposed = true;
-                commonSub.dispose();
-                messageSub.dispose();
+            life.onDispose(() => {
                 if (watcher) watcher.dispose();
                 if (debounceTimer) clearTimeout(debounceTimer);
                 seq++;
             });
         } catch (err) {
-            vscode.window.showErrorMessage('MaterialX Playground: failed to open the Scene Viewer: ' + errMsg(err));
+            if (life.disposed) return; // closed while resolving
+            showHostError('MaterialX Playground: failed to open the Scene Viewer: ' + errMsg(err));
         }
     }
 }
@@ -300,13 +301,13 @@ function register(context) {
         vscode.commands.registerCommand('materialxPlayground.openScene', async (uriArg) => {
             const uri = resolveSceneUri(uriArg);
             if (!isSceneUri(uri)) {
-                vscode.window.showErrorMessage('MaterialX Playground: select a .usd, .usda, .usdc, .usdz, .gltf, .glb or .obj file to open in the Scene Viewer.');
+                showHostError('MaterialX Playground: select a .usd, .usda, .usdc, .usdz, .gltf, .glb or .obj file to open in the Scene Viewer.');
                 return;
             }
             try {
                 await vscode.commands.executeCommand('vscode.openWith', uri, VIEW_TYPE);
             } catch (err) {
-                vscode.window.showErrorMessage('MaterialX Playground: failed to open the Scene Viewer: ' + errMsg(err));
+                showHostError('MaterialX Playground: failed to open the Scene Viewer: ' + errMsg(err));
             }
         })
     );

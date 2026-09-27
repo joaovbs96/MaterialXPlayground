@@ -18,6 +18,9 @@ const hoverProvider = require('./hoverProvider');
 const symbolProviders = require('./symbolProviders');
 const completionProvider = require('./completionProvider');
 const newFromExample = require('./newFromExample');
+const newDocument = require('./newDocument');
+const outlineView = require('./outlineView');
+const filePicker = require('./filePicker');
 const sceneProvider = require('./sceneProvider');
 const usdFileSet = require('./usdFileSet');
 const docScanner = require('./docScanner');
@@ -31,6 +34,49 @@ const { getSetting } = require('./settingsHost');
 let diagnosticCollection = null;
 let statusBarItem = null;
 let validationClient = null;
+
+// activeMtlxDocument()/onDidChangeActiveMtlxDocument (E16b/E17): the ONE
+// place that decides which .mtlx document is "active" for the status bar,
+// the Outline view and the Open in Graph Editor/Viewer actions (when
+// invoked with no explicit uri): the focused text editor's document when
+// it's a .mtlx file, else the document backing the active MaterialX
+// Playground custom-editor tab (if the active tab IS one), else null.
+// vscode.window.activeTextEditor alone (the previous behavior for all of
+// these) is undefined whenever a webview/custom-editor tab has focus, so
+// none of them worked while the Playground itself was focused; this is
+// the single fix shared by all three instead of three separate ad hoc
+// tab-scans. Exposed as a function (not a cached value) since tab-group
+// state can change without a matching text-editor event, and the two
+// pieces of state (activeTextEditor, tabGroups.activeTabGroup) aren't
+// guaranteed to update in the same tick.
+function activeMtlxDocument() {
+    const editor = vscode.window.activeTextEditor;
+    if (editor && editor.document.languageId === 'mtlx') return editor.document;
+    const tabGroup = vscode.window.tabGroups.activeTabGroup;
+    const tab = tabGroup && tabGroup.activeTab;
+    const input = tab && tab.input;
+    if (input instanceof vscode.TabInputCustom && input.viewType === 'materialxPlayground.editor') {
+        const uriStr = input.uri.toString();
+        return vscode.workspace.textDocuments.find((d) => d.uri.toString() === uriStr) || null;
+    }
+    return null;
+}
+
+const activeMtlxDocumentEmitter = new vscode.EventEmitter();
+const onDidChangeActiveMtlxDocument = activeMtlxDocumentEmitter.event;
+let lastActiveMtlxDocumentUri = null;
+
+// Fires onDidChangeActiveMtlxDocument only when activeMtlxDocument()'s
+// answer actually changed (by uri), so switching focus between two
+// editors on the SAME .mtlx file, or an event that doesn't actually
+// change the answer, doesn't force an unnecessary Outline rebuild.
+function fireActiveMtlxDocumentChangeIfNeeded() {
+    const doc = activeMtlxDocument();
+    const uri = doc ? doc.uri.toString() : null;
+    if (uri === lastActiveMtlxDocumentUri) return;
+    lastActiveMtlxDocumentUri = uri;
+    activeMtlxDocumentEmitter.fire(doc);
+}
 
 // materialxPlayground.autoOpenPlayground bookkeeping (see maybeAutoOpen() in
 // activate()): which .mtlx files have already had the playground
@@ -67,12 +113,12 @@ function toVsDiagnostics(items) {
 // every diagnosticCollection update and on active-editor changes, so the
 // status bar always reflects whichever .mtlx tab (if any) is focused.
 function updateStatusBar() {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor || editor.document.languageId !== 'mtlx') {
+    const document = activeMtlxDocument();
+    if (!document) {
         statusBarItem.hide();
         return;
     }
-    const diags = diagnosticCollection.get(editor.document.uri) || [];
+    const diags = diagnosticCollection.get(document.uri) || [];
     if (diags.length === 0) {
         statusBarItem.text = '$(check) MaterialX';
         statusBarItem.tooltip = 'No MaterialX validation issues.';
@@ -210,9 +256,33 @@ function activate(context) {
     // pushes its own disposable onto context.subscriptions.
     newFromExample.register(context);
 
+    // materialxPlayground.newDocument: opens an untitled .mtlx document
+    // seeded with the mtlxdoc snippet skeleton (newDocument.js).
+    newDocument.register(context);
+
     // USD Scene Viewer custom editor for .usd/.usda/.usdc/.usdz plus the
     // materialxPlayground.openScene command (sceneProvider.js).
     sceneProvider.register(context);
+
+    context.subscriptions.push(activeMtlxDocumentEmitter);
+
+    // materialxPlayground.outline (activity bar container): tracks
+    // whichever document activeMtlxDocument() currently reports, see that
+    // function's own comment (outlineView.js).
+    outlineView.register(context, {
+        getActiveDocument: activeMtlxDocument,
+        onDidChangeActiveDocument: onDidChangeActiveMtlxDocument,
+    });
+
+    // materialxPlayground.actions (activity bar container): an always-
+    // empty tree so its contributed viewsWelcome buttons (package.json)
+    // are always what's shown.
+    context.subscriptions.push(
+        vscode.window.registerTreeDataProvider('materialxPlayground.actions', {
+            onDidChangeTreeData: undefined,
+            getChildren: () => [],
+        })
+    );
 
     const provider = new MaterialXEditorProvider(context);
 
@@ -232,9 +302,8 @@ function activate(context) {
     // fall back to the active text editor's document.
     const resolveTargetUri = (uriArg) => {
         if (uriArg instanceof vscode.Uri) return uriArg;
-        const active = vscode.window.activeTextEditor;
-        if (active && active.document && active.document.uri) return active.document.uri;
-        return null;
+        const doc = activeMtlxDocument();
+        return doc ? doc.uri : null;
     };
 
     // 'splitRight' placement for openInPlayground below (materialxPlayground.
@@ -600,6 +669,46 @@ function activate(context) {
             } catch (err) {
                 vscode.window.showErrorMessage('MaterialX Playground: failed to open node documentation — ' + errMsg(err));
             }
+        }),
+        // materialxPlayground.pickFile (E10b): hidden from the Command
+        // Palette (package.json), invoked only by the "Browse for
+        // file..." completion item (completionProvider.js) with
+        // (documentUriString, start, end), start/end being the plain
+        // {line, character} range of the filename= value text to replace.
+        // showOpenDialog defaults into the document's own folder (an
+        // untitled document has none, so no defaultUri); the picked path
+        // is written back relative to that folder in POSIX form
+        // (filePicker.js), or as an absolute POSIX path for an untitled
+        // document.
+        vscode.commands.registerCommand('materialxPlayground.pickFile', async (uriString, start, end) => {
+            try {
+                const docUri = vscode.Uri.parse(uriString);
+                const document = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uriString);
+                if (!document) return;
+
+                const defaultUri = docUri.scheme === 'untitled' ? undefined : vscode.Uri.joinPath(docUri, '..');
+                const picked = await vscode.window.showOpenDialog({
+                    canSelectMany: false,
+                    defaultUri,
+                    filters: {
+                        Images: ['png', 'jpg', 'jpeg', 'tif', 'tiff', 'exr', 'hdr', 'ktx2'],
+                        'All Files': ['*'],
+                    },
+                    title: 'MaterialX Playground: choose a texture file',
+                });
+                if (!picked || !picked.length) return;
+
+                const value = filePicker.computeFilePathValue(
+                    { scheme: docUri.scheme, fsPath: docUri.fsPath },
+                    picked[0].fsPath
+                );
+                const editor = vscode.window.visibleTextEditors.find((e) => e.document.uri.toString() === uriString)
+                    || await vscode.window.showTextDocument(document, { preserveFocus: true });
+                const range = new vscode.Range(start.line, start.character, end.line, end.character);
+                await editor.edit((builder) => builder.replace(range, value));
+            } catch (err) {
+                vscode.window.showErrorMessage('MaterialX Playground: failed to browse for a file: ' + errMsg(err));
+            }
         })
     );
 
@@ -658,6 +767,7 @@ function activate(context) {
     for (const doc of vscode.workspace.textDocuments) {
         if (doc.languageId === 'mtlx') runValidation(doc);
     }
+    fireActiveMtlxDocumentChangeIfNeeded();
     updateStatusBar();
 
     context.subscriptions.push(
@@ -681,7 +791,15 @@ function activate(context) {
             diagnosticCollection.delete(doc.uri);
             updateStatusBar();
         }),
-        vscode.window.onDidChangeActiveTextEditor(() => updateStatusBar())
+        vscode.window.onDidChangeActiveTextEditor(() => updateStatusBar()),
+        // activeMtlxDocument() (E16b/E17) additionally depends on which
+        // custom-editor TAB is active, not just the active text editor, so
+        // it's re-checked on every tab-group change too, not only on
+        // onDidChangeActiveTextEditor above.
+        onDidChangeActiveMtlxDocument(() => updateStatusBar()),
+        vscode.window.onDidChangeActiveTextEditor(fireActiveMtlxDocumentChangeIfNeeded),
+        vscode.window.tabGroups.onDidChangeTabs(fireActiveMtlxDocumentChangeIfNeeded),
+        vscode.window.tabGroups.onDidChangeTabGroups(fireActiveMtlxDocumentChangeIfNeeded)
     );
 
     // activate() is triggered by the implicit onLanguage:mtlx activation

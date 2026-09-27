@@ -84,11 +84,51 @@ test('attribute-name: colorspace appears for a color3 input, not for a float inp
     assert.ok(!labels(complete(floatText)).includes('colorspace'));
 });
 
-test('attribute-name: value is not offered when nodename is already present', () => {
+test('E2: value is not offered when nodename is already present', () => {
     const text = '<materialx version="1.39">\n  <multiply name="m1" type="color3">\n    <input name="in1" type="color3" nodename="other" |/>\n  </multiply>\n</materialx>\n';
     const ls = labels(complete(text));
     assert.ok(!ls.includes('nodename'), 'already-present attributes are excluded');
-    assert.ok(ls.includes('value'), 'value is still offered (mutual exclusivity is authoring guidance, not enforced here)');
+    assert.ok(!ls.includes('value'), 'value conflicts with an already-present connection attribute (nodename)');
+});
+
+test('E2: value is not offered once nodegraph, interfacename or output is already present', () => {
+    const nodegraphText = '<materialx version="1.39">\n  <multiply name="m1" type="color3">\n    <input name="in1" type="color3" nodegraph="NG1" |/>\n  </multiply>\n</materialx>\n';
+    assert.ok(!labels(complete(nodegraphText)).includes('value'));
+    const outputText = '<materialx version="1.39">\n  <multiply name="m1" type="color3">\n    <input name="in1" type="color3" output="out1" |/>\n  </multiply>\n</materialx>\n';
+    assert.ok(!labels(complete(outputText)).includes('value'));
+    const insideGraph = [
+        '<materialx version="1.39">',
+        '  <nodegraph name="NG1" nodedef="ND1">',
+        '    <multiply name="m1" type="color3">',
+        '      <input name="in1" type="color3" interfacename="amt" |/>',
+        '    </multiply>',
+        '  </nodegraph>',
+        '</materialx>',
+        '',
+    ].join('\n');
+    assert.ok(!labels(complete(insideGraph)).includes('value'));
+});
+
+test('E2: colorspace is hidden on a nameless input when none of the parent\'s missing inputs are colorspace-eligible', () => {
+    // multiply type="float" only ever has float in1/in2: no color3,
+    // color4 or filename input is possible, so colorspace must not be
+    // offered on a not-yet-named <input> here (its own type can't be
+    // resolved by name lookup since it has no name yet).
+    const text = '<materialx version="1.39">\n  <multiply name="m1" type="float">\n    <input |/>\n  </multiply>\n</materialx>\n';
+    assert.ok(!labels(complete(text)).includes('colorspace'));
+});
+
+test('E2: colorspace is still offered on a nameless input when a missing sibling input is colorspace-eligible', () => {
+    // image's inputs include a filename "file" input alongside a color3
+    // "default": with neither present yet, a nameless <input> could still
+    // become either, so colorspace stays offered.
+    const text = '<materialx version="1.39">\n  <image name="img1" type="color3">\n    <input |/>\n  </image>\n</materialx>\n';
+    assert.ok(labels(complete(text)).includes('colorspace'));
+});
+
+test('E2: colorspace stays gated by the resolved type once the nameless input becomes named (unaffected by the E2 refinement)', () => {
+    const text = '<materialx version="1.39">\n  <multiply name="m1" type="float">\n    <input name="in1" |/>\n  </multiply>\n</materialx>\n';
+    assert.ok(!labels(complete(text)).includes('colorspace'), 'in1 resolves to float via the library');
 });
 
 test('attribute-name: interfacename only offered inside a nodegraph', () => {

@@ -165,10 +165,12 @@ const ATTRS_BY_KIND = {
     ],
 
     // "Node elements contain zero or more <input> elements" (spec lines
-    // 599-609): value XOR nodename/nodegraph (mtlxCompletions enforces
-    // the exclusion, this list stays flat), plus unit/unittype (line
-    // 603) and interfacename for functional/compound nodegraph content
-    // (lines 1174-1196, gated to inside a <nodegraph> by mtlxCompletions).
+    // 599-609): value XOR nodename/nodegraph/interfacename/output
+    // (mtlxCompletions' attributeNameItems enforces the exclusion by
+    // dropping `value` once any of those is already present; this list
+    // stays flat), plus unit/unittype (line 603) and interfacename for
+    // functional/compound nodegraph content (lines 1174-1196, gated to
+    // inside a <nodegraph> by mtlxCompletions).
     'node-instance-input': [
         attr('name', { required: true }), attr('type', { required: true }),
         attr('value'), attr('nodename'), attr('nodegraph'), attr('output'),

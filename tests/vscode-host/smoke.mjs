@@ -94,6 +94,8 @@ async function main() {
                 // scenarioExternalScene); empty in CI.
                 MTLX_SMOKE_EXTRA_SCENE: process.env.MTLX_SMOKE_EXTRA_SCENE || '',
                 MTLX_SMOKE_EXTRA_ONLY: process.env.MTLX_SMOKE_EXTRA_ONLY || '',
+                // Comma-separated scenario names to run (all when empty), for local reruns.
+                MTLX_SMOKE_ONLY: process.env.MTLX_SMOKE_ONLY || '',
             },
         });
         log('host exited cleanly.');

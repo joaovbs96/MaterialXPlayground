@@ -21,13 +21,15 @@ const KIND_MAP = {
     interfacename: vscode.CompletionItemKind.Property,
     'input-name': vscode.CompletionItemKind.Property,
     'attr-name': vscode.CompletionItemKind.Keyword,
+    'doc-snippet': vscode.CompletionItemKind.Snippet,
+    'file-browse': vscode.CompletionItemKind.File,
 };
 
 // Sort order within one completion list: real node/attribute data first
 // (the most likely pick), the generic '<input name=... />' snippet
 // enrichment and bare attribute-name snippets after, label-alphabetical
 // within each bucket (VS Code's default when sortText ties).
-const KIND_SORT_PREFIX = { node: '0', structural: '1', 'attr-name': '8', input: '9' };
+const KIND_SORT_PREFIX = { node: '0', structural: '1', 'attr-name': '8', input: '9', 'file-browse': '0' };
 
 // Zero-padded so string comparison (what sortText uses) matches numeric
 // order for any realistic candidate-list length.
@@ -48,6 +50,29 @@ function toCompletionItem(document, cand) {
     item.insertText = cand.isSnippet ? new vscode.SnippetString(cand.insertText) : cand.insertText;
     if (typeof cand.replaceStart === 'number' && typeof cand.replaceEnd === 'number') {
         item.range = new vscode.Range(document.positionAt(cand.replaceStart), document.positionAt(cand.replaceEnd));
+    }
+    // E3: an attribute-name item inserts name="$1" with the cursor already
+    // inside the quotes; immediately re-triggering suggest means the value
+    // list for that attribute shows up without the user pressing
+    // Ctrl+Space themselves.
+    if (cand.kind === 'attr-name') {
+        item.command = { command: 'editor.action.triggerSuggest', title: '' };
+    }
+    // E10a: "Browse for file..." inserts nothing itself, it hands off to
+    // the file-picker command (implemented elsewhere) with the document
+    // URI and the value text's own range, so it can replace exactly that.
+    if (cand.kind === 'file-browse' && typeof cand.replaceStart === 'number' && typeof cand.replaceEnd === 'number') {
+        const start = document.positionAt(cand.replaceStart);
+        const end = document.positionAt(cand.replaceEnd);
+        item.command = {
+            command: 'materialxPlayground.pickFile',
+            title: 'Browse for file...',
+            arguments: [
+                document.uri.toString(),
+                { line: start.line, character: start.character },
+                { line: end.line, character: end.character },
+            ],
+        };
     }
     return item;
 }

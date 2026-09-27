@@ -119,7 +119,7 @@ test('scanElements: an unclosed tag followed directly by its ancestor\'s closing
   assert.deepEqual(Object.keys(constant.attrs), ['name', 'type']);
 });
 
-test('buildDocumentSymbols: top-level node, nodegraph (nodes+outputs), nodedef (inputs+outputs)', () => {
+test('buildDocumentSymbols: top-level node, nodegraph (nodes+interface inputs+outputs), nodedef (inputs+outputs)', () => {
   const { root } = mtlxSymbols.scanElements(FIXTURE);
   const symbols = mtlxSymbols.buildDocumentSymbols(root);
   const byName = Object.fromEntries(symbols.map((s) => [s.name, s]));
@@ -127,14 +127,59 @@ test('buildDocumentSymbols: top-level node, nodegraph (nodes+outputs), nodedef (
   assert.equal(byName.ND_myshader.kind, 'nodedef');
   assert.deepEqual(byName.ND_myshader.children.map((c) => c.name), ['base_color', 'out']);
   assert.equal(byName.ND_myshader.detail, 'nodedef');
+  // A nodedef input's detail is its type plus its connection (here a
+  // literal value=), same format a plain node's own input gets.
+  const baseColor = byName.ND_myshader.children.find((c) => c.name === 'base_color');
+  assert.equal(baseColor.kind, 'input');
+  assert.equal(baseColor.detail, 'color3 = 1, 0, 0');
 
   assert.equal(byName.NG1.kind, 'nodegraph');
-  // Interface <input> is excluded from a nodegraph's own symbol children
-  // (spec: "nodegraphs with their nodes and outputs").
-  assert.deepEqual(byName.NG1.children.map((c) => c.name), ['c1', 'mixnode', 'out1']);
+  // The graph's own interface <input> is now included alongside its
+  // nodes and outputs, so the Outline can nest all the way to a port.
+  assert.deepEqual(byName.NG1.children.map((c) => c.name), ['iface_in', 'c1', 'mixnode', 'out1']);
+
+  const ifaceIn = byName.NG1.children.find((c) => c.name === 'iface_in');
+  assert.equal(ifaceIn.kind, 'input');
+  assert.equal(ifaceIn.detail, 'float = 0.5');
+
+  // A plain node's own <input> children are now real Outline children too
+  // (previously a node's symbol never had any children at all).
+  const mixnode = byName.NG1.children.find((c) => c.name === 'mixnode');
+  assert.deepEqual(mixnode.children.map((c) => c.name), ['fg', 'bg']);
+  const fg = mixnode.children.find((c) => c.name === 'fg');
+  assert.equal(fg.detail, 'color3 <- c1');
+  const bg = mixnode.children.find((c) => c.name === 'bg');
+  assert.equal(bg.detail, 'color3 <- iface_in');
+
+  const out1 = byName.NG1.children.find((c) => c.name === 'out1');
+  assert.equal(out1.kind, 'output');
+  assert.equal(out1.detail, 'color3 <- mixnode');
 
   assert.equal(byName.M1.kind, 'node');
   assert.equal(byName.M1.detail, 'surfacematerial : material');
+  const surfIn = byName.M1.children.find((c) => c.name === 'surfaceshader');
+  assert.equal(surfIn.detail, 'surfaceshader <- NG1:out1');
+});
+
+// Follow Cursor picks the deepest symbol whose range contains the
+// cursor: both invariants below (child range inside parent, selection
+// range inside its own range) must hold at every depth, or it stops.
+function assertNesting(sym, parentRange) {
+  const rangeLE = (a, b) => a.line < b.line || (a.line === b.line && a.character <= b.character);
+  if (parentRange) {
+    assert.ok(rangeLE(parentRange.start, sym.range.start), `${sym.name}.range.start inside parent`);
+    assert.ok(rangeLE(sym.range.end, parentRange.end), `${sym.name}.range.end inside parent`);
+  }
+  assert.ok(rangeLE(sym.range.start, sym.selectionRange.start), `${sym.name}.selectionRange.start inside range`);
+  assert.ok(rangeLE(sym.selectionRange.end, sym.range.end), `${sym.name}.selectionRange.end inside range`);
+  for (const child of sym.children) assertNesting(child, sym.range);
+}
+
+test('buildDocumentSymbols: every symbol nests inside its parent\'s range, at every depth', () => {
+  const { root } = mtlxSymbols.scanElements(FIXTURE);
+  const symbols = mtlxSymbols.buildDocumentSymbols(root);
+  assert.ok(symbols.length > 0);
+  for (const sym of symbols) assertNesting(sym, null);
 });
 
 test('resolveReference: interfacename inside a functional nodegraph resolves to its nodedef\'s own input', () => {

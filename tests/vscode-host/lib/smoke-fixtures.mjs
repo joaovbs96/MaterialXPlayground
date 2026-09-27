@@ -521,6 +521,38 @@ async function generateSmokeFixtures(fixturesDir) {
     fs.writeFileSync(path.join(missingDir, 'layers', 'geo.usda'), usdGeoLayer());
     manifest['ws/scenemissing/textures/checker.png'] = writePngRecordHash(path.join(missingDir, 'textures', 'checker.png'), genCheckerPng());
 
+    // textureSwap: one unlit material on ws/texswap/tex.png; the scenario
+    // copies blue.png over it (same size as red.png) and expects the viewer to follow.
+    const swapDir = path.join(wsDir, 'texswap');
+    const swapSrcDir = path.join(fixturesDir, 'texswap-src');
+    for (const d of [swapDir, swapSrcDir]) fs.mkdirSync(d, { recursive: true });
+    const solidPng = (r, g, b) => encodePNG({
+        width: 16, height: 16, bitDepth: 8, colorType: 2,
+        fillRow: (y, row) => { for (let x = 0; x < 16; x++) { row[x * 3] = r; row[x * 3 + 1] = g; row[x * 3 + 2] = b; } },
+    });
+    const swapRedPath = path.join(swapSrcDir, 'red.png');
+    const swapBluePath = path.join(swapSrcDir, 'blue.png');
+    fs.writeFileSync(swapRedPath, solidPng(230, 20, 20));
+    fs.writeFileSync(swapBluePath, solidPng(20, 20, 230));
+    const swapTexPath = path.join(swapDir, 'tex.png');
+    fs.copyFileSync(swapRedPath, swapTexPath);
+    const swapMtlxPath = path.join(swapDir, 'swap.mtlx');
+    fs.writeFileSync(swapMtlxPath, [
+        '<?xml version="1.0"?>',
+        '<materialx version="1.39">',
+        '  <image name="img" type="color3">',
+        '    <input name="file" type="filename" value="tex.png" />',
+        '  </image>',
+        '  <surface_unlit name="unlit" type="surfaceshader">',
+        '    <input name="emission_color" type="color3" nodename="img" />',
+        '  </surface_unlit>',
+        '  <surfacematerial name="M_swap" type="material">',
+        '    <input name="surfaceshader" type="surfaceshader" nodename="unlit" />',
+        '  </surfacematerial>',
+        '</materialx>',
+        '',
+    ].join('\n'));
+
     fs.writeFileSync(path.join(fixturesDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
 
     return {
@@ -530,6 +562,7 @@ async function generateSmokeFixtures(fixturesDir) {
         gltfRootPath, glbRootPath, objRootPath,
         noSiblingsRootPath, noSiblingUnrelatedPaths,
         missingRootPath,
+        swapMtlxPath, swapTexPath, swapRedPath, swapBluePath,
     };
 }
 

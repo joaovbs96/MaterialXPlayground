@@ -22,6 +22,7 @@
 'use strict';
 
 const mtlxNode = require('./mtlxNode');
+const mtlxSymbols = require('./mtlxSymbols');
 const { escapeRegExp } = require('./util');
 
 // ---------------------------------------------------------------------
@@ -440,6 +441,72 @@ function findElementNameRange(text, tag, attrs) {
     return best;
 }
 
+// ---------------------------------------------------------------------
+// MaterialX auto-names an unnamed element on read (bare <multiply>
+// becomes "multiply1"), so it is flagged here at its own tag, reusing
+// mtlxSymbols.scanElements. Severity 'warning': valid MaterialX, not an error.
+function findUnnamedElementDiagnostics(text) {
+    const { root } = mtlxSymbols.scanElements(text);
+    const diags = [];
+    mtlxSymbols.walkAll(root, (el) => {
+        if (el.tag === 'materialx' || el.tag === 'xi:include') return;
+        if (el.attrs && el.attrs.name) return;
+        const s = el.range.start;
+        diags.push({
+            message: '<' + el.tag + '> has no name attribute',
+            startLine: s.line,
+            startChar: s.character,
+            endLine: s.line,
+            endChar: s.character + el.tag.length + 1,
+            severity: 'warning',
+        });
+    });
+    return diags;
+}
+
+// Finds the Nth unnamed occurrence of `tag` (1-based). MaterialX numbers
+// unnamed siblings per parent scope (verified via Node probe): a nested
+// scope can reuse "multiply1"; ties pick the first match found (a known limitation).
+function findAutoNamedElementRange(text, tag, index) {
+    const { root } = mtlxSymbols.scanElements(text);
+    const counters = new Map(); // parent element -> count of unnamed `tag` children seen
+    let found = null;
+    mtlxSymbols.walkAll(root, (el) => {
+        if (found || el.tag !== tag) return;
+        if (el.attrs && el.attrs.name) return;
+        const count = (counters.get(el.parent) || 0) + 1;
+        counters.set(el.parent, count);
+        if (count === index) found = el;
+    });
+    if (!found) return null;
+    const s = found.range.start;
+    return { start: s, end: { line: s.line, character: s.character + tag.length + 1 } };
+}
+
+// Rewrites a validate() message that named an auto-generated element
+// (e.g. `<multiply name="multiply1">`) so it never claims a name the
+// user never wrote: drops the `name="..."` and marks the tag "(unnamed)".
+function rewriteAutoNamedMessage(text, tag, elementName) {
+    let rewritten = text.replace(' name="' + elementName + '"', '');
+    const tagOpenIdx = rewritten.indexOf('<' + tag);
+    if (tagOpenIdx === -1) return rewritten;
+    const gt = rewritten.indexOf('>', tagOpenIdx);
+    if (gt === -1) return rewritten;
+    return rewritten.slice(0, gt + 1) + ' (unnamed)' + rewritten.slice(gt + 1);
+}
+
+// Bare type/category tokens quoted inside validate() messages, never an
+// ELEMENT name. Excluded from findCandidateRange, which previously
+// matched the first unrelated type="float" attribute in the document.
+const GENERIC_TYPE_TOKENS = new Set([
+    'float', 'integer', 'boolean', 'string', 'filename',
+    'color3', 'color4', 'vector2', 'vector3', 'vector4',
+    'matrix33', 'matrix44',
+    'surfaceshader', 'displacementshader', 'volumeshader', 'lightshader',
+    'material', 'BSDF', 'EDF', 'VDF', 'none', 'multioutput',
+    'floatarray', 'integerarray', 'stringarray',
+]);
+
 function mapSemanticMessageToRange(text, lineStarts, item) {
     // Primary: the message line carried a serialized element — scan the
     // document for the best-matching `<tag ... name="...">` (scored
@@ -454,17 +521,34 @@ function mapSemanticMessageToRange(text, lineStarts, item) {
         }
     }
 
-    // Fallback: no serialized element on this line (or its tag/name
-    // didn't match anywhere in the document) — fall back to the older,
-    // cruder heuristic of searching for any quoted substring from the
-    // message text as a bare attribute VALUE anywhere in the document.
+    // Secondary: the name looks auto-generated (e.g. "multiply1") and
+    // wasn't literally in the text, so locate the Nth unnamed occurrence
+    // of that tag and rewrite the message to not claim a fake name.
+    if (item.tag && item.elementName) {
+        const autoMatch = new RegExp('^' + escapeRegExp(item.tag) + '(\\d+)$').exec(item.elementName);
+        if (autoMatch) {
+            const range = findAutoNamedElementRange(text, item.tag, parseInt(autoMatch[1], 10));
+            if (range) {
+                const message = rewriteAutoNamedMessage(item.text, item.tag, item.elementName);
+                return { message, startLine: range.start.line, startChar: range.start.character, endLine: range.end.line, endChar: range.end.character, severity: 'error' };
+            }
+        }
+    }
+
+    // Fallback: search for any quoted substring from the message text as
+    // a bare attribute VALUE anywhere in the document. Generic type
+    // tokens (e.g. "float") are excluded so they fall through below.
     const candidates = [];
-    if (item.elementName) candidates.push(item.elementName);
+    if (item.elementName && !GENERIC_TYPE_TOKENS.has(item.elementName)) candidates.push(item.elementName);
     const quoted = item.text.match(/"([^"]+)"/g) || [];
-    for (const q of quoted) candidates.push(q.slice(1, -1));
+    for (const q of quoted) {
+        const val = q.slice(1, -1);
+        if (!GENERIC_TYPE_TOKENS.has(val)) candidates.push(val);
+    }
     if (item.text.indexOf('/') !== -1) {
         const parts = item.text.split('/');
-        candidates.push(parts[parts.length - 1]);
+        const last = parts[parts.length - 1];
+        if (!GENERIC_TYPE_TOKENS.has(last)) candidates.push(last);
     }
 
     for (const candidate of candidates) {
@@ -506,18 +590,24 @@ async function validateDocument(text) {
     const tier1 = scanXml(text);
     if (tier1.length) return tier1; // tier 2 only runs when tier 1 is clean
     if (!repoRoot) return tier1; // not initialized yet — stay silent
-    if (text.indexOf('<xi:include') !== -1 || text.length > TIER2_MAX_CHARS) return tier1;
+    if (text.length > TIER2_MAX_CHARS) return tier1;
+
+    // Unnamed-element pre-pass: pure regex/tree-walk, no wasm involved, so
+    // it runs even when tier 2 below is skipped or unavailable.
+    const unnamed = findUnnamedElementDiagnostics(text);
+    if (text.indexOf('<xi:include') !== -1) return unnamed;
 
     let tier2;
     try {
         tier2 = await mtlxNode.validateSemantic(repoRoot, text);
     } catch (e) {
-        return tier1; // tier-2 unavailability is ALWAYS silent
+        return unnamed; // tier-2 unavailability is ALWAYS silent
     }
-    if (!tier2 || !tier2.available || !tier2.messages || !tier2.messages.length) return tier1;
+    if (!tier2 || !tier2.available || !tier2.messages || !tier2.messages.length) return unnamed;
 
     const lineStarts = computeLineStarts(text);
-    return tier2.messages.map((m) => mapSemanticMessageToRange(text, lineStarts, m));
+    const mapped = tier2.messages.map((m) => mapSemanticMessageToRange(text, lineStarts, m));
+    return unnamed.concat(mapped);
 }
 
 // One-shot forward of mtlxNode's init-failure string, for extension.js
@@ -527,4 +617,13 @@ function consumeTier2Warning() {
     return mtlxNode.consumeInitError();
 }
 
-module.exports = { scanXml, init, validateDocument, consumeTier2Warning, TIER2_MAX_CHARS };
+module.exports = {
+    scanXml,
+    init,
+    validateDocument,
+    consumeTier2Warning,
+    TIER2_MAX_CHARS,
+    findUnnamedElementDiagnostics,
+    mapSemanticMessageToRange,
+    computeLineStarts,
+};

@@ -183,6 +183,34 @@
         })();
     }
 
+    // Test-transport only: average colour of an 8x8 patch (msg.x/msg.y are
+    // fractions of the frame) of the live viewer's snapshot.
+    function handleTestTriggerPixel(msg) {
+        if (!isTransportTest || !vscodeApi) return;
+        var send = function (report) { vscodeApi.postMessage({ type: 'mtlx-test-pixel', report: report }); };
+        var view = window.__mtlxViewerHandle;
+        var url = view && typeof view.snapshot === 'function' ? view.snapshot() : null;
+        if (!url) { send({ error: 'no viewer snapshot' }); return; }
+        var img = new Image();
+        img.onload = function () {
+            var c = document.createElement('canvas');
+            c.width = img.width; c.height = img.height;
+            var g = c.getContext('2d');
+            g.drawImage(img, 0, 0);
+            var fx = typeof msg.x === 'number' ? msg.x : 0.5;
+            var fy = typeof msg.y === 'number' ? msg.y : 0.5;
+            var d = g.getImageData(Math.floor(img.width * fx) - 4, Math.floor(img.height * fy) - 4, 8, 8).data;
+            var sum = [0, 0, 0];
+            for (var i = 0; i < d.length; i += 4) { sum[0] += d[i]; sum[1] += d[i + 1]; sum[2] += d[i + 2]; }
+            var t = document.createElement('canvas');
+            t.width = 160; t.height = Math.round(160 * img.height / img.width);
+            t.getContext('2d').drawImage(img, 0, 0, t.width, t.height);
+            send({ r: sum[0] / 64, g: sum[1] / 64, b: sum[2] / 64, width: img.width, height: img.height, opens: openSeq, thumb: t.toDataURL('image/png') });
+        };
+        img.onerror = function () { send({ error: 'snapshot decode failed' }); };
+        img.src = url;
+    }
+
     // ------------------------------------------------------------------
     // Error forwarding: surface uncaught errors / unhandled rejections in
     // the extension host's "MaterialX Playground" OutputChannel (see
@@ -1143,6 +1171,7 @@
         if (msg.type === 'mtlx-request-undo' || msg.type === 'mtlx-request-redo') { handleRequestUndoRedo(msg); return; }
         if (msg.type === 'mtlx-test-trigger-download') { handleTestTriggerDownload(msg); return; }
         if (msg.type === 'mtlx-test-trigger-snapshot') { handleTestTriggerSnapshot(msg); return; }
+        if (msg.type === 'mtlx-test-trigger-pixel') { handleTestTriggerPixel(msg); return; }
         if (msg.type === 'mtlx-test-trigger-graph-save') { handleTestTriggerGraphSave(msg); return; }
         if (msg.type === 'mtlx-test-trigger-material-preview') { handleTestTriggerMaterialPreview(msg); return; }
         if (msg.type === 'mtlx-test-trigger-about') { handleTestTriggerAbout(msg); return; }

@@ -8,6 +8,7 @@
 const vscode = require('vscode');
 const mtlxSymbols = require('./mtlxSymbols');
 const mtlxColors = require('./mtlxColors');
+const docScanner = require('./docScanner');
 
 function toVsRange(range) {
     return new vscode.Range(range.start.line, range.start.character, range.end.line, range.end.character);
@@ -120,11 +121,76 @@ function registerColors(context) {
     );
 }
 
+// F2 rename: thin wrappers over mtlxSymbols.js's prepareRename and
+// computeRenameEdits, which throw a user-facing Error on an invalid
+// position, name, or collision (VS Code shows it and cancels the rename).
+function registerRename(context) {
+    context.subscriptions.push(
+        vscode.languages.registerRenameProvider('mtlx', {
+            prepareRename(document, position) {
+                const { root } = mtlxSymbols.scanElements(document.getText());
+                const result = mtlxSymbols.prepareRename(root, toVsPos(position));
+                return { range: toVsRange(result.range), placeholder: result.placeholder };
+            },
+            provideRenameEdits(document, position, newName) {
+                const { root } = mtlxSymbols.scanElements(document.getText());
+                const edits = mtlxSymbols.computeRenameEdits(root, toVsPos(position), newName);
+                const workspaceEdit = new vscode.WorkspaceEdit();
+                for (const edit of edits) {
+                    workspaceEdit.replace(document.uri, toVsRange(edit.range), edit.newText);
+                }
+                return workspaceEdit;
+            },
+        })
+    );
+}
+
+// DocumentLinkProvider (E9): each filename ref becomes a link, resolved
+// through docScanner.js's own containment helpers (the same ones the
+// webview's texture scan uses), so a rejected ref just gets no link.
+function registerDocumentLinks(context) {
+    context.subscriptions.push(
+        vscode.languages.registerDocumentLinkProvider('mtlx', {
+            async provideDocumentLinks(document) {
+                const { root } = mtlxSymbols.scanElements(document.getText());
+                const refs = mtlxSymbols.collectFilenameRefs(root);
+                if (!refs.length) return [];
+
+                const containmentRoot = docScanner.containmentRoot(document.uri);
+                if (!containmentRoot) return [];
+
+                const deps = docScanner.defaultDeps();
+                const isFileScheme = containmentRoot.scheme === 'file';
+                let rootRealpath = null;
+                if (isFileScheme) {
+                    try {
+                        rootRealpath = (await deps.realpath(containmentRoot.fsPath)).replace(/\\/g, '/');
+                    } catch (e) {
+                        rootRealpath = null;
+                    }
+                }
+                const ctx = { root: containmentRoot, rootRealpath, isFileScheme, totalBytes: 0 };
+                const docDirUri = vscode.Uri.joinPath(document.uri, '..');
+
+                const links = [];
+                for (const ref of refs) {
+                    const resolved = await docScanner.resolveContained(deps, ctx, docDirUri, ref.ref, 'texture');
+                    if (resolved.skip) continue;
+                    links.push(new vscode.DocumentLink(toVsRange(ref.range), resolved.uri));
+                }
+                return links;
+            },
+        })
+    );
+}
+
 function register(context) {
     registerDocumentSymbols(context);
     registerDefinitions(context);
     registerReferences(context);
     registerColors(context);
+    registerRename(context);
+    registerDocumentLinks(context);
 }
 
 module.exports = { register };

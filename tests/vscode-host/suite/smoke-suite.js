@@ -1046,6 +1046,164 @@ async function scenarioExternalScene(ctx, scenePath) {
     }
 }
 
+// "Webview is disposed" host errors (toasts or unhandled rejections) since index `from`.
+function disposedErrorsSince(ctx, from) {
+    return ctx.testApi.getHostErrors().slice(from).filter((t) => /disposed/i.test(t));
+}
+
+// Scenario: lifecycleCloseReopen -- closes playground, scene and docs tabs
+// while they are still resolving and again once booted, reopening each time.
+// No "Webview is disposed" error may surface and the last open must load.
+async function scenarioLifecycleCloseReopen(ctx) {
+    const uri = vscode.Uri.file(ctx.fixtures.mainMtlxPath);
+    const sceneUri = vscode.Uri.file(ctx.fixtures.gltfRootPath);
+    const hostFrom = ctx.testApi.getHostErrors().length;
+    const steps = [];
+    try {
+        for (const delay of [0, 30, 150, 600]) {
+            const open = openEditor(uri);
+            await new Promise((r) => setTimeout(r, delay));
+            await closeTabsForUri(uri);
+            await open.catch(() => {});
+            steps.push('mtlx close after ' + delay + 'ms');
+        }
+        for (const delay of [0, 30, 150]) {
+            const open = vscode.commands.executeCommand('materialxPlayground.openScene', sceneUri);
+            await new Promise((r) => setTimeout(r, delay));
+            await closeTabsForUri(sceneUri);
+            await Promise.resolve(open).catch(() => {});
+            steps.push('scene close after ' + delay + 'ms');
+        }
+        for (const delay of [0, 30, 150]) {
+            const open = vscode.commands.executeCommand('materialxPlayground.openDocs');
+            await new Promise((r) => setTimeout(r, delay));
+            await closeTabsForViewType('materialxPlayground.docs');
+            await Promise.resolve(open).catch(() => {});
+            steps.push('docs close after ' + delay + 'ms');
+        }
+        // Reopen the docs panel after those closes: the reuse path must not
+        // reach a panel that was closed while it was being created.
+        await vscode.commands.executeCommand('materialxPlayground.openDocs');
+        await new Promise((r) => setTimeout(r, 1500));
+        await vscode.commands.executeCommand('materialxPlayground.openDocs', 'image');
+        await new Promise((r) => setTimeout(r, 1500));
+        const docsOpen = vscode.window.tabGroups.all.some((g) => g.tabs.some((t) => t.input && t.input.viewType && /materialxPlayground\.docs/.test(t.input.viewType)));
+        await closeTabsForViewType('materialxPlayground.docs');
+        await closeTabsForViewType('mainThreadWebview-materialxPlayground.docs');
+        // Booted close/reopen: the last open has to deliver its document.
+        const start = ctx.allReports.length;
+        await openEditor(uri);
+        await waitForReportAfter(ctx.allReports, start, 60000);
+        await closeTabsForUri(uri);
+        const start2 = ctx.allReports.length;
+        await openEditor(uri);
+        const reopened = await waitForReportAfter(ctx.allReports, start2, 60000).then(() => true, () => false);
+        await new Promise((r) => setTimeout(r, 3000));
+        const disposed = disposedErrorsSince(ctx, hostFrom);
+        const allHost = ctx.testApi.getHostErrors().slice(hostFrom);
+        return { pass: disposed.length === 0 && reopened && docsOpen, disposed: disposed.slice(0, 5), hostErrors: allHost.slice(0, 5), reopened, docsOpen, steps };
+    } finally {
+        await closeTabsForUri(uri);
+        await closeTabsForUri(sceneUri);
+        await closeTabsForViewType('materialxPlayground.docs');
+        await closeTabsForViewType('mainThreadWebview-materialxPlayground.docs');
+    }
+}
+
+// Polls the active panel's viewer centre pixel until `predicate` holds; the
+// last thumbnail is written to <tmp>/mtlx-smoke-pixels/<label>.png as evidence.
+async function waitForPixel(ctx, predicate, timeoutMs, label, x, y) {
+    const deadline = Date.now() + timeoutMs;
+    let last = null;
+    while (Date.now() < deadline) {
+        const from = ctx.pixelReports.length;
+        ctx.testApi.triggerPixel(x, y);
+        last = await waitForValue(() => ctx.pixelReports[from], 5000);
+        if (last && !last.error && predicate(last)) break;
+        await new Promise((r) => setTimeout(r, 1000));
+    }
+    const ok = !!(last && !last.error && predicate(last));
+    if (last && last.thumb) {
+        const dir = path.join(os.tmpdir(), 'mtlx-smoke-pixels');
+        try {
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(path.join(dir, (label || 'pixel') + '.png'), Buffer.from(last.thumb.split(',')[1], 'base64'));
+        } catch (e) { /* evidence only */ }
+    }
+    const pixel = last ? Object.assign({}, last, { thumb: undefined }) : null;
+    return { ok, pixel };
+}
+
+// Scenario: textureSwap -- swap.mtlx shows tex.png unlit. Replacing tex.png
+// on disk with a same-size image of another colour must reach the viewer:
+// after a text edit (same mtime too), and with no edit at all (file watcher).
+async function scenarioTextureSwap(ctx) {
+    const fx = ctx.fixtures;
+    const uri = vscode.Uri.file(fx.swapMtlxPath);
+    const isRed = (p) => p.r > p.b + 60;
+    const isBlue = (p) => p.b > p.r + 60;
+    // A spot on the shaderball's outer shell (the centre is the grey core).
+    const probe = (pred, ms, label) => waitForPixel(ctx, pred, ms, label, 0.25, 0.45);
+    const hostFrom = ctx.testApi.getHostErrors().length;
+    const sha = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex').slice(0, 12);
+    // Copies src over tex.png; `mtime` pins the replaced file's timestamp.
+    const replace = (src, mtime) => {
+        fs.copyFileSync(src, fx.swapTexPath);
+        fs.utimesSync(fx.swapTexPath, mtime, mtime);
+    };
+    const texSha = (report) => (report && report.files && report.files['tex.png'] ? report.files['tex.png'].sha256.slice(0, 12) : null);
+    const editText = async (marker) => {
+        const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString()) || await vscode.workspace.openTextDocument(uri);
+        const edit = new vscode.WorkspaceEdit();
+        edit.insert(uri, doc.positionAt(doc.getText().indexOf('</materialx>')), '  <!-- ' + marker + ' -->\n');
+        await vscode.workspace.applyEdit(edit);
+        await doc.save();
+    };
+    const t0 = new Date(Date.now() - 60000);
+    replace(fx.swapRedPath, t0);
+    const out = {
+        sameSize: fs.statSync(fx.swapRedPath).size === fs.statSync(fx.swapBluePath).size,
+        redSha: sha(fx.swapRedPath), blueSha: sha(fx.swapBluePath),
+    };
+    const cfg = vscode.workspace.getConfiguration('materialxPlayground');
+    const prevDefaultView = cfg.inspect('defaultView')?.globalValue;
+    try {
+        await cfg.update('defaultView', 'viewer', vscode.ConfigurationTarget.Global);
+        const start = ctx.allReports.length;
+        await openEditor(uri);
+        await waitForReportAfter(ctx.allReports, start, 60000);
+        out.initialRed = await probe(isRed, 60000, 'swap-initial');
+
+        // B: a different image with a fresh mtime, then a text edit.
+        let from = ctx.allReports.length;
+        const tB = new Date(Date.now() - 30000);
+        replace(fx.swapBluePath, tB);
+        await editText('edit b');
+        out.bFetchedSha = texSha(await waitForReportAfter(ctx.allReports, from, 30000).then((r) => r.report, () => null));
+        out.bNewMtimeEdit = await probe(isBlue, 30000, 'swap-b-new-mtime-edit');
+
+        // A: same size AND the same mtime as the file it replaces (a copy
+        // that keeps the timestamp), then a text edit.
+        from = ctx.allReports.length;
+        replace(fx.swapRedPath, tB);
+        await editText('edit a');
+        out.aFetchedSha = texSha(await waitForReportAfter(ctx.allReports, from, 30000).then((r) => r.report, () => null));
+        out.aSameMtimeEdit = await probe(isRed, 30000, 'swap-a-same-mtime-edit');
+
+        // C: replace with no text edit at all: the texture watcher reloads.
+        replace(fx.swapBluePath, new Date());
+        out.cWatcher = await probe(isBlue, 30000, 'swap-c-watcher');
+
+        const disposed = disposedErrorsSince(ctx, hostFrom);
+        out.pass = !!(out.initialRed.ok && out.aSameMtimeEdit.ok && out.bNewMtimeEdit.ok && out.cWatcher.ok && disposed.length === 0);
+        return out;
+    } finally {
+        try { await cfg.update('defaultView', prevDefaultView, vscode.ConfigurationTarget.Global); } catch (e) { /* best effort */ }
+        await closeTabsForUri(uri);
+        fs.copyFileSync(fx.swapRedPath, fx.swapTexPath);
+    }
+}
+
 async function run() {
     const fixturesDir = process.env.MTLX_SMOKE_FIXTURES;
     const resultsFile = process.env.MTLX_SMOKE_RESULTS_FILE;
@@ -1077,6 +1235,10 @@ async function run() {
             objRootPath: path.join(wsDir, 'sceneobj', 'quad.obj'),
             noSiblingsRootPath: path.join(wsDir, 'scenenosiblings', 'quad.glb'),
             missingRootPath: path.join(wsDir, 'scenemissing', 'root.usda'),
+            swapMtlxPath: path.join(wsDir, 'texswap', 'swap.mtlx'),
+            swapTexPath: path.join(wsDir, 'texswap', 'tex.png'),
+            swapRedPath: path.join(fixturesDir, 'texswap-src', 'red.png'),
+            swapBluePath: path.join(fixturesDir, 'texswap-src', 'blue.png'),
             wsDir,
         };
 
@@ -1107,7 +1269,9 @@ async function run() {
         testApi.onFullWidthReport((r) => { fullWidthReports.push(r); });
         const viewHashReports = [];
         testApi.onViewHashReport((r) => { viewHashReports.push(r); });
-        const ctx = { fixtures, extensionUri: ext.extensionUri, extensionRoot, testApi, allReports, sceneReports, sceneRounds, sceneCancelReports, graphSaves, previewReports, aboutReports, fullWidthReports, viewHashReports };
+        const pixelReports = [];
+        if (testApi.onPixelReport) testApi.onPixelReport((r) => { pixelReports.push(r); });
+        const ctx = { fixtures, extensionUri: ext.extensionUri, extensionRoot, testApi, allReports, sceneReports, sceneRounds, sceneCancelReports, graphSaves, previewReports, aboutReports, fullWidthReports, viewHashReports, pixelReports };
 
         const extraScene = process.env.MTLX_SMOKE_EXTRA_SCENE;
         if (extraScene) {
@@ -1116,77 +1280,41 @@ async function run() {
             if (process.env.MTLX_SMOKE_EXTRA_ONLY === '1') return;
         }
 
-        const editorSession = await scenarioEditorSession(ctx);
-        out.scenarios.editorE2E = editorSession.editorE2E;
-        out.scenarios.viewerRendered = editorSession.viewerRendered;
-        out.scenarios.saveBridge = editorSession.saveBridge;
-        writeOut();
+        // MTLX_SMOKE_ONLY: comma-separated scenario names for a local rerun (all when empty).
+        const only = (process.env.MTLX_SMOKE_ONLY || '').split(',').map((x) => x.trim()).filter(Boolean);
+        const want = (name) => !only.length || only.includes(name);
+        if (want('editorSession')) {
+            const editorSession = await scenarioEditorSession(ctx);
+            out.scenarios.editorE2E = editorSession.editorE2E;
+            out.scenarios.viewerRendered = editorSession.viewerRendered;
+            out.scenarios.saveBridge = editorSession.saveBridge;
+            writeOut();
+        }
 
-        out.scenarios.validationWorker = await scenarioValidationWorker(ctx);
-        writeOut();
-
-        out.scenarios.hoverDocs = await scenarioHoverDocs(ctx);
-        writeOut();
-
-        out.scenarios.languageFeatures = await scenarioLanguageFeatures(ctx);
-        writeOut();
-
-        out.scenarios.completion = await scenarioCompletion(ctx);
-        writeOut();
-
-        out.scenarios.boundary = await scenarioBoundary(ctx);
-        writeOut();
-
-        out.scenarios.settingsFallback = await scenarioSettingsFallback(ctx);
-        writeOut();
-
-        out.scenarios.docsPanel = await scenarioDocsPanel(ctx);
-        writeOut();
-
-        out.scenarios.sceneAutoOpen = await scenarioSceneAutoOpen(ctx);
-        writeOut();
-
-        out.scenarios.usdScene = await scenarioUsdScene(ctx);
-        writeOut();
-
-        out.scenarios.usdMaterialPreview = await scenarioUsdMaterialPreview(ctx);
-        writeOut();
-
-        out.scenarios.sceneTreePreview = await scenarioSceneTreePreview(ctx);
-        writeOut();
-
-        out.scenarios.sceneGltf = await scenarioSceneFormat(ctx, ctx.fixtures.gltfRootPath, 3);
-        writeOut();
-
-        out.scenarios.sceneGlb = await scenarioSceneFormat(ctx, ctx.fixtures.glbRootPath, 2);
-        writeOut();
-
-        out.scenarios.sceneObj = await scenarioSceneFormat(ctx, ctx.fixtures.objRootPath, 3);
-        writeOut();
-
-        out.scenarios.sceneNoSiblings = await scenarioSceneNoSiblings(ctx);
-        writeOut();
-
-        out.scenarios.sceneMissingRoundTrip = await scenarioSceneMissingRoundTrip(ctx);
-        writeOut();
-
-        out.scenarios.sceneLoadCancel = await scenarioSceneLoadCancel(ctx);
-        writeOut();
-
-        out.scenarios.sceneFormatAutoOpen = await scenarioSceneFormatAutoOpen(ctx);
-        writeOut();
-
-        out.scenarios.newFromExample = await scenarioNewFromExample(ctx);
-        writeOut();
-
-        out.scenarios.aboutLicense = await scenarioAboutLicense(ctx);
-        writeOut();
-
-        out.scenarios.fullWidth = await scenarioFullWidth(ctx);
-        writeOut();
-
-        out.scenarios.openViewCommands = await scenarioOpenViewCommands(ctx);
-        writeOut();
+        if (want('validationWorker')) { out.scenarios.validationWorker = await scenarioValidationWorker(ctx); writeOut(); }
+        if (want('hoverDocs')) { out.scenarios.hoverDocs = await scenarioHoverDocs(ctx); writeOut(); }
+        if (want('languageFeatures')) { out.scenarios.languageFeatures = await scenarioLanguageFeatures(ctx); writeOut(); }
+        if (want('completion')) { out.scenarios.completion = await scenarioCompletion(ctx); writeOut(); }
+        if (want('boundary')) { out.scenarios.boundary = await scenarioBoundary(ctx); writeOut(); }
+        if (want('settingsFallback')) { out.scenarios.settingsFallback = await scenarioSettingsFallback(ctx); writeOut(); }
+        if (want('docsPanel')) { out.scenarios.docsPanel = await scenarioDocsPanel(ctx); writeOut(); }
+        if (want('sceneAutoOpen')) { out.scenarios.sceneAutoOpen = await scenarioSceneAutoOpen(ctx); writeOut(); }
+        if (want('usdScene')) { out.scenarios.usdScene = await scenarioUsdScene(ctx); writeOut(); }
+        if (want('usdMaterialPreview')) { out.scenarios.usdMaterialPreview = await scenarioUsdMaterialPreview(ctx); writeOut(); }
+        if (want('sceneTreePreview')) { out.scenarios.sceneTreePreview = await scenarioSceneTreePreview(ctx); writeOut(); }
+        if (want('sceneGltf')) { out.scenarios.sceneGltf = await scenarioSceneFormat(ctx, ctx.fixtures.gltfRootPath, 3); writeOut(); }
+        if (want('sceneGlb')) { out.scenarios.sceneGlb = await scenarioSceneFormat(ctx, ctx.fixtures.glbRootPath, 2); writeOut(); }
+        if (want('sceneObj')) { out.scenarios.sceneObj = await scenarioSceneFormat(ctx, ctx.fixtures.objRootPath, 3); writeOut(); }
+        if (want('sceneNoSiblings')) { out.scenarios.sceneNoSiblings = await scenarioSceneNoSiblings(ctx); writeOut(); }
+        if (want('sceneMissingRoundTrip')) { out.scenarios.sceneMissingRoundTrip = await scenarioSceneMissingRoundTrip(ctx); writeOut(); }
+        if (want('sceneLoadCancel')) { out.scenarios.sceneLoadCancel = await scenarioSceneLoadCancel(ctx); writeOut(); }
+        if (want('sceneFormatAutoOpen')) { out.scenarios.sceneFormatAutoOpen = await scenarioSceneFormatAutoOpen(ctx); writeOut(); }
+        if (want('newFromExample')) { out.scenarios.newFromExample = await scenarioNewFromExample(ctx); writeOut(); }
+        if (want('aboutLicense')) { out.scenarios.aboutLicense = await scenarioAboutLicense(ctx); writeOut(); }
+        if (want('fullWidth')) { out.scenarios.fullWidth = await scenarioFullWidth(ctx); writeOut(); }
+        if (want('openViewCommands')) { out.scenarios.openViewCommands = await scenarioOpenViewCommands(ctx); writeOut(); }
+        if (want('lifecycleCloseReopen')) { out.scenarios.lifecycleCloseReopen = await scenarioLifecycleCloseReopen(ctx); writeOut(); }
+        if (want('textureSwap')) { out.scenarios.textureSwap = await scenarioTextureSwap(ctx); writeOut(); }
     } catch (e) {
         out.fatalError = String((e && e.stack) || e);
         log('FATAL: ' + (e && e.message || e));

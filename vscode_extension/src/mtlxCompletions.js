@@ -76,7 +76,7 @@ const MTLX_TYPES = ['boolean', 'color3', 'color4', 'filename', 'float', 'integer
 // names when the element itself is <input>.
 const VALUE_ATTRS = new Set([
     'type', 'nodename', 'nodegraph', 'output', 'interfacename', 'colorspace', 'nodedef',
-    'version', 'unittype', 'unit', 'target', 'defaultgeomprop',
+    'version', 'unittype', 'unit', 'target', 'defaultgeomprop', 'value',
     'uniform', 'uivisible', 'uiadvanced', 'isdefaultversion', 'minimized', 'visible', 'exclusive', 'exportable',
 ]);
 
@@ -99,6 +99,90 @@ const UNITS_BY_TYPE = {
 // "Geometric Properties" section (spec lines 468-484): the standard
 // geomprop names valid for a <geomprop> element's own geomprop= value.
 const GEOMPROP_NAMES = ['position', 'normal', 'tangent', 'bitangent', 'texcoord', 'geomcolor'];
+
+// The four multi-element document snippets moved out of
+// language/mtlx.snippets.json and into completion items (see
+// documentSnippetItems below): a static file can't renumber a colliding
+// default name, a completion item built per-request can.
+const DOC_SNIPPETS = [
+    {
+        prefix: 'standard_surface', label: 'standard_surface', kind: 'doc-snippet',
+        detail: 'standard_surface shader + surfacematerial',
+        names: ['SR_surface', 'M_surface'],
+        build: (n) => [
+            '<standard_surface name="${1:' + n[0] + '}" type="surfaceshader">',
+            '\t<input name="base_color" type="color3" value="${2:0.8, 0.8, 0.8}" />',
+            '\t<input name="specular_roughness" type="float" value="${3:0.2}" />',
+            '\t<input name="metalness" type="float" value="${4:0.0}" />',
+            '</standard_surface>',
+            '<surfacematerial name="${5:' + n[1] + '}" type="material">',
+            '\t<input name="surfaceshader" type="surfaceshader" nodename="${1:' + n[0] + '}" />',
+            '</surfacematerial>',
+            '$0',
+        ].join('\n'),
+    },
+    {
+        prefix: 'open_pbr_surface', label: 'open_pbr_surface', kind: 'doc-snippet',
+        detail: 'open_pbr_surface shader + surfacematerial',
+        names: ['SR_openpbr', 'M_openpbr'],
+        build: (n) => [
+            '<open_pbr_surface name="${1:' + n[0] + '}" type="surfaceshader">',
+            '\t<input name="base_color" type="color3" value="${2:0.8, 0.8, 0.8}" />',
+            '\t<input name="base_weight" type="float" value="${3:1.0}" />',
+            '\t<input name="specular_roughness" type="float" value="${4:0.3}" />',
+            '</open_pbr_surface>',
+            '<surfacematerial name="${5:' + n[1] + '}" type="material">',
+            '\t<input name="surfaceshader" type="surfaceshader" nodename="${1:' + n[0] + '}" />',
+            '</surfacematerial>',
+            '$0',
+        ].join('\n'),
+    },
+    {
+        prefix: 'texturechain', label: 'texturechain', kind: 'doc-snippet',
+        detail: 'texcoord -> place2d -> image (color3)',
+        names: ['texcoord1', 'place2d1', 'image1'],
+        build: (n) => [
+            '<texcoord name="${1:' + n[0] + '}" type="vector2">',
+            '\t<input name="index" type="integer" value="0" />',
+            '</texcoord>',
+            '<place2d name="${2:' + n[1] + '}" type="vector2">',
+            '\t<input name="texcoord" type="vector2" nodename="${1:' + n[0] + '}" />',
+            '</place2d>',
+            '<image name="${3:' + n[2] + '}" type="color3">',
+            '\t<input name="file" type="filename" value="${4:texture.png}" colorspace="srgb_texture" />',
+            '\t<input name="texcoord" type="vector2" nodename="${2:' + n[1] + '}" />',
+            '</image>',
+            '$0',
+        ].join('\n'),
+    },
+    {
+        prefix: 'normalmapchain', label: 'normalmapchain', kind: 'doc-snippet',
+        detail: 'image (vector3) -> normalmap',
+        names: ['normal_image', 'normalmap1'],
+        build: (n) => [
+            '<image name="${1:' + n[0] + '}" type="vector3">',
+            '\t<input name="file" type="filename" value="${2:normal.png}" />',
+            '\t<input name="default" type="vector3" value="0.5, 0.5, 1.0" />',
+            '</image>',
+            '<normalmap name="${3:' + n[1] + '}" type="vector3">',
+            '\t<input name="in" type="vector3" nodename="${1:' + n[0] + '}" />',
+            '</normalmap>',
+            '$0',
+        ].join('\n'),
+    },
+    {
+        prefix: 'nodegraph', label: 'nodegraph', kind: 'doc-snippet',
+        detail: 'a reusable nodegraph with a typed output',
+        names: ['NG_graph', 'out', 'node1'],
+        build: (n) => [
+            '<nodegraph name="${1:' + n[0] + '}">',
+            '\t$2',
+            '\t<output name="${3:' + n[1] + '}" type="${4:color3}" nodename="${5:' + n[2] + '}" />',
+            '</nodegraph>',
+            '$0',
+        ].join('\n'),
+    },
+];
 
 // defaultgeomprop only ever supplies a vector2/vector3 default: geomcolor
 // (color3/4) is never a legal defaultgeomprop value, mirrors
@@ -204,6 +288,54 @@ function inputsForCategory(index, category, wantType) {
     return Array.from(byName.values());
 }
 
+// Every `name=` value found anywhere in the document tree, used to keep a
+// freshly-inserted snippet's default names unique document-wide (cheap:
+// completion already re-scans the whole document on every keystroke).
+function allNamesInDocument(root) {
+    const names = new Set();
+    const walk = (n) => {
+        if (n.attrs && n.attrs.name) names.add(n.attrs.name.value);
+        for (const c of n.children) walk(c);
+    };
+    walk(root);
+    return names;
+}
+
+// `base`, or `base` + the smallest integer >= 2 not already taken.
+function uniqueName(base, existing) {
+    if (!existing.has(base)) return base;
+    let n = 2;
+    while (existing.has(base + n)) n++;
+    return base + n;
+}
+
+// Names already used by `parentEl`'s own <input> children, excluding
+// `excludeEl` itself (an <input> being completed is already IN the tree
+// but has no name yet, so excludeEl is usually irrelevant; passed for
+// symmetry/safety).
+function presentChildInputNames(parentEl, excludeEl) {
+    const names = new Set();
+    for (const c of parentEl.children) {
+        if (c.tag === 'input' && c !== excludeEl && c.attrs.name) names.add(c.attrs.name.value);
+    }
+    return names;
+}
+
+function documentSnippetItems(root) {
+    const existing = allNamesInDocument(root);
+    return DOC_SNIPPETS.map((s) => {
+        const names = s.names.map((n) => uniqueName(n, existing));
+        return {
+            kind: s.kind,
+            label: s.label,
+            prefix: s.prefix,
+            detail: s.detail,
+            insertText: s.build(names),
+            isSnippet: true,
+        };
+    });
+}
+
 // ---------------------------------------------------------------------
 // Offset-based text scanning: completion works from a raw char offset
 // (document.offsetAt(position) on the vscode side), unlike mtlxSymbols.js's
@@ -223,6 +355,32 @@ function tagPrefixAt(text, offset) {
     while (start > 0 && isTagNameChar(text[start - 1])) start--;
     if (start === 0 || text[start - 1] !== '<') return null;
     if (text[start - 2] === '/') return null;
+    return { start, end: offset, prefix: text.slice(start, offset) };
+}
+
+// True when the tag being completed already has more of its own content
+// typed past the cursor on the same line (another attribute, a bare '>',
+// or more tag-name characters): a full name+type+closing-tag snippet
+// would then double up with what's already there, so the caller falls
+// back to inserting just the element name (E4).
+function tagAlreadyHasBody(text, offset) {
+    let i = offset;
+    while (i < text.length && text[i] !== '\n' && text[i] !== '<') {
+        if (!/\s/.test(text[i])) return true;
+        i++;
+    }
+    return false;
+}
+
+// A plain identifier/word ending right at `offset`, used for the bare
+// document-snippet prefixes (e.g. "standard_surface") typed as ordinary
+// text rather than after '<': mirrors tagPrefixAt's backward scan but
+// without requiring a preceding '<'.
+const WORD_CHAR_RE = /\w/;
+function wordPrefixAt(text, offset) {
+    let start = offset;
+    while (start > 0 && WORD_CHAR_RE.test(text[start - 1])) start--;
+    if (start === offset) return null;
     return { start, end: offset, prefix: text.slice(start, offset) };
 }
 
@@ -348,7 +506,8 @@ function getCompletions({ text, offset, repoRoot }) {
         const parent = (tagHit.prefix && deepest && deepest.tag && deepest.parent && posEq(deepest.range.start, ltPos))
             ? deepest.parent
             : deepest;
-        const items = nodeAndStructuralItems(index, parent);
+        const alreadyHasBody = tagAlreadyHasBody(text, offset);
+        const items = nodeAndStructuralItems(index, parent, root, alreadyHasBody);
         return items.map((it) => withRange(it, tagHit.start, offset));
     }
 
@@ -374,6 +533,17 @@ function getCompletions({ text, offset, repoRoot }) {
     if (attrNameHit) {
         const el = elementContaining(root);
         if (el) return attributeNameItems(index, el).map((it, i) => withRange(withOrder(it, i), attrNameHit.start, attrNameHit.end));
+    }
+
+    // Context (E6): a bare word typed as ordinary text (not right after
+    // '<', not an attribute name/value) matching one of the multi-element
+    // document snippets moved out of language/mtlx.snippets.json. Filtered
+    // by prefix here (rather than relying solely on the editor's own label
+    // filtering) so an unrelated word yields no items, same as today.
+    const wordHit = wordPrefixAt(text, offset);
+    if (wordHit) {
+        const items = documentSnippetItems(root).filter((it) => it.prefix.indexOf(wordHit.prefix) === 0);
+        if (items.length) return items.map((it) => withRange(it, wordHit.start, offset));
     }
 
     return [];
@@ -445,26 +615,80 @@ function attributeNamePrefixAt(text, offset) {
 // ---------------------------------------------------------------------
 // Context builders.
 
-function nodeAndStructuralItems(index, parentEl) {
-    const items = [];
-    for (const [name, entry] of index.categories) {
-        const bits = [];
-        if (entry.library) bits.push(entry.library);
-        if (entry.outputTypes.length) bits.push('→ ' + entry.outputTypes.join(', '));
-        items.push({ kind: 'node', label: name, detail: bits.join('  '), insertText: name, isSnippet: false });
+// Builds the "<category name=... type=...>...</category>" snippet for a
+// freshly-typed node category (E4): a unique default name (category name
+// plus the smallest free numeric suffix), and a type CHOICE of the
+// category's own output types (its nodedef signatures), preferred type
+// first when the caller has one and it's actually produced by this
+// category. Exported for direct unit testing of the naming/choice rules
+// without going through a full getCompletions() call.
+function buildNodeElementSnippet(category, entry, existingNames, preferredType) {
+    const defaultName = uniqueName(category, existingNames);
+    let choices = entry.outputTypes.length ? entry.outputTypes.slice() : MTLX_TYPES.slice();
+    if (preferredType && choices.indexOf(preferredType) !== -1) {
+        choices = [preferredType].concat(choices.filter((t) => t !== preferredType));
     }
-    for (const s of STRUCTURAL_ELEMENTS) {
-        if (index.categories.has(s.name)) continue; // e.g. surfacematerial is both: the node entry wins
-        items.push({ kind: 'structural', label: s.name, detail: s.detail, insertText: s.name, isSnippet: false });
+    return category + ' name="${1:' + escapeSnippet(defaultName) + '}" type="${2|'
+        + choices.join(',') + '|}">$0</' + category + '>';
+}
+
+function nodeAndStructuralItems(index, parentEl, root, alreadyHasBody) {
+    const items = [];
+    const parentTag = parentEl && parentEl.tag;
+    // Nodes cannot nest inside a node instance's own body (E1): don't
+    // flood that context with the full category list, only the
+    // structural children the spec actually allows there.
+    const parentIsNodeInstance = !!(parentTag && index.categories.has(parentTag));
+    const existingNames = root ? allNamesInDocument(root) : new Set();
+
+    if (!parentIsNodeInstance) {
+        for (const [name, entry] of index.categories) {
+            const bits = [];
+            if (entry.library) bits.push(entry.library);
+            if (entry.outputTypes.length) bits.push('→ ' + entry.outputTypes.join(', '));
+            const detail = bits.join('  ');
+            if (!alreadyHasBody && entry.outputTypes.length) {
+                items.push({
+                    kind: 'node', label: name, detail,
+                    insertText: buildNodeElementSnippet(name, entry, existingNames, null),
+                    isSnippet: true,
+                });
+            } else {
+                items.push({ kind: 'node', label: name, detail, insertText: name, isSnippet: false });
+            }
+        }
+        for (const s of STRUCTURAL_ELEMENTS) {
+            if (index.categories.has(s.name)) continue; // e.g. surfacematerial is both: the node entry wins
+            let insertText = s.name;
+            let isSnippet = false;
+            if (!alreadyHasBody && s.name === 'nodegraph') {
+                const dn = uniqueName('NG_graph', existingNames);
+                insertText = 'nodegraph name="${1:' + dn + '}">$0</nodegraph>';
+                isSnippet = true;
+            } else if (!alreadyHasBody && s.name === 'output') {
+                const dn = uniqueName('out', existingNames);
+                insertText = 'output name="${1:' + dn + '}" type="${2|' + MTLX_TYPES.join(',') + '|}" />$0';
+                isSnippet = true;
+            }
+            items.push({ kind: 'structural', label: s.name, detail: s.detail, insertText, isSnippet });
+        }
+    } else {
+        // Inside a node instance body only <input> (enrichment below) and
+        // <token> are spec-legal children; <output>/other node categories
+        // are not (a node instance never has a nodegraph-style output, and
+        // nodes never nest inside nodes).
+        items.push({ kind: 'structural', label: 'token', detail: 'a string substitution token', insertText: 'token', isSnippet: false });
     }
 
     // Enrichment: the enclosing element is itself a node, offer complete
     // "<input name=... type=... value=... />" snippets for that node's own
-    // inputs, narrowed by its own type= attribute when it has one.
-    const parentTag = parentEl && parentEl.tag;
-    if (parentTag && index.categories.has(parentTag)) {
+    // inputs NOT already present as a child <input>, narrowed by its own
+    // type= attribute when it has one (E1).
+    if (parentIsNodeInstance) {
         const wantType = parentEl.attrs.type ? parentEl.attrs.type.value : null;
+        const present = presentChildInputNames(parentEl, null);
         for (const inp of inputsForCategory(index, parentTag, wantType)) {
+            if (present.has(inp.name)) continue;
             const valuePlaceholder = inp.default != null && inp.default !== '' ? escapeSnippet(inp.default) : '';
             items.push({
                 kind: 'input',
@@ -583,10 +807,26 @@ function valueItemsFor(root, index, hit) {
     if (attrName === 'nodename') {
         // Mirrors mtlxSymbols.js's NON_NODE_TAGS: everything except
         // input/output/token/nodedef children can be a nodename target.
+        // E5: excludes the enclosing node itself (a node can't connect to
+        // its own input), and ranks candidates whose OWN output type
+        // matches this input's resolved type first (still lists the rest,
+        // just after), surfacing the node's type in the item detail.
         const scope = nearestAncestor(element, 'nodegraph') || materialxRoot(root);
-        return scope.children
+        const wantType = resolveElementType(index, element);
+        const candidates = scope.children
             .filter((c) => c.tag && !['input', 'output', 'token', 'nodedef'].includes(c.tag) && c.attrs.name)
-            .map((c) => ({ kind: 'nodename', label: c.attrs.name.value, detail: c.tag, insertText: c.attrs.name.value, isSnippet: false }));
+            .filter((c) => c !== element.parent)
+            .map((c) => {
+                const t = c.attrs.type ? c.attrs.type.value
+                    : (index.categories.has(c.tag) ? (index.categories.get(c.tag).outputTypes[0] || '') : '');
+                return { c, t };
+            });
+        candidates.sort((a, b) => {
+            const am = wantType && a.t === wantType ? 0 : 1;
+            const bm = wantType && b.t === wantType ? 0 : 1;
+            return am - bm;
+        });
+        return candidates.map(({ c, t }) => ({ kind: 'nodename', label: c.attrs.name.value, detail: t, insertText: c.attrs.name.value, isSnippet: false }));
     }
     if (attrName === 'output') {
         let scope = null;
@@ -605,12 +845,26 @@ function valueItemsFor(root, index, hit) {
             ? findNamedChildren(scope, 'input').map((c) => ({ kind: 'interfacename', label: c.attrs.name.value, detail: c.attrs.type ? c.attrs.type.value : '', insertText: c.attrs.name.value, isSnippet: false }))
             : [];
     }
+    if (attrName === 'value' && element.tag === 'input') {
+        // E10a: a filename-typed input's value gets a "Browse for file..."
+        // item that inserts nothing and instead runs a command (wired up
+        // by completionProvider.js, which has the vscode Uri/positions
+        // this pure module doesn't); sortIndex 0 (via withOrder, since
+        // it's the only item) puts it first.
+        const t = resolveElementType(index, element);
+        if (t === 'filename') {
+            return [{ kind: 'file-browse', label: 'Browse for file...', detail: '', insertText: '', isSnippet: false }];
+        }
+        return [];
+    }
     if (attrName === 'name' && element.tag === 'input' && element.parent && element.parent.tag) {
         const parent = element.parent;
         if (index.categories.has(parent.tag)) {
             const wantType = parent.attrs.type ? parent.attrs.type.value : null;
             const hasType = !!(element.attrs && element.attrs.type);
+            const present = presentChildInputNames(parent, element);
             return inputsForCategory(index, parent.tag, wantType)
+                .filter((inp) => !present.has(inp.name))
                 .map((inp) => ({
                     kind: 'input-name',
                     label: inp.name,
@@ -643,15 +897,44 @@ function valueItemsFor(root, index, hit) {
 // same scope check the "interfacename" VALUE completion below already
 // applies via nearestAncestor). Required-first, then alphabetical,
 // mirrors the spec's own "(required)" markers.
+// Attribute names whose presence means a value= would conflict with a
+// connection instead (E2): spec's "value XOR nodename/nodegraph/
+// interfacename/output" rule for a node/nodedef/nodegraph-interface input.
+const CONNECTION_ATTRS = ['nodename', 'nodegraph', 'interfacename', 'output'];
+
 function attributeNameItems(index, el) {
     const kind = attrSchema.classifyElement(el, index.categories);
     if (!kind) return [];
     const present = new Set(Object.keys(el.attrs || {}));
     const effType = resolveElementType(index, el);
     const inNodegraph = !!nearestAncestor(el, 'nodegraph');
+    const hasConnection = CONNECTION_ATTRS.some((a) => present.has(a));
+
+    // E2: when this <input> has no name= yet, `colorspace` can't be
+    // resolved from ITS OWN type (there's nothing to look up by name), so
+    // gate it instead on whether any of the parent node's still-missing
+    // inputs could plausibly want one (color3/color4/filename). An
+    // unknown/unresolvable parent falls through to the normal typeGate
+    // behavior below (permissive: offer it rather than guess wrong).
+    let missingInputTypes = null;
+    if (el.tag === 'input' && !present.has('name') && el.parent && el.parent.tag && index.categories.has(el.parent.tag)) {
+        const parent = el.parent;
+        const wantType = parent.attrs.type ? parent.attrs.type.value : null;
+        const presentNames = presentChildInputNames(parent, el);
+        missingInputTypes = inputsForCategory(index, parent.tag, wantType)
+            .filter((i) => !presentNames.has(i.name))
+            .map((i) => i.type);
+    }
+
     const candidates = attrSchema.attributesFor(kind)
         .filter((a) => !present.has(a.name))
-        .filter((a) => !a.typeGate || !effType || a.typeGate(effType))
+        .filter((a) => a.name !== 'value' || !hasConnection)
+        .filter((a) => {
+            if (a.name === 'colorspace' && missingInputTypes) {
+                return missingInputTypes.some((t) => attrSchema.isColorspaceEligible(t));
+            }
+            return !a.typeGate || !effType || a.typeGate(effType);
+        })
         .filter((a) => a.name !== 'interfacename' || inNodegraph);
 
     const items = candidates.map((a) => ({
@@ -681,4 +964,8 @@ module.exports = {
     COLORSPACES,
     MTLX_TYPES,
     VALUE_ATTRS,
+    uniqueName,
+    buildNodeElementSnippet,
+    documentSnippetItems,
+    DOC_SNIPPETS,
 };

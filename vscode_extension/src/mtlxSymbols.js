@@ -330,10 +330,44 @@ function findReferencesTo(root, target) {
     return collectReferences(root).filter((r) => resolveReference(root, r.element, r.attrName, r.value) === target);
 }
 
-// ---------------------------------------------------------------------
-// Document symbols  -  materials/shaders/other top-level nodes,
-// nodegraphs (children: nodes + outputs), nodedefs (children: inputs +
-// outputs), and looks, if present.
+// Document symbols: top-level nodes, nodegraphs (nodes, interface
+// inputs, outputs), nodedefs (inputs, outputs), looks, and now every
+// input/output child too, so the Outline nests down to a single port.
+
+// Caps how much of a long value literal shows up in a port's detail
+// string, so a huge value list can't make one Outline row unreadable.
+const DETAIL_VALUE_MAX_LEN = 40;
+
+function shortenDetailValue(v) {
+    const s = String(v).replace(/\s+/g, ' ').trim();
+    return s.length > DETAIL_VALUE_MAX_LEN ? s.slice(0, DETAIL_VALUE_MAX_LEN) + '…' : s;
+}
+
+// The "how this port gets its value" half of a port's detail string:
+// nodename/nodegraph, interfacename, output, or a literal value=, in
+// that precedence order. Null when the port has none of these.
+function connectionSuffix(el) {
+    if (el.attrs.nodename) return '<- ' + el.attrs.nodename.value;
+    if (el.attrs.nodegraph) {
+        const out = el.attrs.output ? ':' + el.attrs.output.value : '';
+        return '<- ' + el.attrs.nodegraph.value + out;
+    }
+    if (el.attrs.interfacename) return '<- ' + el.attrs.interfacename.value;
+    if (el.attrs.output) return '<- ' + el.attrs.output.value;
+    if (el.attrs.value) return '= ' + shortenDetailValue(el.attrs.value.value);
+    return null;
+}
+
+// A port's Outline detail: "<type> <connection>", e.g. "color3 <- base"
+// (nodename) or "= 0.8, 0.2, 0.1" (literal value).
+function portDetail(el) {
+    const type = el.attrs.type ? el.attrs.type.value : null;
+    const conn = connectionSuffix(el);
+    if (type && conn) return type + ' ' + conn;
+    if (type) return type;
+    if (conn) return conn;
+    return el.tag;
+}
 
 function symbolNameRange(el) {
     return el.attrs.name ? el.attrs.name.range : el.range;
@@ -342,26 +376,40 @@ function symbolNameRange(el) {
 function toSymbol(el) {
     const name = (el.attrs.name && el.attrs.name.value) || el.tag;
     const type = el.attrs.type ? el.attrs.type.value : null;
-    const detail = type ? (el.tag + ' : ' + type) : el.tag;
 
     let kind = 'node';
     let children = [];
+    let detail;
     if (el.tag === 'nodegraph') {
         kind = 'nodegraph';
+        detail = el.tag;
+        // Everything but <token> becomes a child: nodes, interface
+        // <input>s, and <output>s, so "follow cursor" can land on any.
         children = el.children
-            .filter((c) => c.tag !== 'input' && c.tag !== 'token')
+            .filter((c) => c.tag && c.tag !== 'token')
             .map(toSymbol);
     } else if (el.tag === 'nodedef') {
         kind = 'nodedef';
+        detail = el.tag;
         children = el.children
             .filter((c) => c.tag === 'input' || c.tag === 'output')
             .map(toSymbol);
     } else if (el.tag === 'look') {
         kind = 'look';
+        detail = el.tag;
     } else if (el.tag === 'input') {
         kind = 'input';
+        detail = portDetail(el);
     } else if (el.tag === 'output') {
         kind = 'output';
+        detail = portDetail(el);
+    } else {
+        detail = type ? (el.tag + ' : ' + type) : el.tag;
+        // A plain node's own <input>/<output> children (mix's fg/bg,
+        // a shader's inputs, ...), previously never shown at all.
+        children = el.children
+            .filter((c) => c.tag === 'input' || c.tag === 'output')
+            .map(toSymbol);
     }
 
     return { name, detail, kind, tag: el.tag, range: el.range, selectionRange: symbolNameRange(el), children };
@@ -370,6 +418,114 @@ function toSymbol(el) {
 function buildDocumentSymbols(root) {
     const top = materialxRoot(root).children;
     return top.filter((el) => el.tag).map(toSymbol);
+}
+
+// Rename (F2): pure logic, no vscode. Renames one declaration's `name`
+// plus every reference that resolves to it, reusing findReferencesTo
+// (already scoped per REF_ATTRS kind, so one path covers every case).
+
+const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function isValidIdentifier(name) {
+    return typeof name === 'string' && IDENTIFIER_RE.test(name);
+}
+
+// The element a rename at `pos` would act on, plus the exact range of
+// the token under the cursor, or null when `pos` isn't renamable.
+function renameTargetAt(root, pos) {
+    const hit = attributeValueAt(root, pos);
+    if (!hit) return null;
+    if (hit.attrName === 'name') {
+        return { target: hit.element, range: hit.range };
+    }
+    if (REF_ATTRS.includes(hit.attrName)) {
+        const target = resolveReference(root, hit.element, hit.attrName, hit.value);
+        if (!target) return null;
+        return { target, range: hit.range };
+    }
+    return null;
+}
+
+// Same-scope collision check: does another child of target's own
+// parent already use `newName`? "Scope" is just that parent's own
+// children, the same notion used everywhere else in this file.
+function siblingCollision(target, newName) {
+    if (!target.parent) return false;
+    return target.parent.children.some(
+        (c) => c !== target && c.attrs && c.attrs.name && c.attrs.name.value === newName
+    );
+}
+
+// Throws with a user-facing message when `pos` isn't renamable, else
+// returns { range, placeholder } for VS Code's prepareRename.
+function prepareRename(root, pos) {
+    const found = renameTargetAt(root, pos);
+    if (!found) throw new Error('This is not a MaterialX name or reference that can be renamed.');
+    if (!found.target.attrs.name) throw new Error('This element has no name to rename.');
+    return { range: found.range, placeholder: found.target.attrs.name.value };
+}
+
+// Throws for an invalid new name, a non-renamable position, or a
+// collision; else returns the { range, newText } edits to apply.
+function computeRenameEdits(root, pos, newName) {
+    if (!isValidIdentifier(newName)) {
+        throw new Error(
+            '"' + newName + '" is not a valid MaterialX name (letters, digits and underscore only, must not start with a digit).'
+        );
+    }
+    const found = renameTargetAt(root, pos);
+    if (!found) throw new Error('This is not a MaterialX name or reference that can be renamed.');
+    const target = found.target;
+    if (!target.attrs.name) throw new Error('This element has no name to rename.');
+
+    if (target.attrs.name.value !== newName && siblingCollision(target, newName)) {
+        throw new Error('"' + newName + '" is already used by another element in this scope.');
+    }
+
+    const edits = [{ range: target.attrs.name.range, newText: newName }];
+    for (const ref of findReferencesTo(root, target)) {
+        edits.push({ range: ref.range, newText: newName });
+    }
+    return edits;
+}
+
+// Document links (E9): every <input type="filename" value="..."> with
+// its fileprefix-resolved ref (mirrors docScanner.js's own logic) and
+// value range, for symbolProviders.js to resolve into a link. Pure.
+
+// A filename value containing '<' is a template like <UDIM>/<FRAME>,
+// never a literal path, so it's never a candidate for a real link.
+function isTemplatedFilenameValue(value) {
+    return !value || value.indexOf('<') !== -1;
+}
+
+function collectFilenameRefs(root) {
+    const mtlxRoot = materialxRoot(root);
+    const rootPrefix = (mtlxRoot.attrs.fileprefix && mtlxRoot.attrs.fileprefix.value) || '';
+    const out = [];
+
+    const scan = (node, prefix) => {
+        const nodePrefix = node.tag === 'nodegraph'
+            ? prefix + ((node.attrs.fileprefix && node.attrs.fileprefix.value) || '')
+            : prefix;
+        for (const child of node.children) {
+            if (
+                child.tag === 'input' &&
+                child.attrs.type && child.attrs.type.value === 'filename' &&
+                child.attrs.value && !isTemplatedFilenameValue(child.attrs.value.value)
+            ) {
+                out.push({
+                    element: child,
+                    value: child.attrs.value.value,
+                    range: child.attrs.value.range,
+                    ref: nodePrefix + child.attrs.value.value,
+                });
+            }
+            scan(child, nodePrefix);
+        }
+    };
+    scan(mtlxRoot, rootPrefix);
+    return out;
 }
 
 module.exports = {
@@ -386,4 +542,11 @@ module.exports = {
     findReferencesTo,
     buildDocumentSymbols,
     REF_ATTRS,
+    IDENTIFIER_RE,
+    isValidIdentifier,
+    renameTargetAt,
+    prepareRename,
+    computeRenameEdits,
+    isTemplatedFilenameValue,
+    collectFilenameRefs,
 };

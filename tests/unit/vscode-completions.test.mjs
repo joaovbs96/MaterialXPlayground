@@ -40,7 +40,7 @@ test('after "<" at the document root: node categories plus structural elements',
     assert.ok(node.detail && node.detail.length > 0, 'node categories should carry a detail string');
 });
 
-test('after "<" inside a node: narrowed "<input .../>" snippets are offered alongside the tag list', () => {
+test('after "<" inside a node: narrowed "<input .../>" snippets are offered, but NOT the full node-category list (E1: nodes cannot nest inside nodes)', () => {
     const items = complete(
         '<materialx version="1.39">\n  <standard_surface name="SR1" type="surfaceshader">\n    <|\n  </standard_surface>\n</materialx>\n'
     );
@@ -50,9 +50,48 @@ test('after "<" inside a node: narrowed "<input .../>" snippets are offered alon
     assert.ok(baseColor, 'standard_surface has a base_color input');
     assert.equal(baseColor.isSnippet, true);
     assert.match(baseColor.insertText, /^input name="base_color" type="color3" value="\$\{1:[^}]*\}" \/>\$0$/);
-    // The plain tag-name list is still offered too (this is an enrichment,
-    // not a replacement).
-    assert.ok(labels(items).includes('standard_surface'));
+    // Node categories are NOT offered inside a node instance's own body:
+    // a node can never nest inside another node.
+    assert.ok(!labels(items).includes('standard_surface'));
+    assert.ok(!labels(items).includes('multiply'));
+    // The one structural child a node instance body does allow.
+    assert.ok(labels(items).includes('token'));
+    assert.ok(!labels(items).includes('output'), 'output is a nodegraph child, not a node-instance child');
+});
+
+test('E1: input type is resolved for THIS node instance (image type="vector3" offers a vector3 "default" input)', () => {
+    const items = complete(
+        '<materialx version="1.39">\n  <image name="img1" type="vector3">\n    <|\n  </image>\n</materialx>\n'
+    );
+    const inputItems = items.filter((i) => i.kind === 'input');
+    const fileInput = inputItems.find((i) => i.label === 'input name="file"');
+    const defaultInput = inputItems.find((i) => i.label === 'input name="default"');
+    assert.ok(fileInput, 'image always has a file input');
+    assert.equal(fileInput.detail.split(' ')[0], 'filename', 'file stays filename regardless of the node\'s own output type');
+    assert.ok(defaultInput, 'image has a default input');
+    assert.equal(defaultInput.detail.split(' ')[0], 'vector3', 'default is typed for THIS instance (type="vector3")');
+});
+
+test('E1: an already-present <input> child is not re-offered as a "<input .../>" enrichment snippet', () => {
+    const items = complete(
+        '<materialx version="1.39">\n  <standard_surface name="SR1" type="surfaceshader">\n'
+        + '    <input name="base_color" type="color3" value="1, 0, 0" />\n'
+        + '    <|\n  </standard_surface>\n</materialx>\n'
+    );
+    const inputItems = items.filter((i) => i.kind === 'input');
+    assert.ok(!inputItems.some((i) => i.label === 'input name="base_color"'), 'base_color is already present, must not be re-offered');
+    assert.ok(inputItems.some((i) => i.label === 'input name="specular_roughness"'), 'other inputs are still offered');
+});
+
+test('E1: an already-present <input> child is excluded from <input name="..."> value completion too', () => {
+    const items = complete(
+        '<materialx version="1.39">\n  <standard_surface name="SR1" type="surfaceshader">\n'
+        + '    <input name="base_color" type="color3" value="1, 0, 0" />\n'
+        + '    <input name="|" />\n  </standard_surface>\n</materialx>\n'
+    );
+    const ls = labels(items);
+    assert.ok(!ls.includes('base_color'), 'base_color already exists as a sibling <input>');
+    assert.ok(ls.includes('specular_roughness'));
 });
 
 test('after "<" replaces exactly the already-typed tag-name prefix', () => {
@@ -98,10 +137,38 @@ test('nodename="..." attribute value: nodes in the same scope (nodegraph, not do
     ].join('\n');
     const items = complete(text);
     // Scope is the enclosing nodegraph's children (mirrors mtlxSymbols.js's
-    // own resolveReference for 'nodename' exactly): every named node in
-    // NG1, including "mixnode" itself (self-reference isn't filtered out
-    // here, same as mtlxSymbols.js's reference resolution never does).
-    assert.deepEqual(labels(items).sort(), ['c1', 'mixnode']);
+    // own resolveReference for 'nodename'), but E5 excludes the enclosing
+    // node itself ("mixnode" can't connect to its own input).
+    assert.deepEqual(labels(items).sort(), ['c1']);
+});
+
+test('E5: nodename="..." excludes the enclosing node itself and ranks matching-output-type nodes first', () => {
+    const text = [
+        '<materialx version="1.39">',
+        '  <nodegraph name="NG1">',
+        '    <constant name="c_float" type="float">',
+        '      <input name="value" type="float" value="0.5" />',
+        '    </constant>',
+        '    <constant name="c_color" type="color3">',
+        '      <input name="value" type="color3" value="0.1, 0.1, 0.1" />',
+        '    </constant>',
+        '    <mix name="mixnode" type="color3">',
+        '      <input name="fg" type="color3" nodename="|" />',
+        '    </mix>',
+        '  </nodegraph>',
+        '</materialx>',
+        '',
+    ].join('\n');
+    const items = complete(text);
+    const ls = labels(items);
+    assert.ok(!ls.includes('mixnode'), 'the enclosing node must not offer itself');
+    assert.deepEqual(ls.sort(), ['c_color', 'c_float'].sort());
+    // c_color (a color3 producer) ranks before c_float since fg is color3.
+    const colorItem = items.find((i) => i.label === 'c_color');
+    const floatItem = items.find((i) => i.label === 'c_float');
+    assert.ok(colorItem.sortIndex < floatItem.sortIndex, 'the type-matching candidate sorts first');
+    assert.equal(colorItem.detail, 'color3');
+    assert.equal(floatItem.detail, 'float');
 });
 
 test('nodegraph="..." attribute value: root nodegraphs only', () => {
@@ -275,7 +342,9 @@ test('attribute-name completion in an unclosed tag whose next line is a comment'
 
 test('unknown attribute values and non-completion positions yield no items', () => {
     assert.deepEqual(complete('<materialx version="1.39" unknownattr="|" />\n'), []);
-    assert.deepEqual(complete('<materialx version="1.39">plain text|</materialx>\n'), []);
+    // "zzznotaprefix" (not "text": that's a literal prefix of the
+    // "texturechain" document snippet, see the E6 tests below).
+    assert.deepEqual(complete('<materialx version="1.39">plain zzznotaprefix|</materialx>\n'), []);
 });
 
 test('<input name="..."> value completion also inserts the input\'s declared type=', () => {
@@ -321,4 +390,71 @@ test('Ctrl+Space right after a partial attribute name (no trailing space) offers
     const name = items.find((i) => i.label === 'name');
     assert.equal(name.replaceStart, offset - 1, 'replace range covers just the partial "n"');
     assert.equal(name.replaceEnd, offset);
+});
+
+test('E4: buildNodeElementSnippet picks a unique default name and lists the category\'s output types as choices', () => {
+    const index = mtlxCompletions.getLibraryIndex(REPO_ROOT);
+    const entry = index.categories.get('multiply');
+    const snippet = mtlxCompletions.buildNodeElementSnippet('multiply', entry, new Set(['multiply']), null);
+    assert.match(snippet, /^multiply name="\$\{1:multiply2\}" type="\$\{2\|[^|]+\|\}">\$0<\/multiply>$/);
+    const choicesMatch = snippet.match(/\$\{2\|([^|]+)\|\}/);
+    const choices = choicesMatch[1].split(',');
+    assert.ok(choices.includes('float'));
+    assert.ok(choices.includes('color3'));
+});
+
+test('E4: a preferred type sorts first in the choice list when the category actually produces it', () => {
+    const index = mtlxCompletions.getLibraryIndex(REPO_ROOT);
+    const entry = index.categories.get('multiply');
+    const snippet = mtlxCompletions.buildNodeElementSnippet('multiply', entry, new Set(), 'color3');
+    const choices = snippet.match(/\$\{2\|([^|]+)\|\}/)[1].split(',');
+    assert.equal(choices[0], 'color3');
+});
+
+test('E4: typing "<" at the document root inserts a full name/type/close snippet for a fresh node', () => {
+    const items = complete('<materialx version="1.39">\n  <multi|\n</materialx>\n');
+    const node = items.find((i) => i.label === 'multiply');
+    assert.ok(node);
+    assert.equal(node.isSnippet, true);
+    assert.match(node.insertText, /^multiply name="\$\{1:multiply\}" type="\$\{2\|[^|]+\|\}">\$0<\/multiply>$/);
+});
+
+test('E4: falls back to inserting only the name when the tag already has more content past the cursor', () => {
+    const items = complete('<materialx version="1.39">\n  <multi|ply name="m1" type="float" />\n</materialx>\n');
+    const node = items.find((i) => i.label === 'multiply');
+    assert.ok(node);
+    assert.equal(node.isSnippet, false);
+    assert.equal(node.insertText, 'multiply');
+});
+
+test('E4: a structural "nodegraph" insertion also gets a unique name and a closing tag', () => {
+    const items = complete('<materialx version="1.39">\n  <nodegr|\n</materialx>\n');
+    const ng = items.find((i) => i.label === 'nodegraph');
+    assert.ok(ng);
+    assert.equal(ng.isSnippet, true);
+    assert.match(ng.insertText, /^nodegraph name="\$\{1:NG_graph\}">\$0<\/nodegraph>$/);
+});
+
+test('E6: a bare word matching a document-snippet prefix offers it as a Snippet completion item', () => {
+    const items = complete('<materialx version="1.39">\n  standard_su|\n</materialx>\n');
+    const item = items.find((i) => i.label === 'standard_surface');
+    assert.ok(item, 'expected the standard_surface document snippet');
+    assert.equal(item.kind, 'doc-snippet');
+    assert.equal(item.isSnippet, true);
+});
+
+test('E6: a bare word matching nothing yields no items', () => {
+    assert.deepEqual(complete('<materialx version="1.39">\n  zzzznotaprefix|\n</materialx>\n'), []);
+});
+
+test('E10a: "Browse for file..." is offered inside a filename input\'s value, not for other types', () => {
+    const fileText = '<materialx version="1.39">\n  <image name="img1" type="color3">\n    <input name="file" type="filename" value="|" />\n  </image>\n</materialx>\n';
+    const items = complete(fileText);
+    const browse = items.find((i) => i.kind === 'file-browse');
+    assert.ok(browse, 'expected a file-browse item for a filename-typed value');
+    assert.equal(browse.insertText, '');
+    assert.equal(browse.label, 'Browse for file...');
+
+    const floatText = '<materialx version="1.39">\n  <image name="img1" type="color3">\n    <input name="default" type="color3" value="|" />\n  </image>\n</materialx>\n';
+    assert.ok(!complete(floatText).some((i) => i.kind === 'file-browse'), 'non-filename inputs must not offer the browse item');
 });

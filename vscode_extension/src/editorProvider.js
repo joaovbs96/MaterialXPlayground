@@ -12,6 +12,7 @@ const vscode = require('vscode');
 const path = require('path');
 const os = require('os');
 const docScanner = require('./docScanner');
+const textureStamp = require('./textureStamp');
 const { errMsg } = require('./util');
 const { getSetting } = require('./settingsHost');
 
@@ -45,7 +46,12 @@ if (TEST_TRANSPORT) {
     const fullWidthListeners = [];
     const sceneRoundListeners = [];
     const sceneCancelListeners = [];
+    const pixelListeners = [];
     const errors = [];
+    // Error toasts the host itself raised, plus unhandled rejections in the
+    // extension host (the lifecycle smoke asserts "Webview is disposed" never shows).
+    const hostErrors = [];
+    process.on('unhandledRejection', (reason) => { hostErrors.push('unhandledRejection: ' + errMsg(reason)); });
     testHooks = {
         // sceneProvider.js: one event per file set sent (round 0 is the
         // static collection) and the webview's cancel test report.
@@ -94,6 +100,10 @@ if (TEST_TRANSPORT) {
         emitFilesReport(report) {
             for (const listener of filesListeners) listener(report);
         },
+        emitPixelReport(report) {
+            for (const listener of pixelListeners) listener(report);
+        },
+        emitHostError(text) { hostErrors.push(text); },
         emitError(text) {
             errors.push(text);
             for (const listener of errorListeners) listener(text);
@@ -108,6 +118,11 @@ if (TEST_TRANSPORT) {
             onFilesReport(listener) { filesListeners.push(listener); },
             onError(listener) { errorListeners.push(listener); },
             getErrors() { return errors.slice(); },
+            getHostErrors() { return hostErrors.slice(); },
+            // Centre pixel of the active panel's viewer (bootstrap.js handleTestTriggerPixel).
+            triggerPixel(x, y) { postToActivePanel({ type: 'mtlx-test-trigger-pixel', x, y }); },
+            onPixelReport(listener) { pixelListeners.push(listener); },
+            isDocsPanelOpen() { return !!docsPanelInfo; },
             onSaveResult(listener) { saveResultListeners.push(listener); },
             // Makes handleSaveFile skip vscode.window.showSaveDialog and
             // write straight into `dir` (a plain fs path) instead -- lets
@@ -252,7 +267,12 @@ function setPendingInitialView(uriStr, hash) {
 //
 // `sceneOnly` (sceneProvider.js) becomes ${sceneOnly}, read by bootstrap.js
 // as window.__MTLX_SCENE_ONLY__ so the header keeps only Scene and Graph.
-async function buildHtml(context, webview, initialHash, docsOnly, extraResourceRoot, sceneOnly) {
+//
+// `isLive` (optional) reports whether the panel is still open: a panel closed
+// while the template loads resolves false instead of throwing "Webview is disposed".
+async function buildHtml(context, webview, initialHash, docsOnly, extraResourceRoot, sceneOnly, isLive) {
+    const live = () => typeof isLive !== 'function' || isLive();
+    if (!live()) return false;
     // package.json now lives at the repo root, so packaging (vsce
     // package) bundles both the site's files (index.html, js/,
     // libraries/, ...) and vscode_extension/ into the same install
@@ -288,7 +308,42 @@ async function buildHtml(context, webview, initialHash, docsOnly, extraResourceR
     html = html.split('${extensionVersion}').join(String(context.extension.packageJSON.version || ''));
     html = html.split('${vscodeVersion}').join(String(vscode.version || ''));
 
+    if (!live()) return false;
     webview.html = html;
+    return true;
+}
+
+// Per-panel lifecycle: `disposed` flips on the panel's onDidDispose, which is
+// registered before any await; track() disposes late subscriptions at once
+// and post() drops messages to a closed panel instead of throwing.
+function panelLifecycle(panel) {
+    const webview = panel.webview;
+    const subs = [];
+    const onDispose = [];
+    const state = {
+        disposed: false,
+        webview,
+        isLive: () => !state.disposed,
+        track(sub) {
+            if (state.disposed) { try { sub.dispose(); } catch (e) { /* already gone */ } } else subs.push(sub);
+            return sub;
+        },
+        onDispose(fn) { if (state.disposed) fn(); else onDispose.push(fn); },
+        post(message) {
+            if (state.disposed) return Promise.resolve(false);
+            try {
+                return Promise.resolve(webview.postMessage(message)).catch(() => false);
+            } catch (e) {
+                return Promise.resolve(false); // closed between the check and the call
+            }
+        },
+    };
+    panel.onDidDispose(() => {
+        state.disposed = true;
+        for (const sub of subs.splice(0)) { try { sub.dispose(); } catch (e) { /* ignore */ } }
+        for (const fn of onDispose.splice(0)) { try { fn(); } catch (e) { /* ignore */ } }
+    });
+    return state;
 }
 
 // ---------------------------------------------------------------------
@@ -327,6 +382,12 @@ function logLine(channel, text) {
     channel.appendLine('[' + new Date().toISOString() + '] ' + text);
 }
 
+// showErrorMessage, also recorded for the smoke harness in test mode.
+function showHostError(text) {
+    if (testHooks) testHooks.emitHostError(text);
+    return vscode.window.showErrorMessage(text);
+}
+
 // Where a Save dialog should default to for a given (possibly null)
 // document: the open .mtlx file's own folder, else the first workspace
 // folder, else the user's home directory. Used by handleSaveFile below;
@@ -360,7 +421,14 @@ const MAX_SAVE_FILE_BYTES = 1 * 1024 * 1024 * 1024; // 1 GiB
 // a failure.
 async function handleSaveFile(webview, msg, documentUri) {
     const id = msg.id;
-    const reply = (payload) => webview.postMessage(Object.assign({ type: 'mtlx-save-file-result', id }, payload));
+    // The Save dialog can outlive the panel: a reply to a closed webview is dropped.
+    const reply = (payload) => {
+        try {
+            return Promise.resolve(webview.postMessage(Object.assign({ type: 'mtlx-save-file-result', id }, payload))).catch(() => false);
+        } catch (e) {
+            return Promise.resolve(false);
+        }
+    };
     const rawName = typeof msg.name === 'string' ? msg.name : 'download';
     const baseName = path.basename(rawName) || 'download';
     try {
@@ -407,7 +475,7 @@ async function handleSaveFile(webview, msg, documentUri) {
         const message = errMsg(err);
         reply({ ok: false, error: message });
         if (testHooks) testHooks.emitSaveResult({ name: baseName, ok: false, error: message });
-        vscode.window.showErrorMessage('MaterialX Playground: failed to save "' + baseName + '": ' + message);
+        showHostError('MaterialX Playground: failed to save "' + baseName + '": ' + message);
     }
 }
 
@@ -455,6 +523,8 @@ function wireCommonWebviewMessages(webview, outputChannel, documentUri) {
             if (testHooks) testHooks.emitFullWidthReport(msg.report || null);
         } else if (msg.type === 'mtlx-test-scene-cancel') {
             if (testHooks) testHooks.emitSceneCancelReport(msg.report || null);
+        } else if (msg.type === 'mtlx-test-pixel') {
+            if (testHooks) testHooks.emitPixelReport(msg.report || null);
         } else if (msg.type === 'mtlx-save-file') {
             await handleSaveFile(webview, msg, documentUri);
         }
@@ -479,18 +549,17 @@ function toMessageFilesB64(files) {
     return out;
 }
 
-// Turns docScanner's `textures` map ({ [key]: { uri, size, mtime } }) into
-// the 'mtlx-open' message's `fileUrls` field: a webview resource URL per
+// Turns docScanner's `textures` map ({ [key]: { uri, size, mtime, ctimeNs? } })
+// into the 'mtlx-open' message's `fileUrls` field: a webview resource URL per
 // texture, so media/bootstrap.js fetches the bytes itself instead of them
-// being base64-encoded through postMessage. The '?v=mtime-size' query is
-// a cache-buster only: VS Code's webview resource cache otherwise keeps
-// serving a texture's old bytes after it's rewritten on disk and the live
-// reload picks up the change.
+// being base64-encoded through postMessage. The '?v=' query is a cache-buster
+// only (textureStamp.js): VS Code's webview resource cache otherwise keeps
+// serving a texture's old bytes after it's rewritten on disk.
 function toFileUrls(webview, textures) {
     const out = {};
     for (const key of Object.keys(textures)) {
         const t = textures[key];
-        out[key] = webview.asWebviewUri(t.uri).toString() + '?v=' + t.mtime + '-' + t.size;
+        out[key] = textureStamp.versionedUrl(webview.asWebviewUri(t.uri).toString(), t);
     }
     return out;
 }
@@ -572,10 +641,10 @@ function redoActiveGraph() {
 let docsPanelInfo = null; // { panel } | null
 
 async function openDocsPanel(context, hash, viewColumn) {
-    if (docsPanelInfo) {
-        const { panel } = docsPanelInfo;
+    if (docsPanelInfo && !docsPanelInfo.life.disposed) {
+        const { panel, life } = docsPanelInfo;
         panel.reveal(undefined, true); // preserveFocus, keep its current column
-        panel.webview.postMessage({ type: 'mtlx-open', mode: 'docs', hash: hash });
+        life.post({ type: 'mtlx-open', mode: 'docs', hash: hash });
         return;
     }
     const panel = vscode.window.createWebviewPanel(
@@ -584,15 +653,14 @@ async function openDocsPanel(context, hash, viewColumn) {
         viewColumn,
         { retainContextWhenHidden: true }
     );
-    await MaterialXEditorProvider.renderStaticHtml(context, panel, hash);
-    docsPanelInfo = { panel };
-    panel.onDidDispose(() => {
-        // Only clear if THIS panel is still the recorded one — mirrors
-        // the activePanelInfo dispose guard above.
-        if (docsPanelInfo && docsPanelInfo.panel === panel) {
-            docsPanelInfo = null;
-        }
+    // Recorded (and its dispose hook registered) before the render awaits, so
+    // a panel closed mid-render is never revealed or posted to later.
+    const info = { panel, life: panelLifecycle(panel) };
+    docsPanelInfo = info;
+    info.life.onDispose(() => {
+        if (docsPanelInfo === info) docsPanelInfo = null;
     });
+    await MaterialXEditorProvider.renderStaticHtml(context, panel, hash, info.life);
 }
 
 class MaterialXEditorProvider {
@@ -601,6 +669,10 @@ class MaterialXEditorProvider {
     }
 
     async resolveCustomTextEditor(document, webviewPanel /*, _token */) {
+        // Before any await: a tab closed (or replaced on restore) mid-resolve
+        // flips life.disposed, and every later step checks it.
+        const life = panelLifecycle(webviewPanel);
+        const webview = life.webview;
         try {
             const uriKey = document.uri.toString();
             // The materialxPlayground.defaultView setting picks which view is
@@ -630,11 +702,11 @@ class MaterialXEditorProvider {
             // false: this IS the file-backed custom editor, so it keeps
             // every tab (Docs + Viewer + Graph) — see buildHtml's comment
             // on the docsOnly parameter above.
-            await buildHtml(this.context, webviewPanel.webview, initialHash, false, containmentRoot);
+            if (!await buildHtml(this.context, webview, initialHash, false, containmentRoot, false, life.isLive)) return;
 
             // Error forwarding, shared with the docs panel (see
             // wireCommonWebviewMessages above).
-            const commonSub = wireCommonWebviewMessages(webviewPanel.webview, undefined, document.uri);
+            life.track(wireCommonWebviewMessages(webview, undefined, document.uri));
 
             // Register as the active panel immediately (a freshly created
             // panel is always the one the user is looking at), then keep
@@ -645,11 +717,11 @@ class MaterialXEditorProvider {
             // openInGraphEditor/openInMaterialViewer find and reuse this
             // panel later without needing their own tab-scan.
             panelsByUri.set(uriKey, webviewPanel);
-            const viewStateSub = webviewPanel.onDidChangeViewState(() => {
+            life.track(webviewPanel.onDidChangeViewState(() => {
                 if (webviewPanel.active) {
                     activePanelInfo = { panel: webviewPanel, document };
                 }
-            });
+            }));
 
             // Per-panel scan sequence: sendUpdate can overlap itself (a
             // fast edit debounces into a new scan before an older
@@ -660,6 +732,42 @@ class MaterialXEditorProvider {
             // so the same unresolved include/texture is only re-logged
             // when the warning set actually changes.
             let lastLoggedWarnings = null;
+            // Pending debounced resend (text edits and texture file changes).
+            let debounceTimer = null;
+            const scheduleUpdate = () => {
+                if (life.disposed) return;
+                if (debounceTimer) clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(sendUpdate, RELOAD_DEBOUNCE_MS);
+            };
+
+            // Texture watchers: one non-recursive watcher per folder holding a
+            // texture the last scan resolved (so containment is unchanged);
+            // only changes to those exact files resend the document.
+            let watchedTextures = new Set();
+            const textureWatchers = new Map(); // folder uri string -> watcher
+            const onTextureEvent = (changed) => {
+                if (watchedTextures.has(changed.toString())) scheduleUpdate();
+            };
+            const watchTextures = (textures) => {
+                if (life.disposed) return;
+                const uris = Object.keys(textures).map((key) => textures[key].uri);
+                watchedTextures = new Set(uris.map((u) => u.toString()));
+                const folders = new Map();
+                for (const u of uris) {
+                    const dir = u.with({ path: path.posix.dirname(u.path) });
+                    folders.set(dir.toString(), dir);
+                }
+                for (const [key, watcher] of textureWatchers) {
+                    if (!folders.has(key)) { watcher.dispose(); textureWatchers.delete(key); }
+                }
+                for (const [key, dir] of folders) {
+                    if (textureWatchers.has(key)) continue;
+                    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(dir, '*'));
+                    watcher.onDidChange(onTextureEvent);
+                    watcher.onDidCreate(onTextureEvent);
+                    textureWatchers.set(key, watcher);
+                }
+            };
 
             // The document is sent to BOTH views (mode: 'both' below) —
             // initialHash (fixed above, for the lifetime of this panel)
@@ -672,8 +780,11 @@ class MaterialXEditorProvider {
                 try {
                     const xml = document.getText();
                     const name = path.basename(document.uri.fsPath, path.extname(document.uri.fsPath));
-                    const { files, textures, warnings } = await docScanner.scan(document.uri, xml);
-                    if (mySeq !== scanSeq) return; // superseded by a newer scan while this one was in flight
+                    const scanned = await docScanner.scan(document.uri, xml);
+                    const { files, warnings } = scanned;
+                    const textures = await textureStamp.withChangeTimes(scanned.textures);
+                    if (mySeq !== scanSeq || life.disposed) return; // superseded, or the panel closed meanwhile
+                    watchTextures(textures);
 
                     const joined = warnings.join('\n');
                     if (warnings.length && joined !== lastLoggedWarnings) {
@@ -692,17 +803,17 @@ class MaterialXEditorProvider {
                     }
                     lastLoggedWarnings = joined;
 
-                    webviewPanel.webview.postMessage({
+                    life.post({
                         type: 'mtlx-open',
                         mode: 'both',
                         name,
                         xml,
                         filesB64: toMessageFilesB64(files),
-                        fileUrls: toFileUrls(webviewPanel.webview, textures),
+                        fileUrls: toFileUrls(webview, textures),
                     });
                 } catch (err) {
-                    if (mySeq !== scanSeq) return; // superseded, don't surface a stale scan's error
-                    vscode.window.showErrorMessage(
+                    if (mySeq !== scanSeq || life.disposed) return; // superseded or closed, don't surface a stale scan's error
+                    showHostError(
                         'MaterialX Playground: failed to load "' + path.basename(document.fileName) + '" — '
                         + errMsg(err)
                     );
@@ -753,7 +864,7 @@ class MaterialXEditorProvider {
             // current graph XML back to THIS document's full range and
             // save it to disk, then reply so the webview can settle its
             // pending save promise (and mark its own session saved).
-            const messageSub = webviewPanel.webview.onDidReceiveMessage(async (msg) => {
+            life.track(webview.onDidReceiveMessage(async (msg) => {
                 if (!msg) return;
                 if (msg.type === 'ready') {
                     sendUpdate();
@@ -784,13 +895,13 @@ class MaterialXEditorProvider {
                             }
                         }
                         await document.save();
-                        webviewPanel.webview.postMessage({ type: 'mtlx-save-result', ok: true });
+                        life.post({ type: 'mtlx-save-result', ok: true });
                     } catch (err) {
                         const message = errMsg(err);
-                        vscode.window.showErrorMessage(
+                        showHostError(
                             'MaterialX Playground: failed to save "' + path.basename(document.fileName) + '" — ' + message
                         );
-                        webviewPanel.webview.postMessage({ type: 'mtlx-save-result', ok: false, error: message });
+                        life.post({ type: 'mtlx-save-result', ok: false, error: message });
                     } finally {
                         // Always decremented once the save settles, success
                         // or failure, but only if we actually incremented
@@ -829,7 +940,7 @@ class MaterialXEditorProvider {
                             hostEditDepth--;
                         }
                     } catch (err) {
-                        vscode.window.showErrorMessage(
+                        showHostError(
                             'MaterialX Playground: failed to sync "' + path.basename(document.fileName) + '" — '
                             + errMsg(err)
                         );
@@ -857,19 +968,18 @@ class MaterialXEditorProvider {
                         }
                         sendUpdate();
                     } catch (err) {
-                        vscode.window.showErrorMessage(
+                        showHostError(
                             'MaterialX Playground: ' + (msg.type === 'mtlx-native-undo' ? 'undo' : 'redo') + ' failed — '
                             + errMsg(err)
                         );
                     }
                 }
-            });
+            }));
 
             // Live reload: re-scan + resend whenever THIS document's text
             // changes, debounced so a fast typist doesn't trigger a
             // filesystem crawl per keystroke.
-            let debounceTimer = null;
-            const changeSub = vscode.workspace.onDidChangeTextDocument((e) => {
+            life.track(vscode.workspace.onDidChangeTextDocument((e) => {
                 if (e.document.uri.toString() !== uriKey) return;
                 // Echo suppression: this fires for the 'mtlx-save' and
                 // 'mtlx-sync' handlers' own applyEdit calls above too — and
@@ -884,16 +994,13 @@ class MaterialXEditorProvider {
                 // hostEditDepth above for why a counter, not a boolean, is
                 // what's needed here).
                 if (hostEditDepth > 0) return;
-                if (debounceTimer) clearTimeout(debounceTimer);
-                debounceTimer = setTimeout(sendUpdate, RELOAD_DEBOUNCE_MS);
-            });
+                scheduleUpdate();
+            }));
 
-            webviewPanel.onDidDispose(() => {
-                commonSub.dispose();
-                messageSub.dispose();
-                changeSub.dispose();
-                viewStateSub.dispose();
+            life.onDispose(() => {
                 if (debounceTimer) clearTimeout(debounceTimer);
+                for (const watcher of textureWatchers.values()) watcher.dispose();
+                textureWatchers.clear();
                 // Only clear if THIS panel is still the recorded active
                 // one — a panel that already lost "active" status to a
                 // newer tab (and was superseded in activePanelInfo above)
@@ -908,7 +1015,8 @@ class MaterialXEditorProvider {
                 }
             });
         } catch (err) {
-            vscode.window.showErrorMessage(
+            if (life.disposed) return; // closed while resolving: nothing left to report
+            showHostError(
                 'MaterialX Playground: failed to open the editor — ' + errMsg(err)
             );
         }
@@ -920,16 +1028,17 @@ class MaterialXEditorProvider {
     // index.html#!docs directly). Takes the whole panel (not just its
     // webview) so it can wire the shared error-forwarding handler and
     // dispose it with the panel.
-    static async renderStaticHtml(context, panel, initialHash) {
+    static async renderStaticHtml(context, panel, initialHash, lifecycle) {
+        const life = lifecycle || panelLifecycle(panel);
         try {
             // true: this is only ever the standalone docs panel (no .mtlx
             // document backs it) — see buildHtml's comment on the
             // docsOnly parameter above.
-            await buildHtml(context, panel.webview, initialHash, true);
-            const commonSub = wireCommonWebviewMessages(panel.webview, undefined, null);
-            panel.onDidDispose(() => commonSub.dispose());
+            if (!await buildHtml(context, life.webview, initialHash, true, undefined, false, life.isLive)) return;
+            life.track(wireCommonWebviewMessages(life.webview, undefined, null));
         } catch (err) {
-            vscode.window.showErrorMessage(
+            if (life.disposed) return;
+            showHostError(
                 'MaterialX Playground: failed to open node documentation — ' + errMsg(err)
             );
         }
@@ -942,6 +1051,7 @@ class MaterialXEditorProvider {
 module.exports = {
     MaterialXEditorProvider,
     buildHtml,
+    panelLifecycle,
     wireCommonWebviewMessages,
     toFileUrls,
     trackScenePanel,
@@ -952,6 +1062,7 @@ module.exports = {
     openDocsPanel,
     getSharedOutputChannel,
     logLine,
+    showHostError,
     disposeSharedOutputChannel,
     // materialxPlayground.openInGraphEditor/openInMaterialViewer (extension.js).
     getPanelForUri,
