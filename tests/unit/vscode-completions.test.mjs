@@ -458,3 +458,42 @@ test('E10a: "Browse for file..." is offered inside a filename input\'s value, no
     const floatText = '<materialx version="1.39">\n  <image name="img1" type="color3">\n    <input name="default" type="color3" value="|" />\n  </image>\n</materialx>\n';
     assert.ok(!complete(floatText).some((i) => i.kind === 'file-browse'), 'non-filename inputs must not offer the browse item');
 });
+
+test('uniqueName: a second texturechain insertion numbers up, not a stacked suffix', () => {
+    const text = '<materialx version="1.39">\n'
+        + '  <texcoord name="texcoord1" type="vector2" />\n'
+        + '  <place2d name="place2d1" type="vector2" />\n'
+        + '  <image name="image1" type="color3" />\n'
+        + '  texturechain|\n</materialx>\n';
+    const item = complete(text).find((i) => i.label === 'texturechain');
+    assert.ok(item);
+    assert.match(item.insertText, /name="\$\{1:texcoord2\}"/);
+    assert.match(item.insertText, /name="\$\{2:place2d2\}"/);
+    assert.match(item.insertText, /name="\$\{3:image2\}"/);
+});
+
+test('uniqueName: an existing 1 and 3 leaves 2 as the smallest free index', () => {
+    const text = '<materialx version="1.39">\n'
+        + '  <texcoord name="texcoord1" type="vector2" />\n'
+        + '  <texcoord name="texcoord3" type="vector2" />\n'
+        + '  texturechain|\n</materialx>\n';
+    const item = complete(text).find((i) => i.label === 'texturechain');
+    assert.match(item.insertText, /name="\$\{1:texcoord2\}"/);
+});
+
+test('uniqueName: a second standard_surface insertion gets unique names and a matching link', () => {
+    const text = '<materialx version="1.39">\n'
+        + '  <standard_surface name="SR_surface" type="surfaceshader" />\n'
+        + '  <surfacematerial name="M_surface" type="material" />\n'
+        + '  standard_surface|\n</materialx>\n';
+    const item = complete(text).find((i) => i.label === 'standard_surface');
+    assert.ok(item);
+    const shaderMatch = item.insertText.match(/<standard_surface name="\$\{1:([^}]+)\}"/);
+    const materialMatch = item.insertText.match(/<surfacematerial name="\$\{5:([^}]+)\}"/);
+    assert.ok(shaderMatch && materialMatch);
+    assert.notEqual(shaderMatch[1], 'SR_surface');
+    assert.notEqual(materialMatch[1], 'M_surface');
+    const nodenameMatches = [...item.insertText.matchAll(/nodename="\$\{1:([^}]+)\}"/g)];
+    assert.ok(nodenameMatches.length > 0);
+    for (const m of nodenameMatches) assert.equal(m[1], shaderMatch[1]);
+});

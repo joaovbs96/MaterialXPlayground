@@ -301,12 +301,24 @@ function allNamesInDocument(root) {
     return names;
 }
 
-// `base`, or `base` + the smallest integer >= 2 not already taken.
+// Bare base (no trailing digits, e.g. "SR_surface" or a node category):
+// `base` as-is when free, else `stem` + smallest integer >= 2 not taken.
+// Base already ending in digits (e.g. doc-snippet defaults like
+// "texcoord1"): strip that suffix to get `stem`, then reuse the same
+// stem for every later collision instead of stacking another counter
+// on top ("texcoord1" -> "texcoord2", never "texcoord12").
 function uniqueName(base, existing) {
-    if (!existing.has(base)) return base;
-    let n = 2;
-    while (existing.has(base + n)) n++;
-    return base + n;
+    const m = /^(.*?)(\d+)$/.exec(base);
+    if (!m) {
+        if (!existing.has(base)) return base;
+        let n = 2;
+        while (existing.has(base + n)) n++;
+        return base + n;
+    }
+    const stem = m[1];
+    let n = 1;
+    while (existing.has(stem + n)) n++;
+    return stem + n;
 }
 
 // Names already used by `parentEl`'s own <input> children, excluding
