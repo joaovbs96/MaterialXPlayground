@@ -1,15 +1,14 @@
 // Unit tests for vscode_extension/src/formatter.js: the xml-formatter
-// re-indent pass validated by scratchpad/fmt-spike (see gate-results.md
-// there for the full corpus check this mirrors on a small inline
-// corpus), plus the DocumentFormattingEditProvider /
-// DocumentRangeFormattingEditProvider wiring, tested against a minimal
-// fake 'vscode' (formatter.js takes vscode as a parameter, it never
-// requires the real module, so no stub-loader trick is needed).
+// re-indent pass validated by scratchpad/fmt-spike (see
+// gate-results.md there for the full corpus check this mirrors).
 //
-// The dependency (xml-formatter) is not in the committed vendor registry
-// yet — a later batch adds it. Until then these tests point
-// MTLX_XML_FORMATTER_DIR at scratchpad/fmt-spike/node_modules (the
-// spike's scratch npm install) and skip gracefully if that's absent.
+// Also covers the DocumentFormattingEditProvider /
+// DocumentRangeFormattingEditProvider wiring, tested against a
+// minimal fake 'vscode' (formatter.js takes vscode as a parameter).
+//
+// The dependency (xml-formatter) isn't in the committed vendor
+// registry yet, so tests point MTLX_XML_FORMATTER_DIR at
+// scratchpad/fmt-spike/node_modules and skip gracefully if absent.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import path from 'node:path';
@@ -28,7 +27,7 @@ if (fs.existsSync(SPIKE_NODE_MODULES)) {
 
 const formatter = require('../../vscode_extension/src/formatter.js');
 const DEP_AVAILABLE = formatter._internal.resolveXmlFormatter() !== null;
-const SKIP_REASON = 'xml-formatter not resolvable (no vendor/xml-formatter, no scratchpad/fmt-spike/node_modules — run the Batch D spike setup first)';
+const SKIP_REASON = 'xml-formatter not resolvable (no vendor/xml-formatter, no scratchpad/fmt-spike/node_modules: run the Batch D spike setup first)';
 
 function skipIfUnavailable(t) {
     if (!DEP_AVAILABLE) { t.skip(SKIP_REASON); return true; }
@@ -105,7 +104,7 @@ const SRC_BLANK_RUN = [
 function countBlankLines(text) {
     const lines = text.split('\n');
     // A trailing newline produces a final empty split segment that isn't
-    // a real line — drop it so it isn't mistaken for a blank line.
+    // a real line, so drop it before counting blank lines.
     if (lines.length && lines[lines.length - 1] === '') lines.pop();
     return lines.filter((l) => l.trim() === '').length;
 }
@@ -247,7 +246,7 @@ test('range formatting inside one element only re-indents that element', (t) => 
     const nodegraphEnd = src.indexOf('</nodegraph>') + '</nodegraph>'.length;
     // A range crossing from inside the first <input> into the second, so
     // neither self-closing element alone contains it and the smallest
-    // enclosing element is the parent <nodegraph> — not the whole document.
+    // enclosing element is the parent <nodegraph>, not the whole document.
     const startOffset = src.indexOf('name="a"');
     const endOffset = src.indexOf('name="b"');
     const range = new FakeRange(doc.positionAt(startOffset), doc.positionAt(endOffset));

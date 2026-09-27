@@ -1,28 +1,29 @@
-// formatter.js — DocumentFormattingEditProvider / DocumentRangeFormatting-
+// formatter.js: DocumentFormattingEditProvider / DocumentRangeFormatting-
 // EditProvider for the 'mtlx' language, built on the vendored
-// xml-formatter package (re-indent only: attribute order/values,
-// comments, CDATA, processing instructions and self-closing style all
-// pass through unchanged — see scratchpad/fmt-spike/gate-results.md for
-// the corpus check that verified this).
+// xml-formatter package (re-indent only).
 //
-// Pure Node core (formatMtlx + helpers): no require('vscode'). register()
-// takes the vscode module as a parameter instead of requiring it, so the
-// whole file — including provider wiring — can be unit tested without a
-// real extension host.
+// Attribute order/values, comments, CDATA, processing instructions and
+// self-closing style all pass through unchanged (see the corpus check
+// in scratchpad/fmt-spike/gate-results.md).
+//
+// Pure Node core (formatMtlx + helpers): no require('vscode').
+// register() takes vscode as a parameter instead, so the whole file
+// (including provider wiring) can be tested without a real host.
 //
 // xml-formatter isn't in the committed vendor registry yet (a later
-// batch adds vendor/xml-formatter/ via scripts/vendor-deps.mjs, per the
-// file map in gate-results.md). Until then, resolveXmlFormatter() also
-// checks MTLX_XML_FORMATTER_DIR, which tests point at
-// scratchpad/fmt-spike/node_modules so this module is exercisable now.
+// batch adds vendor/xml-formatter/ via scripts/vendor-deps.mjs, per
+// the file map in gate-results.md).
+//
+// Until then, resolveXmlFormatter() also checks
+// MTLX_XML_FORMATTER_DIR, which tests point at
+// scratchpad/fmt-spike/node_modules.
 'use strict';
 
 const path = require('path');
 
-// Resolves the xml-formatter CJS entry point. Tries the committed vendor
-// path first, then an env-var override (test-only: points at the spike's
-// scratch npm install). Returns null, never throws, if neither resolves —
-// callers decide how to surface "formatter unavailable".
+// Resolves the xml-formatter CJS entry point: tries the committed
+// vendor path, then an env-var override (test-only, points at the
+// spike's scratch install). Returns null, never throws (caller decides).
 function resolveXmlFormatter() {
     const candidates = [];
     candidates.push(path.join(__dirname, '..', '..', 'vendor', 'xml-formatter', 'dist', 'cjs', 'index.js'));
@@ -50,9 +51,9 @@ function detectEol(text) {
     return crlf >= lfOnly ? '\r\n' : '\n';
 }
 
-// True if the document's self-closing tags use `<x />` (space before the
-// slash) rather than `<x/>` — every real .mtlx file checked in the spike
-// uses the spaced form, but this stays source-driven rather than assumed.
+// True if self-closing tags use `<x />` (space before the slash), not
+// `<x/>`. Every file checked in the spike uses the spaced form, but
+// this stays source-driven rather than assumed.
 function detectSelfClosingSpace(text) {
     const withSpace = (text.match(/[^\s]\s\/>/g) || []).length;
     const noSpace = (text.match(/[^\s]\/>/g) || []).length;
@@ -65,10 +66,9 @@ function indentationFor(options) {
     return insertSpaces ? ' '.repeat(tabSize) : '\t';
 }
 
-// Runs xml-formatter with the re-indent-only option set validated by the
-// spike. `contextText` supplies the EOL/self-closing-style detection —
-// for a fragment (range formatting) this is the WHOLE document, so a
-// fragment formats consistently with its surroundings.
+// Runs xml-formatter with the re-indent-only options the spike
+// validated. `contextText` supplies EOL/self-closing detection (for a
+// fragment this is the whole document, matching its surroundings).
 function runXmlFormatter(text, contextText, options) {
     const xmlFormatter = getXmlFormatter();
     if (!xmlFormatter) {
@@ -86,16 +86,17 @@ function runXmlFormatter(text, contextText, options) {
 
 // --- Blank-line preservation ---
 //
-// xml-formatter collapses every blank line between siblings to none (not
-// "at most one" — always zero), so re-indent-only would otherwise erase
-// layout the author chose. Fix: before formatting, replace each blank-
-// line run that sits between two non-blank lines (and isn't inside a
-// comment/CDATA, where it's real content) with a single placeholder
-// comment on its own line; after formatting, turn every line that is
-// just that placeholder back into an empty line. The placeholder is a
-// real XML comment while xml-formatter runs, so it gets a correctly
-// indented line of its own for free, then disappears — it never appears
-// in the text formatMtlx/formatRangeEdits actually return.
+// xml-formatter collapses every blank line between siblings to none
+// (not "at most one", always zero), so re-indent-only would otherwise
+// erase layout the author chose.
+//
+// Fix: before formatting, replace each blank-line run between two
+// non-blank lines (outside comments/CDATA, where it's real content)
+// with a single placeholder comment on its own line.
+//
+// After formatting, every placeholder-only line becomes empty again.
+// It's a real XML comment while xml-formatter runs (so it gets a
+// correctly indented line for free), then disappears from the output.
 function pickBlankPlaceholder(text) {
     let n = 0;
     let candidate = '<!--__mtlx_blank__-->';
@@ -114,9 +115,9 @@ function findExcludedSpans(text) {
     return spans;
 }
 
-// One flag per line: true if that line overlaps a comment/CDATA span in
-// the ORIGINAL text, meaning a blank-looking line there is real comment/
-// CDATA content, not layout whitespace — never collapse it.
+// One flag per line: true if that line overlaps a comment/CDATA span
+// in the ORIGINAL text, meaning a blank-looking line there is real
+// content (comment/CDATA), never layout whitespace to collapse.
 function lineExcludedFlags(text, lines, eol) {
     const spans = findExcludedSpans(text);
     const flags = [];
@@ -173,11 +174,12 @@ function formatXmlPreservingBlankLines(text, contextText, options) {
 }
 
 // formatMtlx(text, {tabSize, insertSpaces, eol}) -> formatted text.
-// `eol` overrides EOL detection (VS Code's FormattingOptions doesn't
-// carry one, so callers normally omit it and let detectEol read the
-// source). xml-formatter trims the whole document and drops a trailing
-// newline unconditionally — re-added here when the source had one, the
-// one gap the spike found outside checks (a)-(e).
+// `eol` overrides EOL detection (VS Code's FormattingOptions has none,
+// so callers normally omit it and let detectEol read the source).
+//
+// xml-formatter trims the document and drops a trailing newline
+// unconditionally: re-added here when the source had one (the one
+// gap the spike found outside checks a-e).
 function formatMtlx(text, options) {
     options = options || {};
     const eol = options.eol || detectEol(text);
@@ -190,12 +192,13 @@ function formatMtlx(text, options) {
 // --- Range formatting: locate the smallest element fully containing the
 // given [startOffset, endOffset) span. ---
 //
-// Single left-to-right scan matching either a closing tag or an opening/
-// self-closing tag. Proper XML nesting means element completions
-// (self-closing tags, and closing tags popping the stack) occur
-// innermost-first, so the FIRST completed span found that contains the
-// target range is already the most deeply nested one — no need to keep
-// scanning for a smaller candidate once one is found.
+// Single left-to-right scan matching either a closing tag or an
+// opening/self-closing tag. Proper XML nesting means element
+// completions occur innermost first.
+//
+// So the first completed span found that contains the target range
+// is already the most deeply nested one (no need to keep scanning
+// once one is found).
 const SCAN_RE = /<(?:(\/)([\w:.\-]+)\s*>|([\w:.\-]+)(?:\s+[\w:.\-]+\s*=\s*(?:"[^"]*"|'[^']*'))*\s*(\/?)>)/g;
 
 function findEnclosingElement(text, startOffset, endOffset) {
