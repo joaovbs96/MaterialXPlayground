@@ -895,8 +895,9 @@ async function scenarioNewFromExample(ctx) {
         try {
             await vscode.commands.executeCommand('materialxPlayground.newFromExample', id, targetUri);
 
-            // Generous window for the custom editor opened by the command
-            // (materialxPlayground.open) to boot and forward any errors.
+            // Generous window for the text editor to open and the
+            // auto-open listener (extension.js's maybeAutoOpen) to place
+            // the Playground beside it, then forward any errors.
             await new Promise((r) => setTimeout(r, 10000));
             const newErrors = ctx.testApi.getErrors().length - errorsBefore;
 
@@ -913,8 +914,31 @@ async function scenarioNewFromExample(ctx) {
                 if (srcHash !== destHash) mismatches.push(f.rel + ': sha256 mismatch');
             }
 
+            // Same result as opening the file from the Explorer: a text
+            // tab AND a Playground custom-editor tab for the new file,
+            // with the text tab active (has focus).
+            let tabCheck = { textTabs: 0, customTabs: 0, textTabActive: false };
+            if (newMtlxUri) {
+                const uriStr = newMtlxUri.toString();
+                const allTabs = vscode.window.tabGroups.all.flatMap((g) => g.tabs);
+                const textTabs = allTabs.filter((t) => t.input instanceof vscode.TabInputText
+                    && t.input.uri.toString() === uriStr);
+                const customTabs = allTabs.filter((t) => t.input instanceof vscode.TabInputCustom
+                    && t.input.viewType === 'materialxPlayground.editor'
+                    && t.input.uri.toString() === uriStr);
+                tabCheck = {
+                    textTabs: textTabs.length,
+                    customTabs: customTabs.length,
+                    textTabActive: textTabs.length === 1 && textTabs[0].isActive,
+                };
+            }
+            const tabsOk = tabCheck.textTabs === 1 && tabCheck.customTabs === 1 && tabCheck.textTabActive;
+
             const errorSample = ctx.testApi.getErrors().slice(errorsBefore, errorsBefore + 3);
-            out[kind] = { pass: mismatches.length === 0 && newErrors === 0, id, mismatches, newErrors, errorSample, fileCount: example.files.length };
+            out[kind] = {
+                pass: mismatches.length === 0 && newErrors === 0 && tabsOk,
+                id, mismatches, newErrors, errorSample, fileCount: example.files.length, tabCheck,
+            };
         } finally {
             if (newMtlxUri) await closeTabsForUri(newMtlxUri);
             try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { /* best effort */ }

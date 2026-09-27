@@ -165,7 +165,15 @@ async function createFromExample(context, example, explorerFolderUri, targetFold
         const newUri = await copyExample(context.extensionUri, example, folder);
         if (!newUri) return; // user declined to overwrite
 
-        await vscode.commands.executeCommand('materialxPlayground.open', newUri);
+        // Open the .mtlx TEXT editor, same as double-clicking it in the
+        // Explorer. That fires onDidChangeActiveTextEditor, which is what
+        // extension.js's maybeAutoOpen uses to open the Playground beside
+        // it per the user's Open Behavior/Default View settings (and to
+        // skip it entirely in Restricted Mode). Calling
+        // materialxPlayground.open here instead would open ONLY the
+        // Playground webview and never show the text editor at all.
+        const doc = await vscode.workspace.openTextDocument(newUri);
+        await vscode.window.showTextDocument(doc, { preview: false });
     } catch (err) {
         vscode.window.showErrorMessage('MaterialX Playground: failed to create material from example: ' + errMsg(err));
     }
