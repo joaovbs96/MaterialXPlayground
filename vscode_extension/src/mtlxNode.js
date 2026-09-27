@@ -131,7 +131,7 @@ async function attemptLoad(repoRoot) {
         if (stat.size !== EXPECTED_DATA_SIZE) {
             throw new Error(
                 'MaterialX .data archive is ' + stat.size + ' bytes, expected ' + EXPECTED_DATA_SIZE
-                + ' — likely CRLF-corrupted by a Windows checkout (this is a binary file; see .gitattributes).'
+                + ': likely CRLF-corrupted by a Windows checkout (this is a binary file; see .gitattributes).'
             );
         }
     } catch (e) {

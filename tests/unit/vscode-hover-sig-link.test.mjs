@@ -1,4 +1,4 @@
-// Exercises the full "Interactive Documentation" hover-link chain end to
+// Exercises the full "Open in Node Library Documentation" hover-link chain end to
 // end: hoverProvider.js/nodeSignature.js extract a signature token from
 // the hovered element, extension.js's materialxPlayground.openDocs command
 // splices it into a `#/<category>?sig=<token>` hash, and the docs panel

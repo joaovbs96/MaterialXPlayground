@@ -80,7 +80,7 @@ function buildHoverMarkdown(category, repoRootFsPath, ctx) {
     // kept anyway as defense in depth against anything the assumption
     // above misses (e.g. a future caller).
     md.isTrusted = { enabledCommands: ['materialxPlayground.openDocs'] };
-    md.appendMarkdown('**`<' + category + '>`** — MaterialX node\n\n');
+    md.appendMarkdown('**`<' + category + '>`**: MaterialX node\n\n');
 
     if (doc && doc.description) {
         md.appendMarkdown(doc.description + '\n\n');
@@ -107,7 +107,7 @@ function buildHoverMarkdown(category, repoRootFsPath, ctx) {
     // matching signature/version instead of the node's first.
     const sigToken = nodeSignature.buildSigToken(ctx);
     const commandArgs = encodeURIComponent(JSON.stringify(sigToken ? [category, sigToken] : [category]));
-    md.appendMarkdown('[Interactive Documentation](command:materialxPlayground.openDocs?' + commandArgs + ')');
+    md.appendMarkdown('[Open in Node Library Documentation](command:materialxPlayground.openDocs?' + commandArgs + ')');
 
     if (doc && doc.specUrl) {
         md.appendMarkdown(' &nbsp;|&nbsp; [Official Specification](' + doc.specUrl + ')');

@@ -39,6 +39,15 @@ let diagnosticCollection = null;
 let statusBarItem = null;
 let validationClient = null;
 
+// Every user-facing error toast this file raises offers a "Show Output"
+// action so a failure always has a way to see the underlying error text,
+// not just the one-line summary in the toast itself.
+function showErrorWithOutput(text) {
+    vscode.window.showErrorMessage(text, 'Show Output').then((choice) => {
+        if (choice === 'Show Output') getSharedOutputChannel().show();
+    });
+}
+
 // activeMtlxDocument()/onDidChangeActiveMtlxDocument (E16b/E17): the ONE
 // place that decides which .mtlx document is "active" for the status bar,
 // the Outline view and the Open in Graph Editor/Viewer actions (when
@@ -238,11 +247,32 @@ const autoOpenedSceneUris = new Set();
 // with plain `node` (no require('vscode')), so this conversion happens
 // at the extension.js boundary instead.
 function toVsDiagnostics(items) {
-    return items.map((it) => new vscode.Diagnostic(
-        new vscode.Range(it.startLine, it.startChar, it.endLine, it.endChar),
-        it.message,
-        it.severity === 'warning' ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Error
-    ));
+    return items.map((it) => {
+        const d = new vscode.Diagnostic(
+            new vscode.Range(it.startLine, it.startChar, it.endLine, it.endChar),
+            it.message,
+            it.severity === 'warning' ? vscode.DiagnosticSeverity.Warning : vscode.DiagnosticSeverity.Error
+        );
+        d.source = 'MaterialX Playground';
+        return d;
+    });
+}
+
+// Pure status bar icon/text/tooltip from counts, no vscode types touched
+// (see tests/unit/vscode-status-bar.test.mjs), unlike updateStatusBar
+// below which reads the live diagnostic/document state.
+function formatStatusBar(errorCount, warningCount, messages) {
+    const icon = errorCount > 0 ? '$(error)' : warningCount > 0 ? '$(warning)' : '$(check)';
+    const parts = [];
+    if (errorCount > 0) parts.push(errorCount + ' error' + (errorCount === 1 ? '' : 's'));
+    if (warningCount > 0) parts.push(warningCount + ' warning' + (warningCount === 1 ? '' : 's'));
+    const label = 'MaterialX Playground' + (parts.length ? ': ' + parts.join(', ') : '');
+    const text = icon + ' ' + label;
+    if (!parts.length) return { icon, text, tooltip: 'No MaterialX validation issues.' };
+    const shown = (messages || []).slice(0, 3);
+    const bullets = shown.map((m) => '• ' + m).join('\n');
+    const remaining = (messages || []).length > 3;
+    return { icon, text, tooltip: label + ':\n' + bullets + (remaining ? '\n…' : '') };
 }
 
 // Reads the currently active editor itself (no args), called after
@@ -255,14 +285,11 @@ function updateStatusBar() {
         return;
     }
     const diags = diagnosticCollection.get(document.uri) || [];
-    if (diags.length === 0) {
-        statusBarItem.text = '$(check) MaterialX';
-        statusBarItem.tooltip = 'No MaterialX validation issues.';
-    } else {
-        statusBarItem.text = '$(error) MaterialX: ' + diags.length;
-        const preview = diags.slice(0, 3).map((d) => '• ' + d.message).join('\n');
-        statusBarItem.tooltip = 'MaterialX validation issue' + (diags.length === 1 ? '' : 's') + ' (' + diags.length + '):\n' + preview + (diags.length > 3 ? '\n…' : '');
-    }
+    const errorCount = diags.filter((d) => d.severity === vscode.DiagnosticSeverity.Error).length;
+    const warningCount = diags.length - errorCount;
+    const { text, tooltip } = formatStatusBar(errorCount, warningCount, diags.map((d) => d.message));
+    statusBarItem.text = text;
+    statusBarItem.tooltip = tooltip;
     statusBarItem.show();
 }
 
@@ -369,7 +396,8 @@ function activate(context) {
     diagnosticCollection = vscode.languages.createDiagnosticCollection('materialx');
     context.subscriptions.push(diagnosticCollection);
 
-    statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
+    statusBarItem = vscode.window.createStatusBarItem('materialxPlayground.validation', vscode.StatusBarAlignment.Left);
+    statusBarItem.name = 'MaterialX Playground Validation';
     statusBarItem.command = 'workbench.actions.view.problems';
     context.subscriptions.push(statusBarItem);
 
@@ -447,6 +475,15 @@ function activate(context) {
         if (uriArg instanceof vscode.Uri) return uriArg;
         const doc = activeMtlxDocument();
         return doc ? doc.uri : null;
+    };
+
+    // Beside the current group for a hover link or a focused .mtlx text
+    // editor, else the active group. Only affects a freshly created docs
+    // panel: an existing one is revealed in its own column regardless.
+    const docsPanelColumn = (fromHoverLink) => {
+        const editor = vscode.window.activeTextEditor;
+        const fromTextEditor = !!editor && editor.document.languageId === 'mtlx';
+        return (fromHoverLink || fromTextEditor) ? vscode.ViewColumn.Beside : vscode.ViewColumn.Active;
     };
 
     // 'splitRight' placement for openInPlayground below (materialxPlayground.
@@ -558,7 +595,7 @@ function activate(context) {
         try {
             const uri = resolveTargetUri(uriArg);
             if (!uri) {
-                vscode.window.showErrorMessage('MaterialX Playground: no .mtlx file to open (no active editor and no file selected).');
+                showErrorWithOutput('MaterialX Playground: no .mtlx file to open (no active editor and no file selected).');
                 return;
             }
 
@@ -583,7 +620,7 @@ function activate(context) {
                 await vscode.commands.executeCommand('vscode.openWith', uri, 'materialxPlayground.editor');
             }
         } catch (err) {
-            vscode.window.showErrorMessage('MaterialX Playground: failed to open — ' + errMsg(err));
+            showErrorWithOutput('MaterialX Playground: failed to open: ' + errMsg(err));
         }
     };
 
@@ -604,7 +641,7 @@ function activate(context) {
         try {
             const uri = resolveTargetUri(uriArg);
             if (!uri) {
-                vscode.window.showErrorMessage('MaterialX Playground: no .mtlx file to open (no active editor and no file selected).');
+                showErrorWithOutput('MaterialX Playground: no .mtlx file to open (no active editor and no file selected).');
                 return;
             }
             const uriStr = uri.toString();
@@ -617,7 +654,7 @@ function activate(context) {
             setPendingInitialView(uriStr, hash);
             await openInPlayground(uri);
         } catch (err) {
-            vscode.window.showErrorMessage('MaterialX Playground: failed to open - ' + errMsg(err));
+            showErrorWithOutput('MaterialX Playground: failed to open: ' + errMsg(err));
         }
     };
 
@@ -764,8 +801,8 @@ function activate(context) {
         vscode.commands.registerCommand('materialxPlayground.redoGraph', () => redoActiveGraph()),
         // `category` is optional: no-arg (Command Palette / explorer menu)
         // opens the docs library browser exactly as before ('#!docs').
-        // Passed a category string, from hoverProvider.js's "Open
-        // Interactive Documentation" command link on a node hover, e.g.
+        // Passed a category string, from hoverProvider.js's "Open in Node
+        // Library Documentation" command link on a node hover, e.g.
         // command:materialxPlayground.openDocs?["standard_surface"], it
         // instead deep-links straight to that node, using the SAME
         // name-only permalink hash format the website's own hashToSel
@@ -793,7 +830,8 @@ function activate(context) {
                 // form into a bogus '#/<uri>' deep-link hash; a menu click
                 // then opens the plain library browser ('#!docs'), same
                 // as the Command Palette / no-arg case.
-                if (typeof category !== 'string') {
+                const invokedFromHover = typeof category === 'string';
+                if (!invokedFromHover) {
                     category = undefined;
                     sig = undefined;
                 }
@@ -814,13 +852,13 @@ function activate(context) {
                 // text editor or the mtlx custom-editor tab) would answer
                 // null if read only after opening it.
                 const filterDoc = activeMtlxDocument();
-                await openDocsPanel(context, hash, vscode.ViewColumn.Active);
+                await openDocsPanel(context, hash, docsPanelColumn(invokedFromHover));
                 // W1: opened from a .mtlx context (hover link, explorer, or
                 // just the active editor) -- send the current filter right
                 // away instead of waiting for the next document-change event.
                 updateDocsFilter(filterDoc, true);
             } catch (err) {
-                vscode.window.showErrorMessage('MaterialX Playground: failed to open node documentation — ' + errMsg(err));
+                showErrorWithOutput('MaterialX Playground: failed to open node documentation: ' + errMsg(err));
             }
         }),
         // W1: manual override for the docs panel's file-based filter, which
@@ -844,7 +882,7 @@ function activate(context) {
             docsFilterAutoEnabled = true;
             // Captured before opening -- see the same note on openDocs above.
             const filterDoc = activeMtlxDocument();
-            if (!isDocsPanelOpen()) await openDocsPanel(context, '#!docs', vscode.ViewColumn.Active);
+            if (!isDocsPanelOpen()) await openDocsPanel(context, '#!docs', docsPanelColumn(false));
             updateDocsFilter(filterDoc, true);
         }),
         // materialxPlayground.pickFile (E10b): hidden from the Command
@@ -884,8 +922,15 @@ function activate(context) {
                 const range = new vscode.Range(start.line, start.character, end.line, end.character);
                 await editor.edit((builder) => builder.replace(range, value));
             } catch (err) {
-                vscode.window.showErrorMessage('MaterialX Playground: failed to browse for a file: ' + errMsg(err));
+                showErrorWithOutput('MaterialX Playground: failed to browse for a file: ' + errMsg(err));
             }
+        }),
+        // materialxPlayground.openSettings: the gear icon on the Actions and
+        // Outline view titles (package.json's view/title menu).
+        // context.extension.id is the canonical "publisher.name" string, so
+        // this can't drift from package.json's own publisher/name fields.
+        vscode.commands.registerCommand('materialxPlayground.openSettings', () => {
+            vscode.commands.executeCommand('workbench.action.openSettings', '@ext:' + context.extension.id);
         })
     );
 

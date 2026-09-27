@@ -12,8 +12,12 @@
 
 const vscode = require('vscode');
 const outlineModel = require('./outlineModel');
+const { getSetting } = require('./settingsHost');
 
 const DEBOUNCE_MS = 200;
+// Follow-cursor reveal debounce (materialxPlayground.syncSelection): keeps
+// a fast typist/scroller from firing a treeView.reveal() per keystroke.
+const FOLLOW_CURSOR_DEBOUNCE_MS = 150;
 
 class MtlxOutlineProvider {
     constructor() {
@@ -122,9 +126,12 @@ class MtlxOutlineProvider {
         return outlineModel.pathAt(document.getText(), { line: position.line, character: position.character });
     }
 
+    // Deepest node at `position` from the already-built cached tree, not a
+    // reparse like pathAt above -- the follow-cursor listener below calls
+    // this on every debounced selection change.
     nodeAt(document, position) {
-        const nodePath = this.pathAt(document, position);
-        return nodePath ? this._tree.byId.get(nodePath) : null;
+        if (!document || document.languageId !== 'mtlx') return null;
+        return outlineModel.findDeepestAt(this._tree.roots, { line: position.line, character: position.character });
     }
 }
 
@@ -165,6 +172,7 @@ function register(context, { getActiveDocument, onDidChangeActiveDocument }) {
     provider.setTreeView(treeView);
 
     let followingCursor = false;
+    let followTimer = null;
 
     context.subscriptions.push(
         treeView,
@@ -181,18 +189,24 @@ function register(context, { getActiveDocument, onDidChangeActiveDocument }) {
         }),
         vscode.window.onDidChangeTextEditorSelection((e) => {
             if (followingCursor) return; // reveal() below re-fires selection on some hosts; avoid feedback loops
+            if (getSetting('syncSelection') === false) return;
             const active = getActiveDocument();
             if (!active || e.textEditor.document.uri.toString() !== active.uri.toString()) return;
             const pos = e.selections[0] && e.selections[0].active;
             if (!pos) return;
-            const node = provider.nodeAt(active, pos);
-            if (!node) return;
-            provider.markProgrammatic(node.id);
-            followingCursor = true;
-            Promise.resolve(treeView.reveal(node, { select: true, focus: false, expand: true }))
-                .catch(() => { /* best effort: a race with a tree rebuild is not fatal */ })
-                .then(() => { followingCursor = false; });
-        })
+            if (followTimer) clearTimeout(followTimer);
+            followTimer = setTimeout(() => {
+                followTimer = null;
+                const node = provider.nodeAt(active, pos);
+                if (!node) return;
+                provider.markProgrammatic(node.id);
+                followingCursor = true;
+                Promise.resolve(treeView.reveal(node, { select: true, focus: false, expand: true }))
+                    .catch(() => { /* best effort: a race with a tree rebuild is not fatal */ })
+                    .then(() => { followingCursor = false; });
+            }, FOLLOW_CURSOR_DEBOUNCE_MS);
+        }),
+        { dispose: () => { if (followTimer) clearTimeout(followTimer); } }
     );
 
     return {

@@ -140,7 +140,7 @@
             }
         })();
     </script>
-    <script>window.__MTLX_BUILD = 'e675144eb63b49a7';</script>
+    <script>window.__MTLX_BUILD = 'fc679bba88350c02';</script>
     <!-- Build-id probe. Lives here, beside the stamp, deliberately: every
          other script (shell.jsx, mtlx-assets.js) is separately cached and
          may itself be the stale file this is meant to detect. -->
@@ -338,6 +338,9 @@
     <script src="js/shared/vendor-runtime.js"></script>
     <!-- Shared UI commons (icon registry) — must precede the engine and every view script. -->
     <script src="js/shared/ui-commons.js"></script>
+    <!-- Single source of truth for decodable texture extensions; must
+         precede every view script that builds a file-picker accept list. -->
+    <script src="js/shared/texture-formats.js"></script>
     <script src="js/shared/mesh-subdivision.js"></script>
     <script src="js/shared/mesh-displacement.js"></script>
     <!-- Session handoff: lets the graph editor's document survive the

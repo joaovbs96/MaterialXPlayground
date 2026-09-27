@@ -494,9 +494,13 @@ function logLine(channel, text, severity, documentName) {
 }
 
 // showErrorMessage, also recorded for the smoke harness in test mode.
+// Always offers a "Show Output" action to the shared OutputChannel, so
+// the full error log is one click away from any toast.
 function showHostError(text) {
     if (testHooks) testHooks.emitHostError(text);
-    return vscode.window.showErrorMessage(text);
+    return vscode.window.showErrorMessage(text, 'Show Output').then((choice) => {
+        if (choice === 'Show Output') getSharedOutputChannel().show();
+    });
 }
 
 // Where a Save dialog should default to for a given (possibly null)
@@ -978,7 +982,7 @@ class MaterialXEditorProvider {
                 } catch (err) {
                     if (mySeq !== scanSeq || life.disposed) return; // superseded or closed, don't surface a stale scan's error
                     showHostError(
-                        'MaterialX Playground: failed to load "' + path.basename(document.fileName) + '" — '
+                        'MaterialX Playground: failed to load "' + path.basename(document.fileName) + '": '
                         + errMsg(err)
                     );
                 }
@@ -1068,7 +1072,7 @@ class MaterialXEditorProvider {
                     } catch (err) {
                         const message = errMsg(err);
                         showHostError(
-                            'MaterialX Playground: failed to save "' + path.basename(document.fileName) + '" — ' + message
+                            'MaterialX Playground: failed to save "' + path.basename(document.fileName) + '": ' + message
                         );
                         life.post({ type: 'mtlx-save-result', ok: false, error: message });
                     } finally {
@@ -1110,7 +1114,7 @@ class MaterialXEditorProvider {
                         }
                     } catch (err) {
                         showHostError(
-                            'MaterialX Playground: failed to sync "' + path.basename(document.fileName) + '" — '
+                            'MaterialX Playground: failed to sync "' + path.basename(document.fileName) + '": '
                             + errMsg(err)
                         );
                     }
@@ -1138,7 +1142,7 @@ class MaterialXEditorProvider {
                         sendUpdate();
                     } catch (err) {
                         showHostError(
-                            'MaterialX Playground: ' + (msg.type === 'mtlx-native-undo' ? 'undo' : 'redo') + ' failed — '
+                            'MaterialX Playground: ' + (msg.type === 'mtlx-native-undo' ? 'undo' : 'redo') + ' failed: '
                             + errMsg(err)
                         );
                     }
@@ -1187,7 +1191,7 @@ class MaterialXEditorProvider {
         } catch (err) {
             if (life.disposed) return; // closed while resolving: nothing left to report
             showHostError(
-                'MaterialX Playground: failed to open the editor — ' + errMsg(err)
+                'MaterialX Playground: failed to open the editor: ' + errMsg(err)
             );
         }
     }
@@ -1209,7 +1213,7 @@ class MaterialXEditorProvider {
         } catch (err) {
             if (life.disposed) return;
             showHostError(
-                'MaterialX Playground: failed to open node documentation — ' + errMsg(err)
+                'MaterialX Playground: failed to open node documentation: ' + errMsg(err)
             );
         }
     }

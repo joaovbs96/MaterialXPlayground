@@ -176,7 +176,8 @@
     "commands": [
       {
         "command": "materialxPlayground.openScene",
-        "title": "MaterialX Playground: Open in Scene Viewer",
+        "title": "Open in Scene Viewer",
+        "category": "MaterialX Playground",
         "icon": {
           "light": "./vscode_extension/media/playground-light.svg",
           "dark": "./vscode_extension/media/playground-dark.svg"
@@ -185,7 +186,8 @@
       },
       {
         "command": "materialxPlayground.open",
-        "title": "MaterialX Playground: Open MaterialX Document",
+        "title": "Open Playground to the Side",
+        "category": "MaterialX Playground",
         "icon": {
           "light": "./vscode_extension/media/playground-light.svg",
           "dark": "./vscode_extension/media/playground-dark.svg"
@@ -194,7 +196,8 @@
       },
       {
         "command": "materialxPlayground.openInGraphEditor",
-        "title": "MaterialX Playground: Open in Graph Editor",
+        "title": "Open in Graph Editor",
+        "category": "MaterialX Playground",
         "icon": {
           "light": "./vscode_extension/media/playground-light.svg",
           "dark": "./vscode_extension/media/playground-dark.svg"
@@ -203,7 +206,8 @@
       },
       {
         "command": "materialxPlayground.openInMaterialViewer",
-        "title": "MaterialX Playground: Open in Material Viewer",
+        "title": "Open in Material Viewer",
+        "category": "MaterialX Playground",
         "icon": {
           "light": "./vscode_extension/media/playground-light.svg",
           "dark": "./vscode_extension/media/playground-dark.svg"
@@ -212,7 +216,8 @@
       },
       {
         "command": "materialxPlayground.openDocs",
-        "title": "MaterialX Playground: Open Node Library Documentation",
+        "title": "Open Node Library Documentation",
+        "category": "MaterialX Playground",
         "icon": {
           "light": "./vscode_extension/media/playground-light.svg",
           "dark": "./vscode_extension/media/playground-dark.svg"
@@ -225,19 +230,23 @@
       },
       {
         "command": "materialxPlayground.saveGraph",
-        "title": "MaterialX Playground: Save Node Graph to File"
+        "title": "Save Node Graph to File",
+        "category": "MaterialX Playground"
       },
       {
         "command": "materialxPlayground.undoGraph",
-        "title": "MaterialX Playground: Undo Node Graph Edit"
+        "title": "Undo Node Graph Edit",
+        "category": "MaterialX Playground"
       },
       {
         "command": "materialxPlayground.redoGraph",
-        "title": "MaterialX Playground: Redo Node Graph Edit"
+        "title": "Redo Node Graph Edit",
+        "category": "MaterialX Playground"
       },
       {
         "command": "materialxPlayground.newFromExample",
-        "title": "MaterialX Playground: New Material from Example",
+        "title": "New Material from Example",
+        "category": "MaterialX Playground",
         "icon": {
           "light": "./vscode_extension/media/playground-light.svg",
           "dark": "./vscode_extension/media/playground-dark.svg"
@@ -245,11 +254,19 @@
       },
       {
         "command": "materialxPlayground.newDocument",
-        "title": "MaterialX Playground: New MaterialX Document"
+        "title": "New MaterialX Document",
+        "category": "MaterialX Playground"
       },
       {
         "command": "materialxPlayground.pickFile",
-        "title": "MaterialX Playground: Browse for File"
+        "title": "Browse for File",
+        "category": "MaterialX Playground"
+      },
+      {
+        "command": "materialxPlayground.openSettings",
+        "title": "Open Settings",
+        "category": "MaterialX Playground",
+        "icon": "$(gear)"
       }
     ],
     "keybindings": [
@@ -311,6 +328,10 @@
           "command": "materialxPlayground.openDocs"
         },
         {
+          "command": "materialxPlayground.filterDocsByFile",
+          "when": "resourceExtname == .mtlx || activeCustomEditorId == 'materialxPlayground.editor'"
+        },
+        {
           "command": "materialxPlayground.newFromExample"
         },
         {
@@ -331,38 +352,71 @@
         {
           "command": "materialxPlayground.pickFile",
           "when": "false"
+        },
+        {
+          "command": "materialxPlayground.openSettings",
+          "when": "false"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "materialxPlayground.openInGraphEditor",
+          "when": "editorLangId == mtlx",
+          "group": "materialxPlayground@1"
+        },
+        {
+          "command": "materialxPlayground.openInMaterialViewer",
+          "when": "editorLangId == mtlx",
+          "group": "materialxPlayground@2"
+        },
+        {
+          "command": "materialxPlayground.openDocs",
+          "when": "editorLangId == mtlx",
+          "group": "materialxPlayground@3"
         }
       ],
       "explorer/context": [
         {
           "command": "materialxPlayground.openInGraphEditor",
           "when": "resourceExtname == .mtlx",
-          "group": "materialxPlayground"
+          "group": "navigation@10"
         },
         {
           "command": "materialxPlayground.openInMaterialViewer",
           "when": "resourceExtname == .mtlx",
-          "group": "materialxPlayground"
+          "group": "navigation@11"
         },
         {
           "command": "materialxPlayground.openDocs",
           "when": "resourceExtname == .mtlx",
-          "group": "materialxPlayground"
+          "group": "navigation@12"
         },
         {
           "command": "materialxPlayground.newFromExample",
           "when": "explorerResourceIsFolder",
-          "group": "materialxPlayground"
+          "group": "navigation@13"
         },
         {
           "command": "materialxPlayground.openScene",
           "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i",
-          "group": "materialxPlayground"
+          "group": "navigation@14"
         }
       ],
       "file/newFile": [
         {
           "command": "materialxPlayground.newDocument"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "materialxPlayground.openSettings",
+          "when": "view == materialxPlayground.actions",
+          "group": "navigation"
+        },
+        {
+          "command": "materialxPlayground.openSettings",
+          "when": "view == materialxPlayground.outline",
+          "group": "navigation"
         }
       ],
       "editor/title/context": [
@@ -412,12 +466,6 @@
         }
       ]
     },
-    "viewsWelcome": [
-      {
-        "view": "materialxPlayground.outline",
-        "contents": "Open a .mtlx file to see its outline here."
-      }
-    ],
     "configurationDefaults": {
       "[mtlx]": {
         "editor.quickSuggestions": {
@@ -437,7 +485,11 @@
             "graph"
           ],
           "default": "graph",
-          "description": "Which MaterialX Playground view (the Material Viewer or the Node Graph Editor) is shown first when a .mtlx file is opened with the MaterialX Playground custom editor. The document is loaded into both views either way; this setting only picks which one is initially visible. Use the header nav to switch to the other."
+          "enumDescriptions": [
+            "Show the Material Viewer first.",
+            "Show the Node Graph Editor first."
+          ],
+          "markdownDescription": "Which MaterialX Playground view (the Material Viewer or the Node Graph Editor) is shown first when a `.mtlx` file is opened with the MaterialX Playground custom editor. The document is loaded into both views either way; this setting only picks which one is initially visible. Use the header nav to switch to the other."
         },
         "materialxPlayground.openBehavior": {
           "type": "string",
@@ -448,24 +500,24 @@
           "default": "splitRight",
           "enumDescriptions": [
             "Open the playground beside the text editor for the same file, reusing an existing right-hand editor group on repeat opens instead of splitting again every time.",
-            "Open the playground in the active editor group (the previous behavior)."
+            "Open the playground in the active editor group, replacing (or reusing) whatever tab is already there."
           ],
-          "description": "Where the MaterialX Playground opens when a text editor for the same .mtlx file is visible: \"splitRight\" opens it beside that editor, reusing an existing right-hand group rather than creating a new split each time; \"sameGroup\" opens it in the active editor group, replacing (or reusing) whatever tab is already there. This is the previous behavior."
+          "markdownDescription": "Where the MaterialX Playground opens when a text editor for the same `.mtlx` file is visible: `splitRight` opens it beside that editor, reusing an existing right-hand group rather than creating a new split each time; `sameGroup` opens it in the active editor group, replacing (or reusing) whatever tab is already there."
         },
         "materialxPlayground.autoOpenPlayground": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically open the MaterialX Playground beside the text editor whenever a .mtlx file is opened. Triggers once per file open; closing the playground won't re-trigger it until the file itself is closed and reopened."
+          "markdownDescription": "Automatically open the MaterialX Playground beside the text editor whenever a `.mtlx` file is opened. Triggers once per file open; closing the playground won't re-trigger it until the file itself is closed and reopened."
         },
         "materialxPlayground.syncSelection": {
           "type": "boolean",
           "default": true,
-          "description": "Keep the text cursor, the MaterialX Outline and the Graph Editor selection in sync."
+          "markdownDescription": "Keep the text cursor, the MaterialX Outline and the Graph Editor selection in sync."
         },
         "materialxPlayground.autoOpenSceneViewer": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically open the Scene Viewer for a USD, glTF, GLB or OBJ scene file (.usd, .usda, .usdc, .usdz, .gltf, .glb, .obj). A text-editable file (.usda, .gltf, .obj, or .usd that opens as text) opens the viewer beside the text editor; a binary file (.usdc, .usdz, .glb, or .usd that VS Code cannot show as text) has its editor tab replaced by the viewer. Triggers once per file open; closing the viewer won't re-trigger it until the file itself is closed and reopened."
+          "markdownDescription": "Automatically open the Scene Viewer for a USD, glTF, GLB or OBJ scene file (`.usd`, `.usda`, `.usdc`, `.usdz`, `.gltf`, `.glb`, `.obj`). A text-editable file (`.usda`, `.gltf`, `.obj`, or `.usd` that opens as text) opens the viewer beside the text editor; a binary file (`.usdc`, `.usdz`, `.glb`, or `.usd` that VS Code cannot show as text) has its editor tab replaced by the viewer. Triggers once per file open; closing the viewer won't re-trigger it until the file itself is closed and reopened."
         },
         "materialx.defaultView": {
           "type": "string",
@@ -474,7 +526,7 @@
             "graph"
           ],
           "default": "graph",
-          "description": "Deprecated: renamed to materialxPlayground.defaultView.",
+          "markdownDescription": "Deprecated: renamed to `materialxPlayground.defaultView`.",
           "deprecationMessage": "Renamed to materialxPlayground.defaultView. This setting still works, but will be removed in a future release.",
           "markdownDeprecationMessage": "Renamed to `materialxPlayground.defaultView`. This setting still works, but will be removed in a future release."
         },
@@ -485,14 +537,14 @@
             "sameGroup"
           ],
           "default": "splitRight",
-          "description": "Deprecated: renamed to materialxPlayground.openBehavior.",
+          "markdownDescription": "Deprecated: renamed to `materialxPlayground.openBehavior`.",
           "deprecationMessage": "Renamed to materialxPlayground.openBehavior. This setting still works, but will be removed in a future release.",
           "markdownDeprecationMessage": "Renamed to `materialxPlayground.openBehavior`. This setting still works, but will be removed in a future release."
         },
         "materialx.autoOpenPlayground": {
           "type": "boolean",
           "default": true,
-          "description": "Deprecated: renamed to materialxPlayground.autoOpenPlayground.",
+          "markdownDescription": "Deprecated: renamed to `materialxPlayground.autoOpenPlayground`.",
           "deprecationMessage": "Renamed to materialxPlayground.autoOpenPlayground. This setting still works, but will be removed in a future release.",
           "markdownDeprecationMessage": "Renamed to `materialxPlayground.autoOpenPlayground`. This setting still works, but will be removed in a future release."
         }

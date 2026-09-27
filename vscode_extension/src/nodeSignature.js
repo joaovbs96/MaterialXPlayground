@@ -420,7 +420,7 @@ function renderPortsMarkdown(table) {
 
         const remaining = portNames.length - shown.length;
         if (remaining > 0) {
-            parts.push('_…and ' + remaining + ' more ports — open the full documentation below._');
+            parts.push('_…and ' + remaining + ' more ports. Open the full documentation below._');
         }
         return parts.join('\n\n');
     } catch (e) {

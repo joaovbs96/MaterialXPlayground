@@ -189,7 +189,7 @@ function scanXml(text) {
             const nameEnd = readWhile(nameStart, isTagNameChar);
             const name = text.slice(nameStart, nameEnd);
             if (!name) {
-                addError(lt, lt + 1, "Unexpected '<' — not a valid tag/comment/CDATA start");
+                addError(lt, lt + 1, "Unexpected '<': not a valid tag/comment/CDATA start");
                 cursor = lt + 1;
                 continue;
             }
@@ -226,7 +226,7 @@ function scanXml(text) {
             const nameEnd = readWhile(nameStart, isTagNameChar);
             const name = text.slice(nameStart, nameEnd);
             if (!name) {
-                addError(lt, lt + 1, "Unexpected '<' — not a valid tag/comment/CDATA start");
+                addError(lt, lt + 1, "Unexpected '<': not a valid tag/comment/CDATA start");
                 cursor = lt + 1;
                 continue;
             }

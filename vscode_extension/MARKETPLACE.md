@@ -31,7 +31,10 @@ MaterialX Playground puts a live node graph editor and a real-time 3D preview ri
 | Open in Material Viewer | Opens the current `.mtlx` file in the playground's Material Viewer. Also in the Explorer right-click menu and the editor tab's right-click menu. |
 | Open in Scene Viewer | Opens the current USD, glTF or OBJ file in the Scene Viewer. |
 | New Material from Example | Copies an example material, with its textures, into a folder you pick. |
+| New MaterialX Document | Creates a new, empty `.mtlx` document from a starter skeleton. |
 | Open Node Library Documentation | Browses every MaterialX node, no file needed. |
+| Filter Node Docs by Current File | Narrows the node library to the node categories used in the current `.mtlx` file. |
+| Format Document | (Shift+Alt+F) formats `.mtlx` files. |
 
 All commands start with "MaterialX Playground:" in the Command Palette. In the Node Graph Editor, Ctrl+S saves and Ctrl+Z / Ctrl+Y undo and redo (Cmd on macOS).
 
@@ -43,6 +46,7 @@ All commands start with "MaterialX Playground:" in the Command Palette. In the N
 | `materialxPlayground.autoOpenSceneViewer` | `true` | Opens the Scene Viewer when you open a scene file. |
 | `materialxPlayground.openBehavior` | `splitRight` | Opens beside the text (`splitRight`) or in the same editor group (`sameGroup`). |
 | `materialxPlayground.defaultView` | `graph` | Shows the Node Graph Editor (`graph`) or the Material Viewer (`viewer`) first. |
+| `materialxPlayground.syncSelection` | `true` | Keeps the text cursor, the Outline and the Graph Editor selection in sync. |
 
 Settings from earlier versions (`materialx.*`) keep working.
 
