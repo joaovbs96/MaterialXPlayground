@@ -23,16 +23,16 @@ function loadGalleryMaterials(extensionUri) {
 }
 
 // A catalog entry's gallery id, ONLY when a manifest entry's OWN source
-// file matches example.mtlxPath exactly - two different files can share a
-// basename (e.g. this catalog's "materials/open_pbr_default.mtlx" vs. the
-// gallery's own "open_pbr_default" id, vendor's unrelated OpenPbr example),
-// and picking by basename alone would show the wrong preview image.
+// document resolves to example.mtlxPath exactly. A manifest entry's id can
+// differ from its source file's basename (e.g. AnimatedChristmasTreeOrnament
+// vs. ChristmasTreeOrnament016_1K-JPG.mtlx), so this compares full resolved
+// paths across every entry instead of pre-filtering by id === basename.
 function galleryIdFor(materials, example) {
-    const base = example.mtlxPath.split('/').pop().replace(/\.mtlx$/i, '');
-    const entry = materials.find((m) => m.id === base);
-    if (!entry) return null;
-    const entryPath = entry.origin === 'materialx' ? 'vendor/materialx/' + entry.docPath : entry.docPath;
-    return entryPath === example.mtlxPath ? entry.id : null;
+    const entry = materials.find((m) => {
+        const entryPath = m.origin === 'materialx' ? 'vendor/materialx/' + m.docPath : m.docPath;
+        return entryPath === example.mtlxPath;
+    });
+    return entry ? entry.id : null;
 }
 
 function exampleIconPath(extensionUri, materials, example) {
@@ -196,4 +196,4 @@ function register(context) {
     );
 }
 
-module.exports = { register, COMMAND_ID };
+module.exports = { register, COMMAND_ID, galleryIdFor };
