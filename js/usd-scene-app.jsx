@@ -1721,6 +1721,35 @@
         };
         const showMaterialPreviewRef = React.useRef(null);
         showMaterialPreviewRef.current = showMaterialPreview;
+        // Bumped on every unbound-material preview attempt (tree or viewport)
+        // so a stale ensureMaterialDocument() resolution from an earlier
+        // double-click, or one that outlives a scene reload, is dropped.
+        const previewRequestRef = React.useRef(0);
+        // Shared fallback when getMaterialDocument has nothing yet: builds the
+        // document on demand (unbound Material prims, or a bound record not
+        // compiled yet), then opens/swaps the preview. `wasUnbound` controls
+        // whether the "not assigned to any mesh" note accompanies success,
+        // matching the existing DOUBLE_CLICK_NOTES.unbound behavior; on a
+        // null resolve or a rejection, the usual failure note is shown
+        // instead (respecting `mode === 'swap'`, which otherwise stays quiet).
+        const previewUnboundMaterial = (current, materialPath, info, mode, anchor, wasUnbound, log) => {
+            const note = (reason) => { if (mode !== 'swap' || reason === 'unbound') showDoubleClickNote(DOUBLE_CLICK_NOTES[reason] || reason); };
+            const failReason = wasUnbound ? 'unbound' : 'no-document';
+            if (typeof current.ensureMaterialDocument !== 'function') { log(failReason); note(failReason); return; }
+            const requestId = ++previewRequestRef.current;
+            const generation = generationRef.current;
+            const stale = () => previewRequestRef.current !== requestId || generationRef.current !== generation || handleRef.current !== current;
+            current.ensureMaterialDocument(materialPath).then((doc) => {
+                if (stale()) return;
+                if (!doc) { log(failReason); note(failReason); return; }
+                log('ok');
+                showMaterialPreview(doc, info, mode, anchor);
+                if (wasUnbound) note('unbound');
+            }).catch(() => {
+                if (stale()) return;
+                log(failReason); note(failReason);
+            });
+        };
         const [dragOver, setDragOver] = React.useState(false);
         // Outliner state lives here, not in the tree, so closing the sidebar or
         // reloading the same stage keeps it; a different stage resets it.
@@ -2041,6 +2070,16 @@
         const filesRef = React.useRef(files);
         const handleRef = React.useRef(null);
         const generationRef = React.useRef(0);
+        // Compact HUD: below ~720px the left pills (Render settings,
+        // Environment settings, both with labels) and the right
+        // ViewportControls strip (labelled rotate/reset/screenshot/record/
+        // fullscreen) no longer fit on one row without wrapping into each
+        // other, so labels drop and the left pills go icon-only. Below
+        // ~420px even icon-only clusters can't share a row reliably (narrow
+        // VS Code panels), so the right cluster moves to its own row under
+        // the left one instead of risking an overlap.
+        const [hudCompact, setHudCompact] = React.useState(false);
+        const [hudStacked, setHudStacked] = React.useState(false);
         const environmentGenerationRef = React.useRef(0);
         // Tracks the whole-load fraction across both the worker and renderer
         // phases of one load (they share a generation id); a new generation
@@ -2428,6 +2467,18 @@
             const observer = new ResizeObserver(() => { if (handle && handle.resize) handle.resize(); });
             observer.observe(containerRef.current); return () => observer.disconnect();
         }, [handle]);
+        // Drives hudCompact/hudStacked (see their declaration above) from the
+        // viewport's own width, not the window's, so a narrow docked VS Code
+        // panel compacts even at full browser width.
+        React.useEffect(() => {
+            if (!containerRef.current || !window.ResizeObserver) return undefined;
+            const observer = new ResizeObserver((entries) => {
+                const width = entries[0] && entries[0].contentRect ? entries[0].contentRect.width : containerRef.current.clientWidth;
+                setHudCompact(width < 720);
+                setHudStacked(width < 420);
+            });
+            observer.observe(containerRef.current); return () => observer.disconnect();
+        }, []);
 
         // True while a popover or dialog owns the viewport; a double-click
         // whose first press dismisses one never opens the preview.
@@ -2466,12 +2517,20 @@
                 const hit = handle.pickAt(e.clientX, e.clientY);
                 if (!hit) return fail('no-hit');
                 if (!hit.materialPath) return fail('no-material', { hit });
-                const doc = handle.getMaterialDocument(hit.materialPath);
-                if (!doc) return fail('no-document', { hit });
-                log(Object.assign({ reason: 'ok' }, base, { hit: { primPath: hit.primPath, materialPath: hit.materialPath } }));
+                const info = { primPath: hit.primPath, materialName: hit.materialName, materialPath: hit.materialPath };
                 const bounds = container.getBoundingClientRect();
-                showMaterialPreviewRef.current(doc, { primPath: hit.primPath, materialName: hit.materialName, materialPath: hit.materialPath }, 'open',
-                    { x: e.clientX - bounds.left, y: e.clientY - bounds.top });
+                const anchor = { x: e.clientX - bounds.left, y: e.clientY - bounds.top };
+                const doc = handle.getMaterialDocument(hit.materialPath);
+                if (!doc) {
+                    // Same on-demand build as the tree; a picked mesh is never
+                    // itself "unbound", so this only ever shows the plain
+                    // no-document note on failure, silently on success.
+                    previewUnboundMaterial(handle, hit.materialPath, info, 'open', anchor, false,
+                        (reason) => log(Object.assign({ reason }, base, { hit })));
+                    return;
+                }
+                log(Object.assign({ reason: 'ok' }, base, { hit: { primPath: hit.primPath, materialPath: hit.materialPath } }));
+                showMaterialPreviewRef.current(doc, info, 'open', anchor);
             };
             // A click on the canvas itself (not an orbit drag, not a HUD pill)
             // selects the surface under it in the outliner; empty space clears.
@@ -2589,14 +2648,16 @@
             const doc = current.getMaterialDocument(node.materialPath);
             // Only bound materials are compiled, so an unassigned Material prim has no document.
             const unbound = node.kind === 'material' && !(sceneTree && (sceneTree.meshesByMaterial.get(node.path) || []).length);
-            if (!doc) return fail(unbound ? 'unbound' : 'no-document');
-            log('ok');
             // materialName is the leaf of the material's own prim path, not
             // node.name (which is the mesh's name for a mesh row): the Graph
             // Editor handoff needs the material's real name, not the surface it's bound to.
             const materialSegments = sceneTreeSegments(node.materialPath);
             const materialName = materialSegments.length ? materialSegments[materialSegments.length - 1] : null;
-            showMaterialPreview(doc, { primPath: node.path, materialName, materialPath: node.materialPath }, mode, null);
+            const info = { primPath: node.path, materialName, materialPath: node.materialPath };
+            if (doc) { log('ok'); showMaterialPreview(doc, info, mode, null); return; }
+            // No document yet: an unbound Material prim, or a bound record not
+            // built yet. Ask the renderer to build it and open once it resolves.
+            previewUnboundMaterial(current, node.materialPath, info, mode, null, unbound, log);
         };
         // Single click on a row: selects it; a group header also opens or closes, a
         // camera becomes the view, the environment opens its settings, another light
@@ -3716,7 +3777,11 @@
                         </div>
                     ) : null}
                     {envLightingOff ? (
-                        <div data-testid="usd-scene-env-lighting-off" className="text-[11px] text-amber-300/90">The environment's lighting is turned off in the hierarchy; the backdrop still shows it.</div>
+                        <div data-testid="usd-scene-env-lighting-off" className="text-[11px] text-amber-300/90">
+                            {backdrop === 'environment'
+                                ? 'The environment\'s lighting is turned off in the hierarchy; the Environment backdrop goes black until it is turned back on.'
+                                : 'The environment\'s lighting is turned off in the hierarchy; the backdrop is unaffected.'}
+                        </div>
                     ) : null}
                     <FilePickerField
                         value={envFileName}
@@ -4194,7 +4259,9 @@
 
                     {handle && (
                         <ViewportControls
-                            containerClassName="absolute top-2 right-2 z-10 flex items-center gap-2.5 flex-wrap justify-end max-w-[calc(100%-5rem)]"
+                            containerClassName={hudStacked
+                                ? 'absolute top-12 left-2 z-10 flex items-center gap-2.5 flex-wrap max-w-[calc(100%-1rem)]'
+                                : 'absolute top-2 right-2 z-10 flex items-center gap-2.5 flex-wrap justify-end max-w-[calc(100%-5rem)]'}
                             clusterClassName="flex items-center gap-1"
                             selectSize="md"
                             buttonClassName={(isActive) => isActive ? HUD_PILL_ACTIVE : HUD_PILL}
@@ -4212,7 +4279,7 @@
                             showRecord={!!handle && typeof handle.beginCapture === 'function'}
                             isFullscreen={isFullscreen}
                             onToggleFullscreen={toggleFullscreen}
-                            showLabels
+                            showLabels={!hudCompact}
                             clusters={[['rotate', 'cameraReset'], ['screenshot', 'record', 'fullscreen']]}
                         />
                     )}
@@ -4223,10 +4290,11 @@
                                 type="button"
                                 onClick={() => setSidebarOpen(true)}
                                 title="Expand the scene viewer panel"
+                                aria-label="Expand the scene viewer panel"
                                 className={HUD_PILL}
                             >
                                 <MtlxIcon name="chevrons-right" className="w-4 h-4" />
-                                <span className="max-w-[5rem] md:max-w-[8rem] truncate">Scene</span>
+                                {!hudCompact && <span className="max-w-[5rem] md:max-w-[8rem] truncate">Scene</span>}
                             </button>
                         )}
                         <button
@@ -4234,11 +4302,12 @@
                             ref={renderSettingsBtnRef}
                             data-testid="usd-scene-render-settings"
                             title={draftDirty ? 'Render settings (unapplied changes)' : 'Render settings'}
+                            aria-label="Render settings"
                             onClick={() => setRenderSettingsOpen((o) => !o)}
                             className={(renderSettingsOpen ? HUD_PILL_ACTIVE : HUD_PILL) + ' relative'}
                         >
                             <MtlxIcon name="settings-cog" className="w-4 h-4" />
-                            <span>Render settings</span>
+                            {!hudCompact && <span>Render settings</span>}
                             {draftDirty ? (
                                 <span title="Unapplied changes" className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-400 border border-gray-900" />
                             ) : null}
@@ -4248,12 +4317,13 @@
                             ref={envBtnRef}
                             data-testid="usd-scene-env-settings"
                             title="Environment settings"
+                            aria-label="Environment settings"
                             aria-expanded={envPopoverOpen}
                             onClick={() => { if (envPopoverOpen) setEnvPopoverOpen(false); else openEnvPopover(); }}
                             className={envPopoverOpen ? HUD_PILL_ACTIVE : HUD_PILL}
                         >
                             <MtlxIcon name="sun" className="w-4 h-4" />
-                            <span>Environment settings</span>
+                            {!hudCompact && <span>Environment settings</span>}
                         </button>
                     </div>
 
@@ -4313,8 +4383,12 @@
                         </div>
                     )}
 
+                    {/* Sits one row above the hint pill below (bottom-10) so a
+                        note is never painted over by it; the note is transient
+                        (3s, see showDoubleClickNote) so it never crowds the
+                        status pill further down. */}
                     {doubleClickNote && (
-                        <div data-testid="usd-scene-dblclick-note" className="absolute bottom-10 left-2 z-10 pointer-events-none px-2 py-1 rounded-full bg-amber-500/20 border border-amber-500/40 text-[11px] text-amber-200">
+                        <div data-testid="usd-scene-dblclick-note" className="absolute bottom-[4.5rem] left-2 z-10 pointer-events-none px-2 py-1 rounded-full bg-amber-500/20 border border-amber-500/40 text-[11px] text-amber-200">
                             {doubleClickNote}
                         </div>
                     )}
