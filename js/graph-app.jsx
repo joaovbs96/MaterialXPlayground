@@ -8539,7 +8539,9 @@
                             <div className="text-center bg-gray-800/90 border border-gray-700 rounded-xl px-8 py-6">
                                 <MtlxIcon name="file-upload" className="w-10 h-10 block mx-auto mb-3 text-gray-400" />
                                 <div className="text-sm text-gray-300 font-medium">
-                                    {status || 'Drop a .mtlx (or a folder / .zip containing one) to begin.'}
+                                    {status || (IN_VSCODE
+                                        ? 'No document loaded yet.'
+                                        : 'Drop a .mtlx (or a folder / .zip containing one) to begin.')}
                                 </div>
                                 {/* Mentions the Open button and page-wide drag-drop,
                                     neither of which exist under VS Code (single opened
