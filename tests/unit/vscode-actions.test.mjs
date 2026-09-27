@@ -19,6 +19,11 @@ test('buildActionRows: six rows, in the specified order, with icons and variants
     assert.equal(rows.find((r) => r.id === 'filterDocsByFile').variant, 'secondary');
 });
 
+test('buildActionRows: newFromExample reveals and focuses the Examples view', () => {
+    const rows = actionsModel.buildActionRows(false);
+    assert.equal(rows.find((r) => r.id === 'newFromExample').command, 'materialxPlayground.examples.focus');
+});
+
 test('buildActionRows: no active document disables the two "Open in ..." rows', () => {
     const rows = actionsModel.buildActionRows(false);
     const graph = rows.find((r) => r.id === 'openInGraphEditor');

@@ -1,5 +1,6 @@
-/* gallery.css: "New Material from Example" webview panel. VS Code theme
-   variables only, so the grid matches light/dark/high-contrast themes. */
+/* gallery.css: "New Material from Example" webview panel layout. Card
+   and search-box styles are shared with the Examples sidebar view via
+   gallery-cards.css. VS Code theme variables only. */
 * { box-sizing: border-box; }
 
 body {
@@ -19,27 +20,6 @@ body {
     margin: 0 0 20px;
 }
 
-.mtlx-gallery-search-label {
-    font-size: 11px;
-    color: var(--vscode-descriptionForeground);
-}
-
-.mtlx-gallery-search {
-    width: 100%;
-    padding: 6px 10px;
-    border-radius: 3px;
-    border: 1px solid var(--vscode-input-border, transparent);
-    background: var(--vscode-input-background);
-    color: var(--vscode-input-foreground);
-    font-family: inherit;
-    font-size: inherit;
-}
-
-.mtlx-gallery-search:focus-visible {
-    outline: 1px solid var(--vscode-focusBorder);
-    outline-offset: -1px;
-}
-
 .mtlx-gallery-group {
     margin-bottom: 28px;
 }
@@ -56,76 +36,4 @@ body {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
     gap: 14px;
-}
-
-.mtlx-gallery-card {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    padding: 0;
-    border: 1px solid var(--vscode-widget-border, transparent);
-    border-radius: 4px;
-    background: var(--vscode-sideBar-background, transparent);
-    color: inherit;
-    font-family: inherit;
-    text-align: left;
-    cursor: pointer;
-    overflow: hidden;
-}
-
-.mtlx-gallery-card:hover {
-    border-color: var(--vscode-focusBorder);
-}
-
-.mtlx-gallery-card:focus-visible {
-    outline: 1px solid var(--vscode-focusBorder);
-    outline-offset: 2px;
-}
-
-.mtlx-gallery-thumb {
-    width: 100%;
-    aspect-ratio: 4 / 3;
-    object-fit: cover;
-    display: block;
-    background: var(--vscode-input-background);
-}
-
-.mtlx-gallery-thumb-placeholder {
-    width: 100%;
-    aspect-ratio: 4 / 3;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 40px;
-    font-weight: 600;
-    background: var(--vscode-badge-background, rgba(128, 128, 128, 0.2));
-    color: var(--vscode-badge-foreground, var(--vscode-foreground));
-}
-
-.mtlx-gallery-card-body {
-    padding: 8px 10px 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
-
-.mtlx-gallery-card-name {
-    font-size: 13px;
-    font-weight: 600;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.mtlx-gallery-card-meta {
-    font-size: 11px;
-    color: var(--vscode-descriptionForeground);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.mtlx-gallery-empty {
-    color: var(--vscode-descriptionForeground);
-    padding: 24px 0;
 }

@@ -400,14 +400,20 @@
     "views": {
       "materialxPlayground": [
         {
-          "id": "materialxPlayground.outline",
-          "name": "Outline",
-          "when": "true"
-        },
-        {
           "id": "materialxPlayground.actions",
           "name": "Actions",
           "type": "webview",
+          "when": "true"
+        },
+        {
+          "id": "materialxPlayground.examples",
+          "name": "Examples",
+          "type": "webview",
+          "when": "true"
+        },
+        {
+          "id": "materialxPlayground.outline",
+          "name": "Outline",
           "when": "true"
         }
       ]

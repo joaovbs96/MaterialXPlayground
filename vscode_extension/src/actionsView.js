@@ -110,6 +110,12 @@ const testApi = TEST_TRANSPORT ? {
         const rows = actionsModel.buildActionRows(activeProvider ? activeProvider._hasActiveDocument : false);
         return { resolved: !!(activeProvider && activeProvider._view), rowIds: rows.map((r) => r.id) };
     },
+    // Bypasses the webview's own DOM, but goes through the exact same
+    // validated _handleMessage() a real row click would.
+    async triggerRow(id) {
+        if (!activeProvider) throw new Error('the actions view is not resolved');
+        activeProvider._handleMessage({ type: 'run', id: id });
+    },
 } : null;
 
 module.exports = { register, MtlxActionsViewProvider, testApi };

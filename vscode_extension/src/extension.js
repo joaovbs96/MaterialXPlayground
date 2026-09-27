@@ -23,6 +23,7 @@ const exampleGallery = require('./exampleGallery');
 const newDocument = require('./newDocument');
 const outlineView = require('./outlineView');
 const actionsView = require('./actionsView');
+const examplesView = require('./examplesView');
 const outlineModel = require('./outlineModel');
 const filePicker = require('./filePicker');
 const sceneProvider = require('./sceneProvider');
@@ -410,6 +411,12 @@ function activate(context) {
         onDidChangeActiveDocument: onDidChangeActiveMtlxDocument,
     });
     registerSelectionSync(context, outline);
+
+    // materialxPlayground.examples (activity bar container, under
+    // Actions): a webview view of the "New Material from Example" catalog
+    // as a searchable card grid (examplesView.js), reusing
+    // exampleGallery.js's model/rendering wiring.
+    examplesView.register(context);
 
     // materialxPlayground.actions (activity bar container): a webview view
     // of action buttons (actionsView.js/actionsModel.js), the "Open in
@@ -990,6 +997,7 @@ function activate(context) {
     const merged = Object.assign({}, testApi || {});
     if (exampleGallery.testApi) merged.gallery = exampleGallery.testApi;
     if (actionsView.testApi) merged.actions = actionsView.testApi;
+    if (examplesView.testApi) merged.examples = examplesView.testApi;
     return Object.keys(merged).length ? { _test: merged } : undefined;
 }
 

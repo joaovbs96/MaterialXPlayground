@@ -64,18 +64,32 @@ function withThumbUris(webview, extensionUri, groups) {
     }));
 }
 
+// buildResolvedGroups: exampleGalleryModel.buildGalleryData plus this
+// webview's own asWebviewUri thumbnails, in one call. Shared by this
+// panel and examplesView.js's sidebar view so neither duplicates the
+// catalog/manifest/thumbnail wiring.
+function buildResolvedGroups(webview, extensionUri) {
+    const materials = loadGalleryMaterials(extensionUri);
+    const baseGroups = galleryModel.buildGalleryData(exampleCatalog.getCatalog(), materials);
+    return withThumbUris(webview, extensionUri, baseGroups);
+}
+
 async function buildHtml(context, webview) {
     const mediaRoot = vscode.Uri.joinPath(context.extensionUri, 'vscode_extension', 'media');
     const nonce = getNonce();
     const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'gallery.js')).toString();
+    const cardsScriptUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'gallery-cards.js')).toString();
     const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'gallery.css')).toString();
+    const cardsStyleUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, 'gallery-cards.css')).toString();
 
     const bytes = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(mediaRoot, 'gallery.html'));
     let html = Buffer.from(bytes).toString('utf8');
     html = html.split('${cspSource}').join(webview.cspSource);
     html = html.split('${nonce}').join(nonce);
     html = html.split('${scriptUri}').join(scriptUri);
+    html = html.split('${cardsScriptUri}').join(cardsScriptUri);
     html = html.split('${styleUri}').join(styleUri);
+    html = html.split('${cardsStyleUri}').join(cardsStyleUri);
     return html;
 }
 
@@ -122,9 +136,7 @@ async function openGallery(context, explorerFolderUri) {
         }
     );
 
-    const materials = loadGalleryMaterials(context.extensionUri);
-    const baseGroups = galleryModel.buildGalleryData(exampleCatalog.getCatalog(), materials);
-    const groups = withThumbUris(panel.webview, context.extensionUri, baseGroups);
+    const groups = buildResolvedGroups(panel.webview, context.extensionUri);
 
     const info = { panel, targetFolderUri: explorerFolderUri || null, groups };
     panelInfo = info;
@@ -178,4 +190,4 @@ if (TEST_TRANSPORT) {
     };
 }
 
-module.exports = { register, openGallery, isGalleryOpen, testApi };
+module.exports = { register, openGallery, isGalleryOpen, buildResolvedGroups, testApi };

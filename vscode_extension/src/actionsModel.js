@@ -7,8 +7,13 @@
 // the button's visual weight.
 'use strict';
 
+// newFromExample runs the auto-generated "reveal and focus" command for
+// the Examples sidebar view (materialxPlayground.examples) instead of the
+// materialxPlayground.newFromExample command -- the Command Palette entry
+// and the Explorer folder context menu still run that command directly,
+// since only they know the target folder to hand the gallery tab.
 const ROWS = [
-    { id: 'newFromExample', label: 'New Material from Example', icon: 'sparkles', variant: 'primary', command: 'materialxPlayground.newFromExample' },
+    { id: 'newFromExample', label: 'New Material from Example', icon: 'sparkles', variant: 'primary', command: 'materialxPlayground.examples.focus' },
     { id: 'newDocument', label: 'New MaterialX Document', icon: 'file-plus', variant: 'default', command: 'materialxPlayground.newDocument' },
     { id: 'openDocs', label: 'Node Library Documentation', icon: 'book', variant: 'default', command: 'materialxPlayground.openDocs' },
     { id: 'openInGraphEditor', label: 'Open in Graph Editor', icon: 'share', variant: 'default', command: 'materialxPlayground.openInGraphEditor', requiresDocument: true },

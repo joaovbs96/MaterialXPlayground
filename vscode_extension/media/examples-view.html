@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource}; style-src ${cspSource}; script-src 'nonce-${nonce}';">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="${cardsStyleUri}">
+<link rel="stylesheet" href="${styleUri}">
+<title>Examples</title>
+</head>
+<body>
+<div class="mtlx-ex-toolbar">
+    <label class="mtlx-gallery-search-label" for="mtlx-ex-search">Search examples</label>
+    <input id="mtlx-ex-search" class="mtlx-gallery-search" type="text"
+           placeholder="Search by name, shading model or license" autocomplete="off">
+</div>
+<div id="mtlx-ex-groups" role="list" aria-label="Example materials"></div>
+<div id="mtlx-ex-empty" class="mtlx-gallery-empty" hidden>No examples match your search.</div>
+<script nonce="${nonce}" src="${cardsScriptUri}"></script>
+<script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>
