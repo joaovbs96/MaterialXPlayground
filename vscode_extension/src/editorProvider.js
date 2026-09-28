@@ -435,62 +435,15 @@ function disposeSharedOutputChannel() {
     }
 }
 
-// E21: every logged line is also forwarded to every live playground/scene
-// webview as { type: 'mtlx-log', severity, text } (bootstrap.js redispatches
-// it as the site's window.MtlxMessages 'mtlx-app-message' event), and kept
-// in a small ring buffer so a panel opened later can replay recent history
-// on its own 'ready'. Capped at LOG_BUFFER_LIMIT entries; identical
-// consecutive lines (same severity+text+document) are dropped instead of
-// spamming every open panel.
-const LOG_BUFFER_LIMIT = 100;
-const logBuffer = []; // { severity, text, documentName }
-const liveLogWebviews = new Set(); // { life, documentName }
-
-function pushLogBuffer(severity, text, documentName) {
-    const last = logBuffer[logBuffer.length - 1];
-    if (last && last.severity === severity && last.text === text && last.documentName === documentName) return false;
-    logBuffer.push({ severity, text, documentName });
-    if (logBuffer.length > LOG_BUFFER_LIMIT) logBuffer.shift();
-    return true;
-}
-
-// Posts one buffered/live line to every currently open webview.
-function broadcastLog(severity, text, documentName) {
-    if (!pushLogBuffer(severity, text, documentName)) return;
-    const message = { type: 'mtlx-log', severity, text };
-    for (const entry of liveLogWebviews) entry.life.post(message);
-}
-
-// Replays buffered lines to one newly-ready panel: lines naming no document
-// (global) go to everyone, lines naming a document only go to a panel open
-// on that same document.
-function replayLogTo(life, documentName) {
-    for (const entry of logBuffer) {
-        if (entry.documentName && entry.documentName !== documentName) continue;
-        life.post({ type: 'mtlx-log', severity: entry.severity, text: entry.text });
-    }
-}
-
-// Basename of a document uri for log tagging, or null (untitled/no uri).
-function safeBasename(documentUri) {
-    if (!documentUri) return null;
-    try {
-        return path.basename(documentUri.fsPath || documentUri.path || '');
-    } catch (e) {
-        return null;
-    }
-}
-
 // Shared by every timestamped OutputChannel line this extension writes
 // (the 'mtlx-error' forward below, sendUpdate's per-warning log further
 // down, and extension.js's tier-2-unavailable log, which imports this) —
 // prepends a '[ISO timestamp] ' prefix so entries can be correlated
-// against other logs, and forwards the line to every live webview (see
-// broadcastLog above). `severity` is 'info' | 'warning' | 'error' (default
-// 'info'); `documentName` (optional) tags the line to one .mtlx/scene file.
+// against other logs. `severity`/`documentName` are accepted for call-site
+// compatibility but no longer used: the Messages panel that once consumed
+// them was removed.
 function logLine(channel, text, severity, documentName) {
     channel.appendLine('[' + new Date().toISOString() + '] ' + text);
-    broadcastLog(severity || 'info', text, documentName || null);
 }
 
 // showErrorMessage, also recorded for the smoke harness in test mode.
@@ -611,24 +564,14 @@ async function handleSaveFile(webview, msg, documentUri) {
 // `outputChannel` is optional — omitted, the lazily-created shared
 // channel is used. `documentUri` (also optional) is the open .mtlx
 // file's uri, used only to default the 'mtlx-save-file' Save dialog's
-// folder, null for the document-less docs panel; also tags this panel's
-// broadcast/replay log entries (E21, see logLine above). `life` (optional,
-// panelLifecycle from the caller) registers this webview to receive live
-// 'mtlx-log' broadcasts and replays buffered history to it on 'ready';
-// omitted, this panel gets neither (never the case for a real panel; only
-// unit tests construct wireCommonWebviewMessages without one). Returns the
-// Disposable for the listener; callers dispose it with their panel.
+// folder, null for the document-less docs panel. `life` (optional,
+// panelLifecycle from the caller) is used for the docs-filter replay below;
+// omitted, only unit tests construct wireCommonWebviewMessages without one.
+// Returns the Disposable for the listener; callers dispose it with their panel.
 function wireCommonWebviewMessages(webview, outputChannel, documentUri, life) {
-    const documentName = safeBasename(documentUri);
-    if (life) {
-        const entry = { life, documentName };
-        liveLogWebviews.add(entry);
-        life.onDispose(() => liveLogWebviews.delete(entry));
-    }
     return webview.onDidReceiveMessage(async (msg) => {
         if (!msg) return;
         if (msg.type === 'ready') {
-            if (life) replayLogTo(life, documentName);
             // W1: this IS the docs panel and a filter was set (possibly
             // before this exact 'ready' arrived) -- replay it now that
             // the page's docs-app.jsx listener is guaranteed to exist.
@@ -639,7 +582,7 @@ function wireCommonWebviewMessages(webview, outputChannel, documentUri, life) {
         }
         if (msg.type === 'mtlx-error') {
             const channel = outputChannel || getSharedOutputChannel();
-            logLine(channel, String(msg.text || ''), 'error', documentName);
+            logLine(channel, String(msg.text || ''), 'error');
             if (testHooks) testHooks.emitError(String(msg.text || ''));
         } else if (msg.type === 'mtlx-test-files') {
             if (testHooks) testHooks.emitFilesReport({ seq: msg.seq, files: msg.files, failures: msg.failures, totalMs: msg.totalMs });

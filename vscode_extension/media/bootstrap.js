@@ -450,17 +450,6 @@
         if (typeof msg.hash === 'string' && msg.hash) location.hash = msg.hash;
     }
 
-    // 'mtlx-log' (editorProvider.js's logLine/broadcastLog, E21): every line
-    // written to the extension's Output channel, live and replayed on
-    // 'ready'. Re-dispatched as the site's own Messages store contract
-    // (window.MtlxMessages, js/shared/mtlx-ui.jsx) so host-side warnings and
-    // errors show up in the same in-app Messages panel as the site's own.
-    function handleMtlxLog(msg) {
-        window.dispatchEvent(new CustomEvent('mtlx-app-message', {
-            detail: { severity: msg.severity || 'info', text: String(msg.text || ''), source: 'extension' },
-        }));
-    }
-
     // 'mtlx-docs-filter' (W1): the host's node-category filter for the Node
     // Library Documentation panel, keyed to the active .mtlx document.
     // js/docs-app.jsx listens for this exact window event name/shape. Also
@@ -1272,7 +1261,6 @@
         if (msg.type === 'mtlx-scene-progress') { handleSceneProgress(msg); return; }
         if (msg.type === 'mtlx-scene-missing-result') { handleSceneMissingResult(msg); return; }
         if (msg.type === 'mtlx-test-trigger-scene-cancel') { handleTestTriggerSceneCancel(msg); return; }
-        if (msg.type === 'mtlx-log') { handleMtlxLog(msg); return; }
         if (msg.type === 'mtlx-docs-filter') { handleDocsFilter(msg); return; }
         if (msg.type === 'mtlx-select') { handleSelect(msg); return; }
         if (msg.type === 'mtlx-test-trigger-graph-selection') { handleTestTriggerGraphSelection(msg); return; }

@@ -419,12 +419,6 @@
             };
             const [status, setStatus] = React.useState('Loading the default document…');
             const [error, setError] = React.useState(null);
-            // Feeds the shared Messages button: every setError call (parse
-            // failures, external-edit banners, rename/definition guards, ...)
-            // lands in the log too, not just the inline error banner.
-            React.useEffect(() => {
-                if (error) window.MtlxMessages.push({ severity: 'error', text: error, source: 'graph' });
-            }, [error]);
             const [dragOver, setDragOver] = React.useState(false);
             const [busy, setBusy] = React.useState(false);
             // Optimistic overlay for scope transitions (can take a beat on
@@ -1504,7 +1498,7 @@
                 const mtlx = Object.keys(merged).filter((k) => /\.mtlx$/i.test(k));
                 setMtlxPaths(mtlx);
                 if (!mtlx.length) {
-                    setStatus('Files received — now drop the .mtlx or .mxsl document itself.' + mxslWarn);
+                    setStatus('Files received. Now drop the .mtlx or .mxsl document itself.' + mxslWarn);
                     return;
                 }
                 if (droppedMtlx.length) {
@@ -1524,7 +1518,7 @@
                 } else if (chosenMtlx) {
                     loadPromise = loadDocument(chosenMtlx, merged); // includes may now resolve
                 } else {
-                    setStatus('Files added — pick a .mtlx below.' + mxslWarn);
+                    setStatus('Files added. Pick a .mtlx below.' + mxslWarn);
                 }
                 // loadDocument clears status/error on success, surface a
                 // partial .mxsl compile failure after it settles.
@@ -1579,7 +1573,7 @@
                     // file (e.g. an unbalanced tag mid-keystroke) — keep
                     // the current graph up instead of blanking it.
                     externalParseFailedRef.current = true;
-                    setError('External edit could not be parsed — keeping the current graph (' + errMsg(e) + ').');
+                    setError('External edit could not be parsed, keeping the current graph (' + errMsg(e) + ').');
                     return;
                 }
 
@@ -1887,7 +1881,7 @@
                         const hasSession = Object.keys(fileMapRef.current)
                             .some((k) => /\.mtlx$/i.test(k));
                         if (!hasSession && !draftPendingRef.current && !IN_VSCODE) {
-                            setStatus("Couldn't reach GitHub for the default document — drop a .mtlx or .mxsl anywhere, use Open, or pick a Preset (top left).");
+                            setStatus("Couldn't reach GitHub for the default document. Drop a .mtlx or .mxsl anywhere, use Open, or pick a Preset (top left).");
                         }
                     });
             }, []);
@@ -3328,7 +3322,7 @@
                             await new Promise((r) => setTimeout(r, 250));
                             return resolveDocXml((attempt || 0) + 1);
                         }
-                        return { xml: null, error: 'a preview render is stuck mid-generation — please try again.' };
+                        return { xml: null, error: 'a preview render is stuck mid-generation, please try again.' };
                     }
                     return { xml: null, error: errMsg(e) };
                 }
@@ -3427,9 +3421,8 @@
             const doSaveInApp = async (forceDialog) => {
                 if (!parsed || !IN_ELECTRON || !window.mtlxDesktop) return false;
                 if (docReadOnlyRef.current) {
-                    // Silent otherwise (the amber "View only" strip already
-                    // explains the lock); the Messages log gets a line too.
-                    window.MtlxMessages.push({ severity: 'warning', text: 'View only: use Export .mtlx to save a copy.', source: 'graph' });
+                    // Silent otherwise; the amber "View only" strip already
+                    // explains the lock.
                     return false;
                 }
                 if (typeof window.__mtlxGetGraphXml !== 'function') {
@@ -3507,7 +3500,7 @@
                     return false;
                 }
                 if (!window.JSZip) {
-                    setError('Export failed: the JSZip library is not loaded — reload the page and try again.');
+                    setError('Export failed: the JSZip library is not loaded, reload the page and try again.');
                     return false;
                 }
                 const zip = new JSZip();
@@ -5991,7 +5984,7 @@
                         // already completed successfully by this point.
                         if (ambiguousConsumers.length) {
                             setError('Ungrouped, but ' + ambiguousConsumers.length
-                                + ' reference(s) with no explicit output selector could not be resolved — check the XML view.');
+                                + ' reference(s) with no explicit output selector could not be resolved, check the XML view.');
                         }
                     } catch (e) {
                         setError('Ungroup failed: ' + errMsg(e));
@@ -7206,7 +7199,7 @@
                         ? 'No autosaved sessions to restore.'
                         : 'Browse and restore a previous editing session recovered from autosave',
                 },
-                { separator: true },
+                !IN_VSCODE && { separator: true },
                 (IN_ELECTRON || IN_VSCODE) && {
                     label: 'Save', icon: 'file-download', keys: 'Ctrl+S', disabled: !parsed || docReadOnly,
                     onSelect: () => {
@@ -7621,7 +7614,6 @@
                                     <span className="gtb-label">Validate</span>
                                 </button>
                             )}
-                            <MtlxMessagesButton idPrefix="graph-messages" sources={['graph']} className={BTN_MENUBAR} showLabel={false} />
                             <button
                                 onClick={() => setHelpOpen(true)}
                                 title="Help & Keybinds"
@@ -7981,8 +7973,8 @@
                                     <button
                                         onClick={() => setPinnedTarget(pinnedTarget ? null : previewTarget)}
                                         title={pinnedTarget
-                                            ? 'Preview is pinned to this node — click to unpin and follow the selection again'
-                                            : 'Pin the preview to this node — it stays put regardless of what you select next'}
+                                            ? 'Preview is pinned to this node, click to unpin and follow the selection again'
+                                            : 'Pin the preview to this node, it stays put regardless of what you select next'}
                                         className={'absolute top-1 left-1 z-10 w-6 h-6 flex items-center justify-center rounded-full border backdrop-blur transition-colors '
                                             + (pinnedTarget
                                                 ? 'bg-blue-600/80 border-blue-400 text-white hover:bg-blue-500/80'
@@ -8152,7 +8144,7 @@
                                                 style={{ background: typeColor(currentSigGroup ? currentSigGroup.type : '') }} />
                                             <select
                                                 className="flex-1 min-w-0 h-6 bg-gray-900 border border-gray-600 rounded px-1.5 py-0 text-[10px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none"
-                                                title="Switch this node to another signature: inputs keeping their name, type and a customized value survive (wires included); the rest — including untouched defaults — follow the new signature"
+                                                title="Switch this node to another signature: inputs keeping their name, type and a customized value survive (wires included); the rest, including untouched defaults, follow the new signature"
                                                 value={currentSigGroup ? currentSigGroup.key : ''}
                                                 onChange={(e) => {
                                                     const g = panelSigGroups.find((g2) => g2.key === e.target.value);
@@ -8184,7 +8176,7 @@
                                             >ver</span>
                                             <select
                                                 className="flex-1 min-w-0 h-6 bg-gray-900 border border-gray-600 rounded px-1.5 py-0 text-[10px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none"
-                                                title="Switch this node to another version — ports are identical, only defaults may differ"
+                                                title="Switch this node to another version. Ports are identical, only defaults may differ"
                                                 value={currentDefName}
                                                 onChange={(e) => {
                                                     const v = currentSigGroup.versions.find((v2) => v2.name === e.target.value);

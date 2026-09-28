@@ -84,7 +84,7 @@ const loadMtlxDocument = async (xmlText, path, version) => {
   } = env;
   const doc = mx.createDocument();
   if (typeof mx.readFromXmlString !== 'function') {
-    throw new Error('readFromXmlString is not bound in this MaterialX build — cannot parse .mtlx files.');
+    throw new Error('readFromXmlString is not bound in this MaterialX build, cannot parse .mtlx files.');
   }
   // CRITICAL: readFromXmlString is ASYNC (a custom post-JS
   // implementation that fetches XIncludes). Missing the await
@@ -445,11 +445,6 @@ function MaterialViewerApp({
   const reportError = msg => {
     setError(msg);
     if (onErrorRef.current) onErrorRef.current(msg);
-    window.MtlxMessages.push({
-      severity: 'error',
-      text: msg,
-      source: 'viewer'
-    });
   };
   const [texReport, setTexReport] = React.useState(null);
   // "Loading textures\u2026" badge while bindDroppedTextures' async
@@ -474,25 +469,6 @@ function MaterialViewerApp({
     }
   }, []);
   const [materialNotices, setMaterialNotices] = React.useState(null);
-  // Feeds the shared Messages button: material notices and
-  // unresolved textures are already shown inline (Material
-  // notices / Textures cards); this just also logs them.
-  React.useEffect(() => {
-    (materialNotices || []).forEach(n => window.MtlxMessages.push({
-      severity: 'warning',
-      text: n,
-      source: 'viewer'
-    }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [materialNotices]);
-  React.useEffect(() => {
-    (texReport && texReport.missing || []).forEach(m => window.MtlxMessages.push({
-      severity: 'warning',
-      text: 'Unresolved texture: ' + m,
-      source: 'viewer'
-    }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [texReport]);
   const [dragOver, setDragOver] = React.useState(false);
   // Compact-mode threshold: drives the toolbar's label/icon switch
   // and the Files sidebar auto-collapse. Declared above sidebarOpen
@@ -722,7 +698,7 @@ function MaterialViewerApp({
     const mtlx = Object.keys(merged).filter(k => /\.mtlx$/i.test(k));
     setMtlxPaths(mtlx);
     if (!mtlx.length) {
-      setStatus('Files received — now drop the .mtlx or .mxsl document itself.' + mxslWarn);
+      setStatus('Files received. Now drop the .mtlx or .mxsl document itself.' + mxslWarn);
       return;
     }
     if (droppedMtlx.length) {
@@ -732,7 +708,7 @@ function MaterialViewerApp({
       // sibling .mtlx via xi:include.
       const pick = rootKey && mtlx.indexOf(rootKey) !== -1 ? rootKey : mtlx.length === 1 ? mtlx[0] : null;
       setChosenMtlx(pick);
-      if (pick) loadPromise = loadDocument(pick, merged);else setStatus('This drop contains several .mtlx files — pick one in the Files panel.' + mxslWarn);
+      if (pick) loadPromise = loadDocument(pick, merged);else setStatus('This drop contains several .mtlx files. Pick one in the Files panel.' + mxslWarn);
     } else if (chosenMtlx && viewRef.current) {
       // Textures added to a live view: rebind without regenerating.
       trackTexReport(bindDroppedTextures(viewRef.current, merged));
@@ -740,7 +716,7 @@ function MaterialViewerApp({
     } else if (chosenMtlx) {
       loadPromise = loadDocument(chosenMtlx, merged);
     } else {
-      setStatus('Textures added — pick a .mtlx in the Files panel.' + mxslWarn);
+      setStatus('Textures added. Pick a .mtlx in the Files panel.' + mxslWarn);
     }
     // loadDocument clears status/error on success, surface a
     // partial .mxsl compile failure after it settles.
@@ -1412,7 +1388,7 @@ function MaterialViewerApp({
   // Non-chromeless HUD cluster layout: geometry/env/settings moved
   // into the sidebar's Scene/Environment cards in the browser, so
   // only IN_VSCODE (no sidebar there) keeps those in its clusters.
-  const hudClusters = IN_VSCODE ? [['geom', 'rotate', 'cameraReset', 'env'], ['screenshot', 'record', 'shaderCode', 'sendToGraph'], ['presets', 'settings', 'fullscreen', 'messages']] : [['rotate', 'cameraReset'], ['screenshot', 'record', 'shaderCode', 'sendToGraph'], ['presets', 'fullscreen']];
+  const hudClusters = IN_VSCODE ? [['geom', 'rotate', 'cameraReset', 'env'], ['screenshot', 'record', 'shaderCode', 'sendToGraph'], ['presets', 'settings', 'fullscreen']] : [['rotate', 'cameraReset'], ['screenshot', 'record', 'shaderCode', 'sendToGraph'], ['presets', 'fullscreen']];
   // Page-transparency CSS: requested AND resolved away from the
   // room. Belt-and-suspenders alongside resolveViewerGeom's own
   // guard above, in case geom ever drifts back to the room.
@@ -1870,17 +1846,7 @@ function MaterialViewerApp({
         className: "w-3.5 h-3.5"
       }), !IN_VSCODE && /*#__PURE__*/React.createElement("span", {
         className: "ml-1.5 whitespace-nowrap"
-      }, "Shader Code")),
-      // VS Code only: the browser instead gets the
-      // Messages button in the docked "Viewer" panel
-      // header, next to its collapse toggle.
-      messages: IN_VSCODE ? /*#__PURE__*/React.createElement(MtlxMessagesButton, {
-        key: "messages",
-        idPrefix: "viewer-messages-vscode",
-        sources: ['viewer'],
-        showLabel: false,
-        className: hudChipClass(false)
-      }) : null
+      }, "Shader Code"))
     }
   }, (isFullscreen || IN_VSCODE) && renderables.length > 1 && !chromeless && /*#__PURE__*/React.createElement(MtlxSelect, {
     value: chosenMat,
@@ -1962,12 +1928,7 @@ function MaterialViewerApp({
       className: "flex-none flex items-center gap-1.5 px-3 py-2 border-b border-gray-700"
     }, /*#__PURE__*/React.createElement("span", {
       className: "text-[13px] font-semibold text-gray-200"
-    }, "Viewer"), /*#__PURE__*/React.createElement(MtlxMessagesButton, {
-      idPrefix: "viewer-messages",
-      sources: ['viewer'],
-      showLabel: false,
-      className: "flex-none ml-auto h-6 w-6 inline-flex items-center justify-center rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700"
-    }), /*#__PURE__*/React.createElement("button", {
+    }, "Viewer"), /*#__PURE__*/React.createElement("button", {
       onClick: () => setSidebarOpen(false),
       title: "Collapse the viewer panel",
       className: "flex-none ml-auto text-gray-400 hover:text-gray-200 px-1 leading-none text-sm"

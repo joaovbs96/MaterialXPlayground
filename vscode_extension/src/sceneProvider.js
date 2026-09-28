@@ -97,8 +97,7 @@ class UsdSceneProvider {
 
             const deps = docScanner.defaultDeps();
             const staticScan = () => !sceneTestHooks || sceneTestHooks.sceneStaticScan !== false;
-            // severity defaults to 'info' (E21: forwarded as 'mtlx-log' to
-            // every live webview, tagged to this scene's file name).
+            // severity defaults to 'info'; writes a timestamped Output line.
             const log = (text, severity) => logLine(getSharedOutputChannel(), text, severity, name);
             // A scan lives until a newer scan starts; a sent set (and its
             // on-demand rounds) until a newer set is sent. A dropped rescan
