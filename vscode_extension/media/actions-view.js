@@ -91,10 +91,10 @@
         groupState = nextGroupExpansion(groupState, which, expanded);
         examplesPanel.hidden = !groupState.examples;
         insertNodePanel.hidden = !groupState.insertNode;
-        // The popover is a child of <body>, independent of insertNodePanel
+        // The node card is a child of <body>, independent of insertNodePanel
         // being hidden -- close it explicitly whenever Insert Node itself
         // collapses (this toggle, or Example expanding and collapsing it).
-        if (!groupState.insertNode && typeof closePopover === 'function') closePopover();
+        if (!groupState.insertNode && typeof closeCard === 'function') closeCard(false);
         updateToggleButton('examples', groupState.examples, focusToggle === 'examples');
         updateToggleButton('insertNode', groupState.insertNode, focusToggle === 'insertNode');
         persistGroupState();
@@ -191,13 +191,13 @@
 
     // ---- Embedded Insert Node panel (above "New Material from Example") -
 
-    // The panel is just the search row (label, input, an "x" clear
-    // button). Focusing it opens a POPOVER (a child of <body>, so it can
-    // overlay content below, e.g. New Material) anchored under the input.
+    // Inline, like any other group: a fixed search row above a TREE
+    // (docs order). Only the tree's own scroll area flexes -- the
+    // search row and every other action row are never pushed off.
 
-    // The popover shows a TREE of every category, grouped like the docs
-    // view (the host's 'state' message sends insertNodeTree pre-sorted).
-    // Picking a node swaps it to a "choose a type, then Insert" screen.
+    // Picking a node opens a floating CARD (a child of <body>, anchored
+    // to the clicked row) with a "choose a type, then Insert" step;
+    // Back/Escape/outside click returns to the tree unchanged.
     const insertNodePanel = document.createElement('div');
     insertNodePanel.id = 'mtlx-insert-panel';
     insertNodePanel.className = 'mtlx-group-panel';
@@ -229,16 +229,9 @@
     insSearchWrap.appendChild(insSearchInputWrap);
     insertNodePanel.appendChild(insSearchWrap);
 
-    // The popover: appended to <body> once, positioned in JS (position:
-    // fixed) against the search input's own bounding rect -- see
-    // positionPopover below.
-    const popover = document.createElement('div');
-    popover.id = 'mtlx-insert-popover';
-    popover.className = 'mtlx-insert-popover';
-    popover.setAttribute('role', 'region');
-    popover.setAttribute('aria-label', 'Insert node');
-    popover.hidden = true;
-    document.body.appendChild(popover);
+    const insTreeScroll = document.createElement('div');
+    insTreeScroll.className = 'mtlx-insert-tree-scroll';
+    insertNodePanel.appendChild(insTreeScroll);
 
     const insListEl = document.createElement('div');
     insListEl.id = 'mtlx-insert-list';
@@ -252,10 +245,18 @@
     insEmptyEl.textContent = 'No nodes match your search.';
     insEmptyEl.hidden = true;
 
-    const insTypeStep = document.createElement('div');
-    insTypeStep.id = 'mtlx-insert-type-step';
-    insTypeStep.className = 'mtlx-insert-type-step';
-    insTypeStep.hidden = true;
+    insTreeScroll.appendChild(insListEl);
+    insTreeScroll.appendChild(insEmptyEl);
+
+    // The floating node card: appended to <body> once, positioned in JS
+    // (position: fixed) against the clicked row's own bounding rect --
+    // see positionCard below.
+    const card = document.createElement('div');
+    card.id = 'mtlx-insert-card';
+    card.className = 'mtlx-insert-card';
+    card.setAttribute('role', 'group');
+    card.hidden = true;
+    document.body.appendChild(card);
 
     const insTypeHeader = document.createElement('div');
     insTypeHeader.className = 'mtlx-insert-type-header';
@@ -289,16 +290,13 @@
     insTypeRow.appendChild(insTypeSelect);
     insTypeRow.appendChild(insInsertBtn);
 
-    insTypeStep.appendChild(insTypeHeader);
-    insTypeStep.appendChild(insTypeRow);
-
-    popover.appendChild(insListEl);
-    popover.appendChild(insEmptyEl);
-    popover.appendChild(insTypeStep);
+    card.appendChild(insTypeHeader);
+    card.appendChild(insTypeRow);
 
     let insertTree = [];       // the host's insertNodeTree
-    let selectedNode = null;   // the chosen node row, while the type step shows
-    let manualExpanded = {};   // group key -> expanded, reset each time the popover opens
+    let selectedNode = null;   // the chosen node row, while the card shows
+    let selectedRowEl = null;  // the clicked row, anchors/refocuses the card
+    let manualExpanded = {};   // group key -> expanded, reset on a fresh open
     let focusRowKey = null;    // roving-tabindex target (survives a re-render)
 
     function nodeMatchesQuery(node, q) {
@@ -395,7 +393,7 @@
                     nname.className = 'mtlx-insert-name';
                     highlightText(nname, n.name, q);
                     item.appendChild(nname);
-                    item.addEventListener('click', () => selectNode(n));
+                    item.addEventListener('click', () => selectNode(n, item));
                     nodeWrap.appendChild(item);
                     focusable.push(item);
                 }
@@ -425,7 +423,6 @@
         manualExpanded = Object.assign({}, manualExpanded, { [key]: !manualExpanded[key] });
         focusRowKey = 'g:' + key;
         renderTree();
-        positionPopover();
         focusRow(focusRowKey);
     }
 
@@ -477,71 +474,61 @@
         insClearBtn.hidden = !insSearchInput.value;
     }
 
-    // Positioned against the search input's own box (fixed, so it tracks
-    // #root scrolling too); sized to whatever room a short sidebar has
-    // left below the input, floored so it never fully collapses.
-    function positionPopover() {
-        if (popover.hidden) return;
-        const rect = insSearchInputWrap.getBoundingClientRect();
+    // Positioned against the clicked row's own box (fixed, so it's never
+    // clipped by the tree's own overflow-y:auto); clamped to stay inside
+    // the webview's own bounds, floored so it never fully collapses.
+    function positionCard(anchorRect) {
         const margin = 8;
-        const width = Math.max(120, Math.min(rect.width, window.innerWidth - margin * 2));
-        const left = Math.max(margin, Math.min(rect.left, window.innerWidth - margin - width));
-        const top = rect.bottom + 4;
-        const available = window.innerHeight - top - margin;
-        popover.style.left = left + 'px';
-        popover.style.top = top + 'px';
-        popover.style.width = width + 'px';
-        popover.style.maxHeight = Math.max(80, Math.min(360, available)) + 'px';
+        const width = Math.min(300, window.innerWidth - margin * 2);
+        card.style.width = width + 'px';
+        card.style.left = Math.max(margin, Math.min(anchorRect.left, window.innerWidth - margin - width)) + 'px';
+        card.style.maxHeight = Math.max(80, window.innerHeight - margin * 2) + 'px';
+        // Two passes: lay it out at the anchor's own top first, then clamp
+        // using its now-known real height so it never runs off-screen.
+        card.style.visibility = 'hidden';
+        card.hidden = false;
+        card.style.top = anchorRect.top + 'px';
+        const height = card.getBoundingClientRect().height;
+        const top = Math.max(margin, Math.min(anchorRect.top, window.innerHeight - margin - height));
+        card.style.top = top + 'px';
+        card.style.visibility = 'visible';
     }
 
-    function onDocMouseDownForPopover(e) {
-        if (popover.contains(e.target) || insSearchInputWrap.contains(e.target)) return;
-        closePopover();
+    // Re-anchors to the SAME row's live rect (not a stale snapshot), so
+    // the card tracks it through a tree scroll or a window resize.
+    function repositionCard() {
+        if (card.hidden || !selectedRowEl) return;
+        positionCard(selectedRowEl.getBoundingClientRect());
     }
 
-    function onPopoverKeydown(e) {
-        if (e.key === 'Escape') {
-            e.preventDefault();
-            if (!insTypeStep.hidden) { backToTree(false); return; }
-            if (insSearchInput.value) {
-                insSearchInput.value = '';
-                updateClearButton();
-                renderTree();
-                positionPopover();
-                return;
-            }
-            closePopover();
-            insSearchInput.focus();
-            return;
-        }
-        if (insTypeStep.hidden) handleTreeArrowKeys(e);
+    function onDocMouseDownForCard(e) {
+        if (card.contains(e.target)) return;
+        closeCard(true);
     }
 
-    function openPopover() {
-        if (!popover.hidden) { positionPopover(); return; }
-        manualExpanded = {}; // "with an empty search all groups start collapsed"
-        insTypeStep.hidden = true;
-        insListEl.hidden = false;
-        renderTree();
-        popover.hidden = false;
-        positionPopover();
-        document.addEventListener('keydown', onPopoverKeydown);
-        document.addEventListener('mousedown', onDocMouseDownForPopover, true);
-        window.addEventListener('resize', positionPopover);
-        window.addEventListener('scroll', positionPopover, true);
+    function onCardKeydown(e) {
+        if (e.key === 'Escape') { e.preventDefault(); closeCard(true); }
     }
 
-    function closePopover() {
-        if (popover.hidden) return;
-        popover.hidden = true;
-        document.removeEventListener('keydown', onPopoverKeydown);
-        document.removeEventListener('mousedown', onDocMouseDownForPopover, true);
-        window.removeEventListener('resize', positionPopover);
-        window.removeEventListener('scroll', positionPopover, true);
+    // closeCard(focusReturn): hides the card and, unless a real insert
+    // is about to focus the text editor instead, refocuses the row that
+    // opened it (the tree itself was never touched underneath).
+    function closeCard(focusReturn) {
+        if (card.hidden) return;
+        card.hidden = true;
+        document.removeEventListener('mousedown', onDocMouseDownForCard, true);
+        window.removeEventListener('resize', repositionCard);
+        window.removeEventListener('scroll', repositionCard, true);
+        const rowEl = selectedRowEl;
+        selectedNode = null;
+        selectedRowEl = null;
+        if (focusReturn && rowEl) focusRow(rowEl);
     }
 
-    function selectNode(n) {
+    function selectNode(n, rowEl) {
         selectedNode = n;
+        selectedRowEl = rowEl;
+        focusRowKey = rowEl.dataset.rowKey;
         insSelectedName.textContent = n.name;
         insSelectedLib.textContent = n.library || '';
         insTypeSelect.textContent = '';
@@ -553,33 +540,21 @@
             insTypeSelect.appendChild(opt);
         }
         if (n.defaultOutputType && types.indexOf(n.defaultOutputType) !== -1) insTypeSelect.value = n.defaultOutputType;
-        insListEl.hidden = true;
-        insEmptyEl.hidden = true;
-        insTypeStep.hidden = false;
-        positionPopover();
+        positionCard(rowEl.getBoundingClientRect());
+        document.addEventListener('mousedown', onDocMouseDownForCard, true);
+        window.addEventListener('resize', repositionCard);
+        window.addEventListener('scroll', repositionCard, true);
         insTypeSelect.focus();
     }
 
-    function backToTree(focusSearch) {
-        selectedNode = null;
-        insTypeStep.hidden = true;
-        insListEl.hidden = false;
-        renderTree();
-        positionPopover();
-        if (focusSearch !== false) insSearchInput.focus();
-    }
-
-    // Popover closed, search cleared; the Insert Node GROUP itself stays
-    // expanded either way. `focus` is false after a real insert, which
-    // hands focus to the text editor instead.
+    // Card closed, search cleared, tree back to collapsed -- the Insert
+    // Node GROUP itself stays expanded either way. `focus` is false after
+    // a real insert, which hands focus to the text editor instead.
     function resetInsertPanel(focus) {
-        selectedNode = null;
-        insTypeStep.hidden = true;
-        insListEl.hidden = false;
+        closeCard(false);
         insSearchInput.value = '';
         updateClearButton();
         manualExpanded = {};
-        closePopover();
         renderTree();
         if (focus) insSearchInput.focus();
     }
@@ -590,13 +565,18 @@
         resetInsertPanel(false);
     }
 
-    insSearchInput.addEventListener('focus', openPopover);
     insSearchInput.addEventListener('input', () => {
         updateClearButton();
-        if (popover.hidden) openPopover();
-        else { renderTree(); positionPopover(); }
+        renderTree();
     });
     insSearchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && insSearchInput.value) {
+            e.preventDefault();
+            insSearchInput.value = '';
+            updateClearButton();
+            renderTree();
+            return;
+        }
         if (e.key === 'ArrowDown') {
             e.preventDefault();
             const rows = insListEl.__rows || [];
@@ -607,10 +587,11 @@
         insSearchInput.value = '';
         updateClearButton();
         renderTree();
-        positionPopover();
         insSearchInput.focus();
     });
-    insBackBtn.addEventListener('click', () => backToTree(true));
+    insListEl.addEventListener('keydown', handleTreeArrowKeys);
+    card.addEventListener('keydown', onCardKeydown);
+    insBackBtn.addEventListener('click', () => closeCard(true));
     insInsertBtn.addEventListener('click', doInsert);
     insTypeSelect.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doInsert(); } });
 
@@ -732,7 +713,11 @@
                 btn.appendChild(chevron);
                 btn.addEventListener('click', () => {
                     if (btn.disabled) return;
-                    setGroupExpanded(which, !groupState[which]);
+                    const wasExpanded = groupState[which];
+                    setGroupExpanded(which, !wasExpanded);
+                    // "with an empty search all groups start collapsed":
+                    // a fresh open resets the tree, not a re-toggle of it.
+                    if (which === 'insertNode' && !wasExpanded) resetInsertPanel(false);
                 });
             } else {
                 btn.addEventListener('click', () => {
@@ -997,7 +982,9 @@
         }
         if (Array.isArray(msg.insertNodeTree)) {
             insertTree = msg.insertNodeTree;
-            if (!popover.hidden && insTypeStep.hidden) renderTree();
+            // Never rebuild the tree while the card is open (same scroll
+            // position and selection is the whole point of leaving it alone).
+            if (card.hidden) renderTree();
         }
         if (!aboutOverlay.hidden && msg.about) renderAbout(msg.about);
     });

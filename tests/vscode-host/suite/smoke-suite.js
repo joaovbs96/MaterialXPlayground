@@ -1659,7 +1659,7 @@ async function scenarioFilesView(ctx) {
 // testApi.insertNode.insert() (the webview DOM isn't reachable from the
 // extension host, same bypass every scenario here uses).
 
-// insertApi.tree() checks the popover's DATA instead: order and memory.
+// insertApi.tree() checks the tree/card's DATA instead: order and memory.
 async function scenarioInsertNode(ctx) {
     const insertApi = ctx.testApi.insertNode;
     if (!insertApi) return { pass: false, error: 'testApi.insertNode is missing' };

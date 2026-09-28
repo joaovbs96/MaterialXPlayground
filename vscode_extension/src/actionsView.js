@@ -200,8 +200,8 @@ class MtlxActionsViewProvider {
         return this._ndefLibs;
     }
 
-    // The Insert Node popover's tree, ordered to match the docs view; a
-    // category in several libraries gets a row per library (allCategorySplitRows).
+    // The Insert Node tree, ordered to match the docs view; a category
+    // in several libraries gets a row per library (allCategorySplitRows).
     _buildInsertNodeTree() {
         try {
             const index = mtlxCompletions.getLibraryIndex(this._context.extensionUri.fsPath);
@@ -479,8 +479,8 @@ if (TEST_TRANSPORT) {
             hasEditor() {
                 return !!(activeProvider && activeProvider._resolveTextEditor());
             },
-            // The popover's tree as the host would send it in 'state' --
-            // lets the smoke suite check order/memory without the webview DOM.
+            // The tree as the host would send it in 'state' -- lets the
+            // smoke suite check order/memory without the webview DOM.
             tree() {
                 if (!activeProvider) throw new Error('the actions view is not resolved');
                 return activeProvider._buildInsertNodeTree();

@@ -334,15 +334,21 @@ body {
     display: none;
 }
 
-/* Just the search row now (the tree lives in the popover below) -- a
-   fixed-size row like any other, not a growing/scrolling area. */
+/* Only .mtlx-insert-tree-scroll below scrolls. min-height stays auto
+   (NOT 0), so #root can't shrink this below the search row + the
+   tree's own 60px floor and overlap the next row -- #root scrolls instead. */
 #mtlx-insert-panel {
-    flex: 0 0 auto;
-    min-height: 0;
-    overflow: visible;
+    display: flex;
+    flex-direction: column;
     /* #root's own flex `gap` spaces this row; .mtlx-group-panel's 10px
-       bottom margin was sized for a panel with a big list below it. */
+       bottom margin was sized for a panel with no nested scroll area. */
     margin-bottom: 0;
+}
+
+/* An id selector's own display:flex above outranks .mtlx-group-panel's
+   plain class+attribute [hidden] rule, so it needs its own override. */
+#mtlx-insert-panel[hidden] {
+    display: none;
 }
 
 .mtlx-ex-toolbar {
@@ -350,12 +356,19 @@ body {
     flex-direction: column;
     gap: 4px;
     margin: 4px 0 10px;
+    flex: 0 0 auto;
 }
 
-/* No list below it any more (the tree moved into the popover), so the
-   toolbar's bottom margin (meant to separate it from that list) is unused. */
 #mtlx-insert-panel .mtlx-ex-toolbar {
-    margin-bottom: 0;
+    margin-bottom: 6px;
+}
+
+/* Only this scrolls when the tree grows past the group's own available
+   height, same floor/last-resort rule as .mtlx-group-panel itself. */
+.mtlx-insert-tree-scroll {
+    flex: 1 1 auto;
+    min-height: 60px;
+    overflow-y: auto;
 }
 
 .mtlx-ex-group {
@@ -428,17 +441,18 @@ body {
     display: none;
 }
 
-/* Anchored below the search input, positioned in JS (positionPopover);
-   a child of <body> so it can overlay content below it, e.g. New
-   Material. Floored so it never fully collapses on a short webview. */
-.mtlx-insert-popover {
+/* Anchored to the clicked row, positioned in JS (positionCard); a child
+   of <body> so it stays on top of the tree underneath it. Floored so it
+   never fully collapses on a short webview. */
+.mtlx-insert-card {
     position: fixed;
     z-index: 80;
     display: flex;
     flex-direction: column;
+    gap: 8px;
     overflow-y: auto;
     box-sizing: border-box;
-    padding: 4px;
+    padding: 8px;
     background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background, var(--vscode-editor-background)));
     color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
     border: 1px solid var(--vscode-widget-border);
@@ -446,7 +460,7 @@ body {
     box-shadow: 0 4px 12px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
 }
 
-.mtlx-insert-popover[hidden] {
+.mtlx-insert-card[hidden] {
     display: none;
 }
 
@@ -543,19 +557,8 @@ body {
     font-weight: 600;
 }
 
-/* ---- The type step: title row (name + muted library, Back on the
-   right), then a row with the type dropdown and Insert beside it. */
-.mtlx-insert-type-step {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 4px 2px 2px;
-}
-
-.mtlx-insert-type-step[hidden] {
-    display: none;
-}
-
+/* ---- The card's own content: title row (name + muted library, Back on
+   the right), then a row with the type dropdown and Insert beside it. */
 .mtlx-insert-type-header {
     display: flex;
     align-items: flex-start;
