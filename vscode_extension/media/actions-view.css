@@ -1,25 +1,44 @@
 /* actions-view.css: styling for the materialxPlayground.actions webview
    view. Uses VS Code theme variables only, no hardcoded colors, so it
    matches light/dark/high-contrast themes automatically. */
+html, body {
+    height: 100%;
+}
+
+/* The page is a flex column filling the webview's height: header and
+   rows are fixed-size, #root flexes to fill the rest. */
+
+/* An expanded group's own panel (flex: 1 1 auto + overflow-y:auto, see
+   .mtlx-group-panel) absorbs height pressure first, so a short sidebar
+   never hides a button; #root only scrolls as a last resort. */
 body {
     margin: 0;
     padding: 8px;
+    box-sizing: border-box;
     font-family: var(--vscode-font-family);
     font-size: var(--vscode-font-size, 13px);
     color: var(--vscode-foreground);
     background: transparent;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
 }
 
 #root {
     display: flex;
     flex-direction: column;
     gap: 6px;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
 }
 
 .mtlx-action-row {
     display: flex;
     flex-direction: column;
     gap: 2px;
+    flex: 0 0 auto;
 }
 
 /* Two half-width rows per visual row (task L): a grid wrapper holds every
@@ -29,6 +48,7 @@ body {
     grid-template-columns: 1fr 1fr;
     gap: 6px;
     margin-bottom: 6px;
+    flex: 0 0 auto;
 }
 
 .mtlx-action-row.half {
@@ -166,6 +186,7 @@ body {
     padding: 2px 2px 8px;
     margin-bottom: 6px;
     border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-widget-border));
+    flex: 0 0 auto;
 }
 
 .mtlx-sidebar-brand {
@@ -296,14 +317,16 @@ body {
     background: transparent;
 }
 
-/* ---- Embedded expandable groups (Insert Node, New Material from Example)
-   Each group has its OWN scrolling area capped well under typical sidebar
-   heights, so the action buttons above it are never pushed out of view --
-   only the group's own content scrolls. */
+/* ---- Embedded expandable groups (Insert Node, New Material from Example) */
+
+/* An expanded group flexes to fill whatever height #root has left,
+   floored so it never fully collapses; its own overflow-y:auto keeps
+   fixed-size rows/toggles around it from ever being pushed out of view. */
 .mtlx-group-panel {
+    flex: 1 1 auto;
+    min-height: 60px;
     margin: 2px 0 10px;
     padding-left: 2px;
-    max-height: 45vh;
     overflow-y: auto;
 }
 
@@ -311,11 +334,28 @@ body {
     display: none;
 }
 
+/* Just the search row now (the tree lives in the popover below) -- a
+   fixed-size row like any other, not a growing/scrolling area. */
+#mtlx-insert-panel {
+    flex: 0 0 auto;
+    min-height: 0;
+    overflow: visible;
+    /* #root's own flex `gap` spaces this row; .mtlx-group-panel's 10px
+       bottom margin was sized for a panel with a big list below it. */
+    margin-bottom: 0;
+}
+
 .mtlx-ex-toolbar {
     display: flex;
     flex-direction: column;
     gap: 4px;
     margin: 4px 0 10px;
+}
+
+/* No list below it any more (the tree moved into the popover), so the
+   toolbar's bottom margin (meant to separate it from that list) is unused. */
+#mtlx-insert-panel .mtlx-ex-toolbar {
+    margin-bottom: 0;
 }
 
 .mtlx-ex-group {
@@ -337,21 +377,109 @@ body {
     gap: 8px;
 }
 
-/* ---- Insert Node panel: node list + the second "pick a type" step ---- */
-#mtlx-insert-list {
+/* ---- Insert Node: search row + its floating popover ------------------ */
+
+/* The search input's inline "x" clear button (design point 2), only shown
+   once there's something to clear. */
+.mtlx-insert-search-wrap {
+    position: relative;
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    align-items: center;
 }
 
-.mtlx-insert-item {
+.mtlx-insert-search-wrap .mtlx-gallery-search {
+    padding-right: 26px;
+}
+
+.mtlx-insert-clear {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--vscode-foreground);
+    cursor: pointer;
+}
+
+.mtlx-insert-clear svg {
+    width: 12px;
+    height: 12px;
+    display: block;
+}
+
+.mtlx-insert-clear:hover {
+    background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+.mtlx-insert-clear:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: -1px;
+}
+
+.mtlx-insert-clear[hidden] {
+    display: none;
+}
+
+/* Anchored below the search input, positioned in JS (positionPopover);
+   a child of <body> so it can overlay content below it, e.g. New
+   Material. Floored so it never fully collapses on a short webview. */
+.mtlx-insert-popover {
+    position: fixed;
+    z-index: 80;
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
-    gap: 1px;
+    overflow-y: auto;
+    box-sizing: border-box;
+    padding: 4px;
+    background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background, var(--vscode-editor-background)));
+    color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
+}
+
+.mtlx-insert-popover[hidden] {
+    display: none;
+}
+
+/* ---- The tree: library header (static), group rows (collapsible, with
+   a chevron + count), node rows (leaf); a thin left border per level
+   stands in for VS Code's own indent guide. */
+.mtlx-insert-lib {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--vscode-descriptionForeground);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    padding: 6px 6px 2px;
+}
+
+.mtlx-insert-lib:first-child {
+    padding-top: 2px;
+}
+
+.mtlx-insert-indent {
+    margin-left: 8px;
+    padding-left: 7px;
+    border-left: 1px solid var(--vscode-tree-indentGuidesStroke, var(--vscode-widget-border));
+}
+
+.mtlx-insert-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     width: 100%;
     box-sizing: border-box;
-    padding: 5px 8px;
+    padding: 4px 6px;
+    margin: 1px 0;
     border: 1px solid transparent;
     border-radius: 3px;
     font-family: inherit;
@@ -362,52 +490,131 @@ body {
     color: var(--vscode-foreground);
 }
 
-.mtlx-insert-item:hover {
+.mtlx-insert-row:hover {
     background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
 }
 
-.mtlx-insert-item:focus-visible {
+.mtlx-insert-row:focus-visible {
     outline: 1px solid var(--vscode-focusBorder);
     outline-offset: -1px;
 }
 
-.mtlx-insert-name {
-    font-weight: 500;
+.mtlx-insert-chevron {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    transform: rotate(-90deg);
+    transition: transform 0.1s ease;
 }
 
-.mtlx-insert-meta {
+.mtlx-insert-chevron svg {
+    width: 14px;
+    height: 14px;
+    display: block;
+}
+
+.mtlx-insert-chevron.is-open {
+    transform: rotate(0deg);
+}
+
+.mtlx-insert-group-name {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mtlx-insert-count {
+    flex: 0 0 auto;
     font-size: 11px;
     color: var(--vscode-descriptionForeground);
 }
 
+.mtlx-insert-name {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mtlx-insert-match {
+    background: transparent;
+    color: var(--vscode-list-highlightForeground);
+    font-weight: 600;
+}
+
+/* ---- The type step: title row (name + muted library, Back on the
+   right), then a row with the type dropdown and Insert beside it. */
 .mtlx-insert-type-step {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    padding-top: 2px;
+    gap: 8px;
+    padding: 4px 2px 2px;
+}
+
+.mtlx-insert-type-step[hidden] {
+    display: none;
+}
+
+.mtlx-insert-type-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.mtlx-insert-selected-title-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+.mtlx-insert-selected-name {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mtlx-insert-selected-lib {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .mtlx-insert-back {
-    align-self: flex-start;
-    padding: 2px 0;
+    flex: 0 0 auto;
+    padding: 2px 4px;
     border: none;
     background: transparent;
     color: var(--vscode-textLink-foreground);
     font: inherit;
     cursor: pointer;
+    white-space: nowrap;
 }
 
 .mtlx-insert-back:hover {
     color: var(--vscode-textLink-activeForeground);
 }
 
-.mtlx-insert-selected-name {
-    font-weight: 500;
-    padding: 2px 0 4px;
+.mtlx-insert-back:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: -1px;
+}
+
+.mtlx-insert-type-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 6px;
 }
 
 .mtlx-insert-select {
-    width: 100%;
+    flex: 1 1 160px;
+    min-width: 0;
     box-sizing: border-box;
     padding: 4px 6px;
     font-family: inherit;
@@ -423,8 +630,13 @@ body {
     outline-offset: -1px;
 }
 
-#mtlx-insert-btn {
-    margin-top: 4px;
+/* .mtlx-action-btn sets width:100%, which becomes this item's flex-basis
+   at flex:0 0 auto (basis auto reads the width) and forces a wrap; pin an
+   explicit auto width and compact padding to keep it beside the dropdown. */
+.mtlx-insert-type-row #mtlx-insert-btn {
+    flex: 0 0 auto;
+    width: auto;
+    padding: 4px 12px;
 }
 
 /* ---- About overlay: covers the sidebar's own content, not the whole

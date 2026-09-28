@@ -91,6 +91,10 @@
         groupState = nextGroupExpansion(groupState, which, expanded);
         examplesPanel.hidden = !groupState.examples;
         insertNodePanel.hidden = !groupState.insertNode;
+        // The popover is a child of <body>, independent of insertNodePanel
+        // being hidden -- close it explicitly whenever Insert Node itself
+        // collapses (this toggle, or Example expanding and collapsing it).
+        if (!groupState.insertNode && typeof closePopover === 'function') closePopover();
         updateToggleButton('examples', groupState.examples, focusToggle === 'examples');
         updateToggleButton('insertNode', groupState.insertNode, focusToggle === 'insertNode');
         persistGroupState();
@@ -186,10 +190,14 @@
     searchInput.addEventListener('input', refreshExamples);
 
     // ---- Embedded Insert Node panel (above "New Material from Example") -
-    // Step 1: a search box + list of node categories. Step 2 (after a
-    // click/Enter on a category): the chosen node's name, an output-type
-    // dropdown (host-ordered, its first entry is the default) and an
-    // Insert button (Enter in the dropdown also inserts).
+
+    // The panel is just the search row (label, input, an "x" clear
+    // button). Focusing it opens a POPOVER (a child of <body>, so it can
+    // overlay content below, e.g. New Material) anchored under the input.
+
+    // The popover shows a TREE of every category, grouped like the docs
+    // view (the host's 'state' message sends insertNodeTree pre-sorted).
+    // Picking a node swaps it to a "choose a type, then Insert" screen.
     const insertNodePanel = document.createElement('div');
     insertNodePanel.id = 'mtlx-insert-panel';
     insertNodePanel.className = 'mtlx-group-panel';
@@ -201,19 +209,42 @@
     insSearchLabel.className = 'mtlx-gallery-search-label';
     insSearchLabel.setAttribute('for', 'mtlx-insert-search');
     insSearchLabel.textContent = 'Search nodes';
+    const insSearchInputWrap = document.createElement('div');
+    insSearchInputWrap.className = 'mtlx-insert-search-wrap';
     const insSearchInput = document.createElement('input');
     insSearchInput.id = 'mtlx-insert-search';
     insSearchInput.className = 'mtlx-gallery-search';
     insSearchInput.type = 'text';
     insSearchInput.autocomplete = 'off';
     insSearchInput.placeholder = 'Search by name or library';
+    const insClearBtn = document.createElement('button');
+    insClearBtn.type = 'button';
+    insClearBtn.className = 'mtlx-insert-clear';
+    insClearBtn.setAttribute('aria-label', 'Clear search');
+    insClearBtn.hidden = true;
+    insClearBtn.innerHTML = svg(CLOSE_PATH);
+    insSearchInputWrap.appendChild(insSearchInput);
+    insSearchInputWrap.appendChild(insClearBtn);
     insSearchWrap.appendChild(insSearchLabel);
-    insSearchWrap.appendChild(insSearchInput);
+    insSearchWrap.appendChild(insSearchInputWrap);
+    insertNodePanel.appendChild(insSearchWrap);
+
+    // The popover: appended to <body> once, positioned in JS (position:
+    // fixed) against the search input's own bounding rect -- see
+    // positionPopover below.
+    const popover = document.createElement('div');
+    popover.id = 'mtlx-insert-popover';
+    popover.className = 'mtlx-insert-popover';
+    popover.setAttribute('role', 'region');
+    popover.setAttribute('aria-label', 'Insert node');
+    popover.hidden = true;
+    document.body.appendChild(popover);
 
     const insListEl = document.createElement('div');
     insListEl.id = 'mtlx-insert-list';
-    insListEl.setAttribute('role', 'list');
+    insListEl.setAttribute('role', 'tree');
     insListEl.setAttribute('aria-label', 'Node categories');
+    insListEl.__rows = [];
 
     const insEmptyEl = document.createElement('div');
     insEmptyEl.id = 'mtlx-insert-empty';
@@ -226,111 +257,362 @@
     insTypeStep.className = 'mtlx-insert-type-step';
     insTypeStep.hidden = true;
 
+    const insTypeHeader = document.createElement('div');
+    insTypeHeader.className = 'mtlx-insert-type-header';
+    const insSelectedTitleWrap = document.createElement('div');
+    insSelectedTitleWrap.className = 'mtlx-insert-selected-title-wrap';
+    const insSelectedName = document.createElement('div');
+    insSelectedName.className = 'mtlx-insert-selected-name';
+    const insSelectedLib = document.createElement('div');
+    insSelectedLib.className = 'mtlx-insert-selected-lib';
+    insSelectedTitleWrap.appendChild(insSelectedName);
+    insSelectedTitleWrap.appendChild(insSelectedLib);
     const insBackBtn = document.createElement('button');
     insBackBtn.type = 'button';
     insBackBtn.className = 'mtlx-insert-back';
-    insBackBtn.textContent = '← Back to search';
+    insBackBtn.textContent = '← Back';
+    insBackBtn.setAttribute('aria-label', 'Back to search results');
+    insTypeHeader.appendChild(insSelectedTitleWrap);
+    insTypeHeader.appendChild(insBackBtn);
 
-    const insSelectedName = document.createElement('div');
-    insSelectedName.className = 'mtlx-insert-selected-name';
-
-    const insTypeLabel = document.createElement('label');
-    insTypeLabel.className = 'mtlx-gallery-search-label';
-    insTypeLabel.setAttribute('for', 'mtlx-insert-type');
-    insTypeLabel.textContent = 'Output type';
-
+    const insTypeRow = document.createElement('div');
+    insTypeRow.className = 'mtlx-insert-type-row';
     const insTypeSelect = document.createElement('select');
     insTypeSelect.id = 'mtlx-insert-type';
     insTypeSelect.className = 'mtlx-insert-select';
-
+    insTypeSelect.setAttribute('aria-label', 'Output type');
     const insInsertBtn = document.createElement('button');
     insInsertBtn.type = 'button';
     insInsertBtn.id = 'mtlx-insert-btn';
     insInsertBtn.className = 'mtlx-action-btn primary';
     insInsertBtn.textContent = 'Insert';
+    insTypeRow.appendChild(insTypeSelect);
+    insTypeRow.appendChild(insInsertBtn);
 
-    insTypeStep.appendChild(insBackBtn);
-    insTypeStep.appendChild(insSelectedName);
-    insTypeStep.appendChild(insTypeLabel);
-    insTypeStep.appendChild(insTypeSelect);
-    insTypeStep.appendChild(insInsertBtn);
+    insTypeStep.appendChild(insTypeHeader);
+    insTypeStep.appendChild(insTypeRow);
 
-    insertNodePanel.appendChild(insSearchWrap);
-    insertNodePanel.appendChild(insListEl);
-    insertNodePanel.appendChild(insEmptyEl);
-    insertNodePanel.appendChild(insTypeStep);
+    popover.appendChild(insListEl);
+    popover.appendChild(insEmptyEl);
+    popover.appendChild(insTypeStep);
 
-    let insertRows = [];
-    let selectedCategory = null;
+    let insertTree = [];       // the host's insertNodeTree
+    let selectedNode = null;   // the chosen node row, while the type step shows
+    let manualExpanded = {};   // group key -> expanded, reset each time the popover opens
+    let focusRowKey = null;    // roving-tabindex target (survives a re-render)
 
-    function renderInsertList() {
-        const term = insSearchInput.value.trim().toLowerCase();
-        insListEl.textContent = '';
-        let count = 0;
-        for (const row of insertRows) {
-            const hay = (row.name + ' ' + (row.library || '')).toLowerCase();
-            if (term && hay.indexOf(term) === -1) continue;
-            count++;
-            const item = document.createElement('button');
-            item.type = 'button';
-            item.className = 'mtlx-insert-item';
-            item.setAttribute('role', 'listitem');
-            item.setAttribute('aria-label', row.name + (row.library ? ', ' + row.library : ''));
-            const name = document.createElement('span');
-            name.className = 'mtlx-insert-name';
-            name.textContent = row.name;
-            item.appendChild(name);
-            if (row.library) {
-                const meta = document.createElement('span');
-                meta.className = 'mtlx-insert-meta';
-                meta.textContent = row.library;
-                item.appendChild(meta);
-            }
-            const choose = () => selectCategory(row);
-            item.addEventListener('click', choose);
-            item.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); choose(); } });
-            insListEl.appendChild(item);
-        }
-        insEmptyEl.hidden = count > 0;
+    function nodeMatchesQuery(node, q) {
+        const hay = (node.name + ' ' + (node.library || '')).toLowerCase();
+        return hay.indexOf(q) !== -1;
     }
 
-    function selectCategory(row) {
-        selectedCategory = row;
-        insSelectedName.textContent = row.name + (row.library ? ' (' + row.library + ')' : '');
+    // Mirrors insertNodeModel.js's filterInsertTree by hand (a plain
+    // browser script here, not requirable there); keep both in sync.
+    function filterTree(tree, term) {
+        const q = String(term || '').trim().toLowerCase();
+        if (!q) return tree.map((g) => Object.assign({}, g, { nodes: g.nodes.slice(), matched: false }));
+        const out = [];
+        for (const g of tree) {
+            const nodes = g.nodes.filter((n) => nodeMatchesQuery(n, q));
+            if (nodes.length) out.push(Object.assign({}, g, { nodes, matched: true }));
+        }
+        return out;
+    }
+
+    function highlightText(el, text, term) {
+        el.textContent = '';
+        const q = term.trim();
+        const idx = q ? text.toLowerCase().indexOf(q.toLowerCase()) : -1;
+        if (idx === -1) { el.textContent = text; return; }
+        if (idx > 0) el.appendChild(document.createTextNode(text.slice(0, idx)));
+        const mark = document.createElement('mark');
+        mark.className = 'mtlx-insert-match';
+        mark.textContent = text.slice(idx, idx + q.length);
+        el.appendChild(mark);
+        if (idx + q.length < text.length) el.appendChild(document.createTextNode(text.slice(idx + q.length)));
+    }
+
+    function renderTree() {
+        const term = insSearchInput.value;
+        const q = term.trim();
+        const filtered = filterTree(insertTree, term);
+        insListEl.textContent = '';
+        const focusable = [];
+        let lastLibrary = null;
+        let libWrap = null;
+        let totalNodes = 0;
+
+        for (const g of filtered) {
+            totalNodes += g.nodes.length;
+            if (g.library !== lastLibrary) {
+                lastLibrary = g.library;
+                const libRow = document.createElement('div');
+                libRow.className = 'mtlx-insert-lib';
+                libRow.textContent = String(g.library || '').toUpperCase();
+                insListEl.appendChild(libRow);
+                libWrap = document.createElement('div');
+                libWrap.className = 'mtlx-insert-indent';
+                insListEl.appendChild(libWrap);
+            }
+            const expanded = q ? true : !!manualExpanded[g.key];
+            const groupBtn = document.createElement('button');
+            groupBtn.type = 'button';
+            groupBtn.className = 'mtlx-insert-row mtlx-insert-group';
+            groupBtn.setAttribute('role', 'treeitem');
+            groupBtn.setAttribute('aria-expanded', String(expanded));
+            groupBtn.dataset.rowKey = 'g:' + g.key;
+            groupBtn.dataset.groupKey = g.key;
+            groupBtn.tabIndex = -1;
+            const chev = document.createElement('span');
+            chev.className = 'mtlx-insert-chevron' + (expanded ? ' is-open' : '');
+            chev.innerHTML = svg(CHEVRON_PATH);
+            groupBtn.appendChild(chev);
+            const gname = document.createElement('span');
+            gname.className = 'mtlx-insert-group-name';
+            highlightText(gname, g.group, q);
+            groupBtn.appendChild(gname);
+            const count = document.createElement('span');
+            count.className = 'mtlx-insert-count';
+            count.textContent = String(g.nodes.length);
+            groupBtn.appendChild(count);
+            groupBtn.addEventListener('click', () => toggleGroup(g.key));
+            libWrap.appendChild(groupBtn);
+            focusable.push(groupBtn);
+
+            if (expanded) {
+                const nodeWrap = document.createElement('div');
+                nodeWrap.className = 'mtlx-insert-indent';
+                for (const n of g.nodes) {
+                    const item = document.createElement('button');
+                    item.type = 'button';
+                    item.className = 'mtlx-insert-row mtlx-insert-node';
+                    item.setAttribute('role', 'treeitem');
+                    item.setAttribute('aria-label', n.name + (n.library ? ', ' + n.library : ''));
+                    item.dataset.rowKey = 'n:' + g.key + ':' + n.name;
+                    item.dataset.groupKey = g.key;
+                    item.tabIndex = -1;
+                    const nname = document.createElement('span');
+                    nname.className = 'mtlx-insert-name';
+                    highlightText(nname, n.name, q);
+                    item.appendChild(nname);
+                    item.addEventListener('click', () => selectNode(n));
+                    nodeWrap.appendChild(item);
+                    focusable.push(item);
+                }
+                libWrap.appendChild(nodeWrap);
+            }
+        }
+
+        insEmptyEl.hidden = totalNodes > 0 || insertTree.length === 0;
+        let target = focusable.filter((el) => el.dataset.rowKey === focusRowKey)[0];
+        if (!target) target = focusable[0];
+        focusable.forEach((el) => { el.tabIndex = el === target ? 0 : -1; });
+        focusRowKey = target ? target.dataset.rowKey : null;
+        insListEl.__rows = focusable;
+    }
+
+    function focusRow(target) {
+        const rows = insListEl.__rows || [];
+        const el = typeof target === 'string' ? rows.filter((r) => r.dataset.rowKey === target)[0] : target;
+        if (!el) return;
+        rows.forEach((r) => { r.tabIndex = -1; });
+        el.tabIndex = 0;
+        el.focus();
+        focusRowKey = el.dataset.rowKey;
+    }
+
+    function toggleGroup(key) {
+        manualExpanded = Object.assign({}, manualExpanded, { [key]: !manualExpanded[key] });
+        focusRowKey = 'g:' + key;
+        renderTree();
+        positionPopover();
+        focusRow(focusRowKey);
+    }
+
+    function handleTreeArrowKeys(e) {
+        const rows = insListEl.__rows || [];
+        if (!rows.length) return;
+        const idx = rows.indexOf(document.activeElement);
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            focusRow(rows[idx === -1 ? 0 : Math.min(rows.length - 1, idx + 1)]);
+            return;
+        }
+        if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (idx <= 0) { insSearchInput.focus(); return; }
+            focusRow(rows[idx - 1]);
+            return;
+        }
+        if (idx === -1) return;
+        const el = rows[idx];
+        const isGroup = el.classList.contains('mtlx-insert-group');
+        if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            if (!isGroup) return;
+            const key = el.dataset.groupKey;
+            if (!manualExpanded[key]) { toggleGroup(key); return; }
+            const next = rows[idx + 1];
+            if (next && next.dataset.groupKey === key && !next.classList.contains('mtlx-insert-group')) focusRow(next);
+            return;
+        }
+        if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            if (isGroup) {
+                if (manualExpanded[el.dataset.groupKey]) toggleGroup(el.dataset.groupKey);
+                return;
+            }
+            const groupKey = el.dataset.groupKey;
+            const groupRow = rows.filter((r) => r.dataset.groupKey === groupKey && r.classList.contains('mtlx-insert-group'))[0];
+            if (groupRow) focusRow(groupRow);
+            return;
+        }
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            el.click();
+        }
+    }
+
+    function updateClearButton() {
+        insClearBtn.hidden = !insSearchInput.value;
+    }
+
+    // Positioned against the search input's own box (fixed, so it tracks
+    // #root scrolling too); sized to whatever room a short sidebar has
+    // left below the input, floored so it never fully collapses.
+    function positionPopover() {
+        if (popover.hidden) return;
+        const rect = insSearchInputWrap.getBoundingClientRect();
+        const margin = 8;
+        const width = Math.max(120, Math.min(rect.width, window.innerWidth - margin * 2));
+        const left = Math.max(margin, Math.min(rect.left, window.innerWidth - margin - width));
+        const top = rect.bottom + 4;
+        const available = window.innerHeight - top - margin;
+        popover.style.left = left + 'px';
+        popover.style.top = top + 'px';
+        popover.style.width = width + 'px';
+        popover.style.maxHeight = Math.max(80, Math.min(360, available)) + 'px';
+    }
+
+    function onDocMouseDownForPopover(e) {
+        if (popover.contains(e.target) || insSearchInputWrap.contains(e.target)) return;
+        closePopover();
+    }
+
+    function onPopoverKeydown(e) {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            if (!insTypeStep.hidden) { backToTree(false); return; }
+            if (insSearchInput.value) {
+                insSearchInput.value = '';
+                updateClearButton();
+                renderTree();
+                positionPopover();
+                return;
+            }
+            closePopover();
+            insSearchInput.focus();
+            return;
+        }
+        if (insTypeStep.hidden) handleTreeArrowKeys(e);
+    }
+
+    function openPopover() {
+        if (!popover.hidden) { positionPopover(); return; }
+        manualExpanded = {}; // "with an empty search all groups start collapsed"
+        insTypeStep.hidden = true;
+        insListEl.hidden = false;
+        renderTree();
+        popover.hidden = false;
+        positionPopover();
+        document.addEventListener('keydown', onPopoverKeydown);
+        document.addEventListener('mousedown', onDocMouseDownForPopover, true);
+        window.addEventListener('resize', positionPopover);
+        window.addEventListener('scroll', positionPopover, true);
+    }
+
+    function closePopover() {
+        if (popover.hidden) return;
+        popover.hidden = true;
+        document.removeEventListener('keydown', onPopoverKeydown);
+        document.removeEventListener('mousedown', onDocMouseDownForPopover, true);
+        window.removeEventListener('resize', positionPopover);
+        window.removeEventListener('scroll', positionPopover, true);
+    }
+
+    function selectNode(n) {
+        selectedNode = n;
+        insSelectedName.textContent = n.name;
+        insSelectedLib.textContent = n.library || '';
         insTypeSelect.textContent = '';
-        const types = row.orderedOutputTypes && row.orderedOutputTypes.length ? row.orderedOutputTypes : [''];
+        const types = n.orderedOutputTypes && n.orderedOutputTypes.length ? n.orderedOutputTypes : [''];
         for (const t of types) {
             const opt = document.createElement('option');
             opt.value = t;
             opt.textContent = t || '(none)';
             insTypeSelect.appendChild(opt);
         }
-        insSearchWrap.hidden = true;
+        if (n.defaultOutputType && types.indexOf(n.defaultOutputType) !== -1) insTypeSelect.value = n.defaultOutputType;
         insListEl.hidden = true;
         insEmptyEl.hidden = true;
         insTypeStep.hidden = false;
+        positionPopover();
         insTypeSelect.focus();
     }
 
-    function backToNodeList(focusSearch) {
-        selectedCategory = null;
+    function backToTree(focusSearch) {
+        selectedNode = null;
         insTypeStep.hidden = true;
-        insSearchWrap.hidden = false;
         insListEl.hidden = false;
-        renderInsertList();
+        renderTree();
+        positionPopover();
         if (focusSearch !== false) insSearchInput.focus();
     }
 
-    function doInsert() {
-        if (!selectedCategory) return;
-        vscode.postMessage({ type: 'insertNode', category: selectedCategory.name, outputType: insTypeSelect.value });
-        backToNodeList(false);
+    // Popover closed, search cleared; the Insert Node GROUP itself stays
+    // expanded either way. `focus` is false after a real insert, which
+    // hands focus to the text editor instead.
+    function resetInsertPanel(focus) {
+        selectedNode = null;
+        insTypeStep.hidden = true;
+        insListEl.hidden = false;
+        insSearchInput.value = '';
+        updateClearButton();
+        manualExpanded = {};
+        closePopover();
+        renderTree();
+        if (focus) insSearchInput.focus();
     }
 
-    insBackBtn.addEventListener('click', () => backToNodeList());
+    function doInsert() {
+        if (!selectedNode) return;
+        vscode.postMessage({ type: 'insertNode', category: selectedNode.name, outputType: insTypeSelect.value });
+        resetInsertPanel(false);
+    }
+
+    insSearchInput.addEventListener('focus', openPopover);
+    insSearchInput.addEventListener('input', () => {
+        updateClearButton();
+        if (popover.hidden) openPopover();
+        else { renderTree(); positionPopover(); }
+    });
+    insSearchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            const rows = insListEl.__rows || [];
+            if (rows.length) focusRow(rows[0]);
+        }
+    });
+    insClearBtn.addEventListener('click', () => {
+        insSearchInput.value = '';
+        updateClearButton();
+        renderTree();
+        positionPopover();
+        insSearchInput.focus();
+    });
+    insBackBtn.addEventListener('click', () => backToTree(true));
     insInsertBtn.addEventListener('click', doInsert);
     insTypeSelect.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doInsert(); } });
-    insSearchInput.addEventListener('input', renderInsertList);
 
     // ---- Two-column / one-column action grid (task G1 item 3) -----------
     // Replaces a fixed 260px media query: a hidden probe holds a live copy
@@ -390,7 +672,7 @@
         if (insertRow && insertRow.disabled && groupState.insertNode) {
             groupState = nextGroupExpansion(groupState, 'insertNode', false);
             persistGroupState();
-            backToNodeList(false);
+            resetInsertPanel(false);
         }
         insertNodePanel.hidden = !groupState.insertNode;
 
@@ -703,7 +985,7 @@
             const insertRow = latestState && (latestState.rows || []).find((r) => r.id === 'insertNode');
             if (insertRow && insertRow.disabled) return;
             setGroupExpanded('insertNode', true, false);
-            backToNodeList();
+            resetInsertPanel(true);
             return;
         }
         if (msg.type !== 'state') return;
@@ -713,9 +995,9 @@
             allGroups = msg.examplesGroups;
             refreshExamples();
         }
-        if (Array.isArray(msg.insertNodeRows)) {
-            insertRows = msg.insertNodeRows;
-            if (insertNodePanel.hidden || insTypeStep.hidden) renderInsertList();
+        if (Array.isArray(msg.insertNodeTree)) {
+            insertTree = msg.insertNodeTree;
+            if (!popover.hidden && insTypeStep.hidden) renderTree();
         }
         if (!aboutOverlay.hidden && msg.about) renderAbout(msg.about);
     });

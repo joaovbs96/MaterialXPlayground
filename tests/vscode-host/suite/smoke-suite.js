@@ -1655,14 +1655,26 @@ async function scenarioFilesView(ctx) {
     }
 }
 
-// Scenario: insertNode -- an untitled .mtlx document (no fixture file
-// needed) gets a uniquely-named "constant" node inserted at the cursor via
-// testApi.insertNode.insert(), the same path a real click/Enter takes
-// inside the Actions webview's embedded Insert Node group
-// (actionsView.js's _insertNode -> mtlxCompletions.buildNodeElementSnippet).
+// Scenario: insertNode -- a "multiply" node inserted at the cursor via
+// testApi.insertNode.insert() (the webview DOM isn't reachable from the
+// extension host, same bypass every scenario here uses).
+
+// insertApi.tree() checks the popover's DATA instead: order and memory.
 async function scenarioInsertNode(ctx) {
     const insertApi = ctx.testApi.insertNode;
     if (!insertApi) return { pass: false, error: 'testApi.insertNode is missing' };
+
+    // 'multiply' has real nodedefs in BOTH pbrlib/pbr (closures: BSDF/
+    // EDF/VDF) and stdlib/math (value types: float/color3/...) --
+    // allCategorySplitRows must list it under both, each its own types.
+    const tree = insertApi.tree();
+    const pbrGroup = tree.find((g) => g.key === 'pbrlib/pbr');
+    const mathGroup = tree.find((g) => g.key === 'stdlib/math');
+    const pbrRow = pbrGroup && pbrGroup.nodes.find((n) => n.name === 'multiply');
+    const mathRow = mathGroup && mathGroup.nodes.find((n) => n.name === 'multiply');
+    const treeOk = !!pbrRow && !!mathRow
+        && pbrRow.outputTypes.every((t) => ['BSDF', 'EDF', 'VDF'].includes(t))
+        && mathRow.outputTypes.includes('color3') && !mathRow.outputTypes.includes('BSDF');
 
     const content = '<?xml version="1.0"?>\n<materialx version="1.39">\n\n</materialx>\n';
     const doc = await vscode.workspace.openTextDocument({ language: 'mtlx', content });
@@ -1672,12 +1684,30 @@ async function scenarioInsertNode(ctx) {
         editor.selection = new vscode.Selection(blankLine, 0, blankLine, 0);
 
         const hasEditor = await waitForValue(() => (insertApi.hasEditor() ? true : null), 8000);
-        await insertApi.insert('constant', 'color3');
-        const text = await waitForValue(() => (doc.getText().includes('<constant ') ? doc.getText() : null), 8000);
+        // "pick node, choose type": multiply, type color3.
+        await insertApi.insert('multiply', 'color3');
+        const text = await waitForValue(() => (doc.getText().includes('<multiply ') ? doc.getText() : null), 8000);
 
-        const nameMatch = text && /<constant name="([^"]+)" type="color3">/.exec(text);
-        const closedOk = !!text && text.includes('</constant>');
-        return { pass: !!hasEditor && !!nameMatch && closedOk, nameMatch: nameMatch && nameMatch[1] };
+        const nameMatch = text && /<multiply name="([^"]+)" type="color3">/.exec(text);
+        const closedOk = !!text && text.includes('</multiply>');
+
+        // "cursor on the new node": the type step's chosen type is pinned
+        // to a literal, so the snippet's one remaining tabstop selects the
+        // name value -- the active editor's own selection should cover it.
+        const cursorOnNameOk = !!nameMatch && !!(await waitForValue(
+            () => (editor.document.getText(editor.selection) === nameMatch[1] ? true : null), 5000
+        ));
+
+        // Last-used-type memory: 'color3' is only offered by the stdlib/
+        // math split, so re-reading the tree should now prefer it THERE
+        // (pbrlib/pbr never offers color3, so its own default is unchanged).
+        const treeAfter = insertApi.tree();
+        const mathGroupAfter = treeAfter.find((g) => g.key === 'stdlib/math');
+        const multiplyAfter = mathGroupAfter && mathGroupAfter.nodes.find((n) => n.name === 'multiply');
+        const lastTypeOk = !!multiplyAfter && multiplyAfter.defaultOutputType === 'color3';
+
+        const pass = !!hasEditor && !!nameMatch && closedOk && treeOk && cursorOnNameOk && lastTypeOk;
+        return { pass, nameMatch: nameMatch && nameMatch[1], treeOk, cursorOnNameOk, lastTypeOk };
     } finally {
         await closeTabsForUri(doc.uri);
     }

@@ -66,6 +66,22 @@ function loadVendorDeps(extensionUri) {
     }
 }
 
+// globalState key for the last output type chosen per node category
+// (insertNodeModel.js's rememberLastType/preferredOutputType), so the
+// type step can default to it instead of always defaultOutputTypeOrder.
+const LAST_TYPES_KEY = 'materialxPlayground.insertNode.lastTypes';
+
+// js/gen/nodelib.json's own key order is the Node Specs docs view's
+// order (js/docs-app.jsx has no sort of its own); read directly so the
+// Insert Node tree can mirror it via insertNodeModel.js's docOrderFromNodelib.
+function loadNodelib(extensionUri) {
+    try {
+        return JSON.parse(fs.readFileSync(vscode.Uri.joinPath(extensionUri, 'js', 'gen', 'nodelib.json').fsPath, 'utf8'));
+    } catch (e) {
+        return {};
+    }
+}
+
 // vsce renames the repo's root LICENSE to LICENSE.txt inside the packaged
 // .vsix (LicenseProcessor); this extension host always serves that
 // packaged/staged tree, so try LICENSE.txt first, same fallback order
@@ -169,18 +185,38 @@ class MtlxActionsViewProvider {
         };
     }
 
-    // Every node category (name/library/output types) for the embedded
-    // search+list panel, each with orderedOutputTypes (mtlxCompletions.js's
-    // defaultOutputTypeOrder, the same ordering completions use, so the
-    // sidebar and auto-complete always agree) -- its first entry is the
-    // type dropdown's default. Empty when nodelib.json isn't built yet.
-    _buildInsertNodeRows() {
+    _lastTypes() {
+        return this._context.globalState.get(LAST_TYPES_KEY, {}) || {};
+    }
+
+    // nodedefLibraries() scans every vendored libraries/**/*.mtlx file
+    // (cheap, tens of ms); cached like mtlxCompletions.js caches its own
+    // index, so it's not redone on every _postState().
+    _nodedefLibraries() {
+        if (!this._ndefLibs) {
+            const root = vscode.Uri.joinPath(this._context.extensionUri, 'libraries').fsPath;
+            this._ndefLibs = insertNodeModel.nodedefLibraries(root);
+        }
+        return this._ndefLibs;
+    }
+
+    // The Insert Node popover's tree, ordered to match the docs view; a
+    // category in several libraries gets a row per library (allCategorySplitRows).
+    _buildInsertNodeTree() {
         try {
             const index = mtlxCompletions.getLibraryIndex(this._context.extensionUri.fsPath);
-            return insertNodeModel.allCategoryRows(index).map((row) => ({
-                ...row,
-                orderedOutputTypes: mtlxCompletions.defaultOutputTypeOrder(row.name, { index }),
-            }));
+            const nodelib = loadNodelib(this._context.extensionUri);
+            const docOrder = insertNodeModel.docOrderFromNodelib(nodelib);
+            const lastTypes = this._lastTypes();
+            const rows = insertNodeModel.allCategorySplitRows(index, this._nodedefLibraries()).map((row) => {
+                const orderedOutputTypes = mtlxCompletions.orderTypeChoices(row.outputTypes, null);
+                return {
+                    ...row,
+                    orderedOutputTypes,
+                    defaultOutputType: insertNodeModel.preferredOutputType(lastTypes, row.name, orderedOutputTypes),
+                };
+            });
+            return insertNodeModel.buildInsertTree(rows, docOrder);
         } catch (e) {
             return [];
         }
@@ -196,7 +232,7 @@ class MtlxActionsViewProvider {
             type: 'state',
             rows: actionsModel.buildActionRows(this._hasActiveDocument, hasMtlxTextEditor),
             examplesGroups: this._groups,
-            insertNodeRows: this._buildInsertNodeRows(),
+            insertNodeTree: this._buildInsertNodeTree(),
             hasMtlxTextEditor,
             about,
         });
@@ -299,7 +335,9 @@ class MtlxActionsViewProvider {
     }
 
     // Builds the same node-element snippet the completion provider uses
-    // and inserts it at the cursor of the resolved .mtlx TEXT editor.
+    // and inserts it at the cursor of the resolved .mtlx TEXT editor, then
+    // hands focus back to that editor -- the click/Enter that triggered
+    // this came from the webview, which otherwise keeps focus.
     // `category` is re-validated against the host's own library index.
     async _insertNode(category, outputType) {
         if (typeof category !== 'string') return;
@@ -320,15 +358,24 @@ class MtlxActionsViewProvider {
         const offset = document.offsetAt(editor.selection.active);
         const existingNames = insertNodeModel.allNamesInText(text);
         const wantType = (typeof outputType === 'string' && entry.outputTypes.indexOf(outputType) !== -1) ? outputType : null;
-        // buildNodeElementSnippet's text starts right after a '<' (its
-        // completion caller already has one, typed by the user); this view
-        // inserts a whole new element from scratch, so add it here.
-        const body = '<' + mtlxCompletions.buildNodeElementSnippet(category, entry, existingNames, wantType);
+        // buildNodeElementSnippet's text starts right after a '<'; this
+        // view inserts a whole new element, so add it here.
+        let body = '<' + mtlxCompletions.buildNodeElementSnippet(category, entry, existingNames, wantType);
+        // The type step already made a definite choice: pin it to a
+        // literal so the one remaining tabstop lands on the name.
+        body = insertNodeModel.pinOutputType(body, wantType);
 
         const plan = insertNodeModel.insertPlan(text, offset);
         const snippetText = plan.mode === 'cursor' ? body : (plan.prefix + plan.indent + body + plan.suffix);
         const pos = document.positionAt(plan.offset);
-        await editor.insertSnippet(new vscode.SnippetString(snippetText), pos);
+
+        const focusedEditor = await vscode.window.showTextDocument(document, { viewColumn: editor.viewColumn, preserveFocus: false, preview: false });
+        await focusedEditor.insertSnippet(new vscode.SnippetString(snippetText), pos);
+
+        if (wantType) {
+            const next = insertNodeModel.rememberLastType(this._lastTypes(), category, wantType);
+            await this._context.globalState.update(LAST_TYPES_KEY, next);
+        }
     }
 }
 
@@ -431,6 +478,12 @@ if (TEST_TRANSPORT) {
             },
             hasEditor() {
                 return !!(activeProvider && activeProvider._resolveTextEditor());
+            },
+            // The popover's tree as the host would send it in 'state' --
+            // lets the smoke suite check order/memory without the webview DOM.
+            tree() {
+                if (!activeProvider) throw new Error('the actions view is not resolved');
+                return activeProvider._buildInsertNodeTree();
             },
         },
         waitForExamplesRendered(timeoutMs) {
