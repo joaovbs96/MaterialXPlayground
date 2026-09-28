@@ -306,11 +306,24 @@ async function main() {
   }
 
   const { baseURL, close } = await startServer({ root: REPO_ROOT });
+  // MTLX_GALLERY_GPU=1 swaps plain headless (SwiftShader, CI default) for
+  // new-headless with real GPU flags, for local renders that need to match
+  // what a user's browser actually produces. Opt-in only, CI is unchanged.
+  const useGpu = process.env.MTLX_GALLERY_GPU === "1";
   const browser = await chromium.launch({
     headless: true,
     // Chromium's default /dev/shm is 64MB under Docker, which surfaces as
     // "Target crashed" mid-screenshot. Harmless outside a container.
-    args: ["--disable-dev-shm-usage"],
+    args: useGpu
+      ? [
+          "--disable-dev-shm-usage",
+          "--headless=new",
+          "--use-gl=angle",
+          "--use-angle=gl",
+          "--ignore-gpu-blocklist",
+          "--enable-gpu-rasterization",
+        ]
+      : ["--disable-dev-shm-usage"],
   });
   const ok = [];
   const failed = [];
