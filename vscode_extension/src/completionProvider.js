@@ -37,7 +37,11 @@ function orderSuffix(cand) {
     return typeof cand.sortIndex === 'number' ? String(cand.sortIndex).padStart(4, '0') : cand.label;
 }
 
-function toCompletionItem(document, cand) {
+function pickFileOnFilenameInputEnabled() {
+    return vscode.workspace.getConfiguration('materialxPlayground').get('pickFileOnFilenameInput', true);
+}
+
+function toCompletionItem(document, cand, filenamePickerEnabled) {
     const kind = KIND_MAP[cand.kind] || vscode.CompletionItemKind.Text;
     const item = new vscode.CompletionItem(cand.label, kind);
     if (cand.detail) item.detail = cand.detail;
@@ -47,7 +51,17 @@ function toCompletionItem(document, cand) {
     // applies (node/structural lists, which have no such priority).
     item.sortText = (KIND_SORT_PREFIX[cand.kind] || '5') + orderSuffix(cand);
     if (cand.preselect) item.preselect = true;
-    item.insertText = cand.isSnippet ? new vscode.SnippetString(cand.insertText) : cand.insertText;
+    // filenameValueEligible (set by mtlxCompletions.js: this candidate
+    // creates a fresh, name-only-or-typed <input> with no value= yet, for
+    // a filename-typed input) is gated on the pickFileOnFilenameInput
+    // setting here, since that pure module has no vscode config access.
+    // Disabled/unset: insertText is untouched, same as before this
+    // feature (the "Browse for file..." item inside value="" still works).
+    let insertText = cand.insertText;
+    if (cand.filenameValueEligible && filenamePickerEnabled && !cand.isSnippet) {
+        insertText = insertText + '" value="';
+    }
+    item.insertText = cand.isSnippet ? new vscode.SnippetString(insertText) : insertText;
     if (typeof cand.replaceStart === 'number' && typeof cand.replaceEnd === 'number') {
         item.range = new vscode.Range(document.positionAt(cand.replaceStart), document.positionAt(cand.replaceEnd));
     }
@@ -74,6 +88,23 @@ function toCompletionItem(document, cand) {
             ],
         };
     }
+    // Filename auto-attach: `insertText` above already ends in `" value="`
+    // for this candidate, and the pre-existing quote right after the
+    // completion's original replace range closes it, landing an empty
+    // value="" right at replaceStart + insertText.length characters into
+    // the SAME line as replaceStart (insertText here is always a single
+    // attribute-text line, never multi-line). That offset is computable
+    // from the document as it stood BEFORE this edit, since nothing before
+    // replaceStart moves and insertText carries no newline to cross.
+    if (cand.filenameValueEligible && filenamePickerEnabled && typeof cand.replaceStart === 'number') {
+        const start = document.positionAt(cand.replaceStart);
+        const pos = { line: start.line, character: start.character + insertText.length };
+        item.command = {
+            command: 'materialxPlayground.pickFile',
+            title: 'Pick file...',
+            arguments: [document.uri.toString(), pos, pos],
+        };
+    }
     return item;
 }
 
@@ -89,7 +120,8 @@ function register(context) {
                         offset: document.offsetAt(position),
                         repoRoot,
                     });
-                    return candidates.map((c) => toCompletionItem(document, c));
+                    const filenamePickerEnabled = pickFileOnFilenameInputEnabled();
+                    return candidates.map((c) => toCompletionItem(document, c, filenamePickerEnabled));
                 },
             },
             '<', '"', ' ', '/'

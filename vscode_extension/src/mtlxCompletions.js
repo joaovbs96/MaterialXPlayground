@@ -189,6 +189,59 @@ const DOC_SNIPPETS = [
 // mtlxAttributeSchema.js's isGeompropEligible typeGate.
 const DEFAULTGEOMPROP_NAMES = GEOMPROP_NAMES.filter((g) => g !== 'geomcolor');
 
+// Closure-producing types: placed after every non-closure type in a
+// default type-choice order, unless a category produces ONLY closures.
+const CLOSURE_TYPES = ['BSDF', 'EDF', 'VDF'];
+
+// Non-closure types ranked ahead of the rest of the list: color3 first
+// (the most commonly authored shading value), then float.
+const COMMON_NONCLOSURE_TYPES = ['color3', 'float'];
+
+// Reorders `types` (a category's own output types, unordered/alphabetical
+// as nodelib-index.json happens to store them) into a sensible default for
+// a type-choice completion: `preferredType` first when it's actually one
+// of `types` (the type the surrounding context already wants, e.g. the
+// input a fresh node will feed), else COMMON_NONCLOSURE_TYPES first, then
+// any other non-closure type (original relative order kept), then
+// CLOSURE_TYPES last (a no-op when `types` has nothing but closures).
+// Exported as the shared primitive behind both buildNodeElementSnippet and
+// defaultOutputTypeOrder below.
+function orderTypeChoices(types, preferredType) {
+    const isClosure = (t) => CLOSURE_TYPES.indexOf(t) !== -1;
+    const nonClosure = types.filter((t) => !isClosure(t));
+    const closure = types.filter(isClosure);
+    const rank = (t) => {
+        const i = COMMON_NONCLOSURE_TYPES.indexOf(t);
+        return i === -1 ? COMMON_NONCLOSURE_TYPES.length : i;
+    };
+    const orderedNonClosure = nonClosure
+        .map((t, i) => ({ t, i }))
+        .sort((a, b) => rank(a.t) - rank(b.t) || a.i - b.i)
+        .map((x) => x.t);
+    const orderedClosure = closure
+        .map((t, i) => ({ t, i }))
+        .sort((a, b) => CLOSURE_TYPES.indexOf(a.t) - CLOSURE_TYPES.indexOf(b.t) || a.i - b.i)
+        .map((x) => x.t);
+    let ordered = orderedNonClosure.concat(orderedClosure);
+    if (preferredType && ordered.indexOf(preferredType) !== -1) {
+        ordered = [preferredType].concat(ordered.filter((t) => t !== preferredType));
+    }
+    return ordered;
+}
+
+// Sidebar-reusable entry point (Insert Node view): the same default
+// type-choice ordering buildNodeElementSnippet applies below, keyed by
+// category name instead of an already-resolved library entry.
+// `context.index` is a getLibraryIndex() result the caller already holds;
+// `context.preferredType` is the type the insertion context wants (e.g.
+// the input the new node will feed), or omitted/null when unknown.
+function defaultOutputTypeOrder(category, context) {
+    const ctx = context || {};
+    const entry = ctx.index && ctx.index.categories.get(category);
+    const types = entry && entry.outputTypes.length ? entry.outputTypes.slice() : MTLX_TYPES.slice();
+    return orderTypeChoices(types, ctx.preferredType || null);
+}
+
 // ---------------------------------------------------------------------
 // Library index: lazy, memoized per repoRoot (only ever one repoRoot per
 // extension host process in practice, same assumption mtlxNode.js/
@@ -673,17 +726,19 @@ function attributeNamePrefixAt(text, offset) {
 // Builds the "<category name=... type=...>...</category>" snippet for a
 // freshly-typed node category (E4): a unique default name (category name
 // plus the smallest free numeric suffix), and a type CHOICE of the
-// category's own output types (its nodedef signatures), preferred type
-// first when the caller has one and it's actually produced by this
-// category. Exported for direct unit testing of the naming/choice rules
-// without going through a full getCompletions() call.
+// category's own output types (its nodedef signatures), ordered by
+// orderTypeChoices (preferred type first when the caller has one and it's
+// actually produced by this category, else a sensible non-closure-first
+// default). The type placeholder is tab stop 1 (not 2): accepting the
+// completion lands the user straight on the type choice instead of a
+// preselected first type they'd otherwise have to Tab past. Exported for
+// direct unit testing of the naming/choice rules without going through a
+// full getCompletions() call.
 function buildNodeElementSnippet(category, entry, existingNames, preferredType) {
     const defaultName = uniqueName(category, existingNames);
-    let choices = entry.outputTypes.length ? entry.outputTypes.slice() : MTLX_TYPES.slice();
-    if (preferredType && choices.indexOf(preferredType) !== -1) {
-        choices = [preferredType].concat(choices.filter((t) => t !== preferredType));
-    }
-    return category + ' name="${1:' + escapeSnippet(defaultName) + '}" type="${2|'
+    const types = entry.outputTypes.length ? entry.outputTypes.slice() : MTLX_TYPES.slice();
+    const choices = orderTypeChoices(types, preferredType);
+    return category + ' name="${2:' + escapeSnippet(defaultName) + '}" type="${1|'
         + choices.join(',') + '|}">$0</' + category + '>';
 }
 
@@ -722,7 +777,8 @@ function nodeAndStructuralItems(index, parentEl, root, alreadyHasBody) {
                 isSnippet = true;
             } else if (!alreadyHasBody && s.name === 'output') {
                 const dn = uniqueName('out', existingNames);
-                insertText = 'output name="${1:' + dn + '}" type="${2|' + MTLX_TYPES.join(',') + '|}" />$0';
+                const choices = orderTypeChoices(MTLX_TYPES.slice(), null);
+                insertText = 'output name="${2:' + dn + '}" type="${1|' + choices.join(',') + '|}" />$0';
                 isSnippet = true;
             }
             items.push({ kind: 'structural', label: s.name, detail: s.detail, insertText, isSnippet });
@@ -793,6 +849,17 @@ function resolveElementType(index, el, ignoreAttr) {
     return null;
 }
 
+// True when `el` (an <input>) already carries a value= or any connection
+// attribute (nodename/nodegraph/interfacename/output, see CONNECTION_ATTRS
+// below): a filename-typed input in that state must not get an
+// auto-inserted value="" (E2's value-XOR-connection rule, and a value
+// that's already there should never be silently replaced).
+function hasValueOrConnection(el) {
+    if (!el || !el.attrs) return false;
+    if (el.attrs.value) return true;
+    return CONNECTION_ATTRS.some((a) => !!el.attrs[a]);
+}
+
 function valueItemsFor(root, index, hit) {
     const { element, attrName } = hit;
 
@@ -809,7 +876,17 @@ function valueItemsFor(root, index, hit) {
             if (t) ordered.push(t);
         }
         for (const t of MTLX_TYPES) if (ordered.indexOf(t) === -1) ordered.push(t);
-        return ordered.map((t) => ({ kind: 'type', label: t, detail: '', insertText: t, isSnippet: false }));
+        // The 'filename' choice, on an <input> with no value/connection
+        // attribute yet, is eligible for the pickFileOnFilenameInput
+        // auto-attach (completionProvider.js decides, per that setting,
+        // whether to append value="" and wire up the picker command; this
+        // pure module only flags eligibility, see hasValueOrConnection).
+        const isInput = element.tag === 'input';
+        return ordered.map((t) => {
+            const item = { kind: 'type', label: t, detail: '', insertText: t, isSnippet: false };
+            if (isInput && t === 'filename' && !hasValueOrConnection(element)) item.filenameValueEligible = true;
+            return item;
+        });
     }
     if (attrName === 'colorspace') {
         return COLORSPACES.map((c) => ({ kind: 'colorspace', label: c, detail: '', insertText: c, isSnippet: false }));
@@ -920,20 +997,28 @@ function valueItemsFor(root, index, hit) {
             const present = presentChildInputNames(parent, element);
             return inputsForCategory(index, parent.tag, wantType)
                 .filter((inp) => !present.has(inp.name))
-                .map((inp) => ({
-                    kind: 'input-name',
-                    label: inp.name,
-                    detail: inp.type,
-                    // The replace range only covers the partial NAME text
-                    // (inside the already-open quote); appending
-                    // `" type="<type>` here closes that quote and reopens
-                    // one for type=, reusing the closing quote the user
-                    // already has right after the cursor  -  same trick the
-                    // tag-context "<input name=... type=... />" snippet a
-                    // few lines up uses, just without a snippet.
-                    insertText: hasType ? inp.name : inp.name + '" type="' + inp.type,
-                    isSnippet: false,
-                }));
+                .map((inp) => {
+                    const item = {
+                        kind: 'input-name',
+                        label: inp.name,
+                        detail: inp.type,
+                        // The replace range only covers the partial NAME text
+                        // (inside the already-open quote); appending
+                        // `" type="<type>` here closes that quote and reopens
+                        // one for type=, reusing the closing quote the user
+                        // already has right after the cursor  -  same trick the
+                        // tag-context "<input name=... type=... />" snippet a
+                        // few lines up uses, just without a snippet.
+                        insertText: hasType ? inp.name : inp.name + '" type="' + inp.type,
+                        isSnippet: false,
+                    };
+                    // filenameValueEligible: completionProvider.js appends
+                    // `" value="` to insertText (same reused-closing-quote
+                    // trick, now closing value= instead) and wires up the
+                    // picker, gated on the pickFileOnFilenameInput setting.
+                    if (inp.type === 'filename' && !hasValueOrConnection(element)) item.filenameValueEligible = true;
+                    return item;
+                });
         }
     }
     return [];
@@ -1023,4 +1108,6 @@ module.exports = {
     buildNodeElementSnippet,
     documentSnippetItems,
     DOC_SNIPPETS,
+    orderTypeChoices,
+    defaultOutputTypeOrder,
 };

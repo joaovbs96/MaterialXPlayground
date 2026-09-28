@@ -392,31 +392,68 @@ test('Ctrl+Space right after a partial attribute name (no trailing space) offers
     assert.equal(name.replaceEnd, offset);
 });
 
-test('E4: buildNodeElementSnippet picks a unique default name and lists the category\'s output types as choices', () => {
+test('E4: buildNodeElementSnippet picks a unique default name, puts the type CHOICE at tab stop 1 (name at 2)', () => {
     const index = mtlxCompletions.getLibraryIndex(REPO_ROOT);
     const entry = index.categories.get('multiply');
     const snippet = mtlxCompletions.buildNodeElementSnippet('multiply', entry, new Set(['multiply']), null);
-    assert.match(snippet, /^multiply name="\$\{1:multiply2\}" type="\$\{2\|[^|]+\|\}">\$0<\/multiply>$/);
-    const choicesMatch = snippet.match(/\$\{2\|([^|]+)\|\}/);
+    assert.match(snippet, /^multiply name="\$\{2:multiply2\}" type="\$\{1\|[^|]+\|\}">\$0<\/multiply>$/);
+    const choicesMatch = snippet.match(/\$\{1\|([^|]+)\|\}/);
     const choices = choicesMatch[1].split(',');
     assert.ok(choices.includes('float'));
     assert.ok(choices.includes('color3'));
+});
+
+test('E4: multiply defaults to a non-closure type first, closures (BSDF/EDF/VDF) last, not BSDF preselected', () => {
+    // The reported bug: accepting "multiply" landed the user on BSDF (the
+    // library's own alphabetical-ish sigGroup order), forcing a Tab press
+    // just to reach a normal numeric type.
+    const index = mtlxCompletions.getLibraryIndex(REPO_ROOT);
+    const entry = index.categories.get('multiply');
+    const snippet = mtlxCompletions.buildNodeElementSnippet('multiply', entry, new Set(), null);
+    const choices = snippet.match(/\$\{1\|([^|]+)\|\}/)[1].split(',');
+    assert.equal(choices[0], 'color3');
+    assert.equal(choices[1], 'float');
+    assert.deepEqual(choices.slice(-3), ['BSDF', 'EDF', 'VDF']);
 });
 
 test('E4: a preferred type sorts first in the choice list when the category actually produces it', () => {
     const index = mtlxCompletions.getLibraryIndex(REPO_ROOT);
     const entry = index.categories.get('multiply');
     const snippet = mtlxCompletions.buildNodeElementSnippet('multiply', entry, new Set(), 'color3');
-    const choices = snippet.match(/\$\{2\|([^|]+)\|\}/)[1].split(',');
+    const choices = snippet.match(/\$\{1\|([^|]+)\|\}/)[1].split(',');
     assert.equal(choices[0], 'color3');
 });
 
-test('E4: typing "<" at the document root inserts a full name/type/close snippet for a fresh node', () => {
+test('E4: image (no closures at all) also defaults to color3 first, float second', () => {
+    const index = mtlxCompletions.getLibraryIndex(REPO_ROOT);
+    const entry = index.categories.get('image');
+    const snippet = mtlxCompletions.buildNodeElementSnippet('image', entry, new Set(), null);
+    const choices = snippet.match(/\$\{1\|([^|]+)\|\}/)[1].split(',');
+    assert.equal(choices[0], 'color3');
+    assert.equal(choices[1], 'float');
+});
+
+test('E4: a closure-only node (oren_nayar_diffuse_bsdf) still gets a type-first snippet with its one choice', () => {
+    const index = mtlxCompletions.getLibraryIndex(REPO_ROOT);
+    const entry = index.categories.get('oren_nayar_diffuse_bsdf');
+    const snippet = mtlxCompletions.buildNodeElementSnippet('oren_nayar_diffuse_bsdf', entry, new Set(), null);
+    assert.match(snippet, /^oren_nayar_diffuse_bsdf name="\$\{2:[^}]+\}" type="\$\{1\|BSDF\|\}">\$0<\/oren_nayar_diffuse_bsdf>$/);
+});
+
+test('defaultOutputTypeOrder: exported helper mirrors buildNodeElementSnippet\'s ordering, keyed by category name', () => {
+    const index = mtlxCompletions.getLibraryIndex(REPO_ROOT);
+    assert.equal(mtlxCompletions.defaultOutputTypeOrder('multiply', { index })[0], 'color3');
+    assert.equal(mtlxCompletions.defaultOutputTypeOrder('multiply', { index, preferredType: 'vector3' })[0], 'vector3');
+    assert.deepEqual(mtlxCompletions.defaultOutputTypeOrder('oren_nayar_diffuse_bsdf', { index }), ['BSDF']);
+});
+
+test('E4: typing "<" at the document root inserts a full name/type/close snippet, type choice first', () => {
     const items = complete('<materialx version="1.39">\n  <multi|\n</materialx>\n');
     const node = items.find((i) => i.label === 'multiply');
     assert.ok(node);
     assert.equal(node.isSnippet, true);
-    assert.match(node.insertText, /^multiply name="\$\{1:multiply\}" type="\$\{2\|[^|]+\|\}">\$0<\/multiply>$/);
+    assert.match(node.insertText, /^multiply name="\$\{2:multiply\}" type="\$\{1\|[^|]+\|\}">\$0<\/multiply>$/);
+    assert.equal(node.insertText.match(/\$\{1\|([^|]+)\|\}/)[1].split(',')[0], 'color3');
 });
 
 test('E4: falls back to inserting only the name when the tag already has more content past the cursor', () => {
@@ -433,6 +470,15 @@ test('E4: a structural "nodegraph" insertion also gets a unique name and a closi
     assert.ok(ng);
     assert.equal(ng.isSnippet, true);
     assert.match(ng.insertText, /^nodegraph name="\$\{1:NG_graph\}">\$0<\/nodegraph>$/);
+});
+
+test('E4: a structural "output" insertion also puts its type choice at tab stop 1, color3 first', () => {
+    const items = complete('<materialx version="1.39">\n  <nodegraph name="NG1">\n    <outp|\n  </nodegraph>\n</materialx>\n');
+    const out = items.find((i) => i.label === 'output');
+    assert.ok(out);
+    assert.equal(out.isSnippet, true);
+    assert.match(out.insertText, /^output name="\$\{2:out\}" type="\$\{1\|[^|]+\|\}" \/>\$0$/);
+    assert.equal(out.insertText.match(/\$\{1\|([^|]+)\|\}/)[1].split(',')[0], 'color3');
 });
 
 test('E6: a bare word matching a document-snippet prefix offers it as a Snippet completion item', () => {
@@ -457,6 +503,42 @@ test('E10a: "Browse for file..." is offered inside a filename input\'s value, no
 
     const floatText = '<materialx version="1.39">\n  <image name="img1" type="color3">\n    <input name="default" type="color3" value="|" />\n  </image>\n</materialx>\n';
     assert.ok(!complete(floatText).some((i) => i.kind === 'file-browse'), 'non-filename inputs must not offer the browse item');
+});
+
+test('filenameValueEligible: picking the "file" input name inside <image> flags it, "default" does not', () => {
+    const text = '<materialx version="1.39">\n  <image name="img1" type="color3">\n    <input name="|" />\n  </image>\n</materialx>\n';
+    const items = complete(text);
+    const file = items.find((i) => i.label === 'file');
+    const dflt = items.find((i) => i.label === 'default');
+    assert.ok(file && dflt);
+    assert.equal(file.filenameValueEligible, true);
+    assert.equal(file.insertText, 'file" type="filename', 'insertText itself is unchanged; completionProvider.js appends value= when the setting allows it');
+    assert.ok(!dflt.filenameValueEligible);
+});
+
+test('filenameValueEligible: not set when the <input> already has a connection attribute', () => {
+    const text = '<materialx version="1.39">\n  <image name="img1" type="color3">\n    <input name="|" nodename="other" />\n  </image>\n</materialx>\n';
+    const file = complete(text).find((i) => i.label === 'file');
+    assert.ok(file);
+    assert.ok(!file.filenameValueEligible, 'a value= would conflict with the existing nodename= connection');
+});
+
+test('filenameValueEligible: choosing "filename" in an <input> type="..." completion flags it, other types do not', () => {
+    const text = '<materialx version="1.39">\n  <image name="img1" type="color3">\n    <input name="file" type="|" />\n  </image>\n</materialx>\n';
+    const items = complete(text);
+    const filename = items.find((i) => i.label === 'filename');
+    const color3 = items.find((i) => i.label === 'color3');
+    assert.ok(filename && color3);
+    assert.equal(filename.filenameValueEligible, true);
+    assert.equal(filename.insertText, 'filename');
+    assert.ok(!color3.filenameValueEligible);
+});
+
+test('filenameValueEligible: not set on type="..." when the input already has a value=', () => {
+    const text = '<materialx version="1.39">\n  <image name="img1" type="color3">\n    <input name="file" type="|" value="tex.png" />\n  </image>\n</materialx>\n';
+    const filename = complete(text).find((i) => i.label === 'filename');
+    assert.ok(filename);
+    assert.ok(!filename.filenameValueEligible, 'a value= is already present, must not be silently repositioned');
 });
 
 test('uniqueName: a second texturechain insertion numbers up, not a stacked suffix', () => {
