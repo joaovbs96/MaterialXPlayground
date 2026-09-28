@@ -38,7 +38,9 @@ concurrency:
 jobs:
   package:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Bumped from 30: gallery rendering (~15 min worst case) is no longer
+    # reuse-only, same budget as release.yml's non-rendering package job.
+    timeout-minutes: 45
     permissions:
       contents: read
     outputs:
@@ -116,13 +118,17 @@ jobs:
           ')"
           echo "mtlx_default_version=$MTLX_DEFAULT_VERSION" >> "$GITHUB_OUTPUT"
 
-      # Manual run, no separate gallery job: reuse everything the published
-      # site already has and render nothing here, same as release.yml's
-      # package job does when its gallery job did not run.
+      # Manual run, no separate gallery job: reuse every tile the published
+      # site already has for an unchanged material and render the rest,
+      # same as deploy.yml's release path. A branch that edits a material
+      # must get a real thumbnail here, not a placeholder.
+      - name: Install Playwright chromium
+        run: npx playwright install --with-deps chromium
+
       - name: Populate gallery data from the live site
         run: |
           node scripts/build-gallery.mjs
-          node scripts/gallery-shots.mjs --reuse-from "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}" --reuse-only
+          node scripts/gallery-shots.mjs --reuse-from "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
 
       # Trims to the preset picker's own materials before packaging, same
       # as release.yml (see --prune-ids-auto's doc comment in gallery-shots.mjs).

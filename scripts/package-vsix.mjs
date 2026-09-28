@@ -50,7 +50,6 @@ const SIGNATURES = [
   "npm run check",
   "node scripts/build-gallery.mjs",
   "--reuse-from",
-  "--reuse-only",
   "node scripts/gallery-shots.mjs --prune-ids-auto",
   "cp .github/vsce/package.json .github/vsce/package-lock.json",
   "npm ci --ignore-scripts --no-audit --no-fund",
@@ -82,6 +81,14 @@ for (const sig of SIGNATURES) {
   if (!inPre) missing.push(`package-prerelease.yml's package job is missing: ${sig}`);
 }
 
+// release.yml's package job only reuses (no separate gallery job ran); the
+// pre-release job always renders the gap, so --reuse-only stays release-only.
+const RELEASE_ONLY_SIGNATURES = ["--reuse-only"];
+
+for (const sig of RELEASE_ONLY_SIGNATURES) {
+  if (!releaseJob.includes(sig)) missing.push(`release.yml's package job no longer contains: ${sig}`);
+}
+
 if (missing.length) {
   fail(
     "packaging commands drifted between release.yml and package-prerelease.yml:\n" +
@@ -89,4 +96,6 @@ if (missing.length) {
   );
 }
 
-log(`ok: ${SIGNATURES.length} packaging command signatures match in both workflows`);
+log(
+  `ok: ${SIGNATURES.length} shared + ${RELEASE_ONLY_SIGNATURES.length} release-only packaging command signatures match`
+);
