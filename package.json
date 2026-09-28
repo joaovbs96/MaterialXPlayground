@@ -188,7 +188,7 @@
       },
       {
         "command": "materialxPlayground.open",
-        "title": "Open Playground to the Side",
+        "title": "Open on MaterialX Playground",
         "category": "MaterialX Playground",
         "icon": {
           "light": "./vscode_extension/media/playground-light.svg",
@@ -288,15 +288,20 @@
         "icon": "$(folder-opened)"
       },
       {
-        "command": "materialxPlayground.openRecentItem",
-        "title": "Open Recent Item",
+        "command": "materialxPlayground.openInTextEditor",
+        "title": "Open in Text Editor",
         "category": "MaterialX Playground"
       },
       {
-        "command": "materialxPlayground.clearRecent",
-        "title": "Clear",
+        "command": "materialxPlayground.insertNodeFromEditor",
+        "title": "Insert Node",
+        "category": "MaterialX Playground"
+      },
+      {
+        "command": "materialxPlayground.contextHeader",
+        "title": "MaterialX Playground",
         "category": "MaterialX Playground",
-        "icon": "$(clear-all)"
+        "enablement": "false"
       }
     ],
     "keybindings": [
@@ -400,15 +405,24 @@
           "when": "false"
         },
         {
-          "command": "materialxPlayground.openRecentItem",
-          "when": "false"
+          "command": "materialxPlayground.openInTextEditor",
+          "when": "activeCustomEditorId == 'materialxPlayground.editor'"
         },
         {
-          "command": "materialxPlayground.clearRecent",
+          "command": "materialxPlayground.insertNodeFromEditor",
+          "when": "editorLangId == mtlx"
+        },
+        {
+          "command": "materialxPlayground.contextHeader",
           "when": "false"
         }
       ],
       "editor/context": [
+        {
+          "command": "materialxPlayground.contextHeader",
+          "when": "editorLangId == mtlx",
+          "group": "materialxPlayground@0"
+        },
         {
           "command": "materialxPlayground.openInGraphEditor",
           "when": "editorLangId == mtlx",
@@ -423,33 +437,43 @@
           "command": "materialxPlayground.openDocs",
           "when": "editorLangId == mtlx",
           "group": "materialxPlayground@3"
+        },
+        {
+          "command": "materialxPlayground.insertNodeFromEditor",
+          "when": "editorLangId == mtlx",
+          "group": "materialxPlayground@4"
         }
       ],
       "explorer/context": [
         {
+          "command": "materialxPlayground.contextHeader",
+          "when": "resourceExtname == .mtlx || explorerResourceIsFolder || resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i",
+          "group": "materialxPlayground@0"
+        },
+        {
           "command": "materialxPlayground.openInGraphEditor",
           "when": "resourceExtname == .mtlx",
-          "group": "navigation@10"
+          "group": "materialxPlayground@1"
         },
         {
           "command": "materialxPlayground.openInMaterialViewer",
           "when": "resourceExtname == .mtlx",
-          "group": "navigation@11"
+          "group": "materialxPlayground@2"
         },
         {
           "command": "materialxPlayground.openDocs",
           "when": "resourceExtname == .mtlx",
-          "group": "navigation@12"
+          "group": "materialxPlayground@3"
         },
         {
           "command": "materialxPlayground.newFromExample",
           "when": "explorerResourceIsFolder",
-          "group": "navigation@13"
+          "group": "materialxPlayground@4"
         },
         {
           "command": "materialxPlayground.openScene",
           "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i",
-          "group": "navigation@14"
+          "group": "materialxPlayground@5"
         }
       ],
       "file/newFile": [
@@ -467,11 +491,6 @@
           "command": "materialxPlayground.openSettings",
           "when": "view == materialxPlayground.outline",
           "group": "navigation"
-        },
-        {
-          "command": "materialxPlayground.clearRecent",
-          "when": "view == materialxPlayground.recent",
-          "group": "navigation"
         }
       ],
       "view/item/context": [
@@ -488,24 +507,34 @@
       ],
       "editor/title/context": [
         {
+          "command": "materialxPlayground.contextHeader",
+          "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i || resourceExtname == .mtlx",
+          "group": "materialxPlayground@0"
+        },
+        {
           "command": "materialxPlayground.openScene",
           "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i",
-          "group": "materialxPlayground"
+          "group": "materialxPlayground@1"
         },
         {
           "command": "materialxPlayground.openInGraphEditor",
           "when": "resourceExtname == .mtlx",
-          "group": "materialxPlayground"
+          "group": "materialxPlayground@2"
         },
         {
           "command": "materialxPlayground.openInMaterialViewer",
           "when": "resourceExtname == .mtlx",
-          "group": "materialxPlayground"
+          "group": "materialxPlayground@3"
         },
         {
           "command": "materialxPlayground.openDocs",
           "when": "resourceExtname == .mtlx",
-          "group": "materialxPlayground"
+          "group": "materialxPlayground@4"
+        },
+        {
+          "command": "materialxPlayground.openInTextEditor",
+          "when": "activeCustomEditorId == 'materialxPlayground.editor'",
+          "group": "materialxPlayground@5"
         }
       ]
     },
@@ -528,26 +557,13 @@
         },
         {
           "id": "materialxPlayground.files",
-          "name": "Files",
+          "name": "Textures & Files in Document",
           "when": "materialxPlayground.filesVisible"
-        },
-        {
-          "id": "materialxPlayground.insertNode",
-          "name": "Insert Node",
-          "type": "webview",
-          "when": "true",
-          "initialSize": 1,
-          "visibility": "collapsed"
         },
         {
           "id": "materialxPlayground.outline",
           "name": "Outline",
           "when": "materialxPlayground.outlineVisible"
-        },
-        {
-          "id": "materialxPlayground.recent",
-          "name": "Recent",
-          "when": "materialxPlayground.recentVisible"
         }
       ]
     },
@@ -589,6 +605,11 @@
             "Open the playground in the active editor group, replacing (or reusing) whatever tab is already there."
           ],
           "markdownDescription": "Where the MaterialX Playground opens when a text editor for the same `.mtlx` file is visible: `splitRight` opens it beside that editor, reusing an existing right-hand group rather than creating a new split each time; `sameGroup` opens it in the active editor group, replacing (or reusing) whatever tab is already there."
+        },
+        "materialxPlayground.pickFileOnFilenameInput": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "When a filename input is added from auto-complete, open a file picker right away to choose the file."
         },
         "materialxPlayground.autoOpenPlayground": {
           "type": "boolean",

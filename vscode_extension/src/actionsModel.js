@@ -8,35 +8,45 @@
 // visual weight.
 'use strict';
 
-// newFromExample no longer runs a command: the button toggles the
-// examples card grid embedded directly below it in the same webview
-// (media/actions-view.js), remembered via the webview state API. `toggle`
-// marks which panel a row shows/hides; every other row keeps its plain
-// `command`. It's last in the list (not first) so opening the examples
-// grid never pushes the other action buttons around -- they're all above
-// it already.
+// newFromExample and insertNode no longer run a command: each button
+// toggles its own group panel embedded directly below it in the same
+// webview (media/actions-view.js), remembered via the webview state API.
+// `toggle` marks which panel a row shows/hides; every other row keeps its
+// plain `command`. insertNode sits directly above newFromExample (task
+// batch G1 item 4), both last in the list so opening either group never
+// pushes the other action buttons around -- they're all above it already.
 // `layout: 'half'` rows render two per row in a CSS grid (actions-view.js/
-// css); everything else (including newFromExample, deliberately last and
-// full width so its examples panel below it never fights a neighbor for
-// width) renders full width, unchanged from before.
+// css); everything else (the two toggle rows, full width so their panels
+// below never fight a neighbor for width) renders full width, unchanged.
 // `shortLabel` is what a half-width row shows in the button itself (the
 // half column is too narrow for the full label without wrapping); `label`
 // stays the full text and is always what aria-label/title expose.
 const ROWS = [
     { id: 'newDocument', label: 'New MaterialX Document', shortLabel: 'New Document', icon: 'file-plus', variant: 'default', command: 'materialxPlayground.newDocument', layout: 'half' },
     { id: 'openDocs', label: 'Node Library Documentation', shortLabel: 'Node Docs', icon: 'book', variant: 'default', command: 'materialxPlayground.openDocs', layout: 'half' },
-    { id: 'openInGraphEditor', label: 'Open in Graph Editor', shortLabel: 'Graph Editor', icon: 'share', variant: 'default', command: 'materialxPlayground.openInGraphEditor', requiresDocument: true, layout: 'half' },
     { id: 'openInMaterialViewer', label: 'Open in Material Viewer', shortLabel: 'Material Viewer', icon: 'eye', variant: 'default', command: 'materialxPlayground.openInMaterialViewer', requiresDocument: true, layout: 'half' },
+    { id: 'openInGraphEditor', label: 'Open in Graph Editor', shortLabel: 'Graph Editor', icon: 'share', variant: 'default', command: 'materialxPlayground.openInGraphEditor', requiresDocument: true, layout: 'half' },
     { id: 'filterDocsByFile', label: 'Filter Node Docs by Current File', shortLabel: 'Filter Docs by File', icon: 'color-filter', variant: 'secondary', command: 'materialxPlayground.filterDocsByFile', requiresDocument: true, layout: 'half' },
+    {
+        id: 'insertNode', label: 'Insert Node', icon: 'puzzle', variant: 'primary', toggle: 'insertNode',
+        requiresTextEditor: true, disabledDescription: 'Open a .mtlx file in the text editor to insert nodes.',
+    },
     { id: 'newFromExample', label: 'New Material from Example', icon: 'sparkles', variant: 'primary', toggle: 'examples' },
 ];
 
-// buildActionRows(hasActiveDocument): rows marked requiresDocument are
-// disabled (no command, a description) when no MaterialX document is
-// active; everything else is always available.
-function buildActionRows(hasActiveDocument) {
+// buildActionRows(hasActiveDocument, hasMtlxTextEditor): rows marked
+// requiresDocument are disabled (no command, a tooltip) when no MaterialX
+// document is active (a text editor OR our own custom editor tab);
+// insertNode is instead gated on hasMtlxTextEditor alone -- inserting at a
+// cursor needs an actual visible .mtlx TEXT editor, our custom editor tab
+// has no text cursor to insert at. Everything else is always available.
+// The disabled tooltip text is row-specific (disabledDescription) or the
+// shared default.
+function buildActionRows(hasActiveDocument, hasMtlxTextEditor) {
     return ROWS.map((row) => {
-        const disabled = !!row.requiresDocument && !hasActiveDocument;
+        const disabled = row.requiresTextEditor
+            ? !hasMtlxTextEditor
+            : (!!row.requiresDocument && !hasActiveDocument);
         return {
             id: row.id,
             label: row.label,
@@ -47,7 +57,7 @@ function buildActionRows(hasActiveDocument) {
             toggle: row.toggle || null,
             command: disabled ? null : (row.command || null),
             disabled,
-            description: disabled ? 'Open a MaterialX file first' : undefined,
+            description: disabled ? (row.disabledDescription || 'Open a MaterialX file first') : undefined,
         };
     });
 }
@@ -55,8 +65,46 @@ function buildActionRows(hasActiveDocument) {
 // Every message type the actions webview may ever send. actionsView.js's
 // _handleMessage rejects anything else before any per-type handling runs
 // -- 'run' additionally validates its own id against known rows/card ids,
-// 'github'/'openHelpLink' never trust a URL from the message itself.
-const MESSAGE_TYPES = new Set(['ready', 'run', 'toggleExamples', 'about', 'github', 'rendered', 'openHelpLink']);
+// 'github'/'openHelpLink' never trust a URL from the message itself,
+// 'insertNode' never trusts a category beyond the host's own known set.
+const MESSAGE_TYPES = new Set([
+    'ready', 'run', 'toggleExamples', 'toggleInsertNode', 'insertNode',
+    'about', 'github', 'rendered', 'openHelpLink',
+]);
+
+// nextGroupExpansion(current, which, expanded): pure reducer for the two
+// mutually exclusive expandable groups (Insert Node, New Material from
+// Example) -- expanding one always collapses the other; collapsing one
+// never expands the other. `current` is {examples, insertNode} booleans,
+// `which` is 'examples'|'insertNode'. Mirrored by hand in
+// media/actions-view.js (a plain browser script, not requirable here);
+// keep both in sync.
+function nextGroupExpansion(current, which, expanded) {
+    if (!expanded) return Object.assign({}, current, { [which]: false });
+    const next = { examples: false, insertNode: false };
+    next[which] = true;
+    return next;
+}
+
+// decideColumnLayout(mode, truncated, streak): pure hysteresis step for the
+// action grid's two-column/one-column decision (task batch G1 item 3,
+// replacing the old fixed 260px media query). `mode` is the CURRENT layout
+// ('two'|'single'), `truncated` is whether media/actions-view.js just
+// measured a half-width label's scrollWidth exceeding its clientWidth in a
+// two-column layout at the current width, `streak` counts consecutive
+// readings that disagree with `mode`. Only flips once that disagreement has
+// held for STREAK_THRESHOLD readings in a row, so one boundary-jitter
+// measurement (e.g. a scrollbar appearing/disappearing) can't flap the
+// layout back and forth. Mirrored by hand in media/actions-view.js; keep
+// both in sync.
+const LAYOUT_STREAK_THRESHOLD = 2;
+function decideColumnLayout(mode, truncated, streak) {
+    const wants = truncated ? 'single' : 'two';
+    if (wants === mode) return { mode, streak: 0 };
+    const nextStreak = (streak || 0) + 1;
+    if (nextStreak >= LAYOUT_STREAK_THRESHOLD) return { mode: wants, streak: 0 };
+    return { mode, streak: nextStreak };
+}
 
 // The three header overflow-menu items (Tutorials, Report an Issue,
 // What's New); actionsView.js's _handleMessage rejects any other id.
@@ -187,4 +235,5 @@ function buildAboutData({ extensionVersion, vscodeVersion, mtlxTag, vendorDeps, 
 module.exports = {
     buildActionRows, isValidMessageType, buildAboutData, reflowLicenseText,
     isValidHelpLinkId, platformLabel, buildIssueUrl,
+    nextGroupExpansion, decideColumnLayout,
 };

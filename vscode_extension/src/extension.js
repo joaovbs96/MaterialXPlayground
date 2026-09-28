@@ -24,9 +24,6 @@ const newDocument = require('./newDocument');
 const outlineView = require('./outlineView');
 const actionsView = require('./actionsView');
 const filesView = require('./filesView');
-const insertNodeView = require('./insertNodeView');
-const recentView = require('./recentView');
-const { recentKindForTab } = require('./recentModel');
 const outlineModel = require('./outlineModel');
 const filePicker = require('./filePicker');
 const sceneProvider = require('./sceneProvider');
@@ -452,10 +449,10 @@ function activate(context) {
     // materialxPlayground.actions (activity bar container): a webview view
     // of action buttons (actionsView.js/actionsModel.js), the "Open in
     // ..." rows tracking activeMtlxDocument(). Also hosts the sidebar
-    // header (brand/About/GitHub) and the "New Material from Example"
-    // card grid, embedded and toggled in place of the old separate
-    // materialxPlayground.examples view.
-    actionsView.register(context, {
+    // header (brand/About/GitHub), the "New Material from Example" card
+    // grid and the Insert Node group (search + insert at the cursor of the
+    // active MaterialX TEXT editor), each embedded and toggled in place.
+    const actionsProvider = actionsView.register(context, {
         getActiveDocument: activeMtlxDocument,
         onDidChangeActiveDocument: onDidChangeActiveMtlxDocument,
     });
@@ -466,14 +463,6 @@ function activate(context) {
         getActiveDocument: activeMtlxDocument,
         onDidChangeActiveDocument: onDidChangeActiveMtlxDocument,
     });
-
-    // materialxPlayground.insertNode: search + insert a node element at
-    // the cursor of the active MaterialX text editor (insertNodeView.js).
-    insertNodeView.register(context);
-
-    // materialxPlayground.recent: last 10 .mtlx/scene files opened in our
-    // own views (recentView.js); recorded below wherever those opens happen.
-    const recent = recentView.register(context);
 
     // exampleGallery.js needs the extension context for its test API only
     // (a real user session reaches it through newFromExample.js's own
@@ -808,6 +797,31 @@ function activate(context) {
         // in favor of these two. See openInPlaygroundView above.
         vscode.commands.registerCommand('materialxPlayground.openInGraphEditor', (uriArg) => openInPlaygroundView(uriArg, '#!graph')),
         vscode.commands.registerCommand('materialxPlayground.openInMaterialViewer', (uriArg) => openInPlaygroundView(uriArg, '#!viewer')),
+        // Custom-editor tab context menu "Open in Text Editor": open/reveal
+        // the plain .mtlx text beside it, same placement rule editorProvider.js's
+        // own mtlx-open-text webview handler uses for its toolbar button.
+        vscode.commands.registerCommand('materialxPlayground.openInTextEditor', async (uriArg) => {
+            try {
+                const uri = resolveTargetUri(uriArg);
+                if (!uri) return;
+                const document = await vscode.workspace.openTextDocument(uri);
+                const uriStr = uri.toString();
+                const visible = vscode.window.visibleTextEditors.find((e) => e.document.uri.toString() === uriStr);
+                const viewColumn = visible ? visible.viewColumn : vscode.ViewColumn.Beside;
+                await vscode.window.showTextDocument(document, { viewColumn, preserveFocus: false });
+            } catch (err) {
+                showErrorWithOutput('MaterialX Playground: failed to open the text editor: ' + errMsg(err));
+            }
+        }),
+        // Text editor right-click "Insert Node": reveal the sidebar, then
+        // ask the Actions webview to expand Insert Node and focus its search.
+        vscode.commands.registerCommand('materialxPlayground.insertNodeFromEditor', async () => {
+            await vscode.commands.executeCommand('materialxPlayground.actions.focus');
+            actionsProvider.requestExpandInsertNode();
+        }),
+        // Always-disabled first entry of our context-menu groups (explorer/
+        // editor/tab context): a plain label, never actually invokable.
+        vscode.commands.registerCommand('materialxPlayground.contextHeader', () => { /* disabled: never invoked */ }),
         // Bound to the Ctrl+S/Cmd+S keybinding contributed in package.json
         // (when: activeCustomEditorId == 'materialxPlayground.editor'):
         // see editorProvider.js's saveActiveGraph() and the comment on
@@ -996,21 +1010,7 @@ function activate(context) {
         // rescanAutoOpenAfterTrust, it covers both this and the
         // playground's own auto-open, so it isn't repeated here.
         vscode.window.tabGroups.onDidChangeTabs((e) => {
-            for (const tab of e.opened) {
-                maybeAutoOpenSceneTab(tab);
-                // materialxPlayground.recent: every tab open (text, Playground
-                // or Scene Viewer) moves its file to the front, even when the
-                // TextDocument was still cached and fired no open event.
-                const input = tab.input;
-                const isText = input instanceof vscode.TabInputText;
-                if (isText || input instanceof vscode.TabInputCustom) {
-                    const kind = recentKindForTab({
-                        input: isText ? 'text' : 'custom', viewType: input.viewType,
-                        scheme: input.uri.scheme, path: input.uri.path,
-                    });
-                    if (kind) recent.record(input.uri, kind);
-                }
-            }
+            for (const tab of e.opened) maybeAutoOpenSceneTab(tab);
             for (const tab of e.closed) {
                 const input = tab.input;
                 if (!input || !(input.uri instanceof vscode.Uri) || !sceneProvider.isSceneUri(input.uri)) continue;
@@ -1093,8 +1093,10 @@ function activate(context) {
     if (exampleGallery.testApi) merged.gallery = exampleGallery.testApi;
     if (actionsView.testApi) merged.actions = actionsView.testApi;
     if (filesView.testApi) merged.files = filesView.testApi;
-    if (insertNodeView.testApi) merged.insertNode = insertNodeView.testApi;
-    if (recentView.testApi) merged.recent = recentView.testApi;
+    // Insert Node moved into the actions webview (task batch G1 item 4);
+    // its test hooks live at actionsView.testApi.insertNode, exposed here
+    // under the same testApi.insertNode.* surface the smoke suite expects.
+    if (actionsView.testApi && actionsView.testApi.insertNode) merged.insertNode = actionsView.testApi.insertNode;
     return Object.keys(merged).length ? { _test: merged } : undefined;
 }
 

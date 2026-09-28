@@ -1,11 +1,12 @@
 // actions-view.js: webview-side script for the materialxPlayground.actions
 // view. Renders actionsModel.js's row list (sent by the host as a 'state'
-// message, along with the embedded examples card grid's groups and the
-// About overlay's data) as full-width buttons, posts {type:'run', id}
+// message, along with the embedded examples/Insert Node panels' data and
+// the About overlay's data) as full-width buttons, posts {type:'run', id}
 // back to the host on click/Enter for a row or an examples card -- the
 // host maps a row id to its own command itself, this script never runs a
-// string built here, and an examples card id is re-validated against the
-// exact group list the host last sent. Plain DOM, no frameworks.
+// string built here, and an examples card id / Insert Node category is
+// re-validated against the exact data the host last sent. Plain DOM, no
+// frameworks.
 (function () {
     const vscode = acquireVsCodeApi();
     const cards = window.MtlxGalleryCards;
@@ -22,14 +23,16 @@
         'external-link': '<path d="M12 6h-6a2 2 0 0 0 -2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-6"/><path d="M11 13l9 -9"/><path d="M15 4h5v5"/>',
         'alert-triangle': '<path d="M12 9v4"/><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0"/><path d="M12 16h.01"/>',
         'file-text': '<path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z"/><path d="M9 9l1 0"/><path d="M9 13l6 0"/><path d="M9 17l6 0"/>',
+        puzzle: '<path d="M4 7h3a1 1 0 0 0 1 -1v-1a2 2 0 0 1 4 0v1a1 1 0 0 0 1 1h3a1 1 0 0 1 1 1v3a1 1 0 0 0 1 1h1a2 2 0 0 1 0 4h-1a1 1 0 0 0 -1 1v3a1 1 0 0 1 -1 1h-3a1 1 0 0 1 -1 -1v-1a2 2 0 0 0 -4 0v1a1 1 0 0 1 -1 1h-3a1 1 0 0 1 -1 -1v-3a1 1 0 0 1 1 -1h1a2 2 0 0 0 0 -4h-1a1 1 0 0 1 -1 -1v-3a1 1 0 0 1 1 -1"/>',
     };
     const CHEVRON_PATH = '<path d="M6 9l6 6l6 -6"/>';
     const CLOSE_PATH = '<path d="M18 6l-12 12" /><path d="M6 6l12 12" />';
 
     // The header overflow menu's three items: id (posted back to the
-    // host), icon key and label. Order here is the render order.
+    // host), icon key and label. Tutorials is disabled (task G1 item 9):
+    // the MkDocs subsite isn't published for this route yet.
     const HELP_LINKS = [
-        { id: 'tutorials', icon: 'external-link', label: 'Tutorials' },
+        { id: 'tutorials', icon: 'external-link', label: 'Tutorials', disabled: true },
         { id: 'reportIssue', icon: 'alert-triangle', label: 'Report an Issue' },
         { id: 'whatsNew', icon: 'file-text', label: "What's New" },
     ];
@@ -42,11 +45,24 @@
     const aboutOverlay = document.getElementById('mtlx-about-overlay');
 
     let latestState = null; // last 'state' message, for the About overlay
-    let allGroups = [];
-    let examplesExpanded = false;
+
+    // ---- Expandable groups: Insert Node, New Material from Example -----
+    // Mutually exclusive (expanding one collapses the other), remembered
+    // via the webview state API. Mirrors actionsModel.js's
+    // nextGroupExpansion(current, which, expanded) by hand (a plain
+    // browser script here, not requirable there); keep both in sync.
+    function nextGroupExpansion(current, which, expanded) {
+        if (!expanded) return Object.assign({}, current, { [which]: false });
+        const next = { examples: false, insertNode: false };
+        next[which] = true;
+        return next;
+    }
+
+    let groupState = { examples: false, insertNode: false };
     try {
         const saved = vscode.getState();
-        if (saved && typeof saved.examplesExpanded === 'boolean') examplesExpanded = saved.examplesExpanded;
+        if (saved && typeof saved.examples === 'boolean') groupState.examples = saved.examples;
+        if (saved && typeof saved.insertNode === 'boolean') groupState.insertNode = saved.insertNode;
     } catch (e) { /* private-window/blocked storage: default to collapsed */ }
 
     function svg(inner, viewBox) {
@@ -58,14 +74,38 @@
         return svg(ICONS[name] || '', '0 0 24 24');
     }
 
+    function updateToggleButton(which, expanded, focus) {
+        const toggleBtn = root.querySelector('.mtlx-action-btn[data-toggle="' + which + '"]');
+        if (!toggleBtn) return;
+        toggleBtn.setAttribute('aria-expanded', String(expanded));
+        const chev = toggleBtn.querySelector('.mtlx-action-chevron');
+        if (chev) chev.classList.toggle('is-open', expanded);
+        if (focus) toggleBtn.focus();
+    }
+
+    function persistGroupState() {
+        try { vscode.setState({ examples: groupState.examples, insertNode: groupState.insertNode }); } catch (e) { /* ignore */ }
+    }
+
+    function setGroupExpanded(which, expanded, focusToggle) {
+        groupState = nextGroupExpansion(groupState, which, expanded);
+        examplesPanel.hidden = !groupState.examples;
+        insertNodePanel.hidden = !groupState.insertNode;
+        updateToggleButton('examples', groupState.examples, focusToggle === 'examples');
+        updateToggleButton('insertNode', groupState.insertNode, focusToggle === 'insertNode');
+        persistGroupState();
+        vscode.postMessage({ type: 'toggleExamples', expanded: groupState.examples });
+        vscode.postMessage({ type: 'toggleInsertNode', expanded: groupState.insertNode });
+    }
+
     // ---- Embedded examples panel (below "New Material from Example") ----
     // Built once and re-attached on every render() so the search input's
     // typed value and the group markup aren't rebuilt from scratch on
     // every unrelated 'state' push (e.g. the active document changing).
     const examplesPanel = document.createElement('div');
     examplesPanel.id = 'mtlx-examples-panel';
-    examplesPanel.className = 'mtlx-examples-panel';
-    examplesPanel.hidden = !examplesExpanded;
+    examplesPanel.className = 'mtlx-group-panel';
+    examplesPanel.hidden = !groupState.examples;
 
     const searchWrap = document.createElement('div');
     searchWrap.className = 'mtlx-ex-toolbar';
@@ -127,6 +167,7 @@
         return cardCount;
     }
 
+    let allGroups = [];
     let reportedCardCount = -1;
     function refreshExamples() {
         const filtered = cards.filterGroups(allGroups, searchInput.value);
@@ -144,22 +185,215 @@
 
     searchInput.addEventListener('input', refreshExamples);
 
-    function setExamplesExpanded(expanded, focusToggle) {
-        examplesExpanded = expanded;
-        examplesPanel.hidden = !expanded;
-        const toggleBtn = root.querySelector('.mtlx-action-btn[data-toggle="examples"]');
-        if (toggleBtn) {
-            toggleBtn.setAttribute('aria-expanded', String(expanded));
-            const chev = toggleBtn.querySelector('.mtlx-action-chevron');
-            if (chev) chev.classList.toggle('is-open', expanded);
-            if (focusToggle) toggleBtn.focus();
+    // ---- Embedded Insert Node panel (above "New Material from Example") -
+    // Step 1: a search box + list of node categories. Step 2 (after a
+    // click/Enter on a category): the chosen node's name, an output-type
+    // dropdown (host-ordered, its first entry is the default) and an
+    // Insert button (Enter in the dropdown also inserts).
+    const insertNodePanel = document.createElement('div');
+    insertNodePanel.id = 'mtlx-insert-panel';
+    insertNodePanel.className = 'mtlx-group-panel';
+    insertNodePanel.hidden = !groupState.insertNode;
+
+    const insSearchWrap = document.createElement('div');
+    insSearchWrap.className = 'mtlx-ex-toolbar';
+    const insSearchLabel = document.createElement('label');
+    insSearchLabel.className = 'mtlx-gallery-search-label';
+    insSearchLabel.setAttribute('for', 'mtlx-insert-search');
+    insSearchLabel.textContent = 'Search nodes';
+    const insSearchInput = document.createElement('input');
+    insSearchInput.id = 'mtlx-insert-search';
+    insSearchInput.className = 'mtlx-gallery-search';
+    insSearchInput.type = 'text';
+    insSearchInput.autocomplete = 'off';
+    insSearchInput.placeholder = 'Search by name or library';
+    insSearchWrap.appendChild(insSearchLabel);
+    insSearchWrap.appendChild(insSearchInput);
+
+    const insListEl = document.createElement('div');
+    insListEl.id = 'mtlx-insert-list';
+    insListEl.setAttribute('role', 'list');
+    insListEl.setAttribute('aria-label', 'Node categories');
+
+    const insEmptyEl = document.createElement('div');
+    insEmptyEl.id = 'mtlx-insert-empty';
+    insEmptyEl.className = 'mtlx-gallery-empty';
+    insEmptyEl.textContent = 'No nodes match your search.';
+    insEmptyEl.hidden = true;
+
+    const insTypeStep = document.createElement('div');
+    insTypeStep.id = 'mtlx-insert-type-step';
+    insTypeStep.className = 'mtlx-insert-type-step';
+    insTypeStep.hidden = true;
+
+    const insBackBtn = document.createElement('button');
+    insBackBtn.type = 'button';
+    insBackBtn.className = 'mtlx-insert-back';
+    insBackBtn.textContent = '← Back to search';
+
+    const insSelectedName = document.createElement('div');
+    insSelectedName.className = 'mtlx-insert-selected-name';
+
+    const insTypeLabel = document.createElement('label');
+    insTypeLabel.className = 'mtlx-gallery-search-label';
+    insTypeLabel.setAttribute('for', 'mtlx-insert-type');
+    insTypeLabel.textContent = 'Output type';
+
+    const insTypeSelect = document.createElement('select');
+    insTypeSelect.id = 'mtlx-insert-type';
+    insTypeSelect.className = 'mtlx-insert-select';
+
+    const insInsertBtn = document.createElement('button');
+    insInsertBtn.type = 'button';
+    insInsertBtn.id = 'mtlx-insert-btn';
+    insInsertBtn.className = 'mtlx-action-btn primary';
+    insInsertBtn.textContent = 'Insert';
+
+    insTypeStep.appendChild(insBackBtn);
+    insTypeStep.appendChild(insSelectedName);
+    insTypeStep.appendChild(insTypeLabel);
+    insTypeStep.appendChild(insTypeSelect);
+    insTypeStep.appendChild(insInsertBtn);
+
+    insertNodePanel.appendChild(insSearchWrap);
+    insertNodePanel.appendChild(insListEl);
+    insertNodePanel.appendChild(insEmptyEl);
+    insertNodePanel.appendChild(insTypeStep);
+
+    let insertRows = [];
+    let selectedCategory = null;
+
+    function renderInsertList() {
+        const term = insSearchInput.value.trim().toLowerCase();
+        insListEl.textContent = '';
+        let count = 0;
+        for (const row of insertRows) {
+            const hay = (row.name + ' ' + (row.library || '')).toLowerCase();
+            if (term && hay.indexOf(term) === -1) continue;
+            count++;
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'mtlx-insert-item';
+            item.setAttribute('role', 'listitem');
+            item.setAttribute('aria-label', row.name + (row.library ? ', ' + row.library : ''));
+            const name = document.createElement('span');
+            name.className = 'mtlx-insert-name';
+            name.textContent = row.name;
+            item.appendChild(name);
+            if (row.library) {
+                const meta = document.createElement('span');
+                meta.className = 'mtlx-insert-meta';
+                meta.textContent = row.library;
+                item.appendChild(meta);
+            }
+            const choose = () => selectCategory(row);
+            item.addEventListener('click', choose);
+            item.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); choose(); } });
+            insListEl.appendChild(item);
         }
-        try { vscode.setState({ examplesExpanded: expanded }); } catch (e) { /* ignore */ }
-        vscode.postMessage({ type: 'toggleExamples', expanded: expanded });
+        insEmptyEl.hidden = count > 0;
+    }
+
+    function selectCategory(row) {
+        selectedCategory = row;
+        insSelectedName.textContent = row.name + (row.library ? ' (' + row.library + ')' : '');
+        insTypeSelect.textContent = '';
+        const types = row.orderedOutputTypes && row.orderedOutputTypes.length ? row.orderedOutputTypes : [''];
+        for (const t of types) {
+            const opt = document.createElement('option');
+            opt.value = t;
+            opt.textContent = t || '(none)';
+            insTypeSelect.appendChild(opt);
+        }
+        insSearchWrap.hidden = true;
+        insListEl.hidden = true;
+        insEmptyEl.hidden = true;
+        insTypeStep.hidden = false;
+        insTypeSelect.focus();
+    }
+
+    function backToNodeList(focusSearch) {
+        selectedCategory = null;
+        insTypeStep.hidden = true;
+        insSearchWrap.hidden = false;
+        insListEl.hidden = false;
+        renderInsertList();
+        if (focusSearch !== false) insSearchInput.focus();
+    }
+
+    function doInsert() {
+        if (!selectedCategory) return;
+        vscode.postMessage({ type: 'insertNode', category: selectedCategory.name, outputType: insTypeSelect.value });
+        backToNodeList(false);
+    }
+
+    insBackBtn.addEventListener('click', () => backToNodeList());
+    insInsertBtn.addEventListener('click', doInsert);
+    insTypeSelect.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doInsert(); } });
+    insSearchInput.addEventListener('input', renderInsertList);
+
+    // ---- Two-column / one-column action grid (task G1 item 3) -----------
+    // Replaces a fixed 260px media query: a hidden probe holds a live copy
+    // of the current half-width rows, forced into the two-column CSS
+    // regardless of which mode is on screen, so scrollWidth/clientWidth on
+    // its labels always reflects "would this truncate at two columns,
+    // right now". Mirrors actionsModel.js's decideColumnLayout(mode,
+    // truncated, streak) by hand; keep both in sync.
+    const layoutProbe = document.createElement('div');
+    layoutProbe.className = 'mtlx-action-grid mtlx-layout-probe';
+    layoutProbe.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(layoutProbe);
+
+    let columnMode = 'two';
+    let columnStreak = 0;
+
+    function decideColumnLayout(mode, truncated, streak) {
+        const wants = truncated ? 'single' : 'two';
+        if (wants === mode) return { mode: mode, streak: 0 };
+        const nextStreak = streak + 1;
+        if (nextStreak >= 2) return { mode: wants, streak: 0 };
+        return { mode: mode, streak: nextStreak };
+    }
+
+    function measureWouldTruncate(gridWrap, width) {
+        if (!gridWrap || !width) return false;
+        layoutProbe.style.width = width + 'px';
+        layoutProbe.innerHTML = gridWrap.innerHTML;
+        let truncated = false;
+        layoutProbe.querySelectorAll('.mtlx-action-label').forEach((el) => {
+            if (el.scrollWidth > el.clientWidth + 0.5) truncated = true;
+        });
+        return truncated;
+    }
+
+    function updateColumnLayout() {
+        const gridWrap = root.querySelector('.mtlx-action-grid');
+        if (!gridWrap) return;
+        const width = gridWrap.clientWidth || root.clientWidth;
+        const truncated = measureWouldTruncate(gridWrap, width);
+        const next = decideColumnLayout(columnMode, truncated, columnStreak);
+        columnStreak = next.streak;
+        if (next.mode !== columnMode) columnMode = next.mode;
+        gridWrap.classList.toggle('single-col', columnMode === 'single');
+    }
+
+    if (typeof ResizeObserver !== 'undefined') {
+        const resizeObserver = new ResizeObserver(() => updateColumnLayout());
+        resizeObserver.observe(root);
     }
 
     // ---- Action rows -------------------------------------------------
     function render(rows) {
+        // insertNode is forced collapsed whenever it's disabled (no
+        // visible .mtlx text editor), even if it was left expanded before.
+        const insertRow = rows.find((r) => r.id === 'insertNode');
+        if (insertRow && insertRow.disabled && groupState.insertNode) {
+            groupState = nextGroupExpansion(groupState, 'insertNode', false);
+            persistGroupState();
+            backToNodeList(false);
+        }
+        insertNodePanel.hidden = !groupState.insertNode;
+
         root.textContent = '';
         // Consecutive `layout: 'half'` rows share one CSS-grid wrapper (two
         // columns); a non-half row (or the end of the list) closes it. An
@@ -175,7 +409,7 @@
             if (row.layout === 'half') {
                 if (!gridWrap) {
                     gridWrap = document.createElement('div');
-                    gridWrap.className = 'mtlx-action-grid';
+                    gridWrap.className = 'mtlx-action-grid' + (columnMode === 'single' ? ' single-col' : '');
                     root.appendChild(gridWrap);
                 }
             } else {
@@ -205,15 +439,19 @@
             label.textContent = (row.layout === 'half' && row.shortLabel) ? row.shortLabel : row.label;
             btn.appendChild(label);
 
-            if (row.toggle === 'examples') {
-                btn.dataset.toggle = 'examples';
-                btn.setAttribute('aria-expanded', String(examplesExpanded));
-                btn.setAttribute('aria-controls', 'mtlx-examples-panel');
+            if (row.toggle === 'examples' || row.toggle === 'insertNode') {
+                const which = row.toggle;
+                btn.dataset.toggle = which;
+                btn.setAttribute('aria-expanded', String(groupState[which]));
+                btn.setAttribute('aria-controls', which === 'examples' ? 'mtlx-examples-panel' : 'mtlx-insert-panel');
                 const chevron = document.createElement('span');
-                chevron.className = 'mtlx-action-chevron' + (examplesExpanded ? ' is-open' : '');
+                chevron.className = 'mtlx-action-chevron' + (groupState[which] ? ' is-open' : '');
                 chevron.innerHTML = svg(CHEVRON_PATH);
                 btn.appendChild(chevron);
-                btn.addEventListener('click', () => setExamplesExpanded(!examplesExpanded));
+                btn.addEventListener('click', () => {
+                    if (btn.disabled) return;
+                    setGroupExpanded(which, !groupState[which]);
+                });
             } else {
                 btn.addEventListener('click', () => {
                     if (btn.disabled) return;
@@ -222,16 +460,12 @@
             }
 
             wrap.appendChild(btn);
-            if (row.disabled && row.description) {
-                const note = document.createElement('div');
-                note.className = 'mtlx-action-note';
-                note.textContent = row.description;
-                wrap.appendChild(note);
-            }
             (gridWrap || root).appendChild(wrap);
             if (row.toggle === 'examples') root.appendChild(examplesPanel);
+            if (row.toggle === 'insertNode') root.appendChild(insertNodePanel);
         }
         closeGroup();
+        updateColumnLayout();
     }
 
     // ---- About overlay -------------------------------------------------
@@ -353,6 +587,11 @@
     function openAbout() {
         if (!latestState || !latestState.about) return;
         lastFocused = document.activeElement;
+        // Collapse both expandable groups (task G1 item 10); the OTHER two
+        // sidebar sections (Outline, Files) are separate TreeViews the host
+        // handles itself once it sees the 'about' message posted below.
+        setGroupExpanded('examples', false);
+        setGroupExpanded('insertNode', false);
         renderAbout(latestState.about);
         aboutOverlay.hidden = false;
         const closeBtn = aboutOverlay.querySelector('.mtlx-toolbar-btn');
@@ -408,6 +647,11 @@
         item.className = 'mtlx-more-item';
         item.setAttribute('role', 'menuitem');
         item.dataset.help = link.id;
+        item.disabled = !!link.disabled;
+        if (link.disabled) {
+            item.title = 'Coming soon';
+            item.setAttribute('aria-disabled', 'true');
+        }
         const icon = document.createElement('span');
         icon.className = 'mtlx-action-icon';
         icon.innerHTML = iconSvg(link.icon);
@@ -416,6 +660,7 @@
         label.textContent = link.label;
         item.appendChild(label);
         item.addEventListener('click', () => {
+            if (item.disabled) return;
             setMoreOpen(false);
             moreBtn.focus();
             vscode.postMessage({ type: 'openHelpLink', id: link.id });
@@ -453,12 +698,24 @@
 
     window.addEventListener('message', (event) => {
         const msg = event.data;
-        if (!msg || msg.type !== 'state') return;
+        if (!msg) return;
+        if (msg.type === 'focusInsertNode') {
+            const insertRow = latestState && (latestState.rows || []).find((r) => r.id === 'insertNode');
+            if (insertRow && insertRow.disabled) return;
+            setGroupExpanded('insertNode', true, false);
+            backToNodeList();
+            return;
+        }
+        if (msg.type !== 'state') return;
         latestState = msg;
         if (Array.isArray(msg.rows)) render(msg.rows);
         if (Array.isArray(msg.examplesGroups)) {
             allGroups = msg.examplesGroups;
             refreshExamples();
+        }
+        if (Array.isArray(msg.insertNodeRows)) {
+            insertRows = msg.insertNodeRows;
+            if (insertNodePanel.hidden || insTypeStep.hidden) renderInsertList();
         }
         if (!aboutOverlay.hidden && msg.about) renderAbout(msg.about);
     });

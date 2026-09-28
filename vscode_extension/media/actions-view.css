@@ -41,12 +41,22 @@ body {
     grid-column: 1 / -1;
 }
 
-/* Below this width two short labels no longer fit side by side without
-   truncating; drop to one button per row instead. */
-@media (max-width: 260px) {
-    .mtlx-action-grid {
-        grid-template-columns: 1fr;
-    }
+/* Applied by media/actions-view.js's ResizeObserver-driven measurement
+   (a half-width label's scrollWidth > clientWidth) instead of a fixed
+   media query, so it tracks the sidebar's real width at any zoom level. */
+.mtlx-action-grid.single-col {
+    grid-template-columns: 1fr;
+}
+
+/* The layout-decision probe: a hidden, always-two-column clone of the
+   current half-width rows, sized to the live container's width and
+   measured off-screen -- never actually seen or interactive. */
+.mtlx-layout-probe {
+    position: fixed;
+    top: 0;
+    left: -9999px;
+    visibility: hidden;
+    pointer-events: none;
 }
 
 .mtlx-action-row.half .mtlx-action-btn {
@@ -127,12 +137,6 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-}
-
-.mtlx-action-note {
-    font-size: 11px;
-    color: var(--vscode-descriptionForeground);
-    padding-left: 24px;
 }
 
 .mtlx-action-chevron {
@@ -283,13 +287,27 @@ body {
     outline: none;
 }
 
-/* ---- Embedded examples panel (below "New Material from Example") ----- */
-.mtlx-examples-panel {
-    margin: 2px 0 10px;
-    padding-left: 2px;
+.mtlx-more-item:disabled {
+    opacity: 0.5;
+    cursor: default;
 }
 
-.mtlx-examples-panel[hidden] {
+.mtlx-more-item:disabled:hover {
+    background: transparent;
+}
+
+/* ---- Embedded expandable groups (Insert Node, New Material from Example)
+   Each group has its OWN scrolling area capped well under typical sidebar
+   heights, so the action buttons above it are never pushed out of view --
+   only the group's own content scrolls. */
+.mtlx-group-panel {
+    margin: 2px 0 10px;
+    padding-left: 2px;
+    max-height: 45vh;
+    overflow-y: auto;
+}
+
+.mtlx-group-panel[hidden] {
     display: none;
 }
 
@@ -317,6 +335,96 @@ body {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
     gap: 8px;
+}
+
+/* ---- Insert Node panel: node list + the second "pick a type" step ---- */
+#mtlx-insert-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.mtlx-insert-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 5px 8px;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: inherit;
+    text-align: left;
+    cursor: pointer;
+    background: transparent;
+    color: var(--vscode-foreground);
+}
+
+.mtlx-insert-item:hover {
+    background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+.mtlx-insert-item:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: -1px;
+}
+
+.mtlx-insert-name {
+    font-weight: 500;
+}
+
+.mtlx-insert-meta {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.mtlx-insert-type-step {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 2px;
+}
+
+.mtlx-insert-back {
+    align-self: flex-start;
+    padding: 2px 0;
+    border: none;
+    background: transparent;
+    color: var(--vscode-textLink-foreground);
+    font: inherit;
+    cursor: pointer;
+}
+
+.mtlx-insert-back:hover {
+    color: var(--vscode-textLink-activeForeground);
+}
+
+.mtlx-insert-selected-name {
+    font-weight: 500;
+    padding: 2px 0 4px;
+}
+
+.mtlx-insert-select {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 4px 6px;
+    font-family: inherit;
+    font-size: inherit;
+    color: var(--vscode-input-foreground, var(--vscode-foreground));
+    background: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border, transparent);
+    border-radius: 2px;
+}
+
+.mtlx-insert-select:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: -1px;
+}
+
+#mtlx-insert-btn {
+    margin-top: 4px;
 }
 
 /* ---- About overlay: covers the sidebar's own content, not the whole

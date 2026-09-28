@@ -1064,9 +1064,10 @@ async function scenarioGalleryPanel(ctx) {
 }
 
 // Scenario: actionsView -- the materialxPlayground.actions sidebar view is
-// now a WebviewView (was a TreeView); focusing it makes VS Code call
+// a WebviewView (was a TreeView); focusing it makes VS Code call
 // resolveWebviewView, and the row list it would render matches
-// actionsModel.js's six ids in order.
+// actionsModel.js's seven ids in order (Material Viewer before Graph
+// Editor, Insert Node embedded directly above New Material from Example).
 async function scenarioActionsView(ctx) {
     const actions = ctx.testApi.actions;
     if (!actions) return { pass: false, error: 'testApi.actions is missing' };
@@ -1074,7 +1075,10 @@ async function scenarioActionsView(ctx) {
     await actions.focus();
     await new Promise((r) => setTimeout(r, 3000)); // let the view resolve
     const state = actions.getState();
-    const expectedIds = ['newDocument', 'openDocs', 'openInGraphEditor', 'openInMaterialViewer', 'filterDocsByFile', 'newFromExample'];
+    const expectedIds = [
+        'newDocument', 'openDocs', 'openInMaterialViewer', 'openInGraphEditor',
+        'filterDocsByFile', 'insertNode', 'newFromExample',
+    ];
     const idsOk = JSON.stringify(state.rowIds) === JSON.stringify(expectedIds);
     return { pass: state.resolved && idsOk, resolved: state.resolved, rowIds: state.rowIds };
 }
@@ -1654,7 +1658,8 @@ async function scenarioFilesView(ctx) {
 // Scenario: insertNode -- an untitled .mtlx document (no fixture file
 // needed) gets a uniquely-named "constant" node inserted at the cursor via
 // testApi.insertNode.insert(), the same path a real click/Enter takes
-// (insertNodeView.js's _insert -> mtlxCompletions.buildNodeElementSnippet).
+// inside the Actions webview's embedded Insert Node group
+// (actionsView.js's _insertNode -> mtlxCompletions.buildNodeElementSnippet).
 async function scenarioInsertNode(ctx) {
     const insertApi = ctx.testApi.insertNode;
     if (!insertApi) return { pass: false, error: 'testApi.insertNode is missing' };
@@ -1678,43 +1683,90 @@ async function scenarioInsertNode(ctx) {
     }
 }
 
-// Scenario: recentView -- every .mtlx tab open records its file at the
-// front of materialxPlayground.recent, including a REOPEN of a file already
-// in the list, and Clear empties it. Asserts only the order its own opens
-// produce, so a list already populated by earlier scenarios is fine.
-async function scenarioRecentView(ctx) {
-    const recentApi = ctx.testApi.recent;
-    if (!recentApi) return { pass: false, error: 'testApi.recent is missing' };
+// Scenario: filesVisibility -- the Files view's title is "Textures & Files
+// in Document" (task G1 item 8) and its refs go empty once focus moves to a
+// non-.mtlx file, the same signal filesView.js's setActiveDocument(null)/
+// materialxPlayground.filesVisible context clearing produces.
+async function scenarioFilesVisibility(ctx) {
+    const filesApi = ctx.testApi.files;
+    if (!filesApi) return { pass: false, error: 'testApi.files is missing' };
 
-    const a = vscode.Uri.file(ctx.fixtures.hoverMtlxPath);
-    const b = vscode.Uri.file(ctx.fixtures.validationMtlxPath);
-    const open = async (uri) => {
-        const doc = await vscode.workspace.openTextDocument(uri);
-        await vscode.window.showTextDocument(doc, { preview: false });
-    };
-    const frontIs = (first, second) => waitForValue(() => {
-        const list = recentApi.getItems();
-        return list.length >= 2 && list[0].uri === first.toString() && list[1].uri === second.toString() ? list : null;
-    }, 10000);
+    const pkg = JSON.parse(fs.readFileSync(path.join(ctx.extensionRoot, 'package.json'), 'utf8'));
+    const viewDef = (pkg.contributes.views.materialxPlayground || []).find((v) => v.id === 'materialxPlayground.files');
+    const titleOk = !!viewDef && viewDef.name === 'Textures & Files in Document';
+
+    const mtlxUri = vscode.Uri.file(ctx.fixtures.filesDemoMtlxPath);
+    const otherPath = path.join(os.tmpdir(), 'mtlx-smoke-files-visibility-' + Date.now() + '.txt');
+    fs.writeFileSync(otherPath, 'not a MaterialX document\n');
+    const otherUri = vscode.Uri.file(otherPath);
     try {
-        await open(a);
-        await open(b);
-        const afterOpens = await frontIs(b, a);
-        // Reopen a: its tab closes, but the TextDocument may stay cached.
-        await closeTabsForUri(a);
-        await open(a);
-        const afterReopen = await frontIs(a, b);
-        const items = afterReopen || recentApi.getItems();
-        const listedOk = !!afterOpens && !!afterReopen && items[0].kind === 'mtlx';
+        const doc = await vscode.workspace.openTextDocument(mtlxUri);
+        await vscode.window.showTextDocument(doc, { preview: false });
+        const refsWhileMtlx = await waitForValue(() => (filesApi.getRefs().length ? filesApi.getRefs() : null), 15000);
+        const visibleForMtlx = Array.isArray(refsWhileMtlx) && refsWhileMtlx.length > 0;
 
-        await recentApi.clear();
-        const cleared = await waitForValue(() => (recentApi.getItems().length === 0 ? true : null), 5000);
+        const otherDoc = await vscode.workspace.openTextDocument(otherUri);
+        await vscode.window.showTextDocument(otherDoc, { preview: false });
+        const hiddenForOther = await waitForValue(() => (filesApi.getRefs().length === 0 ? true : null), 8000);
 
-        return { pass: listedOk && !!cleared, afterOpens: !!afterOpens, afterReopen: !!afterReopen, items: items.map((e) => e.label) };
+        return { pass: titleOk && visibleForMtlx && !!hiddenForOther, titleOk, visibleForMtlx, hiddenForOther: !!hiddenForOther };
     } finally {
-        await closeTabsForUri(a);
-        await closeTabsForUri(b);
+        await closeTabsForUri(mtlxUri);
+        await closeTabsForUri(otherUri);
+        try { fs.rmSync(otherPath, { force: true }); } catch (e) { /* best effort */ }
     }
+}
+
+// Scenario: openInTextEditor -- the custom editor tab's context menu
+// command (materialxPlayground.openInTextEditor, task G1 item 12a) opens/
+// reveals the plain .mtlx text beside the Playground.
+async function scenarioOpenInTextEditor(ctx) {
+    const uri = vscode.Uri.file(ctx.fixtures.mainMtlxPath);
+    try {
+        await openEditor(uri);
+        await new Promise((r) => setTimeout(r, 3000)); // let the Playground panel settle
+        await vscode.commands.executeCommand('materialxPlayground.openInTextEditor', uri);
+        const opened = await waitForValue(() => {
+            const found = vscode.window.visibleTextEditors.find((e) => e.document.uri.toString() === uri.toString());
+            return found ? true : null;
+        }, 10000);
+        return { pass: !!opened, opened: !!opened };
+    } finally {
+        await closeTabsForUri(uri);
+    }
+}
+
+// Scenario: contextHeader -- every context menu we contribute to
+// (explorer/context, editor/context, editor/title/context, task G1 item
+// 12b) leads with our own always-disabled "MaterialX Playground" label,
+// ordered first (@0) in our own group, hidden from the Command Palette.
+async function scenarioContextHeader(ctx) {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ctx.extensionRoot, 'package.json'), 'utf8'));
+    const cmd = (pkg.contributes.commands || []).find((c) => c.command === 'materialxPlayground.contextHeader');
+    const cmdOk = !!cmd && cmd.enablement === 'false' && cmd.title === 'MaterialX Playground';
+
+    const menus = pkg.contributes.menus || {};
+    const headerFirstInGroup = (menuId) => {
+        const entries = menus[menuId] || [];
+        const header = entries.find((e) => e.command === 'materialxPlayground.contextHeader');
+        if (!header) return false;
+        const [groupName, orderStr] = String(header.group || '').split('@');
+        if (orderStr !== '0') return false;
+        return entries.every((e) => {
+            if (e.command === header.command) return true;
+            const [g, o] = String(e.group || '').split('@');
+            return g !== groupName || Number(o) > 0;
+        });
+    };
+    const explorerOk = headerFirstInGroup('explorer/context');
+    const editorOk = headerFirstInGroup('editor/context');
+    const editorTitleOk = headerFirstInGroup('editor/title/context');
+
+    const paletteEntry = (menus.commandPalette || []).find((e) => e.command === 'materialxPlayground.contextHeader');
+    const hiddenFromPaletteOk = !!paletteEntry && paletteEntry.when === 'false';
+
+    const pass = cmdOk && explorerOk && editorOk && editorTitleOk && hiddenFromPaletteOk;
+    return { pass, cmdOk, explorerOk, editorOk, editorTitleOk, hiddenFromPaletteOk };
 }
 
 async function run() {
@@ -1843,8 +1895,10 @@ async function run() {
         if (want('textureSwap')) { out.scenarios.textureSwap = await scenarioTextureSwap(ctx); writeOut(); }
         if (want('selectionSync')) { out.scenarios.selectionSync = await scenarioSelectionSync(ctx); writeOut(); }
         if (want('filesView')) { out.scenarios.filesView = await scenarioFilesView(ctx); writeOut(); }
+        if (want('filesVisibility')) { out.scenarios.filesVisibility = await scenarioFilesVisibility(ctx); writeOut(); }
         if (want('insertNode')) { out.scenarios.insertNode = await scenarioInsertNode(ctx); writeOut(); }
-        if (want('recentView')) { out.scenarios.recentView = await scenarioRecentView(ctx); writeOut(); }
+        if (want('openInTextEditor')) { out.scenarios.openInTextEditor = await scenarioOpenInTextEditor(ctx); writeOut(); }
+        if (want('contextHeader')) { out.scenarios.contextHeader = await scenarioContextHeader(ctx); writeOut(); }
     } catch (e) {
         out.fatalError = String((e && e.stack) || e);
         log('FATAL: ' + (e && e.message || e));

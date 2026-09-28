@@ -9,34 +9,38 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const actionsModel = require('../../vscode_extension/src/actionsModel.js');
 
-test('buildActionRows: six rows, in the specified order, with icons and variants', () => {
-    const rows = actionsModel.buildActionRows(false);
+test('buildActionRows: seven rows, in the specified order (Material Viewer before Graph Editor)', () => {
+    const rows = actionsModel.buildActionRows(false, false);
     assert.deepEqual(rows.map((r) => r.id), [
-        'newDocument', 'openDocs',
-        'openInGraphEditor', 'openInMaterialViewer', 'filterDocsByFile', 'newFromExample',
+        'newDocument', 'openDocs', 'openInMaterialViewer', 'openInGraphEditor',
+        'filterDocsByFile', 'insertNode', 'newFromExample',
     ]);
     assert.equal(rows.find((r) => r.id === 'openDocs').icon, 'book');
     assert.equal(rows.find((r) => r.id === 'newFromExample').variant, 'primary');
+    assert.equal(rows.find((r) => r.id === 'insertNode').variant, 'primary');
     assert.equal(rows.find((r) => r.id === 'filterDocsByFile').variant, 'secondary');
 });
 
-test('buildActionRows: newFromExample toggles the embedded examples panel, no command', () => {
-    const rows = actionsModel.buildActionRows(false);
-    const row = rows.find((r) => r.id === 'newFromExample');
-    assert.equal(row.toggle, 'examples');
-    assert.equal(row.command, null);
+test('buildActionRows: newFromExample and insertNode toggle their own panel, no command', () => {
+    const rows = actionsModel.buildActionRows(false, true);
+    const example = rows.find((r) => r.id === 'newFromExample');
+    const insert = rows.find((r) => r.id === 'insertNode');
+    assert.equal(example.toggle, 'examples');
+    assert.equal(example.command, null);
+    assert.equal(insert.toggle, 'insertNode');
+    assert.equal(insert.command, null);
 });
 
-test('buildActionRows: only newFromExample carries a toggle field', () => {
-    const rows = actionsModel.buildActionRows(true);
+test('buildActionRows: only the two toggle rows carry a toggle field', () => {
+    const rows = actionsModel.buildActionRows(true, true);
     for (const row of rows) {
-        if (row.id === 'newFromExample') continue;
+        if (row.id === 'newFromExample' || row.id === 'insertNode') continue;
         assert.equal(row.toggle, null);
     }
 });
 
 test('buildActionRows: no active document disables the three document-scoped rows', () => {
-    const rows = actionsModel.buildActionRows(false);
+    const rows = actionsModel.buildActionRows(false, true);
     for (const id of ['openInGraphEditor', 'openInMaterialViewer', 'filterDocsByFile']) {
         const row = rows.find((r) => r.id === id);
         assert.equal(row.disabled, true);
@@ -46,7 +50,7 @@ test('buildActionRows: no active document disables the three document-scoped row
 });
 
 test('buildActionRows: active document enables the three document-scoped rows', () => {
-    const rows = actionsModel.buildActionRows(true);
+    const rows = actionsModel.buildActionRows(true, true);
     const graph = rows.find((r) => r.id === 'openInGraphEditor');
     const viewer = rows.find((r) => r.id === 'openInMaterialViewer');
     const filter = rows.find((r) => r.id === 'filterDocsByFile');
@@ -57,26 +61,40 @@ test('buildActionRows: active document enables the three document-scoped rows', 
     assert.equal(filter.command, 'materialxPlayground.filterDocsByFile');
 });
 
-test('buildActionRows: other rows are always enabled regardless of document', () => {
+test('buildActionRows: insertNode is gated on hasMtlxTextEditor, independent of hasActiveDocument', () => {
+    const withDocNoTextEditor = actionsModel.buildActionRows(true, false);
+    const row1 = withDocNoTextEditor.find((r) => r.id === 'insertNode');
+    assert.equal(row1.disabled, true);
+    assert.equal(row1.description, 'Open a .mtlx file in the text editor to insert nodes.');
+
+    const withTextEditorNoDoc = actionsModel.buildActionRows(false, true);
+    const row2 = withTextEditorNoDoc.find((r) => r.id === 'insertNode');
+    assert.equal(row2.disabled, false);
+    assert.equal(row2.description, undefined);
+});
+
+test('buildActionRows: other rows are always enabled regardless of document/editor', () => {
     for (const hasDoc of [false, true]) {
-        const rows = actionsModel.buildActionRows(hasDoc);
-        for (const id of ['newFromExample', 'newDocument', 'openDocs']) {
-            const row = rows.find((r) => r.id === id);
-            assert.equal(row.disabled, false);
+        for (const hasEditor of [false, true]) {
+            const rows = actionsModel.buildActionRows(hasDoc, hasEditor);
+            for (const id of ['newFromExample', 'newDocument', 'openDocs']) {
+                const row = rows.find((r) => r.id === id);
+                assert.equal(row.disabled, false);
+            }
         }
-        assert.ok(rows.find((r) => r.id === 'newDocument').command);
     }
 });
 
-test('buildActionRows: layout is "half" for every row except newFromExample', () => {
-    const rows = actionsModel.buildActionRows(true);
+test('buildActionRows: layout is "half" for every row except the two toggle rows', () => {
+    const rows = actionsModel.buildActionRows(true, true);
     for (const row of rows) {
-        assert.equal(row.layout, row.id === 'newFromExample' ? null : 'half');
+        const isToggle = row.id === 'newFromExample' || row.id === 'insertNode';
+        assert.equal(row.layout, isToggle ? null : 'half');
     }
 });
 
 test('buildActionRows: every half-layout row carries a shortLabel, full label unchanged', () => {
-    const rows = actionsModel.buildActionRows(true);
+    const rows = actionsModel.buildActionRows(true, true);
     const expected = {
         newDocument: 'New Document',
         openDocs: 'Node Docs',
@@ -91,20 +109,51 @@ test('buildActionRows: every half-layout row carries a shortLabel, full label un
     }
 });
 
-test('buildActionRows: newFromExample (full width) has no shortLabel', () => {
-    const rows = actionsModel.buildActionRows(true);
-    const row = rows.find((r) => r.id === 'newFromExample');
-    assert.equal(row.shortLabel, null);
-    assert.equal(row.label, 'New Material from Example');
+test('buildActionRows: the two full-width toggle rows have no shortLabel', () => {
+    const rows = actionsModel.buildActionRows(true, true);
+    for (const id of ['newFromExample', 'insertNode']) {
+        const row = rows.find((r) => r.id === id);
+        assert.equal(row.shortLabel, null);
+    }
+    assert.equal(rows.find((r) => r.id === 'newFromExample').label, 'New Material from Example');
+    assert.equal(rows.find((r) => r.id === 'insertNode').label, 'Insert Node');
 });
 
 test('isValidMessageType: accepts the known set, rejects anything else', () => {
-    for (const type of ['ready', 'run', 'toggleExamples', 'about', 'github', 'rendered', 'openHelpLink']) {
+    for (const type of ['ready', 'run', 'toggleExamples', 'toggleInsertNode', 'insertNode', 'about', 'github', 'rendered', 'openHelpLink']) {
         assert.equal(actionsModel.isValidMessageType(type), true);
     }
     for (const type of ['open', 'toggle', 'exec', '', undefined, null, 123, '__proto__']) {
         assert.equal(actionsModel.isValidMessageType(type), false);
     }
+});
+
+test('nextGroupExpansion: expanding one group collapses the other', () => {
+    const collapsed = { examples: false, insertNode: false };
+    const expandInsert = actionsModel.nextGroupExpansion(collapsed, 'insertNode', true);
+    assert.deepEqual(expandInsert, { examples: false, insertNode: true });
+    const expandExamples = actionsModel.nextGroupExpansion(expandInsert, 'examples', true);
+    assert.deepEqual(expandExamples, { examples: true, insertNode: false });
+});
+
+test('nextGroupExpansion: collapsing one group never expands the other', () => {
+    const bothExpandedIsImpossible = { examples: true, insertNode: false };
+    const next = actionsModel.nextGroupExpansion(bothExpandedIsImpossible, 'examples', false);
+    assert.deepEqual(next, { examples: false, insertNode: false });
+});
+
+test('decideColumnLayout: flips only after two consecutive disagreeing readings (hysteresis)', () => {
+    let step = actionsModel.decideColumnLayout('two', true, 0);
+    assert.deepEqual(step, { mode: 'two', streak: 1 });
+    step = actionsModel.decideColumnLayout(step.mode, true, step.streak);
+    assert.deepEqual(step, { mode: 'single', streak: 0 });
+});
+
+test('decideColumnLayout: an agreeing reading resets the streak, no flip', () => {
+    let step = actionsModel.decideColumnLayout('two', true, 0);
+    assert.deepEqual(step, { mode: 'two', streak: 1 });
+    step = actionsModel.decideColumnLayout(step.mode, false, step.streak);
+    assert.deepEqual(step, { mode: 'two', streak: 0 });
 });
 
 test('isValidHelpLinkId: accepts the three overflow-menu ids, rejects anything else', () => {

@@ -63,4 +63,6 @@ function allCategoryRows(index) {
     return rows;
 }
 
-module.exports = { isInsideOpenTag, lineIndent, insertPlan, allNamesInText, outputTypesInIndex, allCategoryRows };
+module.exports = {
+    isInsideOpenTag, lineIndent, insertPlan, allNamesInText, outputTypesInIndex, allCategoryRows,
+};

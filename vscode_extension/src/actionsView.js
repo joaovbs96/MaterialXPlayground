@@ -21,12 +21,14 @@ const galleryModel = require('./exampleGalleryModel');
 const exampleCatalog = require('./exampleCatalog');
 const newFromExample = require('./newFromExample');
 const mtlxNode = require('./mtlxNode');
+const mtlxCompletions = require('./mtlxCompletions');
+const insertNodeModel = require('./insertNodeModel');
 
 // Every command a row can ever carry, computed once from the model itself
 // -- the webview can only ever trigger one of these, never an arbitrary
 // string it sends us.
 const KNOWN_COMMANDS = new Set(
-    actionsModel.buildActionRows(true).map((r) => r.command).filter(Boolean)
+    actionsModel.buildActionRows(true, true).map((r) => r.command).filter(Boolean)
 );
 
 // MaterialX Playground's repo, hardcoded here rather than required from
@@ -84,15 +86,56 @@ class MtlxActionsViewProvider {
         this._view = null;
         this._groups = [];
         this._examplesExpanded = false;
+        this._insertNodeExpanded = false;
         this._aboutRequests = 0;
         this._githubOpens = 0;
         this._helpOpens = { tutorials: 0, reportIssue: 0, whatsNew: 0 };
         this._helpLinks = null;
+        // Insert Node needs a visible .mtlx TEXT editor to insert at a
+        // cursor; prefers the focused one, falls back to the last known
+        // one (clicking into this webview defocuses it without closing it).
+        this._lastMtlxTextUri = null;
+        // Set by requestExpandInsertNode() when the view hasn't sent its
+        // 'ready' handshake yet (first-ever reveal this session); flushed
+        // once it does, same race this handshake already guards for state.
+        this._pendingExpandInsertNode = false;
+        this._ready = false;
     }
 
     setActiveDocument(document) {
         this._hasActiveDocument = !!document;
         this._postState();
+    }
+
+    noteTextEditorChange(editor) {
+        if (editor && editor.document.languageId === 'mtlx') this._lastMtlxTextUri = editor.document.uri.toString();
+        this._postState();
+    }
+
+    _resolveTextEditor() {
+        const active = vscode.window.activeTextEditor;
+        if (active && active.document.languageId === 'mtlx') return active;
+        if (this._lastMtlxTextUri) {
+            const found = vscode.window.visibleTextEditors.find(
+                (e) => e.document.languageId === 'mtlx' && e.document.uri.toString() === this._lastMtlxTextUri
+            );
+            if (found) return found;
+        }
+        return null;
+    }
+
+    // Text editor right-click "Insert Node": asks the webview to expand
+    // the Insert Node group and focus its search box. Queued if the view's
+    // own 'ready' handshake hasn't landed yet (first reveal this session).
+    requestExpandInsertNode() {
+        this._pendingExpandInsertNode = true;
+        this._flushPendingExpandInsertNode();
+    }
+
+    _flushPendingExpandInsertNode() {
+        if (!this._pendingExpandInsertNode || !this._view || !this._ready) return;
+        this._pendingExpandInsertNode = false;
+        this._view.webview.postMessage({ type: 'focusInsertNode' });
     }
 
     _buildAbout() {
@@ -126,21 +169,42 @@ class MtlxActionsViewProvider {
         };
     }
 
+    // Every node category (name/library/output types) for the embedded
+    // search+list panel, each with orderedOutputTypes (mtlxCompletions.js's
+    // defaultOutputTypeOrder, the same ordering completions use, so the
+    // sidebar and auto-complete always agree) -- its first entry is the
+    // type dropdown's default. Empty when nodelib.json isn't built yet.
+    _buildInsertNodeRows() {
+        try {
+            const index = mtlxCompletions.getLibraryIndex(this._context.extensionUri.fsPath);
+            return insertNodeModel.allCategoryRows(index).map((row) => ({
+                ...row,
+                orderedOutputTypes: mtlxCompletions.defaultOutputTypeOrder(row.name, { index }),
+            }));
+        } catch (e) {
+            return [];
+        }
+    }
+
     _postState() {
         if (!this._view) return;
         this._groups = exampleGallery.buildResolvedGroups(this._view.webview, this._context.extensionUri);
         const about = this._buildAbout();
         this._helpLinks = this._buildHelpLinks(about);
+        const hasMtlxTextEditor = !!this._resolveTextEditor();
         this._view.webview.postMessage({
             type: 'state',
-            rows: actionsModel.buildActionRows(this._hasActiveDocument),
+            rows: actionsModel.buildActionRows(this._hasActiveDocument, hasMtlxTextEditor),
             examplesGroups: this._groups,
+            insertNodeRows: this._buildInsertNodeRows(),
+            hasMtlxTextEditor,
             about,
         });
     }
 
     async resolveWebviewView(webviewView) {
         this._view = webviewView;
+        this._ready = false;
         const webview = webviewView.webview;
         const mediaRoot = vscode.Uri.joinPath(this._context.extensionUri, 'vscode_extension', 'media');
         // localResourceRoots needs the whole extensionUri, not just
@@ -175,13 +239,23 @@ class MtlxActionsViewProvider {
     async _handleMessage(msg) {
         if (!msg || typeof msg !== 'object' || !actionsModel.isValidMessageType(msg.type)) return;
 
-        if (msg.type === 'ready') { this._postState(); return; }
+        if (msg.type === 'ready') { this._ready = true; this._postState(); this._flushPendingExpandInsertNode(); return; }
         if (msg.type === 'rendered' && typeof msg.cardCount === 'number') {
             if (TEST_TRANSPORT && testHooks) testHooks.emitRendered({ cardCount: msg.cardCount });
             return;
         }
         if (msg.type === 'toggleExamples') { this._examplesExpanded = !!msg.expanded; return; }
-        if (msg.type === 'about') { this._aboutRequests += 1; return; }
+        if (msg.type === 'toggleInsertNode') { this._insertNodeExpanded = !!msg.expanded; return; }
+        if (msg.type === 'insertNode') { await this._insertNode(msg.category, msg.outputType); return; }
+        if (msg.type === 'about') {
+            this._aboutRequests += 1;
+            // The webview collapses its own two groups locally; Outline
+            // has a real collapse-all command (showCollapseAll); Files has
+            // no expandable items and no pane-collapse API exists.
+            vscode.commands.executeCommand('workbench.actions.treeView.materialxPlayground.outline.collapseAll')
+                .then(undefined, () => { /* view not yet resolved/visible: best effort */ });
+            return;
+        }
         if (msg.type === 'github') {
             this._githubOpens += 1;
             // TEST_TRANSPORT never actually opens a browser -- the smoke
@@ -204,7 +278,7 @@ class MtlxActionsViewProvider {
         }
         if (msg.type !== 'run' || typeof msg.id !== 'string') return;
 
-        const rows = actionsModel.buildActionRows(this._hasActiveDocument);
+        const rows = actionsModel.buildActionRows(this._hasActiveDocument, !!this._resolveTextEditor());
         const row = rows.find((r) => r.id === msg.id);
         if (row) {
             if (row.disabled || !row.command || !KNOWN_COMMANDS.has(row.command)) return;
@@ -223,6 +297,39 @@ class MtlxActionsViewProvider {
         if (!example) return; // defensive: catalog and this._groups are built from the same source
         await newFromExample.createFromExample(this._context, example, null, null);
     }
+
+    // Builds the same node-element snippet the completion provider uses
+    // and inserts it at the cursor of the resolved .mtlx TEXT editor.
+    // `category` is re-validated against the host's own library index.
+    async _insertNode(category, outputType) {
+        if (typeof category !== 'string') return;
+        const editor = this._resolveTextEditor();
+        if (!editor) return;
+
+        let index;
+        try {
+            index = mtlxCompletions.getLibraryIndex(this._context.extensionUri.fsPath);
+        } catch (e) {
+            return;
+        }
+        const entry = index.categories.get(category);
+        if (!entry) return; // never trust the message's category beyond the known set
+
+        const document = editor.document;
+        const text = document.getText();
+        const offset = document.offsetAt(editor.selection.active);
+        const existingNames = insertNodeModel.allNamesInText(text);
+        const wantType = (typeof outputType === 'string' && entry.outputTypes.indexOf(outputType) !== -1) ? outputType : null;
+        // buildNodeElementSnippet's text starts right after a '<' (its
+        // completion caller already has one, typed by the user); this view
+        // inserts a whole new element from scratch, so add it here.
+        const body = '<' + mtlxCompletions.buildNodeElementSnippet(category, entry, existingNames, wantType);
+
+        const plan = insertNodeModel.insertPlan(text, offset);
+        const snippetText = plan.mode === 'cursor' ? body : (plan.prefix + plan.indent + body + plan.suffix);
+        const pos = document.positionAt(plan.offset);
+        await editor.insertSnippet(new vscode.SnippetString(snippetText), pos);
+    }
 }
 
 // register(context, { getActiveDocument, onDidChangeActiveDocument }):
@@ -234,7 +341,8 @@ function register(context, { getActiveDocument, onDidChangeActiveDocument }) {
 
     context.subscriptions.push(
         vscode.window.registerWebviewViewProvider('materialxPlayground.actions', provider),
-        onDidChangeActiveDocument((doc) => provider.setActiveDocument(doc))
+        onDidChangeActiveDocument((doc) => provider.setActiveDocument(doc)),
+        vscode.window.onDidChangeActiveTextEditor((e) => provider.noteTextEditorChange(e))
     );
     provider.setActiveDocument(getActiveDocument());
 
@@ -267,11 +375,15 @@ if (TEST_TRANSPORT) {
             await vscode.commands.executeCommand('materialxPlayground.actions.focus');
         },
         getState() {
-            const rows = actionsModel.buildActionRows(activeProvider ? activeProvider._hasActiveDocument : false);
+            const hasMtlxTextEditor = !!(activeProvider && activeProvider._resolveTextEditor());
+            const rows = actionsModel.buildActionRows(activeProvider ? activeProvider._hasActiveDocument : false, hasMtlxTextEditor);
             return {
                 resolved: !!(activeProvider && activeProvider._view),
                 rowIds: rows.map((r) => r.id),
+                rows,
                 examplesExpanded: activeProvider ? activeProvider._examplesExpanded : false,
+                insertNodeExpanded: activeProvider ? activeProvider._insertNodeExpanded : false,
+                hasMtlxTextEditor,
                 aboutRequests: activeProvider ? activeProvider._aboutRequests : 0,
                 githubOpens: activeProvider ? activeProvider._githubOpens : 0,
                 helpOpens: activeProvider ? Object.assign({}, activeProvider._helpOpens) : { tutorials: 0, reportIssue: 0, whatsNew: 0 },
@@ -304,6 +416,22 @@ if (TEST_TRANSPORT) {
         async toggleExamples(expanded) {
             if (!activeProvider) throw new Error('the actions view is not resolved');
             await activeProvider._handleMessage({ type: 'toggleExamples', expanded: !!expanded });
+        },
+        async toggleInsertNode(expanded) {
+            if (!activeProvider) throw new Error('the actions view is not resolved');
+            await activeProvider._handleMessage({ type: 'toggleInsertNode', expanded: !!expanded });
+        },
+        // Drives an insert through the same validated _insertNode() a real
+        // click/Enter would, no webview DOM needed; kept as a nested object
+        // so testApi.insertNode.* (extension.js, the smoke suite) is unchanged.
+        insertNode: {
+            async insert(category, outputType) {
+                if (!activeProvider) throw new Error('the actions view is not resolved');
+                await activeProvider._handleMessage({ type: 'insertNode', category, outputType });
+            },
+            hasEditor() {
+                return !!(activeProvider && activeProvider._resolveTextEditor());
+            },
         },
         waitForExamplesRendered(timeoutMs) {
             if (lastRendered) return Promise.resolve(lastRendered);
