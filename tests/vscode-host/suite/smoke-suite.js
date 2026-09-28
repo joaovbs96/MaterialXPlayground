@@ -933,8 +933,8 @@ async function scenarioSceneTreePreview(ctx) {
 async function scenarioNewFromExample(ctx) {
     const catalog = require(path.join(ctx.extensionRoot, 'vscode_extension', 'src', 'exampleCatalog.js'));
     const cases = [
-        { id: 'example-standard-surface-gold', kind: 'singleFile' },
-        { id: 'playground-motley-patchwork-rug', kind: 'textured' },
+        { id: 'standard_surface_gold', kind: 'singleFile' },
+        { id: 'Motley_Patchwork_Rug', kind: 'textured' },
     ];
 
     // Verifies a byte-for-byte copy landed at destName (single:
@@ -1025,9 +1025,61 @@ async function scenarioNewFromExample(ctx) {
     return { pass: out.singleFile.pass && out.textured.pass, singleFile: out.singleFile, textured: out.textured };
 }
 
+// Scenario: newFromExampleTextured -- standard_surface_brass_tiled.mtlx
+// carries a materialx-level fileprefix="../../../Images/" (a shared
+// texture folder three levels above the source file), the case
+// exampleCatalog.js's buildFiles rewrites so the copy is self-contained:
+// both textures relocate under "textures/" next to the copied .mtlx and
+// its filename refs are rewritten to match, instead of climbing outside
+// the destination folder. Proves the files exist where the rewritten refs
+// say they do, AND that the real validator (not a private test hook) sees
+// zero diagnostics on the copy.
+async function scenarioNewFromExampleTextured(ctx) {
+    const catalog = require(path.join(ctx.extensionRoot, 'vscode_extension', 'src', 'exampleCatalog.js'));
+    const id = 'standard_surface_brass_tiled';
+    const example = catalog.getExample(id);
+    if (!example) return { pass: false, error: 'catalog has no "' + id + '" entry' };
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtlx-smoke-newfromexample-textured-'));
+    const targetUri = vscode.Uri.file(tmpDir);
+    let newMtlxUri = null;
+    try {
+        await vscode.commands.executeCommand('materialxPlayground.newFromExample', id, targetUri);
+        await new Promise((r) => setTimeout(r, 10000));
+
+        const missing = [];
+        for (const f of example.files) {
+            const destAbs = path.join(tmpDir, example.destName, ...f.rel.split('/'));
+            if (!fs.existsSync(destAbs)) missing.push(f.rel);
+        }
+
+        const mtlxAbs = path.join(tmpDir, example.destName, example.files[0].rel);
+        newMtlxUri = vscode.Uri.file(mtlxAbs);
+        const copiedXml = fs.existsSync(mtlxAbs) ? fs.readFileSync(mtlxAbs, 'utf8') : '';
+        const stillEscapes = /value="\.\.\//.test(copiedXml);
+        const rewrittenToTextures = /value="textures\//.test(copiedXml);
+
+        const doc = await vscode.workspace.openTextDocument(newMtlxUri);
+        await vscode.window.showTextDocument(doc, { preview: false });
+        const diags = await waitForDiagnostics(newMtlxUri, 8000, () => true);
+        await new Promise((r) => setTimeout(r, 500)); // let a debounced validator settle
+        const diagsSettled = vscode.languages.getDiagnostics(newMtlxUri);
+        const errorDiags = diagsSettled.filter((d) => d.severity === vscode.DiagnosticSeverity.Error);
+
+        return {
+            pass: missing.length === 0 && !stillEscapes && rewrittenToTextures && errorDiags.length === 0,
+            fileCount: example.files.length, missing, stillEscapes, rewrittenToTextures,
+            diagnosticCount: diags.length, errorDiagCount: errorDiags.length,
+        };
+    } finally {
+        if (newMtlxUri) await closeTabsForUri(newMtlxUri);
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { /* best effort */ }
+    }
+}
+
 // Scenario: galleryPanel -- materialxPlayground.newFromExample now opens
 // the "New Material from Example" webview panel (not the old QuickPick),
-// listing every catalog entry (14) as a card, and a card click runs the
+// listing every catalog entry (54) as a card, and a card click runs the
 // same creation flow the (id, targetFolder) command form always has, all
 // through exampleGallery.js's own test API (ctx.testApi.gallery), which
 // goes through the same validated message handler a real webview click
@@ -1042,10 +1094,10 @@ async function scenarioGalleryPanel(ctx) {
         await gallery.open(tmpDir);
         const isOpen = gallery.isOpen();
         const rendered = await gallery.waitForRendered(20000);
-        const cardCountOk = rendered.cardCount === 14;
+        const cardCountOk = rendered.cardCount === 54;
 
         const errorsBefore = ctx.testApi.getErrors().length;
-        await gallery.triggerCard('example-standard-surface-gold');
+        await gallery.triggerCard('standard_surface_gold');
         await new Promise((r) => setTimeout(r, 8000)); // let materialxPlayground.open's panel boot
         const newErrors = ctx.testApi.getErrors().length - errorsBefore;
 
@@ -1085,7 +1137,7 @@ async function scenarioActionsView(ctx) {
 
 // Scenario: actionsExamples -- the "New Material from Example" catalog is
 // now embedded directly in the Actions webview (below its button), not a
-// separate materialxPlayground.examples view: every catalog entry (14)
+// separate materialxPlayground.examples view: every catalog entry (54)
 // renders as a card regardless of the panel's expanded state, and a card
 // click runs the same creation flow through the exact validated
 // _handleMessage() a real click would. No Explorer folder here, so the
@@ -1109,7 +1161,7 @@ async function scenarioActionsExamples(ctx) {
         // already happened.
         await actions.focus();
         const rendered = await actions.waitForExamplesRendered(20000);
-        const cardCountOk = rendered.cardCount === 14;
+        const cardCountOk = rendered.cardCount === 54;
 
         // The toggle button reveals the panel (aria-expanded/state), never
         // opening a separate gallery tab as a side effect.
@@ -1119,7 +1171,7 @@ async function scenarioActionsExamples(ctx) {
         const galleryUnaffected = ctx.testApi.gallery.isOpen() === galleryOpenBefore;
 
         const errorsBefore = ctx.testApi.getErrors().length;
-        await actions.triggerCard('example-standard-surface-gold');
+        await actions.triggerCard('standard_surface_gold');
         await new Promise((r) => setTimeout(r, 8000)); // let materialxPlayground.open's panel boot
         const newErrors = ctx.testApi.getErrors().length - errorsBefore;
 
@@ -1934,6 +1986,7 @@ async function run() {
         if (want('sceneLoadCancel')) { out.scenarios.sceneLoadCancel = await scenarioSceneLoadCancel(ctx); writeOut(); }
         if (want('sceneFormatAutoOpen')) { out.scenarios.sceneFormatAutoOpen = await scenarioSceneFormatAutoOpen(ctx); writeOut(); }
         if (want('newFromExample')) { out.scenarios.newFromExample = await scenarioNewFromExample(ctx); writeOut(); }
+        if (want('newFromExampleTextured')) { out.scenarios.newFromExampleTextured = await scenarioNewFromExampleTextured(ctx); writeOut(); }
         if (want('galleryPanel')) { out.scenarios.galleryPanel = await scenarioGalleryPanel(ctx); writeOut(); }
         if (want('actionsView')) { out.scenarios.actionsView = await scenarioActionsView(ctx); writeOut(); }
         if (want('actionsExamples')) { out.scenarios.actionsExamples = await scenarioActionsExamples(ctx); writeOut(); }

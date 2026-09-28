@@ -36,18 +36,15 @@
 // thumbs/) down to exactly the given ids: no network, no browser. It
 // rewrites manifest.json to list only those materials (ids absent from
 // the manifest are skipped, not an error) and deletes every thumb file
-// not in the set. Used by the .vsix packaging step: the full gallery is
-// too large to ship in the extension, but a handful of preset/example
-// thumbnails at original resolution are worth it.
+// not in the set.
 //
-// --prune-ids-auto computes that id set itself: the union of
-// vscode_extension/src/exampleCatalog.js's destNames (the "New Material
-// from Example" catalog) and js/shared/mtlx-ui.jsx's MTLX_PRESETS entries
-// (the preset picker's no-manifest fallback list, read as text since that
-// file is JSX). This keeps the .vsix's preset picker listing the SAME
-// materials it lists with no manifest at all (MTLX_PRESETS) or with the
-// full manifest on the web - only pruned to a subset never shrinks what
-// the picker shows, just what gets a real thumbnail vs. a placeholder.
+// --prune-ids-auto computes that id set itself: every id already in
+// <out>/manifest.json. The .vsix ships the FULL gallery now (all 54
+// materials, offline), so this keeps every entry - it's a real prune
+// (not skipped outright) only so a thumb left behind by a stale/renamed
+// manifest entry still gets swept before packaging. The release workflow
+// still calls this flag by name (`node scripts/gallery-shots.mjs
+// --prune-ids-auto`); only its meaning changed.
 
 import { readFile, writeFile, mkdir, readdir, unlink } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -165,33 +162,14 @@ async function pruneGallery(manifestPath, outDir, ids) {
   if (missing.length) log(`prune: ${missing.length} id(s) had no manifest entry (no thumbnail shipped): ${missing.join(", ")}`);
 }
 
-/** Gallery ids referenced by js/shared/mtlx-ui.jsx's MTLX_PRESETS array: the
- * preset picker's fallback list when no manifest ships at all. Parsed as
- * text (the file is JSX, not requireable from plain Node) - each entry's
- * `path`/`src` value's basename minus ".mtlx" IS its gallery id, the same
- * rule scripts/build-gallery.mjs uses. */
-async function mtlxPresetGalleryIds() {
-  const text = await readFile(path.join(REPO_ROOT, "js", "shared", "mtlx-ui.jsx"), "utf8");
-  const start = text.indexOf("const MTLX_PRESETS = [");
-  if (start === -1) return [];
-  const end = text.indexOf("\n];", start);
-  const block = text.slice(start, end === -1 ? undefined : end);
-  const ids = [];
-  const re = /(?:path|src):\s*'([^']+)'/g;
-  let m;
-  while ((m = re.exec(block))) ids.push(m[1].split("/").pop().replace(/\.mtlx$/i, ""));
-  return ids;
-}
-
-/** The id set --prune-ids-auto keeps: exampleCatalog.js's destNames union
- * MTLX_PRESETS' ids, so the .vsix's preset picker (manifest mode) never
- * lists fewer materials than either its own fallback (no manifest) or the
- * full web manifest would. */
-async function autoPruneIds() {
-  const { getCatalog } = require(path.join(REPO_ROOT, "vscode_extension", "src", "exampleCatalog.js"));
-  const catalogIds = getCatalog().map((e) => e.destName);
-  const presetIds = await mtlxPresetGalleryIds();
-  return [...new Set([...catalogIds, ...presetIds])];
+/** The id set --prune-ids-auto keeps: every gallery/manifest.json material
+ * (the full 54-item website/desktop gallery). The .vsix now ships the whole
+ * gallery, not a curated subset, so this is effectively a no-op filter -
+ * kept as a real prune (not skipped outright) so orphaned thumbs/ files
+ * left over from a stale manifest still get swept. */
+async function autoPruneIds(manifestPath) {
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  return (manifest.materials || []).map((m) => m.id);
 }
 
 /** Races `promise` against a timeout, rejecting with a labeled error if
@@ -287,7 +265,7 @@ async function main() {
   const { manifestPath, outDir, limit, only, jobs, reuseFrom, reuseOnly, pruneIds, pruneIdsAuto } = parseArgs(process.argv.slice(2));
 
   if (pruneIds || pruneIdsAuto) {
-    const ids = pruneIdsAuto ? await autoPruneIds() : pruneIds;
+    const ids = pruneIdsAuto ? await autoPruneIds(manifestPath) : pruneIds;
     await pruneGallery(manifestPath, outDir, ids);
     return;
   }

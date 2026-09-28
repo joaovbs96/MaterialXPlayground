@@ -162,8 +162,13 @@ async function copyExample(extensionUri, example, targetFolder) {
 
         let newMtlxUri = null;
         for (const { file, destUri } of entries) {
-            const srcUri = vscode.Uri.joinPath(extensionUri, ...file.from.split('/'));
-            const bytes = await vscode.workspace.fs.readFile(srcUri);
+            // Texture refs that would otherwise climb outside the new
+            // folder are pre-rewritten (exampleCatalog.js's buildFiles):
+            // `content` writes that rewritten text, `from` copies a
+            // texture (or an untouched .mtlx) byte-for-byte.
+            const bytes = file.content !== undefined
+                ? Buffer.from(file.content, 'utf8')
+                : await vscode.workspace.fs.readFile(vscode.Uri.joinPath(extensionUri, ...file.from.split('/')));
             await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(destUri, '..'));
             await vscode.workspace.fs.writeFile(destUri, bytes);
             if (file === example.files[0]) newMtlxUri = destUri;

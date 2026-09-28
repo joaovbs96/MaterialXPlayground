@@ -1,7 +1,79 @@
-/* gallery-cards.css: search box and example-card styles shared by the
-   "New Material from Example" gallery panel (gallery.css) and the
-   Examples sidebar view (examples-view.css). VS Code theme variables
-   only, so both match light/dark/high-contrast themes. */
+/* gallery-cards.css: search/filter toolbar and example-card styles shared
+   by the "New Material from Example" gallery panel (gallery.css) and the
+   Examples sidebar view (actions-view.css). VS Code theme variables only,
+   so both match light/dark/high-contrast themes; no shadows anywhere,
+   matching the rest of the sidebar's flat styling. */
+.mtlx-gallery-toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.mtlx-gallery-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.mtlx-gallery-chip {
+    padding: 2px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.4));
+    background: transparent;
+    color: var(--vscode-foreground);
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.mtlx-gallery-chip:hover {
+    background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+.mtlx-gallery-chip.is-active {
+    border-color: var(--vscode-focusBorder);
+    background: var(--vscode-inputOption-activeBackground, rgba(0, 122, 204, 0.25));
+    color: var(--vscode-inputOption-activeForeground, var(--vscode-foreground));
+}
+
+.mtlx-gallery-chip:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: 1px;
+}
+
+.mtlx-gallery-toolbar--compact .mtlx-gallery-chip {
+    padding: 1px 7px;
+    font-size: 10px;
+}
+
+.mtlx-gallery-status {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.mtlx-gallery-clear {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--vscode-textLink-foreground);
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+.mtlx-gallery-clear:hover {
+    color: var(--vscode-textLink-activeForeground, var(--vscode-textLink-foreground));
+}
+
+.mtlx-gallery-clear:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+}
+
 .mtlx-gallery-search-label {
     font-size: 11px;
     color: var(--vscode-descriptionForeground);

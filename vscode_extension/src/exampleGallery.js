@@ -51,28 +51,28 @@ function loadGalleryMaterials(extensionUri) {
 // Resolves each card's thumbId (from exampleGalleryModel.buildGalleryData)
 // to a webview-safe asWebviewUri, dropping it when the .jpg was pruned
 // out of this package (see gallery-shots.mjs's --prune-ids-auto).
-function withThumbUris(webview, extensionUri, groups) {
-    return groups.map((group) => ({
-        source: group.source,
-        cards: group.cards.map((card) => {
-            let thumbUri = null;
-            if (card.thumbId) {
-                const fileUri = vscode.Uri.joinPath(extensionUri, 'gallery', 'thumbs', card.thumbId + '.jpg');
-                if (fs.existsSync(fileUri.fsPath)) thumbUri = webview.asWebviewUri(fileUri).toString();
-            }
-            return { id: card.id, label: card.label, shadingModel: card.shadingModel, license: card.license, thumbUri };
-        }),
-    }));
+function withThumbUris(webview, extensionUri, cards) {
+    return cards.map((card) => {
+        let thumbUri = null;
+        if (card.thumbId) {
+            const fileUri = vscode.Uri.joinPath(extensionUri, 'gallery', 'thumbs', card.thumbId + '.jpg');
+            if (fs.existsSync(fileUri.fsPath)) thumbUri = webview.asWebviewUri(fileUri).toString();
+        }
+        return {
+            id: card.id, label: card.label, shadingModel: card.shadingModel, license: card.license,
+            family: card.family, familyLabel: card.familyLabel, tags: card.tags, thumbUri,
+        };
+    });
 }
 
-// buildResolvedGroups: exampleGalleryModel.buildGalleryData plus this
+// buildResolvedCards: exampleGalleryModel.buildGalleryData plus this
 // webview's own asWebviewUri thumbnails, in one call. Shared by this
 // panel and actionsView.js's embedded examples grid so neither duplicates
 // the catalog/manifest/thumbnail wiring.
-function buildResolvedGroups(webview, extensionUri) {
+function buildResolvedCards(webview, extensionUri) {
     const materials = loadGalleryMaterials(extensionUri);
-    const baseGroups = galleryModel.buildGalleryData(exampleCatalog.getCatalog(), materials);
-    return withThumbUris(webview, extensionUri, baseGroups);
+    const baseCards = galleryModel.buildGalleryData(exampleCatalog.getCatalog(), materials);
+    return withThumbUris(webview, extensionUri, baseCards);
 }
 
 async function buildHtml(context, webview) {
@@ -95,13 +95,13 @@ async function buildHtml(context, webview) {
 }
 
 // Message validation: only 'ready' (send the initial data) and 'run' with
-// an id from the exact group list this panel last sent are honored. A
+// an id from the exact card list this panel last sent are honored. A
 // 'run' for any other id -- unknown, or from a stale/tampered message --
 // is silently dropped, never executed.
 async function handleMessage(context, info, msg) {
     if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'ready') {
-        info.panel.webview.postMessage({ type: 'init', groups: info.groups });
+        info.panel.webview.postMessage({ type: 'init', cards: info.cards });
         return;
     }
     if (msg.type === 'rendered' && typeof msg.cardCount === 'number') {
@@ -109,10 +109,10 @@ async function handleMessage(context, info, msg) {
         return;
     }
     if (msg.type !== 'run' || typeof msg.id !== 'string') return;
-    if (!galleryModel.isKnownCardId(info.groups, msg.id)) return;
+    if (!galleryModel.isKnownCardId(info.cards, msg.id)) return;
 
     const example = exampleCatalog.getExample(msg.id);
-    if (!example) return; // defensive: catalog and info.groups are built from the same source
+    if (!example) return; // defensive: catalog and info.cards are built from the same source
     await newFromExample.createFromExample(context, example, info.targetFolderUri, null);
 }
 
@@ -138,9 +138,9 @@ async function openGallery(context, explorerFolderUri) {
     );
     panel.iconPath = panelIconPath(context.extensionUri);
 
-    const groups = buildResolvedGroups(panel.webview, context.extensionUri);
+    const cards = buildResolvedCards(panel.webview, context.extensionUri);
 
-    const info = { panel, targetFolderUri: explorerFolderUri || null, groups };
+    const info = { panel, targetFolderUri: explorerFolderUri || null, cards };
     panelInfo = info;
     panel.onDidDispose(() => { if (panelInfo === info) panelInfo = null; });
     panel.webview.onDidReceiveMessage((msg) => handleMessage(context, info, msg));
@@ -192,4 +192,4 @@ if (TEST_TRANSPORT) {
     };
 }
 
-module.exports = { register, openGallery, isGalleryOpen, buildResolvedGroups, testApi };
+module.exports = { register, openGallery, isGalleryOpen, buildResolvedCards, testApi };

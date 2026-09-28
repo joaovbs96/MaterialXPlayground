@@ -6,7 +6,8 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import Module from "node:module";
 import { DEFAULT_MTLX_VERSION, MTLX_VERSIONS } from "./lib/mtlx-versions.mjs";
 import { VSCE_VERSION } from "./lib/vsce.mjs";
 import { VENDOR_DEPS } from "./vendor-deps.mjs";
@@ -15,6 +16,7 @@ import { resolveDeps } from "./lib/vendor/registry.mjs";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, "..");
+const require = Module.createRequire(import.meta.url);
 
 function log(...args) {
   console.log("[check-vsix-files]", ...args);
@@ -76,29 +78,37 @@ function splitViewDeps(viewDepsSrc) {
 // including dependency-only bundles such as galleryDetail, is checked.
 const WEBVIEW_UNREACHABLE_VIEWS = ["home", "whatIsMaterialx", "gallery", "roadmap", "builder", "vscode"];
 
-// The only vendor/materialx/ paths .vscodeignore keeps: spec docs, manifest,
-// license, and the curated examples exampleCatalog.js copies from. Kept
-// equal to .vscodeignore by this check.
-export const MATERIALX_KEEP_LIST = [
+// Every vendor/materialx/ path the packaged extension actually reaches:
+// spec docs/manifest/license (fixed), plus every gallery material's own
+// .mtlx (root + any xi:include sibling) and every texture it references
+// (fileprefix-resolved) - derived from exampleCatalog.js's real catalog
+// (manifest-driven, the same file "New Material from Example" copies from),
+// never hand-listed, so it cannot drift out of sync with the 54-material
+// gallery. Empty tail (beyond STATIC_EXTRAS) when vendor/materialx/ isn't
+// on disk at all (a plain checkout with no `npm run vendor:offline` run).
+const MATERIALX_STATIC_EXTRAS = [
   "vendor/materialx/manifest.json",
   "vendor/materialx/LICENSE",
   "vendor/materialx/documents/Specification/MaterialX.StandardNodes.md",
   "vendor/materialx/documents/Specification/MaterialX.PBRSpec.md",
   "vendor/materialx/documents/Specification/MaterialX.NPRSpec.md",
-  "vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_default.mtlx",
-  // Curated "New Material from Example" upstream set: no texture files,
-  // no xi:include. See exampleCatalog.js's EXAMPLES_DEFS.
-  "vendor/materialx/resources/Materials/Examples/StandardSurface/standard_surface_default.mtlx",
-  "vendor/materialx/resources/Materials/Examples/StandardSurface/standard_surface_gold.mtlx",
-  "vendor/materialx/resources/Materials/Examples/StandardSurface/standard_surface_glass.mtlx",
-  "vendor/materialx/resources/Materials/Examples/StandardSurface/standard_surface_plastic.mtlx",
-  "vendor/materialx/resources/Materials/Examples/StandardSurface/standard_surface_marble_solid.mtlx",
-  "vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_aluminum_brushed.mtlx",
-  "vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_glass.mtlx",
-  "vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_carpaint.mtlx",
-  "vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_velvet.mtlx",
-  "vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_pearl.mtlx",
 ];
+
+function computeMaterialxKeepList() {
+  const keep = new Set(MATERIALX_STATIC_EXTRAS);
+  if (!existsSync(path.join(REPO_ROOT, "vendor", "materialx"))) return [...keep].sort();
+  const { getCatalog } = require(path.join(REPO_ROOT, "vscode_extension", "src", "exampleCatalog.js"));
+  for (const entry of getCatalog()) {
+    if (!entry.mtlxPath.startsWith("vendor/materialx/")) continue;
+    keep.add(entry.mtlxPath);
+    for (const file of entry.files) {
+      if (file.from && file.from.startsWith("vendor/materialx/")) keep.add(file.from);
+    }
+  }
+  return [...keep].sort();
+}
+
+export const MATERIALX_KEEP_LIST = computeMaterialxKeepList();
 
 // Data files fetched by literal path, missed by the index.html/VIEW_DEPS
 // scan above; each was confirmed with a grep before being added. MARKETPLACE.md
@@ -290,9 +300,9 @@ function getPackagedFiles() {
   return files;
 }
 
-// Anything under vendor/materialx/ that isn't one of the six keep-list
-// files is forbidden - covers resources/Images/ and any other leftover
-// from the full upstream snapshot, without hand-listing every subpath.
+// Anything under vendor/materialx/ that isn't in the derived keep list
+// is forbidden - an unreferenced Images/ file or any other leftover from
+// the full upstream snapshot the gallery doesn't actually use.
 function isForbiddenMaterialxPath(p) {
   return p.startsWith("vendor/materialx/") && !MATERIALX_KEEP_LIST.includes(p);
 }
@@ -353,4 +363,7 @@ function main() {
   log("OK - every runtime-loadable file is present and no forbidden path leaked in.");
 }
 
-main();
+// Only run the (slow, `vsce ls`-shelling) check when executed directly -
+// importing this module for its exports (MATERIALX_KEEP_LIST, unit tests)
+// must never trigger it as a side effect.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();

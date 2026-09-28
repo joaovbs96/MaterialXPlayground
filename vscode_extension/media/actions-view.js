@@ -111,83 +111,52 @@
     examplesPanel.className = 'mtlx-group-panel';
     examplesPanel.hidden = !groupState.examples;
 
-    const searchWrap = document.createElement('div');
-    searchWrap.className = 'mtlx-ex-toolbar';
-    const searchLabel = document.createElement('label');
-    searchLabel.className = 'mtlx-gallery-search-label';
-    searchLabel.setAttribute('for', 'mtlx-ex-search');
-    searchLabel.textContent = 'Search examples';
-    const searchInput = document.createElement('input');
-    searchInput.id = 'mtlx-ex-search';
-    searchInput.className = 'mtlx-gallery-search';
-    searchInput.type = 'text';
-    searchInput.autocomplete = 'off';
-    searchInput.placeholder = 'Search by name, shading model or license';
-    searchWrap.appendChild(searchLabel);
-    searchWrap.appendChild(searchInput);
+    const toolbarHost = document.createElement('div');
+    toolbarHost.id = 'mtlx-ex-toolbar-host';
 
-    const groupsEl = document.createElement('div');
-    groupsEl.id = 'mtlx-ex-groups';
-    groupsEl.setAttribute('role', 'list');
-    groupsEl.setAttribute('aria-label', 'Example materials');
+    const gridEl = document.createElement('div');
+    gridEl.id = 'mtlx-ex-grid';
+    gridEl.className = 'mtlx-ex-grid';
+    gridEl.setAttribute('role', 'list');
+    gridEl.setAttribute('aria-label', 'Example materials');
 
     const emptyEl = document.createElement('div');
     emptyEl.id = 'mtlx-ex-empty';
     emptyEl.className = 'mtlx-gallery-empty';
-    emptyEl.textContent = 'No examples match your search.';
+    emptyEl.textContent = 'No examples match your filters.';
     emptyEl.hidden = true;
 
-    examplesPanel.appendChild(searchWrap);
-    examplesPanel.appendChild(groupsEl);
+    examplesPanel.appendChild(toolbarHost);
+    examplesPanel.appendChild(gridEl);
     examplesPanel.appendChild(emptyEl);
 
     function runCard(id) {
         vscode.postMessage({ type: 'run', id: id });
     }
 
-    function buildGroup(group) {
-        const section = document.createElement('div');
-        section.className = 'mtlx-ex-group';
-        const heading = document.createElement('div');
-        heading.className = 'mtlx-ex-group-heading';
-        heading.textContent = group.source;
-        const grid = document.createElement('div');
-        grid.className = 'mtlx-ex-grid';
-        grid.setAttribute('role', 'list');
-        for (const card of group.cards) grid.appendChild(cards.buildCard(card, runCard));
-        section.appendChild(heading);
-        section.appendChild(grid);
-        return section;
+    function renderExamples(filtered) {
+        gridEl.textContent = '';
+        for (const card of filtered) gridEl.appendChild(cards.buildCard(card, runCard));
+        emptyEl.hidden = filtered.length > 0;
     }
 
-    function renderExamples(groups) {
-        groupsEl.textContent = '';
-        let cardCount = 0;
-        for (const group of groups) {
-            groupsEl.appendChild(buildGroup(group));
-            cardCount += group.cards.length;
-        }
-        emptyEl.hidden = cardCount > 0;
-        return cardCount;
-    }
+    // Compact chip sizing (sidebar column is narrow): search + family/tag
+    // chips + match count/Clear filters, same toolbar the gallery panel
+    // uses (gallery-cards.js's createFilterController).
+    const examplesFilter = cards.createFilterController(toolbarHost, [], { compact: true });
+    examplesFilter.onChange(renderExamples);
 
-    let allGroups = [];
     let reportedCardCount = -1;
-    function refreshExamples() {
-        const filtered = cards.filterGroups(allGroups, searchInput.value);
-        const cardCount = renderExamples(filtered);
+    function setExamplesCards(list) {
+        examplesFilter.setCards(list);
         // 'rendered' reports the UNFILTERED total (matches the old
         // Examples view's contract: the smoke suite waits for the full
-        // 14-card catalog, independent of whatever is currently typed).
-        const totalCount = allGroups.reduce((n, g) => n + g.cards.length, 0);
-        if (totalCount !== reportedCardCount) {
-            reportedCardCount = totalCount;
-            vscode.postMessage({ type: 'rendered', cardCount: totalCount });
+        // catalog, independent of whatever is currently typed/chipped).
+        if (list.length !== reportedCardCount) {
+            reportedCardCount = list.length;
+            vscode.postMessage({ type: 'rendered', cardCount: list.length });
         }
-        void cardCount;
     }
-
-    searchInput.addEventListener('input', refreshExamples);
 
     // ---- Embedded Insert Node panel (above "New Material from Example") -
 
@@ -976,10 +945,7 @@
         if (msg.type !== 'state') return;
         latestState = msg;
         if (Array.isArray(msg.rows)) render(msg.rows);
-        if (Array.isArray(msg.examplesGroups)) {
-            allGroups = msg.examplesGroups;
-            refreshExamples();
-        }
+        if (Array.isArray(msg.examplesCards)) setExamplesCards(msg.examplesCards);
         if (Array.isArray(msg.insertNodeTree)) {
             insertTree = msg.insertNodeTree;
             // Never rebuild the tree while the card is open (same scroll

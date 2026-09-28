@@ -100,7 +100,7 @@ class MtlxActionsViewProvider {
         this._context = context;
         this._hasActiveDocument = false;
         this._view = null;
-        this._groups = [];
+        this._cards = [];
         this._examplesExpanded = false;
         this._insertNodeExpanded = false;
         this._aboutRequests = 0;
@@ -224,14 +224,14 @@ class MtlxActionsViewProvider {
 
     _postState() {
         if (!this._view) return;
-        this._groups = exampleGallery.buildResolvedGroups(this._view.webview, this._context.extensionUri);
+        this._cards = exampleGallery.buildResolvedCards(this._view.webview, this._context.extensionUri);
         const about = this._buildAbout();
         this._helpLinks = this._buildHelpLinks(about);
         const hasMtlxTextEditor = !!this._resolveTextEditor();
         this._view.webview.postMessage({
             type: 'state',
             rows: actionsModel.buildActionRows(this._hasActiveDocument, hasMtlxTextEditor),
-            examplesGroups: this._groups,
+            examplesCards: this._cards,
             insertNodeTree: this._buildInsertNodeTree(),
             hasMtlxTextEditor,
             about,
@@ -323,14 +323,14 @@ class MtlxActionsViewProvider {
         }
 
         // Not an action row id: try it as an examples card id, validated
-        // against the exact groups this view last sent -- same contract as
-        // exampleGallery.js's own handleMessage. No Explorer folder here
+        // against the exact card list this view last sent -- same contract
+        // as exampleGallery.js's own handleMessage. No Explorer folder here
         // (this is a sidebar view), so the usual active-editor/workspace-
         // folder/prompt chain in newFromExample.js's resolveTargetFolder
         // runs, same as any other sidebar or Command Palette invocation.
-        if (!galleryModel.isKnownCardId(this._groups, msg.id)) return;
+        if (!galleryModel.isKnownCardId(this._cards, msg.id)) return;
         const example = exampleCatalog.getExample(msg.id);
-        if (!example) return; // defensive: catalog and this._groups are built from the same source
+        if (!example) return; // defensive: catalog and this._cards are built from the same source
         await newFromExample.createFromExample(this._context, example, null, null);
     }
 

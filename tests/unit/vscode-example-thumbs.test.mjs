@@ -56,28 +56,33 @@ const FIXTURE_MATERIALS = [
     },
 ];
 
-test('galleryIdFor: matches by full resolved path, not id === basename', () => {
-    const example = exampleCatalog.getExample('playground-christmas-tree-ornament');
+test('galleryIdFor: matches by full resolved path even when id differs from the source basename', () => {
+    const example = exampleCatalog.getExample('AnimatedChristmasTreeOrnament');
     assert.equal(newFromExample.galleryIdFor(FIXTURE_MATERIALS, example), 'AnimatedChristmasTreeOrnament');
 });
 
 test('galleryIdFor: matches playground and vendor entries whose id equals the basename', () => {
-    const rug = exampleCatalog.getExample('playground-motley-patchwork-rug');
+    const rug = exampleCatalog.getExample('Motley_Patchwork_Rug');
     assert.equal(newFromExample.galleryIdFor(FIXTURE_MATERIALS, rug), 'Motley_Patchwork_Rug');
 
-    const carpaint = exampleCatalog.getExample('playground-standard-surface-carpaint-to-openpbr');
+    const carpaint = exampleCatalog.getExample('standard_surface_carpaint_to_openpbr');
     assert.equal(newFromExample.galleryIdFor(FIXTURE_MATERIALS, carpaint), 'standard_surface_carpaint_to_openpbr');
 
-    const glass = exampleCatalog.getExample('example-open-pbr-glass');
+    const glass = exampleCatalog.getExample('open_pbr_glass');
     assert.equal(newFromExample.galleryIdFor(FIXTURE_MATERIALS, glass), 'open_pbr_glass');
 });
 
 test('galleryIdFor: OpenPBR Default resolves to its vendor gallery entry', () => {
-    const example = exampleCatalog.getExample('example-open-pbr-default');
+    const example = exampleCatalog.getExample('open_pbr_default');
     assert.equal(newFromExample.galleryIdFor(FIXTURE_MATERIALS, example), 'open_pbr_default');
 });
 
-test('galleryIdFor: against the real gallery/manifest.json, every catalog entry maps as expected', (t) => {
+test('galleryIdFor: an id absent from the fixture manifest resolves to null', () => {
+    const example = exampleCatalog.getExample('standard_surface_brass_tiled');
+    assert.equal(newFromExample.galleryIdFor(FIXTURE_MATERIALS, example), null);
+});
+
+test('galleryIdFor: against the real gallery/manifest.json, every catalog entry maps to itself (destName === manifest id)', (t) => {
     const manifestPath = path.join(ROOT, 'gallery', 'manifest.json');
     if (!fs.existsSync(manifestPath)) {
         t.skip('gallery/manifest.json is gitignored and not present on this checkout');
@@ -88,9 +93,11 @@ test('galleryIdFor: against the real gallery/manifest.json, every catalog entry 
     for (const example of exampleCatalog.getCatalog()) {
         mapping[example.id] = newFromExample.galleryIdFor(materials, example);
     }
-    assert.equal(mapping['playground-christmas-tree-ornament'], 'AnimatedChristmasTreeOrnament');
-    assert.equal(mapping['example-open-pbr-default'], 'open_pbr_default');
+    assert.equal(mapping['AnimatedChristmasTreeOrnament'], 'AnimatedChristmasTreeOrnament');
+    assert.equal(mapping['open_pbr_default'], 'open_pbr_default');
     const withIcon = Object.values(mapping).filter((id) => id !== null).length;
-    assert.equal(withIcon, 14);
-    assert.equal(Object.keys(mapping).length, 14);
+    // Every catalog entry is built FROM a manifest entry (destName === id),
+    // so every single one must map back to itself - the full 54-material set.
+    assert.equal(withIcon, 54);
+    assert.equal(Object.keys(mapping).length, 54);
 });

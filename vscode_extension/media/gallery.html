@@ -10,13 +10,9 @@
 </head>
 <body>
 <div id="app">
-    <div class="mtlx-gallery-toolbar">
-        <label class="mtlx-gallery-search-label" for="mtlx-gallery-search">Search examples</label>
-        <input id="mtlx-gallery-search" class="mtlx-gallery-search" type="text"
-               placeholder="Search by name, shading model or license" autocomplete="off">
-    </div>
-    <div id="mtlx-gallery-groups" role="list" aria-label="Example materials"></div>
-    <div id="mtlx-gallery-empty" class="mtlx-gallery-empty" hidden>No examples match your search.</div>
+    <div id="mtlx-gallery-toolbar-host"></div>
+    <div id="mtlx-gallery-grid" class="mtlx-gallery-grid" role="list" aria-label="Example materials"></div>
+    <div id="mtlx-gallery-empty" class="mtlx-gallery-empty" hidden>No examples match your filters.</div>
 </div>
 <script nonce="${nonce}" src="${cardsScriptUri}"></script>
 <script nonce="${nonce}" src="${scriptUri}"></script>

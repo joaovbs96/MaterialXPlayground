@@ -371,17 +371,8 @@ body {
     overflow-y: auto;
 }
 
-.mtlx-ex-group {
-    margin-bottom: 12px;
-}
-
-.mtlx-ex-group-heading {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--vscode-descriptionForeground);
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-    padding: 2px 0 6px;
+#mtlx-ex-toolbar-host .mtlx-gallery-toolbar {
+    margin: 4px 0 10px;
 }
 
 .mtlx-ex-grid {
