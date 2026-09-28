@@ -131,7 +131,8 @@
         searchInput.className = 'mtlx-gallery-search';
         searchInput.type = 'text';
         searchInput.autocomplete = 'off';
-        searchInput.placeholder = 'Search by name, family, shading model, license or tag';
+        searchInput.placeholder = 'Search materials';
+        searchInput.title = 'Search by name, family, shading model, license or tag';
         searchWrap.appendChild(searchLabel);
         searchWrap.appendChild(searchInput);
 
