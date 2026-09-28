@@ -1,0 +1,271 @@
+# -----------------------------------------------------------------------------
+# Package a pre-release .vsix from any branch
+# -----------------------------------------------------------------------------
+# Manual workflow: "Use workflow from: <branch>" builds a pre-release .vsix
+# from that branch's tip and uploads it as a workflow artifact. Nothing is
+# published: no release, tag, Marketplace or Open VSX upload.
+#
+# Duplicates release.yml's `package` job commands rather than extracting a
+# composite action or script: release.yml is the production release pipeline,
+# and reshaping it carried untestable-locally behavior risk. Instead,
+# scripts/package-vsix.mjs checks (offline) that both workflows' packaging
+# commands still match, and this workflow runs that check every time.
+#
+# Version scheme: real releases are YYYY.M.patch from a release tag (small
+# patch numbers). A pre-release here uses the same YYYY.M with patch offset
+# by 900000 + this workflow's run number, so it can never collide with or
+# sort below a real release in the same month. Never published, so no
+# ordering claim beyond "not confusable with a real release" is intended.
+# -----------------------------------------------------------------------------
+
+name: Package pre-release VS Code extension
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_smoke:
+        description: Run the real VS Code smoke test against the packaged .vsix
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-prerelease-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      vsix_name: ${{ steps.pkg.outputs.vsix_name }}
+      version: ${{ steps.pkg.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # A high or critical advisory must never ship, even in a pre-release
+      # build; dependency-audit.yml runs the same check on every push.
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
+      - name: Vendor the offline MaterialX snapshot
+        run: npm run vendor:offline
+
+      - name: Build
+        run: npm run build
+
+      # Same gate release.yml's package job runs before packaging: a branch
+      # whose committed artifacts are stale would ship a broken .vsix.
+      - name: Verify committed artifacts match a clean rebuild
+        run: |
+          git diff --exit-code || { echo "::error::Committed artifacts are stale on this branch: run 'npm run build' and push before packaging a pre-release."; exit 1; }
+          [ -z "$(git status --porcelain)" ] || { echo "::error::Build produced files not in the commit."; git status --porcelain; exit 1; }
+
+      - name: Check
+        run: npm run check
+
+      - name: Check every runtime-loaded file is packaged in the vsix
+        run: node scripts/check-vsix-files.mjs
+
+      # Verifies this workflow's packaging commands still match release.yml's
+      # package job (see the header comment above for why this is a check,
+      # not a shared script). Offline, no network, no npm ci of its own.
+      - name: Check packaging steps match release.yml
+        run: node scripts/package-vsix.mjs
+
+      # Version scheme documented in the header comment. Dirties the tree
+      # AFTER the stale-artifact gate and `npm run check`, same as
+      # release.yml's "Set extension version from release tag" step.
+      - name: Compute pre-release version and package name
+        id: pkg
+        run: |
+          YEAR="$(date -u +%Y)"
+          MONTH="$(date -u +%-m)"
+          PATCH=$((900000 + GITHUB_RUN_NUMBER))
+          VERSION="$YEAR.$MONTH.$PATCH"
+          npm pkg set version="$VERSION"
+
+          BRANCH_SLUG="$(echo "${{ github.ref_name }}" | tr '/' '-' | tr -c 'A-Za-z0-9._-' '-')"
+          SHA7="$(git rev-parse --short=7 HEAD)"
+          VSIX_NAME="materialx-playground-$VERSION-pre-$BRANCH_SLUG-$SHA7"
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "vsix_name=$VSIX_NAME" >> "$GITHUB_OUTPUT"
+          echo "branch_slug=$BRANCH_SLUG" >> "$GITHUB_OUTPUT"
+          echo "sha7=$SHA7" >> "$GITHUB_OUTPUT"
+
+          MTLX_DEFAULT_VERSION="$(node --input-type=module -e '
+            import { DEFAULT_MTLX_VERSION } from "./scripts/lib/mtlx-versions.mjs";
+            console.log(DEFAULT_MTLX_VERSION);
+          ')"
+          echo "mtlx_default_version=$MTLX_DEFAULT_VERSION" >> "$GITHUB_OUTPUT"
+
+      # Manual run, no separate gallery job: reuse everything the published
+      # site already has and render nothing here, same as release.yml's
+      # package job does when its gallery job did not run.
+      - name: Populate gallery data from the live site
+        run: |
+          node scripts/build-gallery.mjs
+          node scripts/gallery-shots.mjs --reuse-from "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}" --reuse-only
+
+      # Trims to the preset picker's own materials before packaging, same
+      # as release.yml (see --prune-ids-auto's doc comment in gallery-shots.mjs).
+      - name: Trim gallery for the .vsix
+        run: |
+          node scripts/gallery-shots.mjs --prune-ids-auto
+          echo "vsix gallery thumbnails: $(ls gallery/thumbs 2>/dev/null | wc -l)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Installed from the lockfile into RUNNER_TEMP, not the certified tree,
+      # with install scripts off, the same locked tool release.yml uses.
+      - name: Copy the locked vsce manifest
+        run: |
+          mkdir -p "$RUNNER_TEMP/vsce"
+          cp .github/vsce/package.json .github/vsce/package-lock.json "$RUNNER_TEMP/vsce/"
+
+      - name: Install vsce (locked)
+        working-directory: ${{ runner.temp }}/vsce
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Package VS Code extension (.vsix)
+        run: |
+          VSIX="$RUNNER_TEMP/${{ steps.pkg.outputs.vsix_name }}.vsix"
+          "$RUNNER_TEMP/vsce/node_modules/.bin/vsce" package --no-dependencies --pre-release \
+            --readme-path vscode_extension/MARKETPLACE.md --changelog-path CHANGELOG.md --out "$VSIX"
+
+      - name: Sanity-check vsix contents
+        env:
+          VERSION: ${{ steps.pkg.outputs.version }}
+          MTLX_DEFAULT_VERSION: ${{ steps.pkg.outputs.mtlx_default_version }}
+        run: |
+          VSIX="$RUNNER_TEMP/${{ steps.pkg.outputs.vsix_name }}.vsix"
+          L="$(unzip -l "$VSIX")"
+          echo "$L" | grep -q 'extension/vendor/materialx/manifest.json' || { echo "::error::vendor/materialx missing, vsix would not be offline"; exit 1; }
+          echo "$L" | grep -q 'extension/js/gen/mtlx-version.json' || { echo "::error::js/gen missing (specDocs.js requires it)"; exit 1; }
+          echo "$L" | grep -q 'extension/environment_map.mtlx' || { echo "::error::environment_map.mtlx missing (light-rig fetch)"; exit 1; }
+          echo "$L" | grep -q 'extension/vscode_extension/src/extension.js' || { echo "::error::extension sources missing"; exit 1; }
+          echo "$L" | grep -q 'extension/readme.md' || { echo "::error::readme missing, --readme-path did not apply"; exit 1; }
+          echo "$L" | grep -q 'extension/changelog.md' || { echo "::error::changelog missing, --changelog-path did not apply"; exit 1; }
+          echo "$L" | grep -q 'extension/LICENSE.txt' || { echo "::error::LICENSE missing"; exit 1; }
+          echo "$L" | grep -q 'extension/vendor/vendor-manifest.json' || { echo "::error::vendor/vendor-manifest.json missing"; exit 1; }
+          # Vendor dirs that must not ship come from the registry (deps with vscode: false).
+          NOSHIP="$(node -e 'globalThis.window={};require(require("path").resolve("js/gen/vendor-deps.js"));console.log(Object.values(window.MTLX_VENDOR_DEPS).filter((d)=>d.vscode===false).map((d)=>d.dir).join("|"))')"
+          if echo "$L" | grep -qE "extension/(node_modules|scripts|tests|electron|docs|embed|\\.github|vendor/($NOSHIP))/"; then echo "::error::ignored dirs leaked into the vsix"; exit 1; fi
+          if echo "$L" | grep -E '^extension/gallery/' | grep -vE '^extension/gallery/(manifest\.json|thumbs/[^/]+\.jpg)$' | grep -q .; then echo "::error::unexpected gallery/ file leaked into the vsix"; exit 1; fi
+          if echo "$L" | grep -q 'extension/vendor/materialx/resources/Images/'; then echo "::error::vendor/materialx/resources/Images leaked into the vsix"; exit 1; fi
+
+          PKG="$(unzip -p "$VSIX" extension/package.json)"
+          PUB="$(jq -r .publisher <<<"$PKG")"
+          [ -n "$PUB" ] && [ "$PUB" != "local" ] || { echo "::error::publisher is empty or still \"local\""; exit 1; }
+          PKGVER="$(jq -r .version <<<"$PKG")"
+          [ "$PKGVER" = "$VERSION" ] || { echo "::error::.vsix version $PKGVER does not match computed pre-release version $VERSION"; exit 1; }
+
+          README="$(unzip -p "$VSIX" extension/readme.md)"
+          [ "$(sed -n 1p <<<"$README")" = "$(sed -n 1p vscode_extension/MARKETPLACE.md)" ] || { echo "::error::the listing page is not vscode_extension/MARKETPLACE.md"; exit 1; }
+
+          MANIFEST="$(unzip -p "$VSIX" extension.vsixmanifest)"
+          grep -q 'Id="Microsoft.VisualStudio.Code.PreRelease" Value="true"' <<<"$MANIFEST" || { echo "::error::.vsix is not flagged pre-release"; exit 1; }
+
+          DEFAULT_DIR="extension/js/materialx/$MTLX_DEFAULT_VERSION"
+          for F in JsMaterialXGenShader.js JsMaterialXGenShader.wasm JsMaterialXGenShader.data; do
+            echo "$L" | grep -q "$DEFAULT_DIR/$F" || { echo "::error::$DEFAULT_DIR/$F missing, vsix would not load MaterialX"; exit 1; }
+          done
+          # Non-default MaterialX versions are never fetched in this workflow
+          # (vendor:versions is the offline-zip-only step), so any other
+          # js/materialx/<version>/ directory would mean a packaging bug.
+          LEAKED="$(echo "$L" | grep -oE "extension/js/materialx/[^/]+/" | sort -u | grep -vF "$DEFAULT_DIR/" || true)"
+          [ -z "$LEAKED" ] || { echo "::error::unexpected MaterialX version directories in the vsix: $LEAKED"; exit 1; }
+
+      - name: Write step summary
+        env:
+          VSIX_NAME: ${{ steps.pkg.outputs.vsix_name }}
+          VERSION: ${{ steps.pkg.outputs.version }}
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          VSIX="$RUNNER_TEMP/$VSIX_NAME.vsix"
+          SIZE="$(stat -c%s "$VSIX")"
+          SHA256="$(sha256sum "$VSIX" | cut -d' ' -f1)"
+          # Read the pre-release flag back from the packaged manifest rather
+          # than trusting the flag this workflow passed to vsce, same as
+          # release.yml's "Sanity-check vsix contents" step does.
+          MANIFEST="$(unzip -p "$VSIX" extension.vsixmanifest)"
+          if grep -q 'Id="Microsoft.VisualStudio.Code.PreRelease" Value="true"' <<<"$MANIFEST"; then PRE="pre-release"; else PRE="release (unexpected)"; fi
+          {
+            echo "### $VSIX_NAME.vsix"
+            echo "| | |"; echo "|---|---|"
+            echo "| Version | \`$VERSION\` |"
+            echo "| Branch | \`$BRANCH\` |"
+            echo "| Commit | \`$SHA\` |"
+            echo "| Size | $SIZE bytes |"
+            echo "| SHA-256 | \`$SHA256\` |"
+            echo "| Marketplace channel | $PRE |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload vsix artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.pkg.outputs.vsix_name }}
+          path: ${{ runner.temp }}/${{ steps.pkg.outputs.vsix_name }}.vsix
+          if-no-files-found: error
+          retention-days: 14
+
+  # Boots one real VS Code session against the packaged .vsix from the job
+  # above (tests/vscode-host/smoke.mjs), same as vscode-extension-tests.yml's
+  # smoke job, but against this run's artifact, not a rebuilt copy.
+  smoke:
+    needs: package
+    if: ${{ !cancelled() && needs.package.result == 'success' && inputs.run_smoke }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout (sparse)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /tests/vscode-host/
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Install tests/vscode-host dependencies
+        run: npm ci
+        working-directory: tests/vscode-host
+
+      - name: Download the packaged vsix
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.package.outputs.vsix_name }}
+          path: ${{ runner.temp }}/vsix
+
+      - name: Extract the vsix
+        run: unzip -q "$RUNNER_TEMP/vsix/${{ needs.package.outputs.vsix_name }}.vsix" -d "$RUNNER_TEMP/vsix-extracted"
+
+      # GitHub-hosted ubuntu-latest runners ship the GUI libs VS Code's
+      # Electron needs but not xvfb itself.
+      - name: Install xvfb
+        run: sudo apt-get update -y && sudo apt-get install -y xvfb
+
+      - name: Run the packaged-extension smoke test
+        run: xvfb-run -a node tests/vscode-host/smoke.mjs --extension-dir "$RUNNER_TEMP/vsix-extracted/extension" --vscode stable
