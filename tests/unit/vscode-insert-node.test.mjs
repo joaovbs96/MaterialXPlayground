@@ -19,7 +19,7 @@ test('isInsideOpenTag: true right after the tag name, false once the tag is clos
     assert.equal(model.isInsideOpenTag('<mix name="a"></mix>', 20), false);
 });
 
-test('insertPlan: cursor mode outside any open tag', () => {
+test('insertPlan: normal inside position is unchanged -- cursor mode outside any open tag', () => {
     const text = '<materialx version="1.39">\n  \n</materialx>';
     const offset = text.indexOf('\n  \n') + 3; // the blank line
     const plan = model.insertPlan(text, offset);
@@ -27,8 +27,8 @@ test('insertPlan: cursor mode outside any open tag', () => {
     assert.equal(plan.offset, offset);
 });
 
-test('insertPlan: next-line mode inside an open start tag, pushing the following line down', () => {
-    const text = '<mix name="a" \n  type="color3">\n</mix>';
+test('insertPlan: next-line mode inside a child\'s open start tag, pushing the following line down', () => {
+    const text = '<materialx version="1.39">\n<mix name="a" \n  type="color3">\n</mix>\n</materialx>';
     const offset = text.indexOf('\n  ') + 1 + 2; // inside the attribute whitespace, indented 2
     assert.equal(model.isInsideOpenTag(text, offset), true);
     const plan = model.insertPlan(text, offset);
@@ -40,13 +40,75 @@ test('insertPlan: next-line mode inside an open start tag, pushing the following
     assert.equal(text.slice(0, plan.offset).endsWith('\n'), true);
 });
 
-test('insertPlan: next-line mode at the end of the document (no trailing newline) appends one', () => {
-    const text = '<mix name="a"';
+test('insertPlan: next-line mode at the end of an unclosed document (no trailing newline) appends one', () => {
+    // Still mid-edit inside <materialx> -- the whole document is only
+    // implicitly closed at EOF, so there's no real </materialx> to clamp to.
+    const text = '<materialx version="1.39">\n<mix name="a"';
     const plan = model.insertPlan(text, text.length);
     assert.equal(plan.mode, 'next-line');
     assert.equal(plan.prefix, '\n');
     assert.equal(plan.suffix, '');
     assert.equal(plan.offset, text.length);
+});
+
+// New behavior: never insert outside <materialx></materialx>.
+
+test('insertPlan: cursor before <materialx> lands as the first child, right after its start tag', () => {
+    const text = '<?xml version="1.0"?>\n<materialx version="1.39">\n\t\n</materialx>';
+    const plan = model.insertPlan(text, 5); // inside the XML declaration
+    assert.equal(plan.mode, 'first-child');
+    assert.equal(plan.indent, '\t');
+    assert.equal(plan.suffix, '\n');
+    // Lands right after <materialx ...>'s own line, before the existing content.
+    const openTagEnd = text.indexOf('">') + 2;
+    const nextLine = text.indexOf('\n', openTagEnd) + 1;
+    assert.equal(plan.offset, nextLine);
+});
+
+test('insertPlan: cursor inside a leading comment lands as the first child too', () => {
+    const text = '<!-- a leading comment -->\n<materialx version="1.39">\n\t\n</materialx>';
+    const offset = text.indexOf('leading');
+    const plan = model.insertPlan(text, offset);
+    assert.equal(plan.mode, 'first-child');
+});
+
+test('insertPlan: cursor after </materialx> lands as the last child, right before it', () => {
+    const text = '<materialx version="1.39">\n\t<mix name="a"/>\n</materialx>\n';
+    const plan = model.insertPlan(text, text.length); // past the closing tag entirely
+    assert.equal(plan.mode, 'last-child');
+    assert.equal(plan.indent, '\t');
+    assert.equal(plan.suffix, '\n');
+    const closeTagStart = text.indexOf('</materialx>');
+    assert.equal(plan.offset, closeTagStart);
+});
+
+test('insertPlan: cursor inside the </materialx> end tag itself also lands as the last child', () => {
+    const text = '<materialx version="1.39">\n\t<mix name="a"/>\n</materialx>';
+    const offset = text.indexOf('</materialx>') + 5; // between '<' and '>'
+    const plan = model.insertPlan(text, offset);
+    assert.equal(plan.mode, 'last-child');
+    const closeTagStart = text.indexOf('</materialx>');
+    assert.equal(plan.offset, closeTagStart);
+});
+
+test('insertPlan: a self-closing <materialx ... /> root is expanded into open/close tags', () => {
+    const text = '<materialx version="1.39" />';
+    const plan = model.insertPlan(text, 5);
+    assert.equal(plan.mode, 'expand-root');
+    assert.equal(plan.replaceStart, 0);
+    assert.equal(plan.replaceEnd, text.length);
+    assert.equal(plan.prefix, '<materialx version="1.39">\n');
+    assert.equal(plan.indent, '\t');
+    assert.equal(plan.suffix, '\n</materialx>');
+});
+
+test('insertPlan: no <materialx> element at all yields the no-root mode, no insertion point', () => {
+    const plan = model.insertPlan('<mix name="a"/>', 5);
+    assert.deepEqual(plan, { mode: 'no-root' });
+});
+
+test('insertPlan: an empty document also yields no-root', () => {
+    assert.deepEqual(model.insertPlan('', 0), { mode: 'no-root' });
 });
 
 test('lineIndent: leading whitespace of the offset\'s own line', () => {

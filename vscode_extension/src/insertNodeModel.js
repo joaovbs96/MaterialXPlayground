@@ -5,6 +5,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const mtlxSymbols = require('./mtlxSymbols');
 
 // True when `offset` sits inside an already-typed opening tag (after its
 // '<' and tag name, up to but not including the closing '>'): the last
@@ -22,15 +23,121 @@ function lineIndent(text, offset) {
     return m ? m[0] : '';
 }
 
-// Where a freshly inserted node snippet should land: at the cursor, or
-// pushed to the start of the NEXT line (same indentation) when the cursor
-// is inside an open start tag or between its attributes -- inserting a
-// full element there would otherwise land mid-attribute-list.
+// One level of MaterialX indentation, matching the "MaterialX Document"
+// snippet skeleton (mtlx.snippets.json): a single tab.
+const INDENT_UNIT = '\t';
+
+// Quote-aware scan for the end of the start/self-closing tag beginning
+// at `ltOffset` (its '<'): a '>' inside an attribute value never ends it.
+function scanTagEnd(text, ltOffset) {
+    let i = ltOffset + 1;
+    while (i < text.length && !/[\s/>]/.test(text[i])) i++;
+    while (i < text.length) {
+        const ch = text[i];
+        if (ch === '"' || ch === "'") {
+            const close = text.indexOf(ch, i + 1);
+            i = close === -1 ? text.length : close + 1;
+            continue;
+        }
+        if (ch === '/' && text[i + 1] === '>') return { end: i + 2, selfClosing: true, selfCloseAt: i };
+        if (ch === '>') return { end: i + 1, selfClosing: false, selfCloseAt: -1 };
+        i++;
+    }
+    return { end: text.length, selfClosing: false, selfCloseAt: -1 };
+}
+
+// The document's <materialx> root: mtlxSymbols.scanElements already skips
+// the XML declaration, leading comments and CDATA when finding tags, so
+// this is tolerant of the cursor sitting anywhere among those. Null when
+// the document has no <materialx> element at all.
+function findMaterialxRoot(text) {
+    const { root, lineStarts } = mtlxSymbols.scanElements(text);
+    const materialx = root.children.find((c) => c.tag === 'materialx');
+    if (!materialx) return null;
+    const toOffset = (pos) => lineStarts[pos.line] + pos.character;
+    const rootStart = toOffset(materialx.range.start);
+    const rootEnd = toOffset(materialx.range.end);
+    const tag = scanTagEnd(text, rootStart);
+    return { rootStart, rootEnd, openTagEnd: tag.end, selfClosing: tag.selfClosing, selfCloseAt: tag.selfCloseAt };
+}
+
+// The offset of the real "</materialx" closing tag matching `rootEnd`
+// (the whole element's end, from mtlxSymbols), or -1 when the root was
+// only implicitly closed at end-of-file (an unclosed/mid-edit document).
+function materialxCloseTagStart(text, rootEnd) {
+    const marker = '</materialx';
+    const candidate = text.lastIndexOf('<', rootEnd - 1);
+    if (candidate === -1 || text.slice(candidate, candidate + marker.length) !== marker) return -1;
+    const between = text.slice(candidate + marker.length, rootEnd - 1);
+    if (!/^[ \t\r\n]*$/.test(between) || text[rootEnd - 1] !== '>') return -1;
+    return candidate;
+}
+
+// A self-closing <materialx ... /> has no valid interior at all, so it's
+// expanded to <materialx ...>\n\tBODY\n</materialx> regardless of where
+// the cursor was -- `replaceStart`/`replaceEnd` span the old self-close.
+function expandSelfClosingPlan(text, rootInfo) {
+    const openTag = text.slice(rootInfo.rootStart, rootInfo.selfCloseAt).replace(/\s+$/, '') + '>';
+    const indent = lineIndent(text, rootInfo.rootStart) + INDENT_UNIT;
+    return {
+        mode: 'expand-root',
+        replaceStart: rootInfo.rootStart,
+        replaceEnd: rootInfo.openTagEnd,
+        prefix: openTag + '\n',
+        indent,
+        suffix: '\n</materialx>',
+    };
+}
+
+// New line right after <materialx ...>'s own start tag, as the first
+// child, indented one level in from the root tag itself.
+function firstChildPlan(text, rootInfo) {
+    const indent = lineIndent(text, rootInfo.rootStart) + INDENT_UNIT;
+    const afterOpen = rootInfo.openTagEnd;
+    const nextNewline = text.indexOf('\n', afterOpen);
+    const restOfLine = nextNewline === -1 ? text.slice(afterOpen) : text.slice(afterOpen, nextNewline);
+    if (nextNewline !== -1 && /^[ \t]*$/.test(restOfLine)) {
+        return { mode: 'first-child', offset: nextNewline + 1, prefix: '', indent, suffix: '\n' };
+    }
+    return { mode: 'first-child', offset: afterOpen, prefix: '\n', indent, suffix: '\n' };
+}
+
+// New line right before </materialx>, as the last child, same indent
+// rule as firstChildPlan.
+function lastChildPlan(text, rootInfo, closeTagStart) {
+    const indent = lineIndent(text, rootInfo.rootStart) + INDENT_UNIT;
+    const lineStart = text.lastIndexOf('\n', closeTagStart - 1) + 1;
+    const beforeCloseTag = text.slice(lineStart, closeTagStart);
+    if (/^[ \t]*$/.test(beforeCloseTag)) {
+        return { mode: 'last-child', offset: lineStart, prefix: '', indent, suffix: '\n' };
+    }
+    return { mode: 'last-child', offset: closeTagStart, prefix: '\n', indent, suffix: '\n' };
+}
+
+// Where a freshly inserted node snippet should land. Never outside the
+// <materialx> element: before its start tag (or inside the XML
+// declaration/leading comments/its own attributes) lands as the FIRST
+// child; at or after </materialx> (or inside it) lands as the LAST
+// child; a self-closing root is expanded first. Inside the root's own
+// content, the cursor lands at the cursor, or -- when it's inside an
+// open start tag or between attributes -- pushed to the start of the
+// NEXT line (same indentation), clamped to stay before </materialx>.
+// No <materialx> element at all: nothing valid to insert into.
 function insertPlan(text, offset) {
+    const rootInfo = findMaterialxRoot(text);
+    if (!rootInfo) return { mode: 'no-root' };
+    if (rootInfo.selfClosing) return expandSelfClosingPlan(text, rootInfo);
+
+    if (offset <= rootInfo.openTagEnd) return firstChildPlan(text, rootInfo);
+
+    const closeTagStart = materialxCloseTagStart(text, rootInfo.rootEnd);
+    if (closeTagStart !== -1 && offset >= closeTagStart) return lastChildPlan(text, rootInfo, closeTagStart);
+
     if (!isInsideOpenTag(text, offset)) return { mode: 'cursor', offset, prefix: '', indent: '', suffix: '' };
     const indent = lineIndent(text, offset);
     const lineEnd = text.indexOf('\n', offset);
     if (lineEnd === -1) return { mode: 'next-line', offset: text.length, prefix: '\n', indent, suffix: '' };
+    if (closeTagStart !== -1 && lineEnd >= closeTagStart) return lastChildPlan(text, rootInfo, closeTagStart);
     return { mode: 'next-line', offset: lineEnd + 1, prefix: '', indent, suffix: '\n' };
 }
 
@@ -285,7 +392,7 @@ function pinOutputType(body, outputType) {
 }
 
 module.exports = {
-    isInsideOpenTag, lineIndent, insertPlan, allNamesInText, outputTypesInIndex, allCategoryRows,
+    isInsideOpenTag, lineIndent, insertPlan, findMaterialxRoot, allNamesInText, outputTypesInIndex, allCategoryRows,
     nodedefLibraries, splitCategoryByLibrary, allCategorySplitRows,
     docOrderFromNodelib, buildInsertTree, filterInsertTree,
     rememberLastType, preferredOutputType, pinOutputType,

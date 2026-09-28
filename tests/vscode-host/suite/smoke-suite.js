@@ -1706,8 +1706,29 @@ async function scenarioInsertNode(ctx) {
         const multiplyAfter = mathGroupAfter && mathGroupAfter.nodes.find((n) => n.name === 'multiply');
         const lastTypeOk = !!multiplyAfter && multiplyAfter.defaultOutputType === 'color3';
 
-        const pass = !!hasEditor && !!nameMatch && closedOk && treeOk && cursorOnNameOk && lastTypeOk;
-        return { pass, nameMatch: nameMatch && nameMatch[1], treeOk, cursorOnNameOk, lastTypeOk };
+        // Cursor after </materialx> must still land the node INSIDE the
+        // root (never appended past the closing tag) -- insertPlan's
+        // "last-child" mode, the "never insert outside <materialx>" fix.
+        const afterRootContent = '<materialx version="1.39">\n\t<mix name="m1"/>\n</materialx>\n';
+        const afterRootDoc = await vscode.workspace.openTextDocument({ language: 'mtlx', content: afterRootContent });
+        const afterRootEditor = await vscode.window.showTextDocument(afterRootDoc, { preview: false });
+        let afterRootOk = false;
+        try {
+            const endPos = afterRootDoc.positionAt(afterRootContent.length);
+            afterRootEditor.selection = new vscode.Selection(endPos, endPos);
+            await insertApi.insert('multiply', 'color3');
+            const afterText = await waitForValue(
+                () => (afterRootDoc.getText().includes('<multiply ') ? afterRootDoc.getText() : null), 8000
+            );
+            afterRootOk = !!afterText
+                && afterText.indexOf('<multiply ') < afterText.indexOf('</materialx>')
+                && afterText.indexOf('</materialx>') === afterText.lastIndexOf('</materialx>');
+        } finally {
+            await closeTabsForUri(afterRootDoc.uri);
+        }
+
+        const pass = !!hasEditor && !!nameMatch && closedOk && treeOk && cursorOnNameOk && lastTypeOk && afterRootOk;
+        return { pass, nameMatch: nameMatch && nameMatch[1], treeOk, cursorOnNameOk, lastTypeOk, afterRootOk };
     } finally {
         await closeTabsForUri(doc.uri);
     }

@@ -356,6 +356,14 @@ class MtlxActionsViewProvider {
         const document = editor.document;
         const text = document.getText();
         const offset = document.offsetAt(editor.selection.active);
+        const plan = insertNodeModel.insertPlan(text, offset);
+        if (plan.mode === 'no-root') {
+            vscode.window.showWarningMessage(
+                'This file has no <materialx> element; add one first (New MaterialX Document creates a template).'
+            );
+            return;
+        }
+
         const existingNames = insertNodeModel.allNamesInText(text);
         const wantType = (typeof outputType === 'string' && entry.outputTypes.indexOf(outputType) !== -1) ? outputType : null;
         // buildNodeElementSnippet's text starts right after a '<'; this
@@ -365,12 +373,15 @@ class MtlxActionsViewProvider {
         // literal so the one remaining tabstop lands on the name.
         body = insertNodeModel.pinOutputType(body, wantType);
 
-        const plan = insertNodeModel.insertPlan(text, offset);
         const snippetText = plan.mode === 'cursor' ? body : (plan.prefix + plan.indent + body + plan.suffix);
-        const pos = document.positionAt(plan.offset);
+        // A self-closing root is expanded: replace its whole tag range
+        // instead of inserting at a single position.
+        const location = plan.mode === 'expand-root'
+            ? new vscode.Range(document.positionAt(plan.replaceStart), document.positionAt(plan.replaceEnd))
+            : document.positionAt(plan.offset);
 
         const focusedEditor = await vscode.window.showTextDocument(document, { viewColumn: editor.viewColumn, preserveFocus: false, preview: false });
-        await focusedEditor.insertSnippet(new vscode.SnippetString(snippetText), pos);
+        await focusedEditor.insertSnippet(new vscode.SnippetString(snippetText), location);
 
         if (wantType) {
             const next = insertNodeModel.rememberLastType(this._lastTypes(), category, wantType);
