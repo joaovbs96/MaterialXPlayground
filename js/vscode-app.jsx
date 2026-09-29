@@ -96,6 +96,16 @@ const VSCODE_SETTINGS = [
         desc: 'Automatically open the Playground beside the text editor whenever a .mtlx file is opened. Fires once per file open; closing the Playground does not re-trigger it.',
     },
     {
+        setting: 'materialxPlayground.pickFileOnFilenameInput',
+        values: (<>true <span className="text-gray-500 text-xs font-mono">(default)</span>, false</>),
+        desc: 'When a filename input is added from auto-complete, open a file picker right away to choose the file.',
+    },
+    {
+        setting: 'materialxPlayground.syncSelection',
+        values: (<>true <span className="text-gray-500 text-xs font-mono">(default)</span>, false</>),
+        desc: 'Keep the text cursor, the MaterialX Outline and the Graph Editor selection in sync.',
+    },
+    {
         setting: 'materialxPlayground.autoOpenSceneViewer',
         values: (<>true <span className="text-gray-500 text-xs font-mono">(default)</span>, false</>),
         desc: 'Automatically open the Scene Viewer whenever a USD, glTF, GLB or OBJ scene file is opened: beside the text editor for a file VS Code opens as text, or replacing the tab for a file VS Code shows as binary. Fires once per file open.',
@@ -106,9 +116,9 @@ const VSCODE_SETTINGS = [
 const VSCODE_LIMITS = [
     { title: 'Manual installs and updates', desc: 'Distributed as a .vsix from GitHub Releases only. No Marketplace listing yet, so no automatic updates: check this page or the releases feed for new versions.' },
     { title: 'Graph edits re-serialize the document', desc: (<>Only the Node Graph Editor edits the file; the Material Viewer is read-only. Any graph edit replaces the buffer with the app's own serialization of the whole document, so attribute order and formatting can differ from what you typed by hand.</>) },
-    { title: 'One MaterialX version, no Compare view', desc: 'The .vsix bundles only the default MaterialX build (v1.39.5). The Material Comparison view, the one feature that needs several versions side by side, stays web-only; the webview nav has just Viewer and Graph.' },
+    { title: 'One MaterialX version, no Compare view', desc: 'The .vsix bundles only the default MaterialX build (v1.39.5). The Material Comparison view, the one feature that needs several versions side by side, stays web-only; the webview nav has just Material Viewer and Graph.' },
     { title: 'References must stay in the workspace folder', desc: 'Textures and included files must be inside the workspace folder that contains the document, or next to the document itself when no folder is open.' },
-    { title: 'Some web-app UI is hidden', desc: 'Home, New/Import/Presets, drag-and-drop, the Viewer\'s file sidebar, and Send-to buttons do not apply to a single open file, so the webview hides them. The Docs tab is replaced by the separate docs command.' },
+    { title: 'Some web-app UI is hidden', desc: 'Home, New/Import/Presets, drag-and-drop, the Material Viewer\'s file sidebar, and Send-to buttons do not apply to a single open file, so the webview hides them. The Docs tab is replaced by the separate docs command.' },
     { title: 'Memory scales with open tabs', desc: 'Each open .mtlx tab is its own webview with its own MaterialX WASM instance and WebGL context, kept alive while backgrounded so switching tabs is instant. The first shader compile after opening a file can take a few seconds while the WASM build warms up.' },
     { title: 'Semantic squiggle positions are best-effort', desc: 'MaterialX validate() reports messages without character offsets, so the extension places each squiggle by locating the named element in the text. Very large documents and ones using xi:include get XML checks only.' },
     { title: 'Scene Viewer limits', desc: 'Read only, shows the opened file only, and loads at most 4,000 referenced files up to 4 GiB. Graph edits to a material from a scene cannot be saved back into the scene file; use Export .mtlx instead.' },
@@ -286,8 +296,8 @@ function VscodeApp({ active } = {}) {
                             <span className={EXPERIMENTAL_BADGE_CLASS}>Experimental</span>
                         </div>
                         <p className="text-gray-400 text-base leading-6 max-w-[34em]">
-                            Open <strong className={STRONG_CLASS}>.mtlx</strong> files inside VS Code with the same Material
-                            Viewer and Node Graph Editor as the web app, plus <strong className={STRONG_CLASS}>live validation</strong> and{' '}
+                            Open <strong className={STRONG_CLASS}>.mtlx</strong> files inside VS Code with the same
+                            Material Viewer and Node Graph Editor as the web app, plus <strong className={STRONG_CLASS}>live validation</strong> and{' '}
                             <strong className={STRONG_CLASS}>hover docs</strong> right in the text editor. Everything runs
                             locally: the extension bundles the site and the MaterialX WebAssembly build, and it works fully offline.
                         </p>

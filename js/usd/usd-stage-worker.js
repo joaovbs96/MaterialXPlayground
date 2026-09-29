@@ -2851,7 +2851,7 @@ function copyStageResult(summary, draw, payloads, cameras, lights, metrics = nul
     addTransfer(data.buffer);
     return { path, data: data.buffer };
   });
-  const warnings = Array.from(new Set(nativeWarnings));
+  const warnings = rewriteRuntimeWarnings(Array.from(new Set(nativeWarnings)));
   return {
     rootPath: summary?.rootFile ?? "",
     upAxis: metrics?.upAxis ?? summary?.upAxis,
@@ -2866,6 +2866,27 @@ function copyStageResult(summary, draw, payloads, cameras, lights, metrics = nul
     warnings: Array.from(new Set(warnings)),
     transfer,
   };
+}
+
+// The runtime warns when xformOpOrder names ops with no authored value; USD
+// skips them, so fold those warnings into one info note per prim.
+function rewriteRuntimeWarnings(list) {
+  const re = /Unable to get attribute associated with the xformOp '(?:xformOp:)?([A-Za-z0-9_:]+)', on the prim at path <([^>]+)>/;
+  const byPrim = new Map();
+  const out = [];
+  for (const text of list) {
+    const m = re.exec(String(text));
+    if (!m) { out.push(text); continue; }
+    let ops = byPrim.get(m[2]);
+    if (!ops) { ops = []; byPrim.set(m[2], ops); out.push({ prim: m[2] }); }
+    const op = m[1].split(":")[0];
+    if (!ops.includes(op)) ops.push(op);
+  }
+  return out.map(item => {
+    if (typeof item === "string" || !item || !item.prim) return item;
+    const name = item.prim.split("/").filter(Boolean).pop() || item.prim;
+    return `[info] The file lists transform steps without values (${byPrim.get(item.prim).join(", ")} on ${name}); they were ignored.`;
+  });
 }
 
 // Exact Catmull-Clark triangle count needs each face's vertex count: a face

@@ -4,6 +4,7 @@
 // over outlineModel.js/outlineView.js.
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import fs from 'node:fs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -324,4 +325,30 @@ test('buildAboutData: licenseParagraphs is the reflowed license, empty array wit
 
     const withoutLicense = actionsModel.buildAboutData({});
     assert.deepEqual(withoutLicense.licenseParagraphs, []);
+});
+
+test('decideColumnLayout: fast narrow then wide settles on two columns after the confirming reading', () => {
+    let step = { mode: 'two', streak: 0 };
+    for (const truncated of [true, true]) step = actionsModel.decideColumnLayout(step.mode, truncated, step.streak);
+    assert.equal(step.mode, 'single');
+    // One resize callback after the widen, then the scheduled re-read.
+    step = actionsModel.decideColumnLayout(step.mode, false, step.streak);
+    assert.deepEqual(step, { mode: 'single', streak: 1 });
+    step = actionsModel.decideColumnLayout(step.mode, false, step.streak);
+    assert.deepEqual(step, { mode: 'two', streak: 0 });
+});
+
+test('actions-view.js re-reads while a layout flip is pending', () => {
+    const src = fs.readFileSync(new URL('../../vscode_extension/media/actions-view.js', import.meta.url), 'utf8');
+    assert.match(src, /if \(columnStreak > 0\) columnTimer = setTimeout\(updateColumnLayout/);
+});
+
+test('insert node: remembered type is posted right after the memory update, and drives the next default', () => {
+    const src = fs.readFileSync(new URL('../../vscode_extension/src/actionsView.js', import.meta.url), 'utf8');
+    assert.match(src, /globalState\.update\(LAST_TYPES_KEY, next\);\s*(\/\/[^\n]*\n\s*)*this\._postState\(\);/);
+    const ins = require('../../vscode_extension/src/insertNodeModel.js');
+    const ordered = ['color3', 'float', 'color4'];
+    assert.equal(ins.preferredOutputType({}, 'multiply', ordered), 'color3');
+    const mem = ins.rememberLastType({}, 'multiply', 'float');
+    assert.equal(ins.preferredOutputType(mem, 'multiply', ordered), 'float');
 });

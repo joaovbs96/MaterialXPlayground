@@ -23,6 +23,15 @@ const KIND_MAP = {
     'attr-name': vscode.CompletionItemKind.Keyword,
     'doc-snippet': vscode.CompletionItemKind.Snippet,
     'file-browse': vscode.CompletionItemKind.File,
+    enum: vscode.CompletionItemKind.EnumMember,
+    boolean: vscode.CompletionItemKind.EnumMember,
+    unit: vscode.CompletionItemKind.Unit,
+    unittype: vscode.CompletionItemKind.Unit,
+    geomprop: vscode.CompletionItemKind.Variable,
+    target: vscode.CompletionItemKind.EnumMember,
+    version: vscode.CompletionItemKind.Constant,
+    reference: vscode.CompletionItemKind.Reference,
+    'closing-tag': vscode.CompletionItemKind.Keyword,
 };
 
 // Sort order within one completion list: real node/attribute data first

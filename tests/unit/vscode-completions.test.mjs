@@ -162,13 +162,8 @@ test('E5: nodename="..." excludes the enclosing node itself and ranks matching-o
     const items = complete(text);
     const ls = labels(items);
     assert.ok(!ls.includes('mixnode'), 'the enclosing node must not offer itself');
-    assert.deepEqual(ls.sort(), ['c_color', 'c_float'].sort());
-    // c_color (a color3 producer) ranks before c_float since fg is color3.
-    const colorItem = items.find((i) => i.label === 'c_color');
-    const floatItem = items.find((i) => i.label === 'c_float');
-    assert.ok(colorItem.sortIndex < floatItem.sortIndex, 'the type-matching candidate sorts first');
-    assert.equal(colorItem.detail, 'color3');
-    assert.equal(floatItem.detail, 'float');
+    assert.deepEqual(ls.sort(), ['c_color']);
+    assert.equal(items.find((i) => i.label === 'c_color').detail, 'color3');
 });
 
 test('nodegraph="..." attribute value: root nodegraphs only', () => {
@@ -187,12 +182,13 @@ test('nodegraph="..." attribute value: root nodegraphs only', () => {
     assert.deepEqual(labels(items), ['NG1']);
 });
 
-test('output="..." attribute value: outputs of the nodegraph named on the same element', () => {
+test('output="..." attribute value: outputs of the nodegraph named on the same element, of the input type', () => {
     const text = [
         '<materialx version="1.39">',
         '  <nodegraph name="NG1">',
-        '    <output name="out1" type="color3" nodename="c1" />',
-        '    <output name="out2" type="float" nodename="c1" />',
+        '    <output name="out1" type="surfaceshader" nodename="c1" />',
+        '    <output name="out2" type="surfaceshader" nodename="c1" />',
+        '    <output name="out3" type="color3" nodename="c1" />',
         '  </nodegraph>',
         '  <surfacematerial name="M1" type="material">',
         '    <input name="surfaceshader" type="surfaceshader" nodegraph="NG1" output="|" />',
@@ -204,7 +200,7 @@ test('output="..." attribute value: outputs of the nodegraph named on the same e
     assert.deepEqual(labels(items).sort(), ['out1', 'out2']);
 });
 
-test('output="..." attribute value: outputs of the enclosing nodegraph when no nodegraph= is set', () => {
+test('output="..." attribute value: empty without nodename/nodegraph (spec "Inputs": output qualifies a connection)', () => {
     const text = [
         '<materialx version="1.39">',
         '  <nodegraph name="NG1">',
@@ -216,8 +212,24 @@ test('output="..." attribute value: outputs of the enclosing nodegraph when no n
         '</materialx>',
         '',
     ].join('\n');
-    const items = complete(text);
-    assert.deepEqual(labels(items), ['localOut']);
+    assert.deepEqual(labels(complete(text)), []);
+});
+
+test('output="..." attribute value: the outputs of the multioutput node named by nodename', () => {
+    const text = [
+        '<materialx version="1.39">',
+        '  <nodegraph name="NG1">',
+        '    <separate3 name="sep" type="multioutput" />',
+        '    <multiply name="m" type="float">',
+        '      <input name="in1" type="float" nodename="sep" output="|" />',
+        '    </multiply>',
+        '  </nodegraph>',
+        '</materialx>',
+        '',
+    ].join('\n');
+    const ls = labels(complete(text));
+    assert.ok(ls.includes('outr') || ls.includes('outx'), ls.join(','));
+    assert.ok(!ls.includes('localOut'));
 });
 
 test('interfacename="..." attribute value: the enclosing nodegraph\'s interface inputs', () => {
@@ -225,8 +237,9 @@ test('interfacename="..." attribute value: the enclosing nodegraph\'s interface 
         '<materialx version="1.39">',
         '  <nodegraph name="NG1">',
         '    <input name="amount" type="float" value="0.5" />',
+        '    <input name="tint" type="color3" value="1, 1, 1" />',
         '    <mix name="mixnode" type="color3">',
-        '      <input name="bg" type="color3" interfacename="|" />',
+        '      <input name="mix" type="float" interfacename="|" />',
         '    </mix>',
         '  </nodegraph>',
         '</materialx>',

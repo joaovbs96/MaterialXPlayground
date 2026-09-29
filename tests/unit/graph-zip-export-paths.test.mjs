@@ -94,3 +94,13 @@ test('assignZipTexturePaths: duplicate refs are deduped to one entry', () => {
   const byRef = assignZipTexturePaths(['textures/foo.png', 'textures/foo.png']);
   assert.equal(Object.keys(byRef).length, 1);
 });
+
+test('assignZipTexturePaths: usdz package keys map to textures/<basename>, clashes de-duplicated', () => {
+  const { assignZipTexturePaths } = loadZipExportPaths();
+  const a = 'glove.usdz[0/glove_r.jpg]';
+  const b = 'other.usdz[1/glove_r.jpg]';
+  const r = assignZipTexturePaths([a, b, 'tex/plain.png']);
+  assertFields(r[a], { zipPath: 'textures/glove_r.jpg', relocated: true });
+  assertFields(r[b], { zipPath: 'textures/glove_r_2.jpg', relocated: true });
+  assertFields(r['tex/plain.png'], { zipPath: 'tex/plain.png', relocated: false });
+});

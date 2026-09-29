@@ -225,7 +225,7 @@
     var NAV = [
         { id: 'home', label: 'Home', shellHref: '#!home', icon: ICON_NAV_HOME, mobileOnly: true },
         { id: 'docs', label: 'Node Specs', shellHref: '#!docs', icon: ICON_NAV_DOCS },
-        { id: 'viewer', label: 'Viewer', shellHref: '#!viewer', icon: ICON_NAV_VIEWER },
+        { id: 'viewer', label: 'Material Viewer', shellHref: '#!viewer', icon: ICON_NAV_VIEWER },
         { id: 'scene', label: 'Scene Viewer', shellHref: '#!scene', icon: ICON_NAV_SCENE, badge: 'Experimental' },
         { id: 'compare', label: 'Compare', shellHref: '#!compare', icon: ICON_NAV_COMPARE },
         { id: 'graph', label: 'Graph Editor', shellHref: '#!graph', icon: ICON_NAV_GRAPH },
@@ -1178,6 +1178,27 @@
             // link inside it (hashchange already fires for that click).
             closeMobileMenu();
         });
+    }
+
+    // VS Code Scene Viewer: the Graph Editor tab is disabled while the scene is
+    // the active view; a material's "Open in Graph Editor" is the way in.
+    if (IS_SHELL && window.__MTLX_VSCODE__ && window.__MTLX_SCENE_ONLY__) {
+        var GRAPH_TAB_TIP = "Open a material's graph from the Scene: double-click a mesh, then Open in Graph Editor";
+        var gateGraphTab = function () {
+            var off = shellActiveId(window.location.hash || '') === 'scene';
+            var els = document.querySelectorAll('[data-nav="graph"]');
+            for (var i = 0; i < els.length; i++) {
+                els[i].classList.toggle('is-disabled', off);
+                if (off) { els[i].setAttribute('aria-disabled', 'true'); els[i].setAttribute('title', GRAPH_TAB_TIP); }
+                else { els[i].removeAttribute('aria-disabled'); els[i].removeAttribute('title'); }
+            }
+        };
+        document.addEventListener('click', function (e) {
+            var a = e.target && e.target.closest && e.target.closest('[data-nav="graph"].is-disabled');
+            if (a) { e.preventDefault(); e.stopPropagation(); }
+        }, true);
+        window.addEventListener('hashchange', gateGraphTab);
+        gateGraphTab();
     }
 
     // Version tracking: no visible pill anymore, but js/shell.jsx's

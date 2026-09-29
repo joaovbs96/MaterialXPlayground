@@ -226,6 +226,13 @@
     color: var(--site-gray-200);
     border-bottom-color: var(--site-gray-600);
 }
+.mtlx-tab.is-disabled,
+.mtlx-tab.is-disabled:hover {
+    opacity: 0.4;
+    cursor: not-allowed;
+    color: var(--site-gray-400);
+    border-bottom-color: transparent;
+}
 .mtlx-tab.is-active {
     border-bottom-color: var(--site-blue-500);
     color: var(--site-blue-300);

@@ -54,7 +54,7 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 
 - [parked] **Path tracing mode**: a physically based path tracer next to the real-time view, so materials can be checked against a ground-truth render of the same document, with progressive refinement while the camera is still.
 - [done] **Material gallery**: browse, search and filter the MaterialX example materials with live previews, licenses, permalinks and zip downloads.
-- [done] **Preset picker**: one dialog, backed by the gallery, to pick a starting material in the Viewer, Compare and Graph Editor.
+- [done] **Preset picker**: one dialog, backed by the gallery, to pick a starting material in the Material Viewer, Compare and Graph Editor.
 - [done] **Custom preview models**: load OBJ, GLB and multi-file glTF models, including Draco compressed meshes.
 - [idea] **More backdrop options**: something similar to the backdrop of the Standard Shaderball.
 - [done] **Support for ShadingLanguageX (SLX) viewing**: open .mxsl files in the Material Viewer; they are compiled to MaterialX by the ShadingLanguageX WASM bindings and rendered like any .mtlx document.

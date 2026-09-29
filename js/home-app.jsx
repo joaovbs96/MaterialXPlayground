@@ -17,7 +17,7 @@ const HOME_CARDS = [
     { id: 'graph', group: 'tools', href: '#!graph', icon: 'share', title: 'Node Graph Editor', desc: 'Build MaterialX graphs visually, with nested nodegraphs, a live 3D preview, validation, and .mtlx export.', img: 'images/preview-nodegraph.jpg', cta: 'Open Node Graph Editor' },
     { id: 'scene', group: 'tools', href: '#!scene', icon: 'cube', title: 'Scene Viewer', badge: 'Experimental', desc: 'Drop a USD, glTF, or OBJ scene with MaterialX materials and render it whole: scene lights, shadows, ambient occlusion, and a double-click material preview.', img: 'images/preview-scene.jpg', cta: 'Open Scene Viewer' },
     { id: 'whatIsMaterialx', group: 'learn', href: '#!what-is-materialx', icon: 'world', iconImg: 'images/materialx-logo.svg', title: 'What is MaterialX?', desc: 'A guided introduction to the MaterialX standard: what it is, why it exists, and how its node graphs describe a material.', img: 'images/preview-what.jpg', cta: 'Read the introduction' },
-    { id: 'gallery', group: 'learn', href: '#!gallery', icon: 'layout-grid', title: 'Material Gallery', desc: 'Browse, search, and preview every example material shipped with MaterialX plus our own showcase pieces, then reopen any of them in the Viewer or Graph Editor.', img: 'images/preview-gallery.jpg', cta: 'Browse materials' },
+    { id: 'gallery', group: 'learn', href: '#!gallery', icon: 'layout-grid', title: 'Material Gallery', desc: 'Browse, search, and preview every example material shipped with MaterialX plus our own showcase pieces, then reopen any of them in the Material Viewer or Graph Editor.', img: 'images/preview-gallery.jpg', cta: 'Browse materials' },
     { id: 'docs', group: 'learn', href: '#!docs', icon: 'file-code', title: 'Node Specs', desc: 'Every standard MaterialX node, with per-signature docs, port tables, live 3D previews, and shareable permalinks.', img: 'images/preview-docs.jpg', cta: 'Browse Node Specs' },
     { id: 'tutorials', group: 'learn', status: 'soon', icon: 'book', title: 'Tutorials', badge: 'In progress', desc: 'Guided, hands-on MaterialX tutorials, from what MaterialX is to your first node graph, served alongside the app.', cta: 'Coming soon' },
     { id: 'builder', group: 'integrate', href: '#!builder', icon: 'code', title: 'Embed Builder', badge: 'Experimental', desc: 'Configure an embeddable viewer, preview it live, and copy an <iframe> or custom-element snippet for any web page.', img: 'images/preview-builder.jpg', cta: 'Open Embed Builder' },
@@ -359,7 +359,7 @@ function HeroStage({ active, busy, onOpen }) {
             <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-2 transition-all duration-150 opacity-0 translate-y-1 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:translate-y-0 focus-within:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:translate-y-0 [@media(hover:none)]:pointer-events-auto">
                 <button type="button" disabled={!!busy} onClick={() => onOpen('viewer')} className={PILL_ACTION}>
                     <MtlxIcon name="camera" className="w-3.5 h-3.5 text-gray-500 transition-colors" />
-                    {busy === 'viewer' ? 'Loading' : 'Open in Viewer'}
+                    {busy === 'viewer' ? 'Loading' : 'Open in Material Viewer'}
                 </button>
                 <button type="button" disabled={!!busy} onClick={() => onOpen('graph')} className={PILL_ACTION}>
                     <MtlxIcon name="share" className="w-3.5 h-3.5 text-gray-500 transition-colors" />
@@ -433,7 +433,7 @@ function HomeApp({ active } = {}) {
                     <div className="flex flex-wrap gap-3 pt-1">
                         <a href="#!viewer" className="inline-flex items-center gap-2 h-10 px-4 rounded-lg border border-gray-600 bg-gray-800 hover:bg-gray-700 text-sm font-medium text-gray-100 transition-colors">
                             <MtlxIcon name="camera" className="w-[18px] h-[18px] text-blue-400" />
-                            Open Viewer
+                            Open Material Viewer
                         </a>
                         <a href="#!graph" className="inline-flex items-center gap-2 h-10 px-4 rounded-lg border border-gray-600 bg-gray-800 hover:bg-gray-700 text-sm font-medium text-gray-100 transition-colors">
                             <MtlxIcon name="share" className="w-[18px] h-[18px] text-blue-400" />

@@ -200,7 +200,7 @@ See [docs/EMBEDDING.md](docs/EMBEDDING.md) for the full reference: every query p
 
 ## Compressed textures (KTX2)
 
-Both the Viewer and the Scene understand `.ktx2` (Basis Universal UASTC) textures through the same texture path as `.png`/`.jpg`/`.tif`/`.exr`/`.hdr`. Install the encoder once with:
+Both the Material Viewer and the Scene understand `.ktx2` (Basis Universal UASTC) textures through the same texture path as `.png`/`.jpg`/`.tif`/`.exr`/`.hdr`. Install the encoder once with:
 
 ```
 npm run setup:ktx

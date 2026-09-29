@@ -243,7 +243,7 @@ test('range formatting inside one element only re-indents that element', (t) => 
         '</materialx>\n',
     ].join('');
     const doc = makeDoc(src);
-    const nodegraphStart = src.indexOf('<nodegraph');
+    const nodegraphStart = src.indexOf('  <nodegraph');
     const nodegraphEnd = src.indexOf('</nodegraph>') + '</nodegraph>'.length;
     // A range crossing from inside the first <input> into the second, so
     // neither self-closing element alone contains it and the smallest
@@ -260,6 +260,94 @@ test('range formatting inside one element only re-indents that element', (t) => 
     // The two collapsed inputs land on their own re-indented lines, and
     // nothing outside the <nodegraph> element was touched.
     assert.match(edits[0].newText, /<nodegraph name="NG_test">\n {4}<input name="a"[^]*<input name="b"[^]*<\/nodegraph>/);
+});
+
+const SIB_SRC = [
+    '<?xml version="1.0"?>\n',
+    '<materialx version="1.39">\n',
+    '  <nodegraph name="NG">\n',
+    '      <input name="a" type="float" value="1  2" />\n',
+    '  <input name="b" type="float" value="2" />\n',
+    '        <input name="c" type="float" value="3" />\n',
+    '  </nodegraph>\n',
+    '</materialx>\n',
+].join('');
+
+function rangeEdits(src, a, b) {
+    const doc = makeDoc(src);
+    const { rangeProvider } = registerFake();
+    const range = new FakeRange(doc.positionAt(a), doc.positionAt(b));
+    return rangeProvider.provideDocumentRangeFormattingEdits(doc, range, { tabSize: 2, insertSpaces: true });
+}
+
+test('range formatting of whole child lines formats only those siblings', (t) => {
+    if (skipIfUnavailable(t)) return;
+    const a = SIB_SRC.indexOf('      <input name="a"');
+    const b = SIB_SRC.indexOf('  </nodegraph>');
+    const edits = rangeEdits(SIB_SRC, a, b);
+    assert.equal(edits.length, 1);
+    const first = SIB_SRC.indexOf('      <input name="a"');
+    assert.equal(edits[0].range.start.offset, first);
+    assert.equal(edits[0].range.end.offset, b - 1);
+    const after = SIB_SRC.slice(0, first) + edits[0].newText + SIB_SRC.slice(edits[0].range.end.offset);
+    assert.match(after, /\n {4}<input name="a" type="float" value="1  2" \/>\n {4}<input name="b"[^\n]*\n {4}<input name="c"/);
+    assert.ok(after.includes('\n  </nodegraph>'));
+    // Idempotent: a second pass over the same lines yields no edit.
+    const a2 = after.indexOf('    <input name="a"');
+    const b2 = after.indexOf('  </nodegraph>');
+    assert.deepEqual(rangeEdits(after, a2, b2), []);
+});
+
+test('range formatting that cuts through an element falls back to the enclosing element', (t) => {
+    if (skipIfUnavailable(t)) return;
+    const a = SIB_SRC.indexOf('name="b"');
+    const b = SIB_SRC.indexOf('name="c"');
+    const edits = rangeEdits(SIB_SRC, a, b);
+    assert.equal(edits.length, 1);
+    assert.equal(edits[0].range.start.offset, SIB_SRC.indexOf('  <nodegraph'));
+});
+
+function applyEdit(src, edit) {
+    return src.slice(0, edit.range.start.offset) + edit.newText + src.slice(edit.range.end.offset);
+}
+
+test('range formatting of complete siblings re-indents the first line too', (t) => {
+    if (skipIfUnavailable(t)) return;
+    const a = SIB_SRC.indexOf('<input name="a"');
+    const b = SIB_SRC.indexOf('\n  </nodegraph>');
+    const edits = rangeEdits(SIB_SRC, a, b);
+    assert.equal(edits.length, 1);
+    const after = applyEdit(SIB_SRC, edits[0]);
+    assert.ok(after.includes('\n    <input name="a"'), 'first line re-indented');
+    assert.ok(after.startsWith(SIB_SRC.slice(0, SIB_SRC.indexOf('      <input name="a"'))), 'text before unchanged');
+    assert.ok(after.endsWith(SIB_SRC.slice(b)), 'text after unchanged');
+    const a2 = after.indexOf('<input name="a"');
+    assert.deepEqual(rangeEdits(after, a2, after.indexOf('\n  </nodegraph>')), []);
+});
+
+test('range formatting through the enclosing-element fallback re-indents the first line too', (t) => {
+    if (skipIfUnavailable(t)) return;
+    const src = [
+        '<materialx version="1.39">\n',
+        '      <nodegraph name="NG">\n',
+        '<input name="a" type="float" value="1" /><input name="b" type="float" value="2" />\n',
+        '      </nodegraph>\n',
+        '</materialx>\n',
+    ].join('');
+    const edits = rangeEdits(src, src.indexOf('name="a"'), src.indexOf('name="b"'));
+    assert.equal(edits.length, 1);
+    assert.equal(edits[0].range.start.offset, src.indexOf('      <nodegraph'));
+    const after = applyEdit(src, edits[0]);
+    assert.ok(after.startsWith('<materialx version="1.39">\n  <nodegraph name="NG">\n    <input name="a"'));
+    assert.ok(after.endsWith('\n  </nodegraph>\n</materialx>\n'));
+    assert.deepEqual(rangeEdits(after, after.indexOf('name="a"'), after.indexOf('name="b"')), []);
+});
+
+test('range formatting of the root element does not indent it', (t) => {
+    if (skipIfUnavailable(t)) return;
+    const edits = rangeEdits(SIB_SRC, SIB_SRC.indexOf('<materialx'), SIB_SRC.length - 1);
+    assert.equal(edits.length, 1);
+    assert.ok(applyEdit(SIB_SRC, edits[0]).includes('\n<materialx version="1.39">\n  <nodegraph'));
 });
 
 test('range formatting outside any element returns no edits', (t) => {
@@ -343,4 +431,41 @@ test('loadVendoredXmlFormatter propagates a require error for an unresolvable sp
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });
     }
+});
+
+const COL0_SRC = [
+    '<materialx version="1.39">\n',
+    '  <nodegraph name="NG">\n',
+    '<input name="a" type="float" value="1" />\n',
+    '<input name="b" type="float" value="2" />\n',
+    '  </nodegraph>\n',
+    '</materialx>\n',
+].join('');
+
+test('F-2 siblings path: column-0 first line gets indented', (t) => {
+    if (skipIfUnavailable(t)) return;
+    const a = COL0_SRC.indexOf('<input name="a"');
+    const b = COL0_SRC.indexOf('  </nodegraph>') - 1;
+    const edits = rangeEdits(COL0_SRC, a, b);
+    assert.equal(edits.length, 1);
+    const after = applyEdit(COL0_SRC, edits[0]);
+    assert.ok(after.includes('\n    <input name="a"'), after);
+    assert.ok(after.includes('\n    <input name="b"'), after);
+});
+
+test('F-2 siblings path: selection starting mid first line still indents it', (t) => {
+    if (skipIfUnavailable(t)) return;
+    const a = COL0_SRC.indexOf('<input name="a"') + 3;
+    const b = COL0_SRC.indexOf('  </nodegraph>') - 1;
+    const after = applyEdit(COL0_SRC, rangeEdits(COL0_SRC, a, b)[0] || { range: { start: { offset: 0 }, end: { offset: 0 } }, newText: '' });
+    assert.ok(after.includes('\n    <input name="a"') || after.includes('\n    <input name="b"'), after);
+});
+
+test('F-2 enclosing path: column-0 element start gets indented', (t) => {
+    if (skipIfUnavailable(t)) return;
+    const src = ['<materialx version="1.39">', '<nodegraph name="NG">', '  <input name="a" type="float" value="1" /><input name="b" type="float" value="2" />', '</nodegraph>', '</materialx>', ''].join('\n');
+    const edits = rangeEdits(src, src.indexOf('name="a"'), src.indexOf('name="b"'));
+    assert.equal(edits.length, 1);
+    const after = applyEdit(src, edits[0]);
+    assert.ok(after.startsWith('<materialx version="1.39">\n  <nodegraph name="NG">\n    <input name="a"'), after);
 });

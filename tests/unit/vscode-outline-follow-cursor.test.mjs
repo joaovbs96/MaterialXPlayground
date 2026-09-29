@@ -43,6 +43,8 @@ const fakeVscode = {
         createTreeView() {
             return {
                 onDidChangeSelection() { return { dispose() {} }; },
+                visible: true,
+                onDidChangeVisibility() { return { dispose() {} }; },
                 reveal(node) { revealCalls.push(node); return Promise.resolve(); },
             };
         },

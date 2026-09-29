@@ -111,9 +111,27 @@ class MtlxOutlineProvider {
     revealPath(nodePath) {
         const node = this._tree.byId.get(nodePath);
         if (!node || !this._treeView) return;
+        this.reveal(node);
+    }
+
+    // Reveal only while the view is showing: reveal() on a hidden view makes
+    // VS Code open our container. Otherwise defer to onDidChangeVisibility.
+    reveal(node) {
+        if (!this._treeView) return Promise.resolve();
+        if (!this._treeView.visible) {
+            this._pendingReveal = node.id;
+            return Promise.resolve();
+        }
+        this._pendingReveal = null;
         this.markProgrammatic(node.id);
-        Promise.resolve(this._treeView.reveal(node, { select: true, focus: false, expand: true }))
+        return Promise.resolve(this._treeView.reveal(node, { select: true, focus: false, expand: true }))
             .catch(() => { /* best effort: a race with a tree rebuild is not fatal */ });
+    }
+
+    flushPendingReveal() {
+        const node = this._pendingReveal && this._tree.byId.get(this._pendingReveal);
+        this._pendingReveal = null;
+        if (node) this.reveal(node);
     }
 
     // pathAt/nodeAt take the vscode document/position directly (unlike
@@ -176,6 +194,7 @@ function register(context, { getActiveDocument, onDidChangeActiveDocument }) {
 
     context.subscriptions.push(
         treeView,
+        treeView.onDidChangeVisibility((e) => { if (e.visible) provider.flushPendingReveal(); }),
         onDidChangeActiveDocument((doc) => provider.setActiveDocument(doc)),
         treeView.onDidChangeSelection((e) => {
             const node = e.selection && e.selection[0];
@@ -199,11 +218,8 @@ function register(context, { getActiveDocument, onDidChangeActiveDocument }) {
                 followTimer = null;
                 const node = provider.nodeAt(active, pos);
                 if (!node) return;
-                provider.markProgrammatic(node.id);
                 followingCursor = true;
-                Promise.resolve(treeView.reveal(node, { select: true, focus: false, expand: true }))
-                    .catch(() => { /* best effort: a race with a tree rebuild is not fatal */ })
-                    .then(() => { followingCursor = false; });
+                provider.reveal(node).then(() => { followingCursor = false; });
             }, FOLLOW_CURSOR_DEBOUNCE_MS);
         }),
         { dispose: () => { if (followTimer) clearTimeout(followTimer); } }

@@ -2668,6 +2668,8 @@ const createMtlxSceneView = async ({
         material.userData.mtlxSceneTransfer = { compiled: transferCompiled, material: transferMaterial, uniforms: transferUniforms };
     };
     const sourceXmlByRecord = new WeakMap();
+    // Node names pruned from a record's network, so overrides aimed at them stay quiet.
+    const prunedNodesByRecord = new WeakMap();
     const materialRecords = new Map();
     // Resolved MaterialX document per material path, for the graph/shaderball
     // preview panel: { xml, name, materialName, sourceAsset }.
@@ -2768,6 +2770,8 @@ const createMtlxSceneView = async ({
         if (!overrides.length) return;
         const label = record.materialName || String(record.path || '').split('/').filter(Boolean).pop() || record.sourceAsset || 'material';
         for (const ov of overrides) {
+            // Checked before the lookup, which can also match a library graph's inner node.
+            if (ov.node && prunedNodesByRecord.get(record)?.has(ov.node)) continue;
             const targetNode = ov.node ? findMxNode(doc, ov.node) : matchedNode;
             if (!targetNode) {
                 const warning = `USD override targets missing MaterialX node "${ov.node}" in ${label}`;
@@ -2912,11 +2916,12 @@ const sceneScanMtlxElements = (xml) => {
         const closing = match[1], tag = match[2], attrs = match[3], selfClose = match[4];
         if (closing) {
             const open = stack.pop();
-            if (open) { open.closeStart = match.index + 2; open.closeEnd = match.index + 2 + tag.length; }
+            if (open) { open.closeStart = match.index + 2; open.closeEnd = match.index + 2 + tag.length; open.end = tagRe.lastIndex; }
             continue;
         }
         const el = { tag, attrs, tagStart: match.index + 1, tagEnd: match.index + 1 + tag.length,
-            attrsStart: match.index + 1 + tag.length, children: [], a: {} };
+            attrsStart: match.index + 1 + tag.length, children: [], a: {},
+            start: match.index, end: selfClose ? tagRe.lastIndex : -1, depth: stack.length };
         attrRe.lastIndex = 0;
         let attr;
         while ((attr = attrRe.exec(attrs)) !== null) el.a[attr[1]] = attr[2];
@@ -3191,6 +3196,64 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
     return { xml: out, repairs };
 };
 
+// Top-level elements that are never shading nodes, so never pruned.
+const SCENE_KEEP_TAGS = new Set(['nodedef', 'implementation', 'typedef', 'output', 'input', 'token', 'look', 'lookgroup',
+    'materialassign', 'collection', 'geominfo', 'geompropdef', 'propertyset', 'propertysetassign', 'variantset',
+    'variantassign', 'visibility', 'backdrop', 'unitdef', 'unittypedef', 'attributedef', 'targetdef']);
+
+// Drops top-level nodes (and plain nodegraphs) that no material node or
+// document output reaches, such as a dead UsdUVTexture chain left in a USD
+// Material. Skipped when there is no material node or the text has includes.
+const scenePruneUnreachableNodes = (xml) => {
+    const text = String(xml || '');
+    const none = { xml: text, removed: [] };
+    if (/<xi:include\b/.test(text)) return none;
+    const top = sceneScanMtlxElements(text).filter((el) => el.depth === 1 && el.end > el.start);
+    const candidates = new Map();
+    const roots = [];
+    let hasMaterial = false;
+    for (const el of top) {
+        // A nodegraph carrying a nodedef is an implementation, never pruned.
+        if (SCENE_KEEP_TAGS.has(el.tag) || !el.a.name || (el.tag === 'nodegraph' && el.a.nodedef)) {
+            roots.push(el);
+            continue;
+        }
+        candidates.set(el.a.name, el);
+        if (el.tag !== 'nodegraph' && el.a.type === 'material') { roots.push(el); hasMaterial = true; }
+    }
+    if (!hasMaterial) return none;
+    const reached = new Set(roots);
+    const queue = roots.slice();
+    const visit = (name) => {
+        const el = name ? candidates.get(name) : null;
+        if (el && !reached.has(el)) { reached.add(el); queue.push(el); }
+    };
+    // Every descendant reference counts, so a name collision only keeps more.
+    const walk = (el) => {
+        visit(el.a.nodename);
+        visit(el.a.nodegraph);
+        el.children.forEach(walk);
+    };
+    while (queue.length) walk(queue.shift());
+    const dead = [...candidates.values()].filter((el) => !reached.has(el));
+    if (!dead.length) return none;
+    let out = text;
+    for (const el of dead.slice().sort((a, b) => b.start - a.start)) {
+        // Takes the element's indentation and line break with it.
+        let from = el.start;
+        while (from > 0 && (out[from - 1] === ' ' || out[from - 1] === '\t')) from -= 1;
+        let to = el.end;
+        if (from === 0 || out[from - 1] === '\n') {
+            if (out[to] === '\r') to += 1;
+            if (out[to] === '\n') to += 1;
+        } else {
+            from = el.start;
+        }
+        out = out.slice(0, from) + out.slice(to);
+    }
+    return { xml: out, removed: dead.map((el) => el.a.name) };
+};
+
     // Reads and fully resolves one material's MaterialX source text: blob
     // read, inline-payload repair, include resolution and filename
     // canonicalization. No MaterialX/wasm work happens here, so this half
@@ -3201,6 +3264,20 @@ const sceneRepairInlineMaterialX = (xml, stdlib) => {
         const blob = source && fileMap[source];
         if (!blob) throw new Error('MaterialX source asset is unavailable: ' + (record && record.sourceAsset || 'unknown'));
         let raw = await blob.text();
+        // Networks built from a USD Material carry every shader prim under it,
+        // connected or not; only what the material reaches is kept.
+        if (/^__(?:inline|usdshade|usdpreview)_/.test(String(source).split('/').pop() || '')) {
+            let pruned = null;
+            try { pruned = scenePruneUnreachableNodes(raw); } catch (e) { pruned = null; }
+            if (pruned && pruned.removed.length) {
+                raw = pruned.xml;
+                prunedNodesByRecord.set(record, new Set(pruned.removed));
+                const n = pruned.removed.length;
+                const note = '[info] Removed ' + n + ' unused shading node' + (n === 1 ? '' : 's')
+                    + ' that ' + (n === 1 ? 'was' : 'were') + ' not connected to the material ' + label;
+                if (!udimWarnings.has(note)) { udimWarnings.add(note); warnings.push(note); }
+            }
+        }
         // The runtime's inline payloads need type repairs before MaterialX
         // can resolve their nodedefs; authored .mtlx files are left alone.
         if (/^__inline_/.test(String(source).split('/').pop() || '')) {

@@ -178,19 +178,38 @@ export function computeSmoothNormals(positions, options = {}) {
     faceUnit[fi] = nx / len; faceUnit[fi + 1] = ny / len; faceUnit[fi + 2] = nz / len;
   }
 
-  const buckets = new Map();
-  const keyOf = (v) => {
+  // Numeric open-addressing weld: slot -> group id, chained via next[].
+  const cap = 1 << Math.max(4, Math.ceil(Math.log2(vertexCount * 2 + 1)));
+  const mask = cap - 1;
+  const slotGroup = new Int32Array(cap).fill(-1);
+  const groupRep = new Int32Array(vertexCount);
+  const groupHead = new Int32Array(vertexCount);
+  const next = new Int32Array(vertexCount);
+  const vertGroup = new Int32Array(vertexCount);
+  let groupCount = 0;
+  for (let v = 0; v < vertexCount; v++) {
     const p = v * 3;
     const kx = Math.round(positions[p] * weldScale);
     const ky = Math.round(positions[p + 1] * weldScale);
     const kz = Math.round(positions[p + 2] * weldScale);
-    return kx + "_" + ky + "_" + kz;
-  };
-  for (let v = 0; v < vertexCount; v++) {
-    const key = keyOf(v);
-    let bucket = buckets.get(key);
-    if (!bucket) { bucket = []; buckets.set(key, bucket); }
-    bucket.push(v);
+    let h = (Math.imul(kx | 0, 73856093) ^ Math.imul(ky | 0, 19349663) ^ Math.imul(kz | 0, 83492791)) & mask;
+    let gid = -1;
+    for (;;) {
+      const g = slotGroup[h];
+      if (g < 0) {
+        gid = groupCount++;
+        slotGroup[h] = gid;
+        groupRep[gid] = v;
+        groupHead[gid] = -1;
+        break;
+      }
+      const r = groupRep[g] * 3;
+      if (Math.round(positions[r] * weldScale) === kx && Math.round(positions[r + 1] * weldScale) === ky && Math.round(positions[r + 2] * weldScale) === kz) { gid = g; break; }
+      h = (h + 1) & mask;
+    }
+    next[v] = groupHead[gid];
+    groupHead[gid] = v;
+    vertGroup[v] = gid;
   }
 
   const out = new Float32Array(positions.length);
@@ -199,9 +218,8 @@ export function computeSmoothNormals(positions, options = {}) {
     const fi = t * 3;
     const ownGroup = groupIds ? groupIds[t] : 0;
     const nx0 = faceUnit[fi], ny0 = faceUnit[fi + 1], nz0 = faceUnit[fi + 2];
-    const bucket = buckets.get(keyOf(v));
     let sx = 0, sy = 0, sz = 0;
-    for (const w of bucket) {
+    for (let w = groupHead[vertGroup[v]]; w !== -1; w = next[w]) {
       const tw = (w / 3) | 0;
       if (groupIds && groupIds[tw] !== ownGroup) continue;
       const fwi = tw * 3;
@@ -342,20 +360,44 @@ export async function loadObjStage({ files, rootPath, signal, onProgress } = {})
   // meshes/material groups are extracted in the same order faces appear.
   const hasVN = objHasVertexNormals(text);
   const faceGroups = hasVN ? null : parseObjSmoothingGroups(text);
-  let smoothCursor = 0;
+  let globalNormals = null;
+  let globalCursor = 0; // vertex offset into globalNormals
   let normalsRecomputed = false;
+
+  // Smooth normals are computed once over every mesh so vertices shared
+  // across g/o groups and materials get identical normals (no seams).
+  if (!hasVN) {
+    const slices = [];
+    let total = 0;
+    container.traverse((object) => {
+      if (!object.isMesh) return;
+      const g = object.geometry;
+      const pa = g && g.getAttribute && g.getAttribute("position");
+      if (!pa || !pa.count) return;
+      const gs = g.groups && g.groups.length ? g.groups : [{ start: 0, count: pa.count }];
+      for (const gr of gs) {
+        if (!gr.count) continue;
+        slices.push([pa.array, gr.start, gr.count]);
+        total += gr.count;
+      }
+    });
+    const all = new Float32Array(total * 3);
+    let o = 0;
+    for (const [arr, start, count] of slices) {
+      all.set(arr.subarray(start * 3, (start + count) * 3), o);
+      o += count * 3;
+    }
+    const usable = faceGroups && faceGroups.length === total / 3;
+    globalNormals = computeSmoothNormals(all, { creaseAngleDeg: 60, groupIds: usable ? faceGroups : null });
+  }
 
   const buildMeshRecord = (name, positions, normals, uvs, colors, start, count, materialName) => {
     if (!count) return;
     const posSlice = Float32Array.from(positions.subarray(start * 3, (start + count) * 3));
     let normalSlice = normals ? Float32Array.from(normals.subarray(start * 3, (start + count) * 3)) : null;
     if (!hasVN) {
-      const triCount = count / 3;
-      const groupSlice = faceGroups && smoothCursor + triCount <= faceGroups.length
-        ? faceGroups.slice(smoothCursor, smoothCursor + triCount)
-        : null;
-      normalSlice = computeSmoothNormals(posSlice, { creaseAngleDeg: 60, groupIds: groupSlice });
-      smoothCursor += triCount;
+      normalSlice = globalNormals.slice(globalCursor * 3, (globalCursor + count) * 3);
+      globalCursor += count;
       normalsRecomputed = true;
     }
     const geomprops = [];

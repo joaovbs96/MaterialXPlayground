@@ -1529,40 +1529,93 @@ async function waitForPixel(ctx, predicate, timeoutMs, label, x, y) {
 
 // Scenario: textureSwap -- swap.mtlx shows tex.png unlit. Replacing tex.png
 // on disk with a same-size image of another colour must reach the viewer:
-// after a text edit (same mtime too), and with no edit at all (file watcher).
+// after a text edit, and with no edit at all (copy, overwrite, recreate).
 async function scenarioTextureSwap(ctx) {
     const fx = ctx.fixtures;
-    const uri = vscode.Uri.file(fx.swapMtlxPath);
     const isRed = (p) => p.r > p.b + 60;
     const isBlue = (p) => p.b > p.r + 60;
     // A spot on the shaderball's outer shell (the centre is the grey core).
     const probe = (pred, ms, label) => waitForPixel(ctx, pred, ms, label, 0.25, 0.45);
     const hostFrom = ctx.testApi.getHostErrors().length;
     const sha = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex').slice(0, 12);
-    // Copies src over tex.png; `mtime` pins the replaced file's timestamp.
-    const replace = (src, mtime) => {
-        fs.copyFileSync(src, fx.swapTexPath);
-        fs.utimesSync(fx.swapTexPath, mtime, mtime);
-    };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const texLog = () => (ctx.testApi.getTextureLog ? ctx.testApi.getTextureLog() : []);
     const texSha = (report) => (report && report.files && report.files['tex.png'] ? report.files['tex.png'].sha256.slice(0, 12) : null);
-    const editText = async (marker) => {
+    // Copies src over tex.png; `mtime` pins the replaced file's timestamp.
+    const replace = (texPath, src, mtime) => {
+        fs.copyFileSync(src, texPath);
+        fs.utimesSync(texPath, mtime, mtime);
+    };
+    const editText = async (uri, marker) => {
         const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString()) || await vscode.workspace.openTextDocument(uri);
         const edit = new vscode.WorkspaceEdit();
         edit.insert(uri, doc.positionAt(doc.getText().indexOf('</materialx>')), '  <!-- ' + marker + ' -->\n');
         await vscode.workspace.applyEdit(edit);
         await doc.save();
     };
-    const t0 = new Date(Date.now() - 60000);
-    replace(fx.swapRedPath, t0);
+    // The three ways a user replaces a texture with no text edit: a copy
+    // that keeps the source timestamp (sources share tex.png's mtime and
+    // size), an in-place overwrite, and delete then recreate a moment later.
+    const ways = {
+        copy: async (texPath, src) => { fs.copyFileSync(src, texPath); },
+        overwrite: async (texPath, src) => {
+            const fd = fs.openSync(texPath, 'r+');
+            try { fs.writeSync(fd, fs.readFileSync(src), 0, undefined, 0); } finally { fs.closeSync(fd); }
+        },
+        recreate: async (texPath, src) => { fs.unlinkSync(texPath); await sleep(1500); fs.writeFileSync(texPath, fs.readFileSync(src)); },
+    };
+    const noEditStep = async (label, texPath, way, src, pred) => {
+        const from = ctx.allReports.length;
+        const logFrom = texLog().length;
+        await ways[way](texPath, src);
+        const report = await waitForReportAfter(ctx.allReports, from, 20000).then((r) => r.report, () => null);
+        const px = await probe(pred, 20000, 'swap-' + label);
+        const log = texLog().slice(logFrom).map((e) => (e.kind === 'post' ? { kind: 'post', urls: e.urls } : { kind: e.kind, matched: e.matched, uri: e.uri }));
+        return { ok: px.ok, fetchedSha: texSha(report), pixel: px.pixel, log };
+    };
+    const redSrc = fx.swapRedPath;
+    const blueSrc = fx.swapBluePath;
     const out = {
-        sameSize: fs.statSync(fx.swapRedPath).size === fs.statSync(fx.swapBluePath).size,
-        redSha: sha(fx.swapRedPath), blueSha: sha(fx.swapBluePath),
+        sameSize: fs.statSync(redSrc).size === fs.statSync(blueSrc).size,
+        redSha: sha(redSrc), blueSha: sha(blueSrc),
+    };
+    // Runs copy/overwrite/recreate with the playground focused, then with the
+    // text editor focused beside it; each step flips the colour.
+    const noEditRound = async (prefix, uri, texPath, startRed) => {
+        const res = {};
+        let red = !startRed;
+        const pin = () => {
+            const t = new Date(Date.now() - 120000);
+            for (const p of [redSrc, blueSrc, texPath]) fs.utimesSync(p, t, t);
+        };
+        pin();
+        await sleep(1500); // let the pin's own change event settle
+        for (const focus of ['playground', 'text']) {
+            if (focus === 'text') {
+                const doc = await vscode.workspace.openTextDocument(uri);
+                await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false });
+                pin();
+                await sleep(1500);
+            }
+            for (const way of ['copy', 'overwrite', 'recreate']) {
+                res[focus + '-' + way] = await noEditStep(prefix + '-' + focus + '-' + way, texPath, way, red ? redSrc : blueSrc, red ? isRed : isBlue);
+                red = !red;
+            }
+        }
+        return res;
     };
     const cfg = vscode.workspace.getConfiguration('materialxPlayground');
     const prevDefaultView = cfg.inspect('defaultView')?.globalValue;
+    const uri = vscode.Uri.file(fx.swapMtlxPath);
+    // Same document outside the workspace folder (its folder is the root).
+    const outsideDir = path.join(os.tmpdir(), 'mtlx-texswap-outside');
+    const outsideUri = vscode.Uri.file(path.join(outsideDir, 'swap.mtlx'));
+    const outsideTex = path.join(outsideDir, 'tex.png');
     try {
         await cfg.update('defaultView', 'viewer', vscode.ConfigurationTarget.Global);
-        const start = ctx.allReports.length;
+        const t0 = new Date(Date.now() - 60000);
+        replace(fx.swapTexPath, redSrc, t0);
+        let start = ctx.allReports.length;
         await openEditor(uri);
         await waitForReportAfter(ctx.allReports, start, 60000);
         out.initialRed = await probe(isRed, 60000, 'swap-initial');
@@ -1570,30 +1623,44 @@ async function scenarioTextureSwap(ctx) {
         // B: a different image with a fresh mtime, then a text edit.
         let from = ctx.allReports.length;
         const tB = new Date(Date.now() - 30000);
-        replace(fx.swapBluePath, tB);
-        await editText('edit b');
+        replace(fx.swapTexPath, blueSrc, tB);
+        await editText(uri, 'edit b');
         out.bFetchedSha = texSha(await waitForReportAfter(ctx.allReports, from, 30000).then((r) => r.report, () => null));
         out.bNewMtimeEdit = await probe(isBlue, 30000, 'swap-b-new-mtime-edit');
 
         // A: same size AND the same mtime as the file it replaces (a copy
         // that keeps the timestamp), then a text edit.
         from = ctx.allReports.length;
-        replace(fx.swapRedPath, tB);
-        await editText('edit a');
+        replace(fx.swapTexPath, redSrc, tB);
+        await editText(uri, 'edit a');
         out.aFetchedSha = texSha(await waitForReportAfter(ctx.allReports, from, 30000).then((r) => r.report, () => null));
         out.aSameMtimeEdit = await probe(isRed, 30000, 'swap-a-same-mtime-edit');
 
-        // C: replace with no text edit at all: the texture watcher reloads.
-        replace(fx.swapBluePath, new Date());
-        out.cWatcher = await probe(isBlue, 30000, 'swap-c-watcher');
+        // No text edit at all: the texture watcher alone must reload.
+        out.noEdit = await noEditRound('ws', uri, fx.swapTexPath, true);
+        await closeTabsForUri(uri);
+
+        fs.rmSync(outsideDir, { recursive: true, force: true });
+        fs.mkdirSync(outsideDir, { recursive: true });
+        fs.copyFileSync(fx.swapMtlxPath, outsideUri.fsPath);
+        fs.copyFileSync(redSrc, outsideTex);
+        start = ctx.allReports.length;
+        await openEditor(outsideUri);
+        await waitForReportAfter(ctx.allReports, start, 60000);
+        out.outsideInitialRed = await probe(isRed, 60000, 'swap-outside-initial');
+        out.outsideNoEdit = await noEditRound('outside', outsideUri, outsideTex, true);
 
         const disposed = disposedErrorsSince(ctx, hostFrom);
-        out.pass = !!(out.initialRed.ok && out.aSameMtimeEdit.ok && out.bNewMtimeEdit.ok && out.cWatcher.ok && disposed.length === 0);
+        const allOk = (round) => Object.values(round).every((r) => r.ok);
+        out.pass = !!(out.initialRed.ok && out.aSameMtimeEdit.ok && out.bNewMtimeEdit.ok && allOk(out.noEdit)
+            && out.outsideInitialRed.ok && allOk(out.outsideNoEdit) && disposed.length === 0);
         return out;
     } finally {
         try { await cfg.update('defaultView', prevDefaultView, vscode.ConfigurationTarget.Global); } catch (e) { /* best effort */ }
         await closeTabsForUri(uri);
-        fs.copyFileSync(fx.swapRedPath, fx.swapTexPath);
+        await closeTabsForUri(outsideUri);
+        try { fs.copyFileSync(fx.swapRedPath, fx.swapTexPath); } catch (e) { /* best effort */ }
+        try { fs.rmSync(outsideDir, { recursive: true, force: true }); } catch (e) { /* best effort */ }
     }
 }
 
@@ -1671,6 +1738,70 @@ async function scenarioSelectionSync(ctx) {
         out.pass = out.loaded && out.textToGraph.ok && out.graphToText.ok && out.settingOff.ok;
         return out;
     } finally {
+        try { await cfg.update('defaultView', prevDefaultView, vscode.ConfigurationTarget.Global); } catch (e) { /* best effort */ }
+        try { await cfg.update('syncSelection', prevSync, vscode.ConfigurationTarget.Global); } catch (e) { /* best effort */ }
+        await closeTabsForUri(uri);
+    }
+}
+
+// Scenario: graphClickNoEdit -- the first real click (with mouse jitter) on a
+// Graph Editor card of an auto-laid-out document selects its line and never edits the file.
+async function scenarioGraphClickNoEdit(ctx) {
+    const src = fs.readFileSync(ctx.fixtures.selSyncMtlxPath, 'utf8');
+    const filePath = path.join(path.dirname(ctx.fixtures.selSyncMtlxPath), 'click.mtlx');
+    fs.writeFileSync(filePath, src);
+    const uri = vscode.Uri.file(filePath);
+    const uriStr = uri.toString();
+    const cfg = vscode.workspace.getConfiguration('materialxPlayground');
+    const prevDefaultView = cfg.inspect('defaultView')?.globalValue;
+    const prevSync = cfg.inspect('syncSelection')?.globalValue;
+    const out = {};
+    let doc = null;
+    const hasPanel = () => vscode.window.tabGroups.all.some((g) => g.tabs.some((t) =>
+        t.input instanceof vscode.TabInputCustom && t.input.uri.toString() === uriStr));
+    try {
+        await cfg.update('defaultView', 'graph', vscode.ConfigurationTarget.Global);
+        await cfg.update('syncSelection', true, vscode.ConfigurationTarget.Global);
+        doc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, preview: false });
+        await waitForValue(() => hasPanel() || null, 8000);
+        if (!hasPanel()) {
+            await vscode.commands.executeCommand('vscode.openWith', uri, VIEW_TYPE, { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true });
+        }
+        const deadline = Date.now() + 90000;
+        let loaded = null;
+        while (!loaded && Date.now() < deadline) {
+            const from = ctx.graphSelectionReports.length;
+            ctx.testApi.triggerGraphSelection(uriStr);
+            const r = await waitForValue(() => ctx.graphSelectionReports.slice(from).find((x) => x && !('clicked' in x)), 3000);
+            if (r && r.loaded && r.cardCount > 0) loaded = r;
+            else await new Promise((res) => setTimeout(res, 400));
+        }
+        out.loaded = !!loaded;
+        if (!loaded) { out.pass = false; return out; }
+        await new Promise((r) => setTimeout(r, 1500));
+        out.dirtyBeforeClick = doc.isDirty;
+        const editorFor = () => vscode.window.visibleTextEditors.find((e) => e.document.uri.toString() === uriStr);
+        const srLine = src.split('\n').findIndex((l) => l.includes('name="SR_test"'));
+        const clickFrom = ctx.graphSelectionReports.length;
+        // Down, 1-4 px of jitter, up: the path a real mouse takes.
+        ctx.testApi.triggerGraphClick(uriStr, 'n:SR_test', [[1, 0], [2, 1], [4, 2]]);
+        out.click = await waitForValue(() => ctx.graphSelectionReports.slice(clickFrom).find((r) => r && ('clicked' in r || r.error)), 10000);
+        out.selectedLine = await waitForValue(() => {
+            const ed = editorFor();
+            return ed && ed.selection.start.line === srLine ? srLine + 1 : null;
+        }, 10000);
+        // Well past the graph's 350 ms edit flush.
+        await new Promise((r) => setTimeout(r, 2500));
+        const ed = editorFor();
+        out.lineAfter = ed ? ed.selection.start.line + 1 : null;
+        out.expectedLine = srLine + 1;
+        out.dirtyAfter = doc.isDirty;
+        out.textUnchanged = doc.getText() === src;
+        out.pass = !out.dirtyBeforeClick && !!out.selectedLine && out.lineAfter === out.expectedLine && !out.dirtyAfter && out.textUnchanged;
+        return out;
+    } finally {
+        try { if (doc && doc.isDirty) await doc.save(); } catch (e) { /* best effort */ }
         try { await cfg.update('defaultView', prevDefaultView, vscode.ConfigurationTarget.Global); } catch (e) { /* best effort */ }
         try { await cfg.update('syncSelection', prevSync, vscode.ConfigurationTarget.Global); } catch (e) { /* best effort */ }
         await closeTabsForUri(uri);
@@ -1817,6 +1948,28 @@ async function scenarioFilesVisibility(ctx) {
         await closeTabsForUri(mtlxUri);
         await closeTabsForUri(otherUri);
         try { fs.rmSync(otherPath, { force: true }); } catch (e) { /* best effort */ }
+    }
+}
+
+// Scenario: noSidebarSwitch -- with the Explorer showing, opening a .mtlx and
+// moving the cursor must not switch to our container. Asserted via the Files
+// tree's visible flag (true only if our container is the active sidebar).
+async function scenarioNoSidebarSwitch(ctx) {
+    const filesApi = ctx.testApi.files;
+    if (!filesApi || !filesApi.isVisible) return { pass: false, error: 'testApi.files.isVisible is missing' };
+    await vscode.commands.executeCommand('workbench.view.explorer');
+    await new Promise((r) => setTimeout(r, 800));
+    const before = filesApi.isVisible();
+    const uri = vscode.Uri.file(ctx.fixtures.filesDemoMtlxPath);
+    try {
+        const doc = await vscode.workspace.openTextDocument(uri);
+        const editor = await vscode.window.showTextDocument(doc, { preview: false });
+        editor.selection = new vscode.Selection(3, 0, 3, 0);
+        await new Promise((r) => setTimeout(r, 2500));
+        const after = filesApi.isVisible();
+        return { pass: !before && !after, before, after };
+    } finally {
+        await closeTabsForUri(uri);
     }
 }
 
@@ -1998,9 +2151,11 @@ async function run() {
         if (want('lifecycleCloseReopen')) { out.scenarios.lifecycleCloseReopen = await scenarioLifecycleCloseReopen(ctx); writeOut(); }
         if (want('textureSwap')) { out.scenarios.textureSwap = await scenarioTextureSwap(ctx); writeOut(); }
         if (want('selectionSync')) { out.scenarios.selectionSync = await scenarioSelectionSync(ctx); writeOut(); }
+        if (want('graphClickNoEdit')) { out.scenarios.graphClickNoEdit = await scenarioGraphClickNoEdit(ctx); writeOut(); }
         if (want('filesView')) { out.scenarios.filesView = await scenarioFilesView(ctx); writeOut(); }
         if (want('filesVisibility')) { out.scenarios.filesVisibility = await scenarioFilesVisibility(ctx); writeOut(); }
         if (want('insertNode')) { out.scenarios.insertNode = await scenarioInsertNode(ctx); writeOut(); }
+        if (want('noSidebarSwitch')) { out.scenarios.noSidebarSwitch = await scenarioNoSidebarSwitch(ctx); writeOut(); }
         if (want('openInTextEditor')) { out.scenarios.openInTextEditor = await scenarioOpenInTextEditor(ctx); writeOut(); }
         if (want('contextHeader')) { out.scenarios.contextHeader = await scenarioContextHeader(ctx); writeOut(); }
     } catch (e) {

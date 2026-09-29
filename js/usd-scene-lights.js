@@ -432,7 +432,7 @@
                     extent: item.extent,
                 };
                 out.push(item.entry);
-                if (item.extent > 0) {
+                if (item.extent > 0 && opts.sceneCenter) {
                     warn('[info] Light ' + item.record.primPath + ' (' + item.record.type
                         + ') is approximated as a point at its centre; no slots were left to split it');
                 }
@@ -464,7 +464,9 @@
                 out.push(sub);
             }
             splitReported++;
-            warn('[info] Light ' + item.record.primPath + ' (' + item.record.type + ') is split into '
+            // The first pass has no scene bounds and its counts are provisional,
+            // so only the final pass reports; it matches getStageLightDetails.
+            if (opts.sceneCenter) warn('[info] Light ' + item.record.primPath + ' (' + item.record.type + ') is split into '
                 + samples.length + ' point samples across its surface');
         }
         return out;

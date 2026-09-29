@@ -95,7 +95,7 @@
                             ? p.filter((c) => (c.signatures || []).some((sig) => (sig.inputs || []).some((i) => i.type === typeFilter)))
                             // Default (including filterMode 'in'): the new node
                             // must produce that type as its OUTPUT.
-                            : p.filter((c) => (c.signatures || []).some((sig) => sig.type === typeFilter));
+                            : p.filter((c) => (c.signatures || []).some((sig) => sigHasOutputType(sig, typeFilter)));
                     }
                     return searchFilter(p, s, keysOf);
                 };

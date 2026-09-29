@@ -386,6 +386,8 @@ class MtlxActionsViewProvider {
         if (wantType) {
             const next = insertNodeModel.rememberLastType(this._lastTypes(), category, wantType);
             await this._context.globalState.update(LAST_TYPES_KEY, next);
+            // Re-send the model so the webview's remembered types are fresh.
+            this._postState();
         }
     }
 }

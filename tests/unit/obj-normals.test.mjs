@@ -147,3 +147,15 @@ test('computeSmoothNormals: two-group case keeps groups from blending even under
   almostEqual(corner(normals, 2), n1);
   almostEqual(corner(normals, 4), n2);
 });
+
+test('computeSmoothNormals: two groups sharing an edge on a smooth surface get identical normals at shared vertices', () => {
+  // Gently curved strip split into two "groups": one call over both, as the loader now does.
+  const P = (x, y) => [x, y, 0.1 * x * x];
+  const quad = (x0, x1) => [...P(x0, 0), ...P(x1, 0), ...P(x1, 1), ...P(x0, 0), ...P(x1, 1), ...P(x0, 1)];
+  const positions = Float32Array.from([...quad(0, 1), ...quad(1, 2)]);
+  const normals = computeSmoothNormals(positions, { creaseAngleDeg: 60 });
+  // Group 1 corner (1,0) is index 1; group 2 corner (1,0) is index 6.
+  almostEqual(corner(normals, 1), corner(normals, 6));
+  // Group 1 corner (1,1) is index 2; group 2 corner (1,1) is index 11.
+  almostEqual(corner(normals, 2), corner(normals, 11));
+});

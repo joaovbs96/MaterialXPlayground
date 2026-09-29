@@ -18,7 +18,11 @@ async function handleCommand(context) {
         const editor = await vscode.window.showTextDocument(document);
         await editor.insertSnippet(new vscode.SnippetString(body));
     } catch (err) {
-        vscode.window.showErrorMessage('MaterialX Playground: failed to create a new MaterialX document: ' + errMsg(err));
+        // Lazy require: editorProvider pulls in much of the extension.
+        const ep = require('./editorProvider');
+        const text = 'MaterialX Playground: failed to create a new MaterialX document: ' + errMsg(err);
+        ep.logLine(ep.getSharedOutputChannel(), text);
+        ep.showHostError(text);
     }
 }
 

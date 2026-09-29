@@ -9,6 +9,13 @@ const exampleCatalog = require('./exampleCatalog');
 const { errMsg } = require('./util');
 const { nextFreeExampleName } = require('./nextFreeExampleName');
 
+// Logs to the shared Output channel and raises the "Show Output" error popup.
+function reportError(text) {
+    const ep = require('./editorProvider');
+    ep.logLine(ep.getSharedOutputChannel(), text);
+    return ep.showHostError(text);
+}
+
 const COMMAND_ID = 'materialxPlayground.newFromExample';
 
 // The trimmed gallery/manifest.json the release package job ships (see
@@ -198,7 +205,7 @@ async function createFromExample(context, example, explorerFolderUri, targetFold
         const doc = await vscode.workspace.openTextDocument(newUri);
         await vscode.window.showTextDocument(doc, { preview: false });
     } catch (err) {
-        vscode.window.showErrorMessage('MaterialX Playground: failed to create material from example: ' + errMsg(err));
+        reportError('MaterialX Playground: failed to create material from example: ' + errMsg(err));
     }
 }
 
@@ -213,7 +220,7 @@ async function handleCommand(context, arg1, arg2) {
     if (typeof arg1 === 'string') {
         const example = exampleCatalog.getExample(arg1);
         if (!example) {
-            vscode.window.showErrorMessage('MaterialX Playground: unknown example id "' + arg1 + '".');
+            reportError('MaterialX Playground: unknown example id "' + arg1 + '".');
             return;
         }
         await createFromExample(context, example, null, arg2 instanceof vscode.Uri ? arg2 : null);
@@ -237,4 +244,4 @@ function register(context) {
     );
 }
 
-module.exports = { register, COMMAND_ID, galleryIdFor, createFromExample, pickExample, resolveTargetFolder };
+module.exports = { register, reportError, handleCommand, createFromExample, COMMAND_ID, galleryIdFor, pickExample, resolveTargetFolder };

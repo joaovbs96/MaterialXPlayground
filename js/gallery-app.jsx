@@ -507,7 +507,7 @@ function GalleryDetailOverlay({
                             className={PILL_ACTION}
                         >
                             <MtlxIcon name="camera" className="w-3.5 h-3.5" />
-                            {actionBusy === 'viewer' ? 'Loading' : 'Open in Viewer'}
+                            {actionBusy === 'viewer' ? 'Loading' : 'Open in Material Viewer'}
                         </button>
                         <button
                             type="button"
@@ -818,7 +818,7 @@ function MtlxGalleryApp({ active } = {}) {
                     </h1>
                     <p className="text-gray-400 text-sm sm:text-base max-w-[60em]">
                         Every example material shipped in the MaterialX project repo ({tag}), plus a few playground
-                        materials of our own, ready to search, preview and reopen in the Viewer or Graph Editor.
+                        materials of our own, ready to search, preview and reopen in the Material Viewer or Graph Editor.
                     </p>
                 </div>
 

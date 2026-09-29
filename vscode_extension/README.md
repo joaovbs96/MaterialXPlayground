@@ -3,11 +3,11 @@
 See [MARKETPLACE.md](MARKETPLACE.md) for the user-facing Marketplace listing; this file is developer documentation.
 
 Opens `.mtlx` files in this repo's MaterialX Playground web app (Material
-Viewer or Node Graph Editor) inside a VS Code webview: sibling textures
+Material Viewer or Node Graph Editor) inside a VS Code webview: sibling textures
 and `xi:include` docs are resolved automatically, and the view live-
 reloads as you edit the text. The **Material Viewer is read/view only**,
 and switching to it always shows the Graph editor's current state (see
-"Viewer/Graph sync" under Usage below). The **Node Graph Editor edits the
+"Material Viewer/Graph sync" under Usage below). The **Node Graph Editor edits the
 document**: every settled graph edit is written straight into the open
 `.mtlx` document buffer, so a text editor on the same file updates live
 and the tab shows unsaved changes; **Ctrl+S** (Cmd+S on macOS) saves the
@@ -144,19 +144,19 @@ dependencies — it runs directly out of a checkout of this repo.
   graph re-renders the undone or redone state. A focused text field (e.g.
   a parameter's label input) handles the chord itself first, as usual:
   its native undo, not the document's. Outside the Node Graph Editor
-  (Viewer, docs view, or no MaterialX Playground editor active) this is a
+  (Material Viewer, docs view, or no MaterialX Playground editor active) this is a
   no-op.
 
-### Viewer/Graph sync
+### Material Viewer/Graph sync
 
 - Both views load the same document, but only one is mounted/visible at a
   time. Switching to the **Material Viewer always shows the Node Graph
   Editor's current state** — including edits not yet saved to disk —
-  at the moment you switch: it's a one-way sync (Graph -> Viewer), read
-  the instant the Viewer becomes visible. The Viewer never edits, so
+  at the moment you switch: it's a one-way sync (Graph -> Material Viewer), read
+  the instant the Material Viewer becomes visible. The Material Viewer never edits, so
   nothing needs to flow back the other way, and an external file change
   already reloads both views regardless.
-- This means the Viewer **recompiles its shader on every switch** to it
+- This means the Material Viewer **recompiles its shader on every switch** to it
   (same cost as any fresh load) — the site's background WASM warm-up is
   what keeps that from stalling the UI, not something instantaneous.
 
@@ -186,7 +186,7 @@ reachable through *Open With…* -> *Text Editor*.
 
 **Auto-open** (`materialxPlayground.autoOpenSceneViewer`, default `true`):
 when enabled, opening a scene file automatically opens the Scene
-Viewer, once per file per "open" (same re-arm rule as `.mtlx` auto-open
+Material Viewer, once per file per "open" (same re-arm rule as `.mtlx` auto-open
 above). VS Code opens some scene files (`.usda`, `.gltf`, `.obj`, or a
 `.usd` it can decode as text) as a real text editor, in which case the
 Scene Viewer opens **beside it**, following
@@ -248,7 +248,7 @@ editor.
     with precise `{line, character}` squiggle ranges.
   - **Tier 2 — MaterialX semantic validation.** Runs only once tier 1 is
     clean: loads the same bundled MaterialX WASM build the Material
-    Viewer/Node Graph Editor use (headless, inside the extension host)
+    Material Viewer/Node Graph Editor use (headless, inside the extension host)
     and actually parses + `validate()`s the document — catching things
     like a node graph referencing a nonexistent node. The message-holder
     overload of `validate()` gives back MaterialX's real diagnostic text
@@ -319,7 +319,7 @@ editor.
   such session. Toggling previews on in the docs view's own UI sticks
   for the rest of that webview's session (it does not silently flip back
   off); this default is scoped to docs panels only — the Material
-  Viewer/Node Graph Editor views never read this preference at all.
+  Material Viewer/Node Graph Editor views never read this preference at all.
 
 ## Settings
 
@@ -379,12 +379,12 @@ explicitly set old-name value.
 
 - **The webview hides browser-only / multi-document UI** that doesn't make
   sense when the editor is bound to a single already-opened `.mtlx` file:
-  the Home nav, New/Import/Presets, drag & drop, the Viewer's file sidebar
-  (the Viewer fills the tab instead, and its material picker moves to the
-  viewport overlay), the Send-to-Viewer/Send-to-Editor buttons (both views
-  are always in sync already — see "Viewer/Graph sync" below), and the
+  the Home nav, New/Import/Presets, drag & drop, the Material Viewer's file sidebar
+  (the Material Viewer fills the tab instead, and its material picker moves to the
+  viewport overlay), the Send-to-Material-Viewer/Send-to-Editor buttons (both views
+  are always in sync already — see "Material Viewer/Graph sync" below), and the
   docs view's Copy-link and open-in-new-tab actions. The header nav itself
-  drops the Docs tab too, leaving only Viewer and Graph — node
+  drops the Docs tab too, leaving only Material Viewer and Graph — node
   documentation stays reachable through the graph editor's own
   node-documentation dialog and hover links, or the separate
   `MaterialX Playground: Open Node Library Documentation` command, rather
@@ -416,7 +416,7 @@ explicitly set old-name value.
   the USD Scene Viewer runtime, and every MaterialX version except the
   default one are left out entirely. The Material Comparison view, the
   one feature that needs several versions side by side, stays web-only;
-  the webview nav has just Viewer and Graph.
+  the webview nav has just Material Viewer and Graph.
 - The repo root is the extension's `package.json`/install root, so a
   packaged `.vsix` (`vsce package`) bundles the site's files alongside
   `vscode_extension/` automatically — no separate copy step needed.
@@ -469,7 +469,7 @@ explicitly set old-name value.
   extension's message into the exact
   `window.__mtlxPendingImport`/`__mtlxPendingViewerImport` +
   `'mtlx-load-document'`/`'mtlx-view-document'` contract the site's own
-  "Send to Viewer"/"Send to Editor" buttons use
+  "Send to Material Viewer"/"Send to Editor" buttons use
   (`js/shared/mtlx-ui.jsx`), setting BOTH globals and dispatching BOTH
   events so the document is loaded into both views — the webview is, as
   far as the site's own code can tell, just another caller of that same
@@ -546,15 +546,15 @@ focus is not in an editable element, then posts `'mtlx-native-undo'` /
 calls `sendUpdate()` right away so the graph re-renders the result
 without waiting for the debounce.
 
-### How the Viewer stays in sync with the Graph editor
+### How the Material Viewer stays in sync with the Graph editor
 
 `media/bootstrap.js` remembers the `name`/texture-blob map from the most
 recent `mtlx-open` message and listens for `hashchange`. Whenever the
 hash becomes `#!viewer` and `window.__mtlxGetGraphXml` exists (the Graph
 editor has a live session), it re-serializes the graph and dispatches the
 same `window.__mtlxPendingViewerImport` + `'mtlx-view-document'` contract
-`mtlx-open` and the site's own "Send to Viewer" button use — so the
-Viewer always reflects the Graph editor's latest state, including
+`mtlx-open` and the site's own "Send to Material Viewer" button use — so the
+Material Viewer always reflects the Graph editor's latest state, including
 unsaved edits, the instant it becomes visible.
 
 ### Diagnostics

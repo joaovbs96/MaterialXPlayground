@@ -45,8 +45,10 @@ const assignZipTexturePaths = (refs, relocateFolder = 'textures') => {
     for (const ref of refs || []) {
         const key = String(ref || '').replace(/\\/g, '/');
         if (!key || Object.prototype.hasOwnProperty.call(byRef, key)) continue;
-        const { path, escaped } = collapseRefSegments(key);
-        let relocated = escaped || !path;
+        // Scene Viewer package keys '<pkg>.usdz[<inner>]' become '<folder>/<basename>'.
+        const pkg = /\[([^\]]*)\]\s*$/.exec(key);
+        const { path, escaped } = collapseRefSegments(pkg ? pkg[1] : key);
+        let relocated = escaped || !path || !!pkg;
         let zipPath = relocated
             ? relocateFolder + '/' + (path.split('/').pop() || 'texture')
             : path;

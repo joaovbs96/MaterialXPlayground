@@ -18,6 +18,7 @@ const DEBOUNCE_MS = 300;
 // environment.
 const TEST_TRANSPORT = process.env.MTLX_TEST_TRANSPORT === '1';
 let activeProvider = null;
+let activeTreeView = null;
 
 class MtlxFilesProvider {
     constructor() {
@@ -106,6 +107,7 @@ function register(context, { getActiveDocument, onDidChangeActiveDocument }) {
     provider.setActiveDocument(getActiveDocument());
 
     const treeView = vscode.window.createTreeView('materialxPlayground.files', { treeDataProvider: provider });
+    if (TEST_TRANSPORT) activeTreeView = treeView;
 
     async function openFileRef(ref) {
         if (!ref || typeof ref.value !== 'string') return;
@@ -158,6 +160,10 @@ function register(context, { getActiveDocument, onDidChangeActiveDocument }) {
 let testApi = null;
 if (TEST_TRANSPORT) {
     testApi = {
+        // True when our sidebar container is showing (proxy: the Files tree is visible).
+        isVisible() {
+            return !!activeTreeView && activeTreeView.visible;
+        },
         getRefs() {
             return activeProvider ? activeProvider._refs.slice() : [];
         },

@@ -578,6 +578,7 @@
 
     let columnMode = 'two';
     let columnStreak = 0;
+    let columnTimer = 0;
 
     function decideColumnLayout(mode, truncated, streak) {
         const wants = truncated ? 'single' : 'two';
@@ -607,6 +608,10 @@
         columnStreak = next.streak;
         if (next.mode !== columnMode) columnMode = next.mode;
         gridWrap.classList.toggle('single-col', columnMode === 'single');
+        // A pending flip needs a confirming reading; observers only fire on
+        // size changes, so schedule one instead of waiting for another resize.
+        clearTimeout(columnTimer);
+        if (columnStreak > 0) columnTimer = setTimeout(updateColumnLayout, 80);
     }
 
     if (typeof ResizeObserver !== 'undefined') {

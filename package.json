@@ -421,59 +421,59 @@
         {
           "command": "materialxPlayground.contextHeader",
           "when": "editorLangId == mtlx",
-          "group": "materialxPlayground@0"
+          "group": "1_materialxPlayground@0"
         },
         {
           "command": "materialxPlayground.openInGraphEditor",
           "when": "editorLangId == mtlx",
-          "group": "materialxPlayground@1"
+          "group": "1_materialxPlayground@1"
         },
         {
           "command": "materialxPlayground.openInMaterialViewer",
           "when": "editorLangId == mtlx",
-          "group": "materialxPlayground@2"
+          "group": "1_materialxPlayground@2"
         },
         {
           "command": "materialxPlayground.openDocs",
           "when": "editorLangId == mtlx",
-          "group": "materialxPlayground@3"
+          "group": "1_materialxPlayground@3"
         },
         {
           "command": "materialxPlayground.insertNodeFromEditor",
           "when": "editorLangId == mtlx",
-          "group": "materialxPlayground@4"
+          "group": "1_materialxPlayground@4"
         }
       ],
       "explorer/context": [
         {
           "command": "materialxPlayground.contextHeader",
           "when": "resourceExtname == .mtlx || explorerResourceIsFolder || resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i",
-          "group": "materialxPlayground@0"
+          "group": "1_materialxPlayground@0"
         },
         {
           "command": "materialxPlayground.openInGraphEditor",
           "when": "resourceExtname == .mtlx",
-          "group": "materialxPlayground@1"
+          "group": "1_materialxPlayground@1"
         },
         {
           "command": "materialxPlayground.openInMaterialViewer",
           "when": "resourceExtname == .mtlx",
-          "group": "materialxPlayground@2"
+          "group": "1_materialxPlayground@2"
         },
         {
           "command": "materialxPlayground.openDocs",
           "when": "resourceExtname == .mtlx",
-          "group": "materialxPlayground@3"
+          "group": "1_materialxPlayground@3"
         },
         {
           "command": "materialxPlayground.newFromExample",
           "when": "explorerResourceIsFolder",
-          "group": "materialxPlayground@4"
+          "group": "1_materialxPlayground@4"
         },
         {
           "command": "materialxPlayground.openScene",
           "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i",
-          "group": "materialxPlayground@5"
+          "group": "1_materialxPlayground@5"
         }
       ],
       "file/newFile": [
@@ -500,41 +500,51 @@
           "group": "inline@1"
         },
         {
+          "command": "materialxPlayground.replaceFileRef",
+          "when": "view == materialxPlayground.files",
+          "group": "1_modify@1"
+        },
+        {
           "command": "materialxPlayground.revealFileRefInExplorer",
           "when": "view == materialxPlayground.files && viewItem == mtlxFileRefFound",
           "group": "inline@2"
+        },
+        {
+          "command": "materialxPlayground.revealFileRefInExplorer",
+          "when": "view == materialxPlayground.files && viewItem == mtlxFileRefFound",
+          "group": "1_modify@2"
         }
       ],
       "editor/title/context": [
         {
           "command": "materialxPlayground.contextHeader",
           "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i || resourceExtname == .mtlx",
-          "group": "materialxPlayground@0"
+          "group": "1_materialxPlayground@0"
         },
         {
           "command": "materialxPlayground.openScene",
           "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i",
-          "group": "materialxPlayground@1"
+          "group": "1_materialxPlayground@1"
         },
         {
           "command": "materialxPlayground.openInGraphEditor",
           "when": "resourceExtname == .mtlx",
-          "group": "materialxPlayground@2"
+          "group": "1_materialxPlayground@2"
         },
         {
           "command": "materialxPlayground.openInMaterialViewer",
           "when": "resourceExtname == .mtlx",
-          "group": "materialxPlayground@3"
+          "group": "1_materialxPlayground@3"
         },
         {
           "command": "materialxPlayground.openDocs",
           "when": "resourceExtname == .mtlx",
-          "group": "materialxPlayground@4"
+          "group": "1_materialxPlayground@4"
         },
         {
           "command": "materialxPlayground.openInTextEditor",
           "when": "activeCustomEditorId == 'materialxPlayground.editor'",
-          "group": "materialxPlayground@5"
+          "group": "1_materialxPlayground@5"
         }
       ]
     },

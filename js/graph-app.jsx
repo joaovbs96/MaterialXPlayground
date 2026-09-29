@@ -942,6 +942,17 @@
             // sidebar), read by every viewport/overlay measurement below
             // instead of panelRef, so the sidebar's width is never double-counted.
             const canvasHostRef = React.useRef(null);
+            // Top edge (px) of the canvas HUD: 8, or the view-only banner's
+            // measured bottom + 8 while it shows (it wraps on narrow canvases).
+            const [hudTop, setHudTop] = React.useState(8);
+            const bannerObsRef = React.useRef(null);
+            const lockBannerRef = React.useCallback((el) => {
+                if (bannerObsRef.current) { bannerObsRef.current.disconnect(); bannerObsRef.current = null; }
+                if (!el) { setHudTop(8); return; }
+                const update = () => setHudTop(el.offsetTop + el.offsetHeight + 8);
+                update();
+                if (typeof ResizeObserver === 'function') { bannerObsRef.current = new ResizeObserver(update); bannerObsRef.current.observe(el); }
+            }, []);
             const [isFullscreen, setIsFullscreen] = React.useState(false);
             React.useEffect(() => watchFullscreen(
                 (el) => setIsFullscreen(!!el && el === panelRef.current)
@@ -1123,6 +1134,20 @@
                 el.style.flexWrap = prevWrap;
                 el.style.justifyContent = prevJustify;
             };
+
+            // Below this bar width the three grid columns cannot all fit,
+            // so the bar stacks its clusters into rows (class toggled, no state).
+            const GTB_STACK_BELOW = 780;
+            const toolbarBarRef = React.useRef(null);
+            React.useLayoutEffect(() => {
+                const el = toolbarBarRef.current;
+                if (!el) return;
+                const apply = () => el.classList.toggle('gtb-stack', el.clientWidth < GTB_STACK_BELOW);
+                apply();
+                const ro = new ResizeObserver(apply);
+                ro.observe(el);
+                return () => ro.disconnect();
+            });
 
             // Top-left cluster: this row (see its JSX) is a direct
             // child of the menu bar's first grid column, and is
@@ -4976,7 +5001,10 @@
                     // A signature group's `versions` array is built from
                     // the same nodeDefInfo objects as entry.defs, so
                     // versions[0] IS a defs[] entry (default/first version).
-                    const sig = (entry.signatures || []).find((sg) => sg.type === typeHint);
+                    // Exact output type first, else a multi-output signature
+                    // with a matching output (the wiring picks that output).
+                    const sigs = entry.signatures || [];
+                    const sig = sigs.find((sg) => sg.type === typeHint) || sigs.find((sg) => sigHasOutputType(sg, typeHint));
                     if (sig && sig.versions && sig.versions[0]) {
                         def = sig.versions[0];
                         pinNodedef = true;
@@ -6669,6 +6697,46 @@
             // A finished drag SNAPSHOTS the whole on-screen layout into
             // the document as xpos/ypos (1 unit = 240px). Purely spatial —
             // no docRev bump, but it changes Export's output, so it marks dirty.
+            // A click is not a move: real mice jitter 1-3 px between down and
+            // up, so a pointer travel under DRAG_SLOP_PX (screen px) snaps the
+            // nodes back and never touches the document.
+            const DRAG_SLOP_PX = 5;
+            const dragStartPosRef = React.useRef(null);
+            const pointerDownRef = React.useRef(null);
+            const onCanvasPointerDownCapture = (e) => { pointerDownRef.current = { x: e.clientX, y: e.clientY }; };
+            const dragPositions = (nodes) => {
+                const m = {};
+                (nodes || []).forEach((n) => { if (n && n.position) m[n.id] = { x: n.position.x, y: n.position.y }; });
+                return m;
+            };
+            const onNodeDragStart = (evt, node, nodes) => { dragStartPosRef.current = dragPositions(nodes && nodes.length ? nodes : [node]); };
+            const onSelectionDragStart = (evt, nodes) => { dragStartPosRef.current = dragPositions(nodes); };
+            const pointerTravel = (evt) => {
+                const down = pointerDownRef.current;
+                const p = evt && evt.changedTouches && evt.changedTouches[0] ? evt.changedTouches[0] : evt;
+                if (!down || !p || typeof p.clientX !== 'number') return Infinity;
+                return Math.hypot(p.clientX - down.x, p.clientY - down.y);
+            };
+            const dragMoved = (evt, nodes) => {
+                const start = dragStartPosRef.current;
+                dragStartPosRef.current = null;
+                if (!start) return pointerTravel(evt) >= DRAG_SLOP_PX;
+                const end = dragPositions(nodes);
+                const moved = Object.keys(end).some((id) => !start[id] || start[id].x !== end[id].x || start[id].y !== end[id].y);
+                if (!moved) return false;
+                if (pointerTravel(evt) >= DRAG_SLOP_PX) return true;
+                setFlow((prev) => ({
+                    edges: prev.edges,
+                    nodes: prev.nodes.map((n) => (start[n.id] ? { ...n, position: { ...start[n.id] } } : n)),
+                }));
+                return false;
+            };
+            const onNodeDragStopMoved = (evt, node, nodes) => {
+                if (dragMoved(evt, nodes && nodes.length ? nodes : [node])) { onNodeDragStop(); return; }
+                // d3-drag swallows the click after any pointer travel, so a jittery click selects here.
+                if (node && pointerTravel(evt) > 0) onNodeClick(evt, node);
+            };
+            const onSelectionDragStopMoved = (evt, nodes) => { if (dragMoved(evt, nodes)) onNodeDragStop(); };
             const onNodeDragStop = () => {
                 if (scopeLockedRef.current) return;
                 const c = scopeContainer();
@@ -7449,7 +7517,7 @@
                     {/* Menu bar and canvas+sidebar body row below are real
                         flex children; only dialogs and full-editor overlays
                         further down stay absolutely positioned on top. */}
-                    <div className="gtb-bar flex-none grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-2 px-2 py-1.5 bg-gray-900 border-b border-gray-700">
+                    <div ref={toolbarBarRef} className="gtb-bar flex-none grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-2 px-2 py-1.5 bg-gray-900 border-b border-gray-700">
                         {/* Top-left cluster: the File and Edit menus, plus
                             the undo/redo pair that stays out of them, the
                             way Word keeps those on the toolbar too. */}
@@ -7518,7 +7586,7 @@
                             equal-width (minmax(0,1fr)), so this stays dead
                             centre no matter what the clusters contain, and items-start keeps it on the bar's top row when a cluster wraps. */}
                         {parsed ? (
-                            <div className="flex items-center h-7 min-w-0">
+                            <div className="gtb-crumb flex items-center h-7 min-w-0">
                                 <div className="text-[11px] font-sans text-gray-400 max-w-full truncate">
                                     <button className="hover:text-gray-200 underline decoration-dotted" onClick={goUpScope}>
                                         {/* A docs-page implementation handoff (scopeOriginRef.returnHash)
@@ -7549,6 +7617,7 @@
                             the MiniMap, bottom-aligned with it, instead of
                             underneath it (kept, not hidden: see below). */}
                         <style>{'.gtb-collapsed .gtb-label { display: none !important; } .gtb-wrap { flex-wrap: wrap !important; } '
+                            + '.gtb-bar.gtb-stack { grid-template-columns: minmax(0, 1fr) !important; row-gap: 4px; } .gtb-stack .gtb-crumb { justify-content: flex-start; } '
                             + '.mtlx-graph-editor-canvas .react-flow__attribution { margin: 0 ' + (minimapMarginRight + 200 + 8) + 'px 8px 0 !important; }'}</style>
                         <div ref={topRightClusterRef} className="flex items-center gap-1.5 flex-nowrap justify-end min-w-0">
                             {mtlxPaths.length > 1 && (
@@ -7597,6 +7666,7 @@
                             {parsed && (
                                 <button
                                     onClick={() => setValidateOpen(true)}
+                                    aria-label="Validate"
                                     title="Run the MaterialX library's document validation"
                                     /* Borderless at rest like the rest of the bar, but a
                                        validation result keeps its coloured edge: that
@@ -7617,6 +7687,7 @@
                             <button
                                 onClick={() => setHelpOpen(true)}
                                 title="Help & Keybinds"
+                                aria-label="Help"
                                 className={BTN_MENUBAR}
                             >
                                 <MtlxIcon name="help" className="w-3.5 h-3.5" />
@@ -7625,6 +7696,7 @@
                             <button
                                 onClick={() => toggleFullscreen(panelRef.current)}
                                 title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
+                                aria-label={isFullscreen ? 'Exit' : 'Fullscreen'}
                                 className={'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border transition-colors whitespace-nowrap shrink-0 '
                                     + (isFullscreen
                                         ? 'bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70'
@@ -7689,6 +7761,8 @@
                             sidebar is a SIBLING, so its inputs keep the native
                             menu. */}
                         <div ref={canvasHostRef} className="mtlx-graph-editor-canvas relative flex-1 min-w-0"
+                            onPointerDownCapture={onCanvasPointerDownCapture}
+                            onMouseDownCapture={onCanvasPointerDownCapture}
                             onContextMenu={(e) => e.preventDefault()}>
                             <div className="absolute inset-0">
                                 <ReactFlowComp
@@ -7701,8 +7775,10 @@
                                     onEdgesChange={onEdgesChange}
                                     onSelectionStart={onSelectionStart}
                                     onSelectionEnd={onSelectionEnd}
-                                    onNodeDragStop={onNodeDragStop}
-                                    onSelectionDragStop={onNodeDragStop}
+                                    onNodeDragStart={onNodeDragStart}
+                                    onSelectionDragStart={onSelectionDragStart}
+                                    onNodeDragStop={onNodeDragStopMoved}
+                                    onSelectionDragStop={onSelectionDragStopMoved}
                                     onNodeDoubleClick={onNodeDoubleClick}
                                     onNodeContextMenu={onNodeContextMenu}
                                     onSelectionContextMenu={onSelectionContextMenu}
@@ -7812,10 +7888,10 @@
                             </div>
 
                             {/* View-only notice: inset strip above the HUD, which
-                                shifts down to top-14 while it shows; min-w-0 lets
-                                the text wrap instead of overflowing. */}
+                                sits below its measured height (hudTop); min-w-0
+                                lets the text wrap instead of overflowing. */}
                             {scopeLocked && (
-                                <div className="absolute top-2 left-2 right-2 z-20 flex flex-wrap items-center justify-center gap-2 px-3 py-1.5 bg-amber-900/40 border border-amber-700/50 rounded-md text-[11px] text-amber-200 backdrop-blur">
+                                <div ref={lockBannerRef} className="absolute top-2 left-2 right-2 z-20 flex flex-wrap items-center justify-center gap-2 px-3 py-1.5 bg-amber-900/40 border border-amber-700/50 rounded-md text-[11px] text-amber-200 backdrop-blur">
                                     <MtlxIcon name="lock" className="w-3.5 h-3.5 shrink-0" />
                                     {docReadOnly ? (
                                         <>
@@ -7835,22 +7911,18 @@
                                 </div>
                             )}
 
-                            {/* Top-left HUD: the collapsed node-list chip and
-                                the scope select share one anchored row so
-                                they never stack on top of each other. */}
-                            {parsed && (!leftOpen || scopeOptions.length > 0) && (
-                                <div className={'absolute left-2 z-30 flex items-center gap-2 ' + (scopeLocked ? 'top-14' : 'top-2')}>
-                                    {!leftOpen && (
-                                        <button
-                                            onClick={() => setLeftOpen(true)}
-                                            title="Show the node list (L)"
-                                            className={HUD_PILL}
-                                        >
-                                            <span>Explore Nodegraph</span>
-                                            <MtlxIcon name="chevrons-right" className="w-3.5 h-3.5" />
-                                        </button>
-                                    )}
+                            {/* Top-left HUD, one anchored column: the scope select
+                                and the Leave pill share the first row (Leave wraps
+                                under the select when narrow), Explore beneath; it
+                                stops short of the top-right Preview Panel pill. */}
+                            {parsed && (!leftOpen || scopeOptions.length > 0 || scope) && (
+                                <div className={'absolute left-2 z-30 flex flex-col items-start gap-1.5 ' + (paramsOpen ? 'max-w-[calc(100%_-_1rem)]' : 'max-w-[calc(100%_-_9rem)]')} style={{ top: hudTop }}>
+                                    {(scopeOptions.length > 0 || scope) && (
+                                    <div className="flex flex-wrap items-center gap-1.5 max-w-full min-w-0">
+                                    {/* Each item shrinks from its content width down to
+                                        a basis before the row wraps; names truncate. */}
                                     {scopeOptions.length > 0 && (
+                                        <div className="flex flex-[1_1_10rem] max-w-max min-w-0">
                                         <MtlxSelect
                                             value={scope}
                                             options={scopeOptions}
@@ -7863,35 +7935,47 @@
                                             title="Scope: the document root, or step inside a nodegraph"
                                             size="md"
                                             font="mono"
-                                            className="max-w-[20rem]"
+                                            className="w-full max-w-[20rem] min-w-0"
                                             popWidth={320}
                                             // Full name per option, so a truncated
                                             // row (long graph names) still has a tooltip.
                                             titles={Object.fromEntries(scopeOptions.map((o) => [o.value, o.label]))}
                                         />
+                                        </div>
+                                    )}
+                                    {/* Same go-up action as Backspace. */}
+                                    {scope && (
+                                        <div className="flex flex-[1_1_8rem] max-w-max min-w-0">
+                                        <button
+                                            onClick={goUpScope}
+                                            title={'Leave ' + scope + ' (Backspace)'}
+                                            className={HUD_PILL + ' w-full min-w-0'}
+                                        >
+                                            <MtlxIcon name="arrow-left" className="w-3.5 h-3.5 shrink-0" />
+                                            <span className="truncate max-w-[14rem]">Leave {scope}</span>
+                                        </button>
+                                        </div>
+                                    )}
+                                    </div>
+                                    )}
+                                    {!leftOpen && (
+                                        <button
+                                            onClick={() => setLeftOpen(true)}
+                                            title="Show the node list (L)"
+                                            className={HUD_PILL}
+                                        >
+                                            <span>Explore Nodegraph</span>
+                                            <MtlxIcon name="chevrons-right" className="w-3.5 h-3.5" />
+                                        </button>
                                     )}
                                 </div>
                             )}
 
                             {/* Error banner, centered along the top */}
                             {error && (
-                                <div className={'absolute left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg ' + (scopeLocked ? 'top-14' : 'top-2')}>
+                                <div className={'absolute left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg'} style={{ top: hudTop }}>
                                     {error}
                                 </div>
-                            )}
-
-                            {/* Leave-nodegraph pill: centered at the canvas
-                                host's top edge, only while scoped inside a
-                                nodegraph. Same go-up action as Backspace. */}
-                            {scope && (
-                                <button
-                                    onClick={goUpScope}
-                                    title={scope + ' (Backspace)'}
-                                    className={HUD_PILL + ' absolute left-1/2 -translate-x-1/2 z-30 max-w-[16rem] ' + (scopeLocked ? 'top-14' : 'top-2')}
-                                >
-                                    <MtlxIcon name="arrow-left" className="w-3.5 h-3.5 shrink-0" />
-                                    <span className="truncate">Leave {scope}</span>
-                                </button>
                             )}
 
                             {/* Types window (bottom left): zoom/fit cluster docked
@@ -7944,7 +8028,8 @@
                             <button
                                 onClick={() => setParamsOpen(true)}
                                 title="Expand the preview panel"
-                                className={HUD_PILL + ' absolute right-2 z-30 ' + (scopeLocked ? 'top-14' : 'top-2')}
+                                className={HUD_PILL + ' absolute right-2 z-30'}
+                                style={{ top: hudTop }}
                             >
                                 <MtlxIcon name="chevrons-left" className="w-3.5 h-3.5" />
                                 <span>Preview Panel</span>

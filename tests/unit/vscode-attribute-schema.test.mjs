@@ -66,7 +66,7 @@ test('attribute-name: UI attributes appear on a compound nodegraph interface inp
     const text = [
         '<materialx version="1.39">',
         '  <nodegraph name="NG1">',
-        '    <input name="amount" type="float" value="0.5" |/>',
+        '    <input name="amount" type="float" |/>',
         '    <output name="out" type="float" nodename="n1"/>',
         '  </nodegraph>',
         '</materialx>',
@@ -241,11 +241,26 @@ test('isGeompropEligible: only vector2/vector3', () => {
     assert.equal(schema.isGeompropEligible('color3'), false);
 });
 
-test('defaultgeomprop="..." value completion excludes geomcolor (color-typed)', () => {
-    const text = '<materialx version="1.39">\n  <nodedef name="ND1" node="foo">\n    <input name="in1" type="vector3" defaultgeomprop="|" />\n  </nodedef>\n</materialx>\n';
-    const ls = labels(complete(text));
-    assert.ok(ls.includes('normal'));
-    assert.ok(!ls.includes('geomcolor'), 'geomcolor is color-typed, not a legal defaultgeomprop value');
+test('defaultgeomprop="..." offers library geompropdef names matching the input type', () => {
+    const mk = (t) => ['<materialx version="1.39">', '  <nodedef name="ND1" node="foo">',
+        '    <input name="in1" type="' + t + '" defaultgeomprop="|" />', '  </nodedef>', '</materialx>', ''].join('\n');
+    const v3 = labels(complete(mk('vector3')));
+    assert.ok(v3.includes('Nworld') && v3.includes('Pobject'));
+    assert.ok(!v3.includes('UV0') && !v3.includes('normal') && !v3.includes('geomcolor'));
+    assert.deepEqual(labels(complete(mk('vector2'))), ['UV0']);
+});
+
+test('user reports: filename colorspace, value XOR connection, nodename type filter', () => {
+    const attrs = (t) => labels(complete(['<materialx version="1.39">', '  <image name="n" type="' + t + '">',
+        '    <input name="file" type="filename" value="a.png" |/>', '  </image>', '</materialx>', ''].join('\n')));
+    assert.ok(!attrs('vector3').includes('colorspace'));
+    assert.ok(attrs('color3').includes('colorspace'));
+    const ls = attrs('color3');
+    for (const a of ['nodename', 'nodegraph', 'output', 'interfacename']) assert.ok(!ls.includes(a), a);
+    const doc = ['<materialx version="1.39">', '  <nodegraph name="g">', '    <texcoord name="tc" type="vector2" />',
+        '    <image name="im" type="color3" />', '    <constant name="cf" type="float" />', '    <mix name="m" type="float">',
+        '      <input name="fg" type="float" nodename="|" />', '    </mix>', '  </nodegraph>', '</materialx>', ''].join('\n');
+    assert.deepEqual(labels(complete(doc)), ['cf']);
 });
 
 function every(items, pred) {
@@ -301,3 +316,10 @@ function readSpecText() {
     const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
     return files.map((f) => fs.readFileSync(path.join(dir, f), 'utf8')).join('\n');
 }
+
+test('C-29: target is offered on a functional nodegraph, not on a compound or bare one', () => {
+  const has = (el) => schema.attributesFor(schema.classifyElement(el)).some((a) => a.name === 'target');
+  assert.equal(has({ tag: 'nodegraph', attrs: { nodedef: 'ND_x' }, children: [] }), true);
+  assert.equal(has({ tag: 'nodegraph', attrs: {}, children: [{ tag: 'input' }] }), false);
+  assert.equal(has({ tag: 'nodegraph', attrs: {}, children: [] }), false);
+});

@@ -252,6 +252,52 @@ function findEnclosingElement(text, startOffset, endOffset) {
     return null;
 }
 
+// Every element span in document order of completion, each with the index
+// of its parent span (-1 for the root), for the complete-elements path.
+function collectElementSpans(text) {
+    const spans = [];
+    const stack = [];
+    SCAN_RE.lastIndex = 0;
+    let m;
+    while ((m = SCAN_RE.exec(text)) !== null) {
+        const end = m.index + m[0].length;
+        if (m[1] === '/') {
+            if (stack.length === 0) continue;
+            const o = stack.pop();
+            o.end = end;
+            o.parentId = stack.length ? stack[stack.length - 1].id : -1;
+            spans.push(o);
+        } else if (m[4] === '/') {
+            spans.push({ id: spans.length + stack.length + 1000000 + m.index, start: m.index, end, parentId: stack.length ? stack[stack.length - 1].id : -1 });
+        } else {
+            stack.push({ id: m.index, start: m.index });
+        }
+    }
+    return spans;
+}
+
+// If the selection (ignoring surrounding whitespace) covers one or more
+// COMPLETE sibling elements, returns their spans; otherwise null.
+function findSelectedSiblings(text, startOffset, endOffset) {
+    let s = startOffset;
+    let e = endOffset;
+    while (s < e && /\s/.test(text[s])) s++;
+    while (e > s && /\s/.test(text[e - 1])) e--;
+    if (s >= e) return null;
+    const inside = collectElementSpans(text).filter((sp) => sp.start >= s && sp.end <= e);
+    if (!inside.length) return null;
+    const ids = new Set(inside.map((sp) => sp.id));
+    const top = inside.filter((sp) => !ids.has(sp.parentId)).sort((a, b) => a.start - b.start);
+    if (!top.length || top[0].start !== s || top[top.length - 1].end !== e) return null;
+    if (top.some((sp) => sp.parentId !== top[0].parentId)) return null;
+    // Only whitespace or comments may sit between the sibling elements.
+    for (let i = 1; i < top.length; i++) {
+        const gap = text.slice(top[i - 1].end, top[i].start).replace(/<!--[\s\S]*?-->/g, '');
+        if (gap.trim() !== '') return null;
+    }
+    return top;
+}
+
 function reindentFragment(formatted, baseIndent, eol) {
     return formatted
         .split(eol)
@@ -281,29 +327,73 @@ function formatRangeEdits(document, range, formatOptions, vscode) {
         return formatWholeDocumentEdits(document, formatOptions, vscode);
     }
 
+    const siblings = findSelectedSiblings(text, startOffset, endOffset);
+    if (siblings) {
+        const eol0 = detectEol(text);
+        const fmtOpts = { tabSize: formatOptions.tabSize, insertSpaces: formatOptions.insertSpaces };
+        const lineIndentAt = (off) => {
+            const ls = text.lastIndexOf('\n', off - 1) + 1;
+            return text.slice(ls, off).match(/^[ \t]*/)[0];
+        };
+        const parentStart = siblings[0].parentId;
+        const indent = parentStart >= 0 && parentStart < text.length && text[parentStart] === '<' ? lineIndentAt(parentStart) + indentationFor(fmtOpts) : '';
+        let out = indent;
+        try {
+            siblings.forEach((sp, i) => {
+                if (i > 0) {
+                    const gap = text.slice(siblings[i - 1].end, sp.start);
+                    out += gap.replace(/(\r?\n)[ \t]*(?=\S|$)/g, (_m, nl) => nl + indent);
+                }
+                const frag = formatXmlPreservingBlankLines(text.slice(sp.start, sp.end), text, fmtOpts);
+                out += reindentFragment(frag, indent, eol0);
+            });
+        } catch (e) {
+            return [];
+        }
+        const first = siblings[0].start;
+        const last = siblings[siblings.length - 1].end;
+        const lineStart = text.lastIndexOf('\n', first - 1) + 1;
+        const ownLine = text.slice(lineStart, first).trim() === '';
+        const editStart = ownLine ? lineStart : first;
+        // Own-line starts (including column 0) replace from the line start and carry the indent.
+        const outText = ownLine ? out : out.slice(indent.length);
+        if (outText === text.slice(editStart, last)) return [];
+        return [vscode.TextEdit.replace(new vscode.Range(document.positionAt(editStart), document.positionAt(last)), outText)];
+    }
+
     const enclosing = findEnclosingElement(text, startOffset, endOffset);
     if (!enclosing) return [];
 
     const elementText = text.slice(enclosing.start, enclosing.end);
     const lineStart = text.lastIndexOf('\n', enclosing.start - 1) + 1;
-    const baseIndent = text.slice(lineStart, enclosing.start);
+    const leading = text.slice(lineStart, enclosing.start);
+    const ownLine = leading.trim() === '';
+    // The first line is re-indented too: derive the indent from the parent element.
+    const fmtOpts = { tabSize: formatOptions.tabSize, insertSpaces: formatOptions.insertSpaces };
+    let baseIndent = leading;
+    if (ownLine) {
+        const self = collectElementSpans(text).find((sp) => sp.start === enclosing.start);
+        const parentStart = self ? self.parentId : -1;
+        baseIndent = parentStart >= 0 && text[parentStart] === '<'
+            ? text.slice(text.lastIndexOf('\n', parentStart - 1) + 1, parentStart).match(/^[ \t]*/)[0] + indentationFor(fmtOpts)
+            : '';
+    }
 
     let formattedFragment;
     try {
-        formattedFragment = formatXmlPreservingBlankLines(elementText, text, {
-            tabSize: formatOptions.tabSize,
-            insertSpaces: formatOptions.insertSpaces,
-        });
+        formattedFragment = formatXmlPreservingBlankLines(elementText, text, fmtOpts);
     } catch (e) {
         return [];
     }
 
     const eol = detectEol(text);
     const reindented = reindentFragment(formattedFragment, baseIndent, eol);
-    if (reindented === elementText) return [];
+    const editStart = ownLine ? lineStart : enclosing.start;
+    const outText = ownLine ? baseIndent + reindented : reindented;
+    if (outText === text.slice(editStart, enclosing.end)) return [];
 
-    const editRange = new vscode.Range(document.positionAt(enclosing.start), document.positionAt(enclosing.end));
-    return [vscode.TextEdit.replace(editRange, reindented)];
+    const editRange = new vscode.Range(document.positionAt(editStart), document.positionAt(enclosing.end));
+    return [vscode.TextEdit.replace(editRange, outText)];
 }
 
 // register(context, vscode): wires the two providers for language 'mtlx'.

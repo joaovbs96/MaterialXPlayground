@@ -786,7 +786,7 @@ function DesktopSettingsDialog() {
                             <MtlxSelect
                                 value={documentOpenView}
                                 options={['graph', 'viewer']}
-                                labels={{ graph: 'Graph Editor', viewer: 'Viewer' }}
+                                labels={{ graph: 'Graph Editor', viewer: 'Material Viewer' }}
                                 defValue="graph"
                                 onChange={changeDocumentOpenView}
                                 ariaLabel="Open Documents Into"
@@ -1246,7 +1246,7 @@ function Shell() {
     React.useEffect(() => {
         if (EMBED) return;
         const titles = {
-            home: 'MaterialX Playground — Node Library, Viewer & Graph Editor',
+            home: 'MaterialX Playground — Node Library, Material Viewer & Graph Editor',
             docs: 'MaterialX Playground — Node Library & Documentation',
             viewer: 'MaterialX Playground — Material Viewer',
             graph: 'MaterialX Playground — Node Graph Editor',
@@ -1258,7 +1258,7 @@ function Shell() {
             gallery: 'MaterialX Playground - Material Gallery',
             roadmap: 'MaterialX Playground - Roadmap',
         };
-        document.title = titles[activeView] || 'MaterialX Playground — Node Library, Viewer & Graph Editor';
+        document.title = titles[activeView] || 'MaterialX Playground — Node Library, Material Viewer & Graph Editor';
     }, [activeView]);
 
     const renderView = (view) => {

@@ -114,6 +114,8 @@ if (TEST_TRANSPORT) {
             for (const listener of docsFilterListeners) listener(report);
         },
         emitHostError(text) { hostErrors.push(text); },
+        // Texture watcher events and the texture URLs each resend posted.
+        textureLog: [],
         emitError(text) {
             errors.push(text);
             for (const listener of errorListeners) listener(text);
@@ -129,13 +131,14 @@ if (TEST_TRANSPORT) {
             onError(listener) { errorListeners.push(listener); },
             getErrors() { return errors.slice(); },
             getHostErrors() { return hostErrors.slice(); },
+            getTextureLog() { return testHooks.textureLog.slice(); },
             // Centre pixel of the active panel's viewer (bootstrap.js handleTestTriggerPixel).
             triggerPixel(x, y) { postToActivePanel({ type: 'mtlx-test-trigger-pixel', x, y }); },
             onPixelReport(listener) { pixelListeners.push(listener); },
             // Selection sync (E18): graph selection state of the playground for
             // uriStr, and a simulated user click on a graph node card.
             triggerGraphSelection(uriStr) { postToDocumentPanel(uriStr, { type: 'mtlx-test-trigger-graph-selection' }); },
-            triggerGraphClick(uriStr, nodeId) { postToDocumentPanel(uriStr, { type: 'mtlx-test-trigger-graph-click', id: nodeId }); },
+            triggerGraphClick(uriStr, nodeId, jitter) { postToDocumentPanel(uriStr, { type: 'mtlx-test-trigger-graph-click', id: nodeId, jitter: jitter || [] }); },
             onGraphSelectionReport(listener) { graphSelectionListeners.push(listener); },
             isDocsPanelOpen() { return !!docsPanelInfo; },
             // Asks the docs panel (not the active editor -- the docs panel
@@ -632,12 +635,42 @@ function toMessageFilesB64(files) {
     return out;
 }
 
-// Turns docScanner's `textures` map ({ [key]: { uri, size, mtime, ctimeNs? } })
+// Turns docScanner's `textures` map ({ [key]: { uri, size, mtime, ctimeNs?, fingerprint? } })
 // into the 'mtlx-open' message's `fileUrls` field: a webview resource URL per
 // texture, so media/bootstrap.js fetches the bytes itself instead of them
 // being base64-encoded through postMessage. The '?v=' query is a cache-buster
 // only (textureStamp.js): VS Code's webview resource cache otherwise keeps
 // serving a texture's old bytes after it's rewritten on disk.
+// Uris of the root document's refs the scan found missing. docScanner only
+// reports 'missing' after its lexical containment check, so these stay inside.
+function missingRefUris(documentUri, refs) {
+    const dir = vscode.Uri.joinPath(documentUri, '..');
+    const out = [];
+    for (const r of refs || []) {
+        if (r && r.status === 'missing' && typeof r.value === 'string') {
+            try { out.push(vscode.Uri.joinPath(dir, r.value)); } catch (e) { /* unjoinable ref: not watched */ }
+        }
+    }
+    return out;
+}
+
+// The smallest replace turning oldText into newText (common prefix and
+// suffix kept), so a graph sync never moves text cursors outside the change.
+function minimalReplace(document, oldText, newText) {
+    const max = Math.min(oldText.length, newText.length);
+    let p = 0;
+    while (p < max && oldText.charCodeAt(p) === newText.charCodeAt(p)) p++;
+    // Never split a CRLF or a surrogate pair.
+    const hi = (c) => c >= 0xd800 && c <= 0xdbff;
+    if (p > 0 && (oldText.charCodeAt(p - 1) === 13 || hi(oldText.charCodeAt(p - 1)))) p--;
+    let s = 0;
+    while (s < max - p && oldText.charCodeAt(oldText.length - 1 - s) === newText.charCodeAt(newText.length - 1 - s)) s++;
+    const lo = (c) => c >= 0xdc00 && c <= 0xdfff;
+    if (s > 0 && (oldText.charCodeAt(oldText.length - s) === 10 || lo(oldText.charCodeAt(oldText.length - s)))) s--;
+    const range = new vscode.Range(document.positionAt(p), document.positionAt(oldText.length - s));
+    return { range, text: newText.slice(p, newText.length - s) };
+}
+
 function toFileUrls(webview, textures) {
     const out = {};
     for (const key of Object.keys(textures)) {
@@ -851,16 +884,19 @@ class MaterialXEditorProvider {
             };
 
             // Texture watchers: one non-recursive watcher per folder holding a
-            // texture the last scan resolved (so containment is unchanged);
-            // only changes to those exact files resend the document.
+            // texture the last scan resolved or a contained ref it found missing
+            // (so a delete then recreate is seen); only those files resend.
             let watchedTextures = new Set();
             const textureWatchers = new Map(); // folder uri string -> watcher
-            const onTextureEvent = (changed) => {
-                if (watchedTextures.has(changed.toString())) scheduleUpdate();
+            const onTextureEvent = (changed, kind) => {
+                const matched = watchedTextures.has(changed.toString());
+                if (testHooks) testHooks.textureLog.push({ ts: Date.now(), kind, uri: changed.toString(), matched, watched: [...watchedTextures] });
+                if (matched && kind !== 'delete') scheduleUpdate();
             };
-            const watchTextures = (textures) => {
+            const watchTextures = (textures, refs) => {
                 if (life.disposed) return;
-                const uris = Object.keys(textures).map((key) => textures[key].uri);
+                const uris = Object.keys(textures).map((key) => textures[key].uri)
+                    .concat(missingRefUris(document.uri, refs));
                 watchedTextures = new Set(uris.map((u) => u.toString()));
                 const folders = new Map();
                 for (const u of uris) {
@@ -873,8 +909,9 @@ class MaterialXEditorProvider {
                 for (const [key, dir] of folders) {
                     if (textureWatchers.has(key)) continue;
                     const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(dir, '*'));
-                    watcher.onDidChange(onTextureEvent);
-                    watcher.onDidCreate(onTextureEvent);
+                    watcher.onDidChange((u) => onTextureEvent(u, 'change'));
+                    watcher.onDidCreate((u) => onTextureEvent(u, 'create'));
+                    if (testHooks) watcher.onDidDelete((u) => onTextureEvent(u, 'delete'));
                     textureWatchers.set(key, watcher);
                 }
             };
@@ -892,9 +929,9 @@ class MaterialXEditorProvider {
                     const name = path.basename(document.uri.fsPath, path.extname(document.uri.fsPath));
                     const scanned = await docScanner.scan(document.uri, xml);
                     const { files, warnings } = scanned;
-                    const textures = await textureStamp.withChangeTimes(scanned.textures);
+                    const textures = await textureStamp.withVersions(scanned.textures);
                     if (mySeq !== scanSeq || life.disposed) return; // superseded, or the panel closed meanwhile
-                    watchTextures(textures);
+                    watchTextures(textures, scanned.refs);
 
                     const joined = warnings.join('\n');
                     if (warnings.length && joined !== lastLoggedWarnings) {
@@ -914,13 +951,15 @@ class MaterialXEditorProvider {
                     }
                     lastLoggedWarnings = joined;
 
+                    const fileUrls = toFileUrls(webview, textures);
+                    if (testHooks) testHooks.textureLog.push({ ts: Date.now(), kind: 'post', uri: uriKey, urls: fileUrls });
                     life.post({
                         type: 'mtlx-open',
                         mode: 'both',
                         name,
                         xml,
                         filesB64: toMessageFilesB64(files),
-                        fileUrls: toFileUrls(webview, textures),
+                        fileUrls,
                     });
                 } catch (err) {
                     if (mySeq !== scanSeq || life.disposed) return; // superseded or closed, don't surface a stale scan's error
@@ -996,9 +1035,9 @@ class MaterialXEditorProvider {
                     const needsEdit = xml !== document.getText();
                     try {
                         if (needsEdit) {
-                            const fullRange = document.validateRange(new vscode.Range(0, 0, document.lineCount, 0));
+                            const r = minimalReplace(document, document.getText(), xml);
                             const edit = new vscode.WorkspaceEdit();
-                            edit.replace(document.uri, fullRange, xml);
+                            edit.replace(document.uri, r.range, r.text);
                             // Incremented BEFORE applyEdit: applyEdit
                             // synchronously fires onDidChangeTextDocument
                             // (changeSub below), so the counter has to already
@@ -1045,10 +1084,11 @@ class MaterialXEditorProvider {
                     const xml = typeof msg.xml === 'string' ? msg.xml : null;
                     if (xml === null) return;
                     try {
-                        if (xml === document.getText()) return; // no-op, avoid a redundant WorkspaceEdit
-                        const fullRange = document.validateRange(new vscode.Range(0, 0, document.lineCount, 0));
+                        const current = document.getText();
+                        if (xml === current) return; // no-op, avoid a redundant WorkspaceEdit
+                        const r = minimalReplace(document, current, xml);
                         const edit = new vscode.WorkspaceEdit();
-                        edit.replace(document.uri, fullRange, xml);
+                        edit.replace(document.uri, r.range, r.text);
                         hostEditDepth++;
                         try {
                             await vscode.workspace.applyEdit(edit);
@@ -1186,6 +1226,7 @@ module.exports = {
     panelLifecycle,
     wireCommonWebviewMessages,
     toFileUrls,
+    missingRefUris,
     trackScenePanel,
     RELOAD_DEBOUNCE_MS,
     saveActiveGraph,

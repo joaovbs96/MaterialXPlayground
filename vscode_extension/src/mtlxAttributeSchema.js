@@ -1,13 +1,6 @@
 // mtlxAttributeSchema.js: pure (no 'vscode') attribute-name schema for
-// .mtlx elements, keyed by "element kind" (tag + surrounding context, not
-// just tag alone: a node's own <input> and a <nodedef>'s <input> allow
-// different attribute sets). Built from vendor/materialx/documents/
-// Specification/*.md (MaterialX 1.39); each non-obvious rule below quotes
-// its source section. mtlxCompletions.js is the only caller: it resolves
-// which KIND an element in the live document tree is, then narrows this
-// module's per-kind list by which attributes are already present and,
-// for value-typed conditions (colorspace/unit/ui-range), by the
-// element's resolved MaterialX type.
+// .mtlx elements, keyed by element kind (tag plus context), built from the
+// MaterialX 1.39 spec; each rule cites its spec section.
 'use strict';
 
 // ---------------------------------------------------------------------
@@ -37,7 +30,7 @@ const DESC = {
     uiname: 'alternative display name for this element in a UI',
     internalgeomprops: 'geometric properties this node needs internally available',
     uniform: 'restrict this input to uniform (non-varying) values/connections',
-    defaultgeomprop: 'intrinsic geometric property providing this input\'s default value',
+    defaultgeomprop: 'name of a geompropdef supplying the default value (vector2/vector3 nodedef inputs)',
     enum: 'comma-separated list of allowed value labels',
     enumvalues: 'comma-separated list of underlying values for enum',
     unittype: 'unit type (e.g. "distance") this value is expressed in',
@@ -90,6 +83,10 @@ const DESC = {
     attrname: 'name of the custom attribute being defined',
     elements: 'comma-separated element (or element/input) names this custom attribute applies to',
     exportable: 'whether this custom attribute is emitted as shader metadata',
+    scale: 'multiplicative conversion factor of this unit relative to the other units of its unittype',
+    impltype: 'target-specific type of the enumvalues given in this implementation',
+    geomfile: 'file in which the geometry referenced within this scope is defined',
+    href: 'path of the .mtlx document to include',
 };
 
 function attr(name, opts) {
@@ -97,34 +94,53 @@ function attr(name, opts) {
 }
 
 // ---------------------------------------------------------------------
-// Type gates: predicates over a resolved MaterialX `type` string, used to
-// narrow value-conditional attributes (mtlxCompletions resolves the type
-// itself: own `type=` attribute, else the parent node's nodedef).
+// Type gates: predicates over a resolved MaterialX `type` string, applied
+// by mtlxCompletions once it knows the element's type (unknown: offered).
 
 const NUMERIC_UI_TYPES = new Set(['integer', 'float', 'color3', 'color4', 'vector2', 'vector3', 'vector4']);
-const UNIT_ELIGIBLE_TYPES = new Set(['float', 'vector2', 'vector3', 'vector4', 'filename']);
+// "Units": float, vectorN (and their arrays) plus filename inputs.
+const UNIT_ELIGIBLE_TYPES = new Set(['float', 'vector2', 'vector3', 'vector4', 'floatarray',
+    'vector2array', 'vector3array', 'vector4array', 'filename']);
+// GeomExts "GeomProp Elements": only float and vectorN geomprops take a unittype/unit.
+const GEOM_UNIT_TYPES = new Set(['float', 'vector2', 'vector3', 'vector4']);
 const COLORSPACE_TYPES = new Set(['color3', 'color4', 'filename']);
-// defaultgeomprop only ever supplies a vector2/vector3 default (e.g. Nworld,
-// Tworld, UV0), not a color3/float one (spec: "Geometric Properties").
+// "NodeDef Input Elements": colorspace is "for color3- or color4-type inputs".
+const COLOR_TYPES = new Set(['color3', 'color4']);
+// "NodeDef Input Elements": defaultgeomprop is only "for vector2 or vector3 inputs".
 const GEOMPROP_ELIGIBLE_TYPES = new Set(['vector2', 'vector3']);
 const isNumericUi = (t) => NUMERIC_UI_TYPES.has(t);
 const isUnitEligible = (t) => UNIT_ELIGIBLE_TYPES.has(t);
+const isGeomUnitEligible = (t) => GEOM_UNIT_TYPES.has(t);
 const isColorspaceEligible = (t) => COLORSPACE_TYPES.has(t);
+const isColorType = (t) => COLOR_TYPES.has(t);
 const isGeompropEligible = (t) => GEOMPROP_ELIGIBLE_TYPES.has(t);
+const isFilename = (t) => t === 'filename';
+// enumvalues is "for non-string types" (NodeDef Input/Token Elements).
+const isNonString = (t) => t !== 'string' && t !== 'stringarray';
 
 // ---------------------------------------------------------------------
-// Attribute lists per element "kind". `required: true` sorts an attribute
-// first (mirrors the spec's own "required" markers); `typeGate` restricts
-// the attribute to a resolved type, applied by mtlxCompletions once it
-// knows the element's effective type (unknown/unresolved type: the
-// attribute is still offered, since withholding it on incomplete
-// information is worse than offering one that may not apply).
+// Per-kind attribute lists. Options: `required` (sorts first), `typeGate`,
+// `conflicts` (dropped once any listed attribute is present; "a=v" matches
+// that value only), `requiresAny` (dropped until one is present), `when`.
 
-// Standard UI attributes ("Standard UI Attributes", spec lines 682-727):
-// `doc` on every element; xpos/ypos/width/height/uicolor on node types
-// and <look>; uivisible/uiadvanced only on <input>/<token> of a nodedef
-// or node instantiation (not inside <implementation> or a nodegraph
-// interface).
+const without = (list, name) => list.filter((n) => n !== name);
+
+// "Inputs": value, nodename, nodegraph and (inside a nodegraph)
+// interfacename are alternatives; `output` only qualifies a nodename or
+// nodegraph connection. colorspace/unit/fileprefix describe a value or file.
+const IN_SOURCES = ['value', 'nodename', 'nodegraph', 'interfacename'];
+const connSource = (n) => attr(n, {
+    conflicts: without(IN_SOURCES, n).concat(n === 'value' || n === 'interfacename' ? ['output'] : []),
+});
+const CONNECTED = ['nodename', 'nodegraph', 'interfacename'];
+const OUTPUT_QUALIFIER = attr('output', { requiresAny: ['nodename', 'nodegraph'] });
+
+// GeomExts: "Either a geom or a collection may be specified, but not both."
+const GEOM_OR_COLLECTION = [attr('geom', { conflicts: ['collection'] }), attr('collection', { conflicts: ['geom'] })];
+
+// Standard UI Attributes: `doc` on every element; xpos/ypos/width/height/
+// uicolor on node types and <look>; uivisible/uiadvanced only on <input>/
+// <token> of a nodedef or node instance.
 const DOC_ONLY = [attr('doc')];
 const NODE_UI_POS = [attr('xpos'), attr('ypos'), attr('width'), attr('height'), attr('uicolor')];
 const IO_UI_ATTRS = [
@@ -135,59 +151,53 @@ const IO_UI_ATTRS = [
     attr('uivisible'), attr('uiadvanced'),
 ];
 
+// geompropdef space/index follow the standard geomprop's own inputs
+// (StandardNodes "Geometric Nodes"); a non-standard geomprop stays permissive.
+const SPACE_GEOMPROPS = ['position', 'normal', 'tangent', 'bitangent'];
+const INDEX_GEOMPROPS = ['tangent', 'bitangent', 'texcoord', 'geomcolor'];
+const STANDARD_GEOMPROPS = ['position', 'normal', 'tangent', 'bitangent', 'texcoord', 'geomcolor'];
+const geompropAllows = (list) => (attrs) => !STANDARD_GEOMPROPS.includes(attrs.geomprop) || list.includes(attrs.geomprop);
+
 const ATTRS_BY_KIND = {
-    // "Attributes for a <materialx> element" (spec lines 328-332), plus
-    // fileprefix/geomprefix (File Prefixes/Geometry Prefixes sections).
+    // "MTLX File Format Definition", "File Prefixes", GeomExts "Geometry
+    // Prefixes" and "Geometry Representation" (geomfile).
     materialx: [
         attr('version', { required: true }), attr('colorspace'), attr('namespace'),
-        attr('fileprefix'), attr('geomprefix'), attr('doc'),
+        attr('fileprefix'), attr('geomprefix'), attr('geomfile'), attr('doc'),
     ],
 
-    // "Individual node elements" (spec lines 581-593): name/type required;
-    // version/nodedef disambiguate which nodedef signature is requested;
-    // colorspace on a node instance is spec-legal generally (line 358,
-    // "Other elements, such as <nodegraph> or a node instance, are
-    // allowed to define a colorspace attribute...") but only offered here
-    // once the element's resolved type is one colorspace actually
-    // describes (typeGate). `inherit` is deliberately NOT offered here:
-    // the spec only documents it for "instantiated shader nodes... of
-    // the same class" (lines 1303-1309, e.g. a <unified_srf> inheriting
-    // another <unified_srf>), a narrow same-category case this schema
-    // has no way to narrow to, so it is left off the generic node-
-    // instance list rather than offered on every node category.
+    // "Nodes": name/type required, version/nodedef, uiname; colorspace and
+    // fileprefix apply to the node's scope. `inherit` (shader instances
+    // only) and `target` (not a node-instance attribute) are not offered.
     'node-instance': [
         attr('name', { required: true }), attr('type', { required: true }),
         attr('nodedef'), attr('version'),
-        attr('colorspace', { typeGate: isColorspaceEligible }),
-        attr('target'),
+        attr('colorspace', { typeGate: isColorspaceEligible }), attr('fileprefix'),
         attr('uiname'), attr('uicolor'), attr('xpos'), attr('ypos'), attr('width'), attr('height'),
         attr('doc'),
     ],
 
-    // "Node elements contain zero or more <input> elements" (spec lines
-    // 599-609): value XOR nodename/nodegraph/interfacename/output
-    // (mtlxCompletions' attributeNameItems enforces the exclusion by
-    // dropping `value` once any of those is already present; this list
-    // stays flat), plus unit/unittype (line 603) and interfacename for
-    // functional/compound nodegraph content (lines 1174-1196, gated to
-    // inside a <nodegraph> by mtlxCompletions).
+    // "Inputs", "Custom Inputs" (documentational target), "File Prefixes",
+    // Standard UI Attributes (uivisible on node-instance inputs).
     'node-instance-input': [
         attr('name', { required: true }), attr('type', { required: true }),
-        attr('value'), attr('nodename'), attr('nodegraph'), attr('output'),
-        attr('interfacename'),
-        attr('colorspace', { typeGate: isColorspaceEligible }),
-        attr('unittype', { typeGate: isUnitEligible }), attr('unit', { typeGate: isUnitEligible }),
-        attr('target'), attr('doc'),
+        connSource('value'), connSource('nodename'), connSource('nodegraph'), OUTPUT_QUALIFIER,
+        connSource('interfacename'),
+        attr('colorspace', { typeGate: isColorspaceEligible, conflicts: CONNECTED }),
+        attr('unittype', { typeGate: isUnitEligible, conflicts: CONNECTED }),
+        attr('unit', { typeGate: isUnitEligible, conflicts: CONNECTED }),
+        attr('fileprefix', { typeGate: isFilename, conflicts: CONNECTED }),
+        attr('target'), attr('uivisible'), attr('doc'),
     ],
 
-    // Token elements on a node instance mirror geominfo tokens (name,
-    // type, value) plus interfacename for nodegraph-content use.
+    // Token on a node instance: value, or interfacename inside a nodegraph.
     'node-instance-token': [
         attr('name', { required: true }), attr('type', { required: true }),
-        attr('value'), attr('interfacename'), attr('doc'),
+        attr('value', { conflicts: ['interfacename'] }), attr('interfacename', { conflicts: ['value'] }),
+        attr('uivisible'), attr('doc'),
     ],
 
-    // "Attributes for <nodedef> elements" (spec lines 942-952).
+    // "Custom Node Declaration NodeDef Elements".
     nodedef: [
         attr('name', { required: true }), attr('node', { required: true }),
         attr('inherit'), attr('nodegroup'), attr('version'), attr('isdefaultversion'),
@@ -195,71 +205,75 @@ const ATTRS_BY_KIND = {
         attr('namespace'), attr('doc'),
     ],
 
-    // "Attributes for NodeDef Input elements" (spec lines 983-1005) plus
-    // the shared Standard UI Attributes for nodedef inputs/tokens (uiname
-    // duplicated there intentionally: both sections declare it).
+    // "NodeDef Input Elements": value XOR defaultgeomprop, and
+    // defaultgeomprop "May not be specified on uniform inputs".
     'nodedef-input': [
         attr('name', { required: true }), attr('type', { required: true }),
-        attr('value'), attr('uniform'),
-        attr('defaultgeomprop', { typeGate: isGeompropEligible }), attr('enum'), attr('enumvalues'),
-        attr('colorspace', { typeGate: isColorspaceEligible }),
+        attr('value', { conflicts: ['defaultgeomprop'] }), attr('uniform', { conflicts: ['defaultgeomprop'] }),
+        attr('defaultgeomprop', { typeGate: isGeompropEligible, conflicts: ['value', 'uniform=true'] }),
+        attr('enum'), attr('enumvalues', { typeGate: isNonString }),
+        attr('colorspace', { typeGate: isColorType }),
         attr('unittype', { typeGate: isUnitEligible }), attr('unit', { typeGate: isUnitEligible }),
         attr('hint'), attr('target'), attr('doc'),
         ...IO_UI_ATTRS,
     ],
 
-    // "Attributes for NodeDef Token elements" (spec lines 1018-1027).
+    // "NodeDef Token Elements".
     'nodedef-token': [
         attr('name', { required: true }), attr('type', { required: true }),
-        attr('value'), attr('enum'), attr('enumvalues'), attr('doc'),
+        attr('value'), attr('enum'), attr('enumvalues', { typeGate: isNonString }), attr('doc'),
         attr('uiname'), attr('uifolder'), attr('uivisible'), attr('uiadvanced'),
     ],
 
-    // "Attributes for NodeDef Output elements" (spec lines 1039-1046):
-    // no nodename/nodegraph connection allowed, only defaultinput/default.
+    // "NodeDef Output Elements": defaultinput/default, never a connection or
+    // file attributes. `uniform` is from "Output Elements", which the nodedef
+    // section does not exclude (how a node output is "declared uniform").
     'nodedef-output': [
         attr('name', { required: true }), attr('type', { required: true }),
-        attr('defaultinput'), attr('default'), attr('doc'),
+        attr('defaultinput'), attr('default'), attr('uniform'), attr('doc'),
     ],
 
-    // Output element inside a <nodegraph> ("Attributes for Output
-    // elements", spec lines 640-653): nodename required there, plus the
-    // 2D-caching-specific colorspace/width/height/bitdepth.
+    // "Output Elements" (nodegraph or document level): nodename required,
+    // output only with it, plus the 2D-caching colorspace/width/height/bitdepth.
     'nodegraph-output': [
         attr('name', { required: true }), attr('type', { required: true }),
-        attr('nodename', { required: true }), attr('output'), attr('uniform'),
+        attr('nodename', { required: true }), attr('output', { requiresAny: ['nodename'] }), attr('uniform'),
         attr('colorspace', { typeGate: isColorspaceEligible }),
         attr('width'), attr('height'), attr('bitdepth'), attr('doc'),
     ],
 
-    // Functional nodegraph: "must either itself specify a nodedef
-    // attribute..." (spec line 1149); "may not itself specify any direct
-    // child input elements" (line 1154), so no compound-only attrs here.
+    // "Functional Nodegraphs": nodedef (or an <implementation>), optional target.
     'nodegraph-functional': [
         attr('name', { required: true }), attr('nodedef', { required: true }),
-        attr('target'), attr('namespace'), attr('fileprefix'), attr('doc'),
+        attr('target'), attr('namespace'), attr('colorspace'), attr('fileprefix'), attr('doc'),
         ...NODE_UI_POS,
     ],
 
-    // Compound nodegraph: "may specify the same float width and height
-    // and boolean minimized attributes as <backdrop> nodes" (spec line
-    // 1196).
+    // "Compound Nodegraphs": width/height/minimized like a <backdrop>.
     'nodegraph-compound': [
         attr('name', { required: true }),
-        attr('target'), attr('namespace'), attr('fileprefix'),
-        attr('width'), attr('height'), attr('minimized'), attr('doc'),
-        ...NODE_UI_POS,
+        attr('namespace'), attr('colorspace'), attr('fileprefix'), attr('minimized'),
+        ...NODE_UI_POS, attr('doc'),
     ],
 
-    // Interface <input>/<token> that is a direct child of a compound
-    // nodegraph (spec lines 1186-1196): same shape as a node input's
-    // value/nodename, no interfacename (there is no OUTER interface to
-    // reference from here).
+    // A bare <nodegraph> without nodedef: target is functional-only, so not offered.
+    nodegraph: [
+        attr('name', { required: true }), attr('nodedef', { conflicts: ['minimized'] }),
+        attr('namespace'), attr('colorspace'), attr('fileprefix'),
+        attr('minimized', { conflicts: ['nodedef'] }),
+        ...NODE_UI_POS, attr('doc'),
+    ],
+
+    // Compound nodegraph interface <input>: value, or a nodename/nodegraph
+    // connection at the nodegraph's own scope ("Compound Nodegraphs").
     'nodegraph-interface-input': [
         attr('name', { required: true }), attr('type', { required: true }),
-        attr('value'), attr('nodename'), attr('output'),
-        attr('colorspace', { typeGate: isColorspaceEligible }),
-        attr('unittype', { typeGate: isUnitEligible }), attr('unit', { typeGate: isUnitEligible }),
+        attr('value', { conflicts: ['nodename', 'nodegraph', 'output'] }),
+        attr('nodename', { conflicts: ['value', 'nodegraph'] }), attr('nodegraph', { conflicts: ['value', 'nodename'] }),
+        OUTPUT_QUALIFIER,
+        attr('colorspace', { typeGate: isColorspaceEligible, conflicts: CONNECTED }),
+        attr('unittype', { typeGate: isUnitEligible, conflicts: CONNECTED }),
+        attr('unit', { typeGate: isUnitEligible, conflicts: CONNECTED }),
         attr('doc'),
     ],
     'nodegraph-interface-token': [
@@ -267,34 +281,40 @@ const ATTRS_BY_KIND = {
         attr('value'), attr('doc'),
     ],
 
-    // "Implementation elements support the following attributes" (spec
-    // lines 1054-1064).
+    // "Custom Node Definition Using Implementation Elements": "may define a
+    // file or sourcecode attribute, or neither, but not both".
     implementation: [
         attr('name', { required: true }), attr('nodedef', { required: true }),
-        attr('nodegraph'), attr('implname'), attr('file'), attr('sourcecode'),
+        attr('nodegraph'), attr('implname'),
+        attr('file', { conflicts: ['sourcecode'] }), attr('sourcecode', { conflicts: ['file'] }),
         attr('function'), attr('target'), attr('format'), attr('doc'),
     ],
-    // <input> remap child of an <implementation> (spec lines 1068-1075):
-    // only name/type/implname, never value/nodename.
+    // Remap <input>/<token> children: implname, plus target-specific
+    // enumvalues/impltype for enum inputs and tokens.
     'implementation-input': [
-        attr('name', { required: true }), attr('type'), attr('implname'), attr('doc'),
+        attr('name', { required: true }), attr('type'), attr('implname'),
+        attr('impltype'), attr('enumvalues'), attr('doc'),
+    ],
+    'implementation-token': [
+        attr('name', { required: true }), attr('type'), attr('impltype'), attr('enumvalues'), attr('doc'),
     ],
 
-    // "Attributes for <typedef> elements" (spec lines 261-269).
+    // "Custom Data Types".
     typedef: [
         attr('name', { required: true }), attr('semantic'), attr('context'),
         attr('inherit'), attr('hint'), attr('doc'),
     ],
-    // "Attributes for <member> elements" (spec lines 271-275).
     member: [
         attr('name', { required: true }), attr('type', { required: true }),
         attr('value', { required: true }), attr('doc'),
     ],
 
+    // "Units": <unit name scale>.
     unittypedef: [attr('name', { required: true }), attr('doc')],
     unitdef: [attr('name', { required: true }), attr('unittype', { required: true }), attr('doc')],
-    unit: [attr('name', { required: true }), attr('value'), attr('doc')],
+    unit: [attr('name', { required: true }), attr('scale', { required: true }), attr('doc')],
 
+    // "Target Definition", "Custom Attributes".
     targetdef: [attr('name', { required: true }), attr('inherit'), attr('doc')],
     attributedef: [
         attr('name', { required: true }), attr('attrname', { required: true }),
@@ -303,33 +323,36 @@ const ATTRS_BY_KIND = {
         attr('enum'), attr('enumvalues'), attr('doc'),
     ],
 
-    // "Look and Property Elements" (GeomExts.md).
+    // GeomExts "Look and Property Elements".
     look: [attr('name', { required: true }), attr('inherit'), attr('doc'), ...NODE_UI_POS],
     lookgroup: [
-        attr('name', { required: true }), attr('looks'),
+        attr('name', { required: true }), attr('looks', { required: true }),
         attr('default', { detail: 'name of the default look in this lookgroup' }),
-        attr('doc'),
+        attr('xpos'), attr('ypos'), attr('uicolor'), attr('doc'),
     ],
     materialassign: [
         attr('name', { required: true }), attr('material', { required: true }),
-        attr('geom'), attr('collection'), attr('exclusive'), attr('doc'),
+        ...GEOM_OR_COLLECTION, attr('exclusive'), attr('doc'),
     ],
     variantassign: [
         attr('name', { required: true }), attr('variantset', { required: true }),
         attr('variant', { required: true }), attr('doc'),
     ],
+    // "Either geom or collection must be defined but not both; similarly,
+    // one cannot define both a viewergeom and a viewercollection."
     visibility: [
-        attr('name', { required: true }), attr('viewergeom'), attr('viewercollection'),
-        attr('geom'), attr('collection'), attr('vistype'), attr('visible'), attr('doc'),
+        attr('name', { required: true }),
+        attr('viewergeom', { conflicts: ['viewercollection'] }), attr('viewercollection', { conflicts: ['viewergeom'] }),
+        ...GEOM_OR_COLLECTION, attr('vistype'), attr('visible'), attr('doc'),
     ],
     propertyassign: [
         attr('name', { required: true }), attr('property', { required: true }),
         attr('type', { required: true }), attr('value', { required: true }),
-        attr('target'), attr('geom'), attr('collection'), attr('doc'),
+        attr('target'), ...GEOM_OR_COLLECTION, attr('doc'),
     ],
     propertysetassign: [
         attr('name', { required: true }), attr('propertyset', { required: true }),
-        attr('geom'), attr('collection'), attr('doc'),
+        ...GEOM_OR_COLLECTION, attr('doc'),
     ],
     propertyset: [attr('name', { required: true }), attr('doc')],
     property: [
@@ -340,119 +363,83 @@ const ATTRS_BY_KIND = {
         attr('name', { required: true }), attr('includegeom'), attr('includecollection'),
         attr('excludegeom'), attr('doc'),
     ],
-    geominfo: [attr('name', { required: true }), attr('geom'), attr('collection'), attr('doc')],
+    geominfo: [attr('name', { required: true }), ...GEOM_OR_COLLECTION, attr('doc')],
     geomprop: [
         attr('name', { required: true }), attr('type', { required: true }),
         attr('value', { required: true }),
-        attr('unittype', { typeGate: isUnitEligible }), attr('unit', { typeGate: isUnitEligible }),
+        attr('unittype', { typeGate: isGeomUnitEligible }), attr('unit', { typeGate: isGeomUnitEligible }),
         attr('doc'),
     ],
     'geominfo-token': [attr('name', { required: true }), attr('type', { required: true }), attr('value'), attr('doc')],
     tokendefault: [attr('name', { required: true }), attr('type', { required: true }), attr('value'), attr('doc')],
+    // "Geometric Properties": space/index only with geomprop, and none of
+    // geomprop/space/index on uniform="true" geomprops.
     geompropdef: [
-        attr('name', { required: true }), attr('type', { required: true }), attr('uniform'),
-        attr('geomprop'), attr('space'), attr('index'),
+        attr('name', { required: true }), attr('type', { required: true }),
+        attr('uniform', { conflicts: ['geomprop', 'space', 'index'] }),
+        attr('geomprop', { conflicts: ['uniform=true'] }),
+        attr('space', { requiresAny: ['geomprop'], conflicts: ['uniform=true'], when: geompropAllows(SPACE_GEOMPROPS) }),
+        attr('index', { requiresAny: ['geomprop'], conflicts: ['uniform=true'], when: geompropAllows(INDEX_GEOMPROPS) }),
+        attr('unittype', { typeGate: isGeomUnitEligible }), attr('unit', { typeGate: isGeomUnitEligible }),
+        attr('doc'),
+    ],
+    // "Material Variants": variant inputs "may only define a value, not a connection".
+    variantset: [attr('name', { required: true }), attr('node'), attr('nodedef'), attr('doc')],
+    variant: [attr('name', { required: true }), attr('doc')],
+    'variant-input': [
+        attr('name', { required: true }), attr('type', { required: true }), attr('value'),
+        attr('colorspace', { typeGate: isColorspaceEligible }),
         attr('unittype', { typeGate: isUnitEligible }), attr('unit', { typeGate: isUnitEligible }),
         attr('doc'),
     ],
-    variantset: [attr('name', { required: true }), attr('node'), attr('nodedef'), attr('doc')],
-    variant: [attr('name', { required: true }), attr('doc')],
+    'variant-token': [attr('name', { required: true }), attr('type', { required: true }), attr('value'), attr('doc')],
+    // "Backdrop Elements".
     backdrop: [
         attr('name', { required: true }), attr('contains'), attr('minimized'),
-        attr('width'), attr('height'), ...NODE_UI_POS.filter((a) => a.name === 'xpos' || a.name === 'ypos'),
+        attr('width'), attr('height'), attr('xpos'), attr('ypos'),
         attr('doc'),
     ],
     uifolder: [attr('name', { required: true }), attr('uifolder', { required: true }), attr('doc')],
+    // "MTLX File Format Definition": standard XML XIncludes.
+    'xi:include': [attr('href', { required: true })],
 };
 
-// ---------------------------------------------------------------------
-// classifyElement(el): maps a live document-tree element (mtlxSymbols.js
-// node shape: {tag, parent, attrs}) to one of the ATTRS_BY_KIND keys
-// above, or null when this module has no schema entry for it (falls
-// back to just `name`/`doc` via COMMON_FALLBACK). `categories` is
-// mtlxCompletions' library index's `categories` Map (category name ->
-// node-library entry), used to tell a node instance apart from a
-// same-named structural element (e.g. a node category also named
-// "surfacematerial").
-function classifyElement(el, categories) {
+// Structural tags that map straight to a kind of the same name.
+const DIRECT_KINDS = new Set(['materialx', 'nodedef', 'implementation', 'typedef', 'member', 'unittypedef',
+    'unitdef', 'unit', 'targetdef', 'attributedef', 'look', 'lookgroup', 'materialassign', 'variantassign',
+    'visibility', 'propertyassign', 'propertysetassign', 'propertyset', 'property', 'collection', 'geominfo',
+    'geompropdef', 'variantset', 'variant', 'backdrop', 'uifolder', 'tokendefault', 'geomprop', 'xi:include']);
+
+// classifyElement(el): maps a document-tree element ({tag, parent, attrs,
+// children}) to an ATTRS_BY_KIND key. Any unrecognized tag is a node
+// instance (the permissive default for custom nodes).
+function classifyElement(el) {
     if (!el || !el.tag) return null;
     const tag = el.tag;
     const parentTag = el.parent && el.parent.tag;
-    const grandparentTag = el.parent && el.parent.parent && el.parent.parent.tag;
-
-    if (tag === 'materialx') return 'materialx';
-
-    if (tag === 'nodedef') return 'nodedef';
-    if (tag === 'implementation') return 'implementation';
-    if (tag === 'typedef') return 'typedef';
-    if (tag === 'member') return 'member';
-    if (tag === 'unittypedef') return 'unittypedef';
-    if (tag === 'unitdef') return 'unitdef';
-    if (tag === 'unit') return 'unit';
-    if (tag === 'targetdef') return 'targetdef';
-    if (tag === 'attributedef') return 'attributedef';
-    if (tag === 'look') return 'look';
-    if (tag === 'lookgroup') return 'lookgroup';
-    if (tag === 'materialassign') return 'materialassign';
-    if (tag === 'variantassign') return 'variantassign';
-    if (tag === 'visibility') return 'visibility';
-    if (tag === 'propertyassign') return 'propertyassign';
-    if (tag === 'propertysetassign') return 'propertysetassign';
-    if (tag === 'propertyset') return 'propertyset';
-    if (tag === 'property') return 'property';
-    if (tag === 'collection') return 'collection';
-    if (tag === 'geominfo') return 'geominfo';
-    if (tag === 'geompropdef') return 'geompropdef';
-    if (tag === 'variantset') return 'variantset';
-    if (tag === 'variant') return 'variant';
-    if (tag === 'backdrop') return 'backdrop';
-    if (tag === 'uifolder') return 'uifolder';
-    if (tag === 'tokendefault') return 'tokendefault';
-
-    if (tag === 'geomprop') return 'geomprop';
+    if (DIRECT_KINDS.has(tag)) return tag;
 
     if (tag === 'nodegraph') {
-        // Compound: has any direct <input>/<token> children (spec line
-        // 1186). Functional: has a `nodedef` attribute, or none of the
-        // above yet (still ambiguous while being typed) -> treat as
-        // functional, the more common authoring case for a bare
-        // "<nodegraph " tag.
-        const hasInterfaceChild = el.children.some((c) => c.tag === 'input' || c.tag === 'token');
-        return hasInterfaceChild ? 'nodegraph-compound' : 'nodegraph-functional';
+        if (el.attrs && el.attrs.nodedef) return 'nodegraph-functional';
+        const hasInterfaceChild = (el.children || []).some((c) => c.tag === 'input' || c.tag === 'token');
+        if (hasInterfaceChild || (el.attrs && el.attrs.minimized)) return 'nodegraph-compound';
+        return 'nodegraph';
     }
-
-    if (tag === 'implementation') return 'implementation';
-
-    if (tag === 'output') {
-        if (parentTag === 'nodedef') return 'nodedef-output';
-        return 'nodegraph-output';
-    }
-
+    if (tag === 'output') return parentTag === 'nodedef' ? 'nodedef-output' : 'nodegraph-output';
     if (tag === 'input') {
         if (parentTag === 'nodedef') return 'nodedef-input';
         if (parentTag === 'implementation') return 'implementation-input';
         if (parentTag === 'nodegraph') return 'nodegraph-interface-input';
-        if (parentTag === 'variant') return 'node-instance-input'; // value-only; caller excludes nodename/nodegraph
-        // Otherwise: an <input> child of a node instance (any category).
+        if (parentTag === 'variant') return 'variant-input';
         return 'node-instance-input';
     }
-
     if (tag === 'token') {
         if (parentTag === 'nodedef') return 'nodedef-token';
         if (parentTag === 'geominfo') return 'geominfo-token';
         if (parentTag === 'nodegraph') return 'nodegraph-interface-token';
+        if (parentTag === 'implementation') return 'implementation-token';
+        if (parentTag === 'variant') return 'variant-token';
         return 'node-instance-token';
-    }
-
-    // A node instance: any tag that isn't one of the structural tags
-    // above, found at the document root, inside a <nodegraph>, or inside
-    // a <variantset>/<look> (materialassign's shaderref-less children).
-    // categories (when available) confirms it; without it (library
-    // unavailable) any remaining tag defaults to a node instance, since
-    // that's what an unrecognized element name almost always is in a
-    // .mtlx file.
-    if (!categories || categories.has(tag) || parentTag === 'nodegraph' || parentTag === 'materialx' || !parentTag) {
-        return 'node-instance';
     }
     return 'node-instance';
 }
@@ -467,6 +454,9 @@ module.exports = {
     attributesFor,
     isNumericUi,
     isUnitEligible,
+    isGeomUnitEligible,
     isColorspaceEligible,
+    isColorType,
     isGeompropEligible,
+    STANDARD_GEOMPROPS,
 };

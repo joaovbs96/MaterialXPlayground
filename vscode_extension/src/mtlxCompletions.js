@@ -22,47 +22,74 @@ const attrSchema = require('./mtlxAttributeSchema');
 // ---------------------------------------------------------------------
 // Static reference data.
 
-// Mirrors hoverProvider.js's STRUCTURAL_ELEMENTS set (that file requires
-// vscode; this one must not, so the list is duplicated rather than
-// imported, same "mirrors but does not import" precedent mtlxNode.js/
-// specDocs.js already document for js/mtlx-engine.js/js/spec-parser.js).
-// A short `detail` string is added here since completion items benefit
-// from one, unlike a hover (which already shows the spec description).
+// Every non-node element the MaterialX 1.39 spec and Geometry Extensions
+// define (there is no <comment> element: XML comments are <!-- -->), with
+// a short completion detail.
 const STRUCTURAL_ELEMENTS = [
     { name: 'materialx', detail: 'document root element' },
     { name: 'nodegraph', detail: 'a graph of connected nodes' },
     { name: 'nodedef', detail: 'custom node interface declaration' },
     { name: 'input', detail: 'a node, nodedef or interface input' },
-    { name: 'output', detail: 'a node or nodegraph output' },
+    { name: 'output', detail: 'a nodedef or nodegraph output' },
     { name: 'token', detail: 'a string substitution token' },
+    { name: 'uifolder', detail: 'a nodedef UI folder' },
     { name: 'implementation', detail: 'source-code implementation of a nodedef' },
     { name: 'typedef', detail: 'custom data type declaration' },
     { name: 'member', detail: 'a typedef struct member' },
-    { name: 'unit', detail: 'a unit declaration' },
-    { name: 'unittype', detail: 'a unit type declaration' },
+    { name: 'unittypedef', detail: 'a unit type declaration' },
+    { name: 'unitdef', detail: 'a set of units for a unit type' },
+    { name: 'unit', detail: 'a unit and its scale, inside a unitdef' },
+    { name: 'targetdef', detail: 'a rendering target declaration' },
+    { name: 'attributedef', detail: 'a custom attribute declaration' },
+    { name: 'geompropdef', detail: 'geometric property declaration' },
     { name: 'look', detail: 'a collection of material/visibility assignments' },
     { name: 'lookgroup', detail: 'a group of looks' },
-    { name: 'materialassign', detail: 'assigns a material to a collection' },
+    { name: 'materialassign', detail: 'assigns a material to geometry or a collection' },
+    { name: 'variantassign', detail: 'applies a variant from a variantset' },
     { name: 'visibility', detail: 'visibility override for a collection' },
+    { name: 'propertyassign', detail: 'assigns a property value to geometry' },
+    { name: 'propertysetassign', detail: 'assigns a propertyset to geometry' },
     { name: 'collection', detail: 'a named set of geometries' },
     { name: 'geominfo', detail: 'per-geometry property values' },
-    { name: 'geomprop', detail: 'a named geometric property' },
-    { name: 'geompropdef', detail: 'geometric property declaration' },
+    { name: 'geomprop', detail: 'a geometric property value, inside a geominfo' },
+    { name: 'tokendefault', detail: 'default value for a geometry token' },
     { name: 'property', detail: 'a shader property' },
     { name: 'propertyset', detail: 'a set of shader properties' },
-    { name: 'propertyassign', detail: 'assigns a propertyset to a collection' },
     { name: 'variant', detail: 'a named variant' },
     { name: 'variantset', detail: 'a set of variants' },
-    { name: 'variantassign', detail: 'assigns a variant value' },
     { name: 'backdrop', detail: 'a graph-editor annotation region' },
-    { name: 'comment', detail: 'an XML comment element' },
+    { name: 'xi:include', detail: 'include another .mtlx document' },
 ];
 
-// Mirrors js/mtlx-engine.js's COLORSPACES array (a browser global script,
-// not requireable from Node, same reason as the STRUCTURAL_ELEMENTS copy
-// above).
-const COLORSPACES = ['srgb_texture', 'lin_rec709', 'g22_rec709', 'g18_rec709',
-    'acescg', 'lin_ap1', 'srgb_displayp3', 'lin_displayp3', 'adobergb', 'lin_adobergb', 'none'];
+// Allowed children per parent tag (spec element descriptions): `nodes`
+// also allows node instances. Tags absent here and from LEAF_TAGS (unknown
+// or custom elements) keep the permissive full list.
+const ROOT_CHILDREN = ['nodegraph', 'nodedef', 'implementation', 'typedef', 'unittypedef', 'unitdef',
+    'targetdef', 'attributedef', 'geompropdef', 'look', 'lookgroup', 'collection', 'geominfo', 'tokendefault',
+    'propertyset', 'variantset', 'backdrop', 'output', 'xi:include'];
+const CHILDREN_BY_PARENT = {
+    materialx: { nodes: true, tags: ROOT_CHILDREN },
+    nodegraph: { nodes: true, tags: ['input', 'token', 'output', 'nodegraph', 'backdrop'] },
+    nodedef: { tags: ['input', 'token', 'output', 'uifolder'] },
+    implementation: { tags: ['input', 'token'] },
+    typedef: { tags: ['member'] },
+    unitdef: { tags: ['unit'] },
+    look: { tags: ['materialassign', 'variantassign', 'visibility', 'propertyassign', 'propertysetassign'] },
+    materialassign: { tags: ['variantassign'] },
+    propertyset: { tags: ['property'] },
+    geominfo: { tags: ['geomprop', 'token'] },
+    variantset: { tags: ['variant'] },
+    variant: { tags: ['input', 'token'] },
+};
+const LEAF_TAGS = new Set(['input', 'output', 'token', 'member', 'unit', 'geomprop', 'property', 'tokendefault',
+    'geompropdef', 'targetdef', 'unittypedef', 'attributedef', 'collection', 'lookgroup', 'visibility',
+    'propertyassign', 'propertysetassign', 'variantassign', 'backdrop', 'uifolder', 'xi:include']);
+const STRUCTURAL_TAGS = new Set(STRUCTURAL_ELEMENTS.map((s) => s.name));
+
+// "Color Spaces and Color Management Systems": the spec's ACES 1.2 list
+// plus the reserved "none".
+const COLORSPACES = ['srgb_texture', 'lin_rec709', 'g22_rec709', 'g18_rec709', 'acescg', 'lin_ap1',
+    'g22_ap1', 'g18_ap1', 'lin_srgb', 'adobergb', 'lin_adobergb', 'srgb_displayp3', 'lin_displayp3', 'none'];
 
 // Mirrors js/graph/panels.jsx's IFACE_VALUE_TYPES: every scalar/aggregate
 // MaterialX data type plus the shader-ish ones a `type="..."` attribute can
@@ -70,14 +97,31 @@ const COLORSPACES = ['srgb_texture', 'lin_rec709', 'g22_rec709', 'g18_rec709',
 const MTLX_TYPES = ['boolean', 'color3', 'color4', 'filename', 'float', 'integer',
     'matrix33', 'matrix44', 'string', 'vector2', 'vector3', 'vector4',
     'surfaceshader', 'displacementshader', 'volumeshader', 'BSDF', 'EDF', 'VDF', 'lightshader', 'material'];
+// "MaterialX Data Types": the array types, offered after MTLX_TYPES in type="" values.
+const ARRAY_TYPES = ['integerarray', 'floatarray', 'color3array', 'color4array',
+    'vector2array', 'vector3array', 'vector4array', 'stringarray'];
 
-// Attribute names whose VALUE this module can complete (see valueItemsFor
-// below); 'name' is handled separately since it only narrows to input
-// names when the element itself is <input>.
+// Fixed enumerations from the spec, keyed by attribute name.
+const ENUM_VALUES = {
+    semantic: ['default', 'color', 'shader', 'material'], // "Custom Data Types"
+    context: ['surface', 'volume', 'displacement', 'light'], // "Shader Nodes" standard typedefs
+    format: ['shader', 'fragment'], // implementation "format"
+    vistype: ['camera', 'illumination', 'shadow', 'secondary'], // GeomExts "Visibility Elements"
+    space: ['model', 'object', 'world'], // "Geometric Spaces"
+    bitdepth: ['8', '16', '32', '64'], // "Output Elements"
+};
+// `hint` differs by element: "Custom Data Types" vs "NodeDef Input Elements".
+const TYPEDEF_HINTS = ['halfprecision', 'doubleprecision'];
+const INPUT_HINTS = ['transparency', 'opacity', 'anisotropy'];
+
+// Attribute names whose VALUE this module can complete (see valueItemsFor).
 const VALUE_ATTRS = new Set([
     'type', 'nodename', 'nodegraph', 'output', 'interfacename', 'colorspace', 'nodedef',
-    'version', 'unittype', 'unit', 'target', 'defaultgeomprop', 'value',
+    'version', 'unittype', 'unit', 'target', 'defaultgeomprop', 'value', 'defaultinput', 'geomprop',
     'uniform', 'uivisible', 'uiadvanced', 'isdefaultversion', 'minimized', 'visible', 'exclusive', 'exportable',
+    'semantic', 'context', 'format', 'vistype', 'space', 'bitdepth', 'hint', 'nodegroup', 'inherit',
+    'internalgeomprops', 'material', 'collection', 'includecollection', 'viewercollection', 'looks',
+    'default', 'variantset', 'variant', 'propertyset',
 ]);
 
 // Boolean-typed attributes (spec: "boolean, optional"): value completion
@@ -86,19 +130,17 @@ const BOOLEAN_ATTRS = new Set([
     'uniform', 'uivisible', 'uiadvanced', 'isdefaultversion', 'minimized', 'visible', 'exclusive', 'exportable',
 ]);
 
-// "Units" section (spec lines 373-402): the two unittypes and their units
-// pre-defined by the MaterialX standard library. Mirrors the <unitdef>
-// example in the spec verbatim (js/gen/nodelib.json does not carry unit
-// definitions, only node signatures, so this can't be derived from it).
+// "Units": the spec's predefined unittypes and units, used only when
+// libraries/**.mtlx cannot be read (the library <unitdef>s win otherwise).
 const UNITTYPES = ['distance', 'angle'];
 const UNITS_BY_TYPE = {
     distance: ['nanometer', 'micron', 'millimeter', 'centimeter', 'inch', 'foot', 'yard', 'meter', 'kilometer', 'mile'],
     angle: ['degree', 'radian'],
 };
 
-// "Geometric Properties" section (spec lines 468-484): the standard
-// geomprop names valid for a <geomprop> element's own geomprop= value.
-const GEOMPROP_NAMES = ['position', 'normal', 'tangent', 'bitangent', 'texcoord', 'geomcolor'];
+// "Geometric Properties": the standard geomprop names, valid for a
+// <geompropdef>'s geomprop= value.
+const GEOMPROP_NAMES = attrSchema.STANDARD_GEOMPROPS;
 
 // The four multi-element document snippets moved out of
 // language/mtlx.snippets.json and into completion items (see
@@ -183,11 +225,6 @@ const DOC_SNIPPETS = [
         ].join('\n'),
     },
 ];
-
-// defaultgeomprop only ever supplies a vector2/vector3 default: geomcolor
-// (color3/4) is never a legal defaultgeomprop value, mirrors
-// mtlxAttributeSchema.js's isGeompropEligible typeGate.
-const DEFAULTGEOMPROP_NAMES = GEOMPROP_NAMES.filter((g) => g !== 'geomcolor');
 
 // Closure-producing types: placed after every non-closure type in a
 // default type-choice order, unless a category produces ONLY closures.
@@ -293,11 +330,94 @@ function buildLibraryIndex(repoRoot) {
         categories.set(category, { library: libraryOf.get(category) || null, outputTypes, sigGroups, nodedefNames, versions });
     }
 
+    const lib = scanLibraries(repoRoot);
+    const allTargets = Array.isArray(nodelibIndex.allTargets) ? nodelibIndex.allTargets.slice() : [];
+    for (const t of lib.targets) if (allTargets.indexOf(t) === -1) allTargets.push(t);
     return {
         categories,
+        geompropdefs: lib.geompropdefs,
+        unittypes: lib.unittypes.length ? lib.unittypes : UNITTYPES.slice(),
+        unitsByType: Object.keys(lib.unitsByType).length ? lib.unitsByType : UNITS_BY_TYPE,
+        nodegroups: lib.nodegroups.sort(),
+        typedefs: lib.typedefs,
+        libNodedefs: lib.nodedefs,
         nodedefNames: Array.from(nodedefNameSet).sort(),
-        allTargets: Array.isArray(nodelibIndex.allTargets) ? nodelibIndex.allTargets.slice() : [],
+        allTargets: allTargets.sort(),
     };
+}
+
+function emptyIndex() {
+    return {
+        categories: new Map(), geompropdefs: [], unittypes: UNITTYPES.slice(), unitsByType: UNITS_BY_TYPE,
+        nodegroups: [], typedefs: [], libNodedefs: new Map(), nodedefNames: [], allTargets: [],
+    };
+}
+
+// Definitions read from libraries/**.mtlx at load time (never hard-coded):
+// geompropdefs, unittypedefs/unitdefs, targetdefs, typedefs, nodegroups
+// and each nodedef's port attributes (enum, unittype, uniform, outputs).
+const LIB_TAG_RE = /<(\/?)([\w:]+)((?:\s+[\w:.-]+\s*=\s*"[^"]*")*)\s*(\/?)>/g;
+const LIB_ATTR_RE = /([\w:.-]+)\s*=\s*"([^"]*)"/g;
+function scanLibraries(repoRoot) {
+    const out = { geompropdefs: [], unittypes: [], unitsByType: {}, targets: [], typedefs: [], nodegroups: [], nodedefs: new Map() };
+    const scanText = (text) => {
+        let unittype = null;
+        let nd = null;
+        let m;
+        LIB_TAG_RE.lastIndex = 0;
+        while ((m = LIB_TAG_RE.exec(text))) {
+            const [, closing, tag, attrText, selfClose] = m;
+            if (closing) {
+                if (tag === 'unitdef') unittype = null;
+                if (tag === 'nodedef') nd = null;
+                continue;
+            }
+            const a = {};
+            let am;
+            LIB_ATTR_RE.lastIndex = 0;
+            while ((am = LIB_ATTR_RE.exec(attrText))) a[am[1]] = am[2];
+            if (tag === 'geompropdef' && a.name && a.type && !out.geompropdefs.some((g) => g.name === a.name)) {
+                out.geompropdefs.push({ name: a.name, type: a.type });
+            } else if (tag === 'unittypedef' && a.name && out.unittypes.indexOf(a.name) === -1) {
+                out.unittypes.push(a.name);
+            } else if (tag === 'unitdef') {
+                unittype = selfClose ? null : a.unittype || null;
+            } else if (tag === 'unit' && unittype && a.name) {
+                const list = out.unitsByType[unittype] || (out.unitsByType[unittype] = []);
+                if (list.indexOf(a.name) === -1) list.push(a.name);
+            } else if (tag === 'targetdef' && a.name && out.targets.indexOf(a.name) === -1) {
+                out.targets.push(a.name);
+            } else if (tag === 'typedef' && a.name && out.typedefs.indexOf(a.name) === -1) {
+                out.typedefs.push(a.name);
+            } else if (tag === 'nodedef' && a.name) {
+                if (a.nodegroup && out.nodegroups.indexOf(a.nodegroup) === -1) out.nodegroups.push(a.nodegroup);
+                const def = { name: a.name, node: a.node || '', inputs: new Map(), tokens: new Map(), outputs: [] };
+                if (!out.nodedefs.has(a.name)) out.nodedefs.set(a.name, def);
+                nd = selfClose ? null : def;
+            } else if (nd && tag === 'input' && a.name) {
+                nd.inputs.set(a.name, a);
+            } else if (nd && tag === 'token' && a.name) {
+                nd.tokens.set(a.name, a);
+            } else if (nd && tag === 'output' && a.name) {
+                nd.outputs.push({ name: a.name, type: a.type || '' });
+            }
+        }
+    };
+    const walk = (dir) => {
+        let entries = [];
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+        for (const e of entries) {
+            const full = path.join(dir, e.name);
+            if (e.isDirectory()) walk(full);
+            else if (e.name.endsWith('.mtlx')) {
+                let text = '';
+                try { text = fs.readFileSync(full, 'utf8'); } catch (err) { continue; }
+                scanText(text.replace(/<!--[\s\S]*?-->/g, ''));
+            }
+        }
+    };
+    walk(path.join(repoRoot, 'libraries'));
+    return out;
 }
 
 function getLibraryIndex(repoRoot) {
@@ -553,7 +673,7 @@ function getCompletions({ text, offset, repoRoot }) {
     try {
         index = getLibraryIndex(repoRoot);
     } catch (e) {
-        index = { categories: new Map(), nodedefNames: [], allTargets: [] };
+        index = emptyIndex();
     }
 
     // Context: inside a quoted attribute VALUE. Nearest hit wins,
@@ -627,7 +747,7 @@ function getCompletions({ text, offset, repoRoot }) {
     // inAttributeWhitespace below.
     if (inAttributeWhitespace(text, offset)) {
         const el = elementContaining(root);
-        if (el) return attributeNameItems(index, el).map((it, i) => withRange(withOrder(it, i), offset, offset));
+        if (el) return attributeNameItems(index, el, root).map((it, i) => withRange(withOrder(it, i), offset, offset));
     }
 
     // Context: a PARTIAL attribute name already typed (e.g. "<multiply n",
@@ -640,7 +760,7 @@ function getCompletions({ text, offset, repoRoot }) {
     const attrNameHit = attributeNamePrefixAt(text, offset);
     if (attrNameHit) {
         const el = elementContaining(root);
-        if (el) return attributeNameItems(index, el).map((it, i) => withRange(withOrder(it, i), attrNameHit.start, attrNameHit.end));
+        if (el) return attributeNameItems(index, el, root).map((it, i) => withRange(withOrder(it, i), attrNameHit.start, attrNameHit.end));
     }
 
     // Context (E6): a bare word typed as ordinary text (not right after
@@ -742,73 +862,294 @@ function buildNodeElementSnippet(category, entry, existingNames, preferredType) 
         + choices.join(',') + '|}">$0</' + category + '>';
 }
 
+// ---------------------------------------------------------------------
+// Document-local definitions and node/port resolution.
+
+function findNamedChildren(scope, tag) {
+    if (!scope) return [];
+    return scope.children.filter((c) => c.tag === tag && c.attrs.name);
+}
+
+function attrVal(el, name) {
+    return el && el.attrs && el.attrs[name] ? el.attrs[name].value : null;
+}
+
+function docChildren(root, tag) {
+    return root ? findNamedChildren(materialxRoot(root), tag) : [];
+}
+
+function namesOf(els) {
+    return els.map((c) => c.attrs.name.value);
+}
+
+// Document <nodedef>s declaring node category `category` (their node=).
+function docNodedefsFor(root, category) {
+    return docChildren(root, 'nodedef').filter((n) => attrVal(n, 'node') === category);
+}
+
+// A document <nodedef> element in the {name, node, inputs, tokens, outputs}
+// shape scanLibraries builds for library nodedefs.
+function nodedefShape(nd) {
+    const plain = (c) => {
+        const a = {};
+        for (const k of Object.keys(c.attrs)) a[k] = c.attrs[k].value;
+        return a;
+    };
+    const shape = { name: attrVal(nd, 'name'), node: attrVal(nd, 'node') || '', inputs: new Map(), tokens: new Map(), outputs: [] };
+    for (const c of nd.children) {
+        if (!c.attrs || !c.attrs.name) continue;
+        if (c.tag === 'input') shape.inputs.set(c.attrs.name.value, plain(c));
+        else if (c.tag === 'token') shape.tokens.set(c.attrs.name.value, plain(c));
+        else if (c.tag === 'output') shape.outputs.push({ name: c.attrs.name.value, type: attrVal(c, 'type') || '' });
+    }
+    return shape;
+}
+
+const nodedefOutType = (d) => (d.outputs.length > 1 ? 'multioutput' : (d.outputs[0] ? d.outputs[0].type : ''));
+
+// Nodedef shapes (library, then document) for a node category, narrowed to
+// the ones producing `wantType` ("multioutput" for several outputs) if any do.
+function nodedefsForCategory(index, root, category, wantType) {
+    const defs = [];
+    const entry = index.categories.get(category);
+    if (entry) for (const n of entry.nodedefNames) if (index.libNodedefs.has(n)) defs.push(index.libNodedefs.get(n));
+    for (const nd of docNodedefsFor(root, category)) defs.push(nodedefShape(nd));
+    if (!wantType) return defs;
+    const narrowed = defs.filter((d) => nodedefOutType(d) === wantType);
+    return narrowed.length ? narrowed : defs;
+}
+
+// Declared attributes of port `name` (a token when isToken, else an input)
+// on node instance `nodeEl`'s nodedef, or null when none declares it.
+function portDecl(index, root, nodeEl, name, isToken) {
+    for (const d of nodedefsForCategory(index, root, nodeEl.tag, attrVal(nodeEl, 'type'))) {
+        const p = (isToken ? d.tokens : d.inputs).get(name);
+        if (p) return p;
+    }
+    return null;
+}
+
+// A library node category, or a custom one declared by a document nodedef.
+function isNodeCategory(index, root, tag) {
+    if (!tag) return false;
+    if (index.categories.has(tag)) return true;
+    return !STRUCTURAL_TAGS.has(tag) && docNodedefsFor(root, tag).length > 0;
+}
+
+// Inputs [{name, type, default}] of node instance `nodeEl`: library
+// signatures, else the document's own nodedefs for that category.
+function inputsForNode(index, root, nodeEl) {
+    const wantType = attrVal(nodeEl, 'type');
+    if (index.categories.has(nodeEl.tag)) return inputsForCategory(index, nodeEl.tag, wantType);
+    const byName = new Map();
+    for (const d of nodedefsForCategory(index, root, nodeEl.tag, wantType)) {
+        for (const [n, a] of d.inputs) if (!byName.has(n)) byName.set(n, { name: n, type: a.type, default: a.value });
+    }
+    return Array.from(byName.values());
+}
+
+// Output ports [{name, type}] of node instance `nodeEl`, or null if unknown.
+function nodeOutputs(index, root, nodeEl) {
+    const t = attrVal(nodeEl, 'type');
+    const byName = new Map();
+    const entry = index.categories.get(nodeEl.tag);
+    if (entry) {
+        const narrowed = t ? entry.sigGroups.filter((g) => g.type === t) : [];
+        for (const g of narrowed.length ? narrowed : entry.sigGroups) {
+            for (const v of g.versions || []) {
+                const outs = v.outputTypes || {};
+                for (const n of Object.keys(outs)) if (!byName.has(n)) byName.set(n, outs[n]);
+            }
+        }
+    } else {
+        for (const d of nodedefsForCategory(index, root, nodeEl.tag, t)) {
+            for (const o of d.outputs) if (!byName.has(o.name)) byName.set(o.name, o.type);
+        }
+    }
+    return byName.size ? Array.from(byName, ([name, type]) => ({ name, type })) : null;
+}
+
+// Every output type a node instance can connect with (a multioutput node:
+// each of its outputs), or [] when unknown.
+function nodeConnectableTypes(index, root, nodeEl) {
+    const t = attrVal(nodeEl, 'type');
+    if (t && t !== 'multioutput') return [t];
+    const outs = nodeOutputs(index, root, nodeEl);
+    return outs ? outs.map((o) => o.type) : [];
+}
+
+// Scope whose children a nodename/nodegraph on `el` references: a node
+// input sees its node's siblings, a compound nodegraph's interface input
+// the nodegraph's siblings, a nodegraph <output> the nodegraph's children.
+function connectionScope(root, el) {
+    const p = el.parent;
+    const top = materialxRoot(root);
+    if (el.tag === 'output') return p && p.tag ? p : top;
+    if (p && p.tag === 'nodegraph') return p.parent && p.parent.tag ? p.parent : top;
+    if (p && p.parent && p.parent.tag) return p.parent;
+    return nearestAncestor(el, 'nodegraph') || top;
+}
+
+function findNodeIn(scope, name) {
+    return scope.children.find((c) => c.tag && !STRUCTURAL_TAGS.has(c.tag) && attrVal(c, 'name') === name) || null;
+}
+
+function referencedNodegraph(root, el) {
+    const name = attrVal(el, 'nodegraph');
+    const byName = (c) => c.attrs.name.value === name;
+    return findNamedChildren(connectionScope(root, el), 'nodegraph').find(byName)
+        || docChildren(root, 'nodegraph').find(byName) || null;
+}
+
+// "Inputs": output is required for a multi-output source and ignored for a
+// single-output one. Unresolvable sources count as multi-output.
+function connectsToMultiOutput(index, root, el) {
+    if (attrVal(el, 'nodegraph') !== null) {
+        const ng = referencedNodegraph(root, el);
+        return !ng || ng.children.filter((c) => c.tag === 'output').length > 1;
+    }
+    const nn = attrVal(el, 'nodename');
+    if (nn === null) return true;
+    const node = findNodeIn(connectionScope(root, el), nn);
+    if (!node) return true;
+    const t = attrVal(node, 'type');
+    if (t) return t === 'multioutput';
+    const outs = nodeOutputs(index, root, node);
+    return !outs || outs.length > 1;
+}
+
+// "Inputs": same type only, except a string output may feed a filename input.
+function typeCompatible(sourceType, wantType) {
+    return !wantType || !sourceType || sourceType === wantType || (wantType === 'filename' && sourceType === 'string');
+}
+
+// Outputs of the node or nodegraph `el` connects to, for output="...".
+function outputCandidates(index, root, el) {
+    if (attrVal(el, 'nodegraph') !== null) {
+        const ng = referencedNodegraph(root, el);
+        return ng ? findNamedChildren(ng, 'output').map((c) => ({ name: c.attrs.name.value, type: attrVal(c, 'type') || '' })) : [];
+    }
+    const nn = attrVal(el, 'nodename');
+    if (nn === null) return [];
+    const node = findNodeIn(connectionScope(root, el), nn);
+    return node ? nodeOutputs(index, root, node) || [] : [];
+}
+
+// Interface ports an interfacename may reference ("Functional Nodegraphs",
+// "Compound Nodegraphs"): the nodedef's inputs (or tokens) for a functional
+// nodegraph, the nodegraph's own ones for a compound one.
+function interfaceCandidates(index, root, el) {
+    const ng = nearestAncestor(el, 'nodegraph');
+    if (!ng) return [];
+    const isToken = el.tag === 'token';
+    let ndName = attrVal(ng, 'nodedef');
+    if (ndName === null) {
+        const impl = docChildren(root, 'implementation').find((c) => attrVal(c, 'nodegraph') === attrVal(ng, 'name'));
+        ndName = impl ? attrVal(impl, 'nodedef') : null;
+    }
+    if (ndName !== null) {
+        const docNd = docChildren(root, 'nodedef').find((c) => c.attrs.name.value === ndName);
+        const shape = docNd ? nodedefShape(docNd) : index.libNodedefs.get(ndName);
+        if (shape) return Array.from((isToken ? shape.tokens : shape.inputs).values()).map((a) => ({ name: a.name, type: a.type || '' }));
+    }
+    return findNamedChildren(ng, isToken ? 'token' : 'input').map((c) => ({ name: c.attrs.name.value, type: attrVal(c, 'type') || '' }));
+}
+
+// ---------------------------------------------------------------------
+// Tag-name completions.
+
+function structuralItem(s, existingNames, alreadyHasBody) {
+    let insertText = s.name;
+    let isSnippet = false;
+    if (!alreadyHasBody && s.name === 'nodegraph') {
+        insertText = 'nodegraph name="${1:' + uniqueName('NG_graph', existingNames) + '}">$0</nodegraph>';
+        isSnippet = true;
+    } else if (!alreadyHasBody && s.name === 'output') {
+        const choices = orderTypeChoices(MTLX_TYPES.slice(), null);
+        insertText = 'output name="${2:' + uniqueName('out', existingNames) + '}" type="${1|' + choices.join(',') + '|}" />$0';
+        isSnippet = true;
+    } else if (!alreadyHasBody && s.name === 'xi:include') {
+        insertText = 'xi:include href="$1" />$0';
+        isSnippet = true;
+    }
+    return { kind: 'structural', label: s.name, detail: s.detail, insertText, isSnippet };
+}
+
+function nodeItem(name, entry, detail, existingNames, alreadyHasBody) {
+    if (!alreadyHasBody && entry.outputTypes.length) {
+        return { kind: 'node', label: name, detail, insertText: buildNodeElementSnippet(name, entry, existingNames, null), isSnippet: true };
+    }
+    return { kind: 'node', label: name, detail, insertText: name, isSnippet: false };
+}
+
+// Children allowed inside `parentEl` (CHILDREN_BY_PARENT): node categories
+// only where nodes may appear, <input>/<token> snippets inside a node
+// instance, nothing inside leaf elements, everything inside unknown ones.
 function nodeAndStructuralItems(index, parentEl, root, alreadyHasBody) {
     const items = [];
     const parentTag = parentEl && parentEl.tag;
-    // Nodes cannot nest inside a node instance's own body (E1): don't
-    // flood that context with the full category list, only the
-    // structural children the spec actually allows there.
-    const parentIsNodeInstance = !!(parentTag && index.categories.has(parentTag));
     const existingNames = root ? allNamesInDocument(root) : new Set();
 
-    if (!parentIsNodeInstance) {
+    if (parentTag && isNodeCategory(index, root, parentTag)) {
+        // Inside a node instance body only <input> and <token> are legal.
+        items.push({ kind: 'structural', label: 'token', detail: 'a string substitution token', insertText: 'token', isSnippet: false });
+        const present = presentChildInputNames(parentEl, null);
+        for (const inp of inputsForNode(index, root, parentEl)) {
+            if (present.has(inp.name)) continue;
+            const hasDefault = inp.default != null && inp.default !== '';
+            items.push({
+                kind: 'input',
+                label: 'input name="' + inp.name + '"',
+                detail: inp.type + (hasDefault ? ' = ' + inp.default : ''),
+                insertText: 'input name="' + inp.name + '" type="' + inp.type + '" value="${1:' + (hasDefault ? escapeSnippet(inp.default) : '') + '}" />$0',
+                isSnippet: true,
+            });
+        }
+        return items;
+    }
+
+    let allowNodes = true;
+    let allowed = null; // null: every structural element (unknown parent)
+    if (!parentTag) {
+        allowNodes = false;
+        allowed = ['materialx'];
+    } else if (CHILDREN_BY_PARENT[parentTag]) {
+        const rule = CHILDREN_BY_PARENT[parentTag];
+        allowNodes = !!rule.nodes;
+        allowed = rule.tags;
+        // "a functional nodegraph may not itself specify any direct child input elements"
+        if (parentTag === 'nodegraph' && attrVal(parentEl, 'nodedef') !== null) {
+            allowed = allowed.filter((t) => t !== 'input' && t !== 'token');
+        }
+    } else if (LEAF_TAGS.has(parentTag)) {
+        return [];
+    }
+
+    if (allowNodes) {
         for (const [name, entry] of index.categories) {
             const bits = [];
             if (entry.library) bits.push(entry.library);
             if (entry.outputTypes.length) bits.push('→ ' + entry.outputTypes.join(', '));
-            const detail = bits.join('  ');
-            if (!alreadyHasBody && entry.outputTypes.length) {
-                items.push({
-                    kind: 'node', label: name, detail,
-                    insertText: buildNodeElementSnippet(name, entry, existingNames, null),
-                    isSnippet: true,
-                });
-            } else {
-                items.push({ kind: 'node', label: name, detail, insertText: name, isSnippet: false });
-            }
+            items.push(nodeItem(name, entry, bits.join('  '), existingNames, alreadyHasBody));
         }
-        for (const s of STRUCTURAL_ELEMENTS) {
-            if (index.categories.has(s.name)) continue; // e.g. surfacematerial is both: the node entry wins
-            let insertText = s.name;
-            let isSnippet = false;
-            if (!alreadyHasBody && s.name === 'nodegraph') {
-                const dn = uniqueName('NG_graph', existingNames);
-                insertText = 'nodegraph name="${1:' + dn + '}">$0</nodegraph>';
-                isSnippet = true;
-            } else if (!alreadyHasBody && s.name === 'output') {
-                const dn = uniqueName('out', existingNames);
-                const choices = orderTypeChoices(MTLX_TYPES.slice(), null);
-                insertText = 'output name="${2:' + dn + '}" type="${1|' + choices.join(',') + '|}" />$0';
-                isSnippet = true;
+        // Custom node categories declared by this document's own nodedefs.
+        const seen = new Set();
+        for (const nd of docChildren(root, 'nodedef')) {
+            const cat = attrVal(nd, 'node');
+            if (!cat || seen.has(cat) || index.categories.has(cat) || STRUCTURAL_TAGS.has(cat)) continue;
+            seen.add(cat);
+            const outputTypes = [];
+            for (const d of docNodedefsFor(root, cat)) {
+                const t = nodedefOutType(nodedefShape(d));
+                if (t && outputTypes.indexOf(t) === -1) outputTypes.push(t);
             }
-            items.push({ kind: 'structural', label: s.name, detail: s.detail, insertText, isSnippet });
+            items.push(nodeItem(cat, { outputTypes }, 'custom node (this document)', existingNames, alreadyHasBody));
         }
-    } else {
-        // Inside a node instance body only <input> (enrichment below) and
-        // <token> are spec-legal children; <output>/other node categories
-        // are not (a node instance never has a nodegraph-style output, and
-        // nodes never nest inside nodes).
-        items.push({ kind: 'structural', label: 'token', detail: 'a string substitution token', insertText: 'token', isSnippet: false });
     }
-
-    // Enrichment: the enclosing element is itself a node, offer complete
-    // "<input name=... type=... value=... />" snippets for that node's own
-    // inputs NOT already present as a child <input>, narrowed by its own
-    // type= attribute when it has one (E1).
-    if (parentIsNodeInstance) {
-        const wantType = parentEl.attrs.type ? parentEl.attrs.type.value : null;
-        const present = presentChildInputNames(parentEl, null);
-        for (const inp of inputsForCategory(index, parentTag, wantType)) {
-            if (present.has(inp.name)) continue;
-            const valuePlaceholder = inp.default != null && inp.default !== '' ? escapeSnippet(inp.default) : '';
-            items.push({
-                kind: 'input',
-                label: 'input name="' + inp.name + '"',
-                detail: inp.type + (inp.default != null && inp.default !== '' ? ' = ' + inp.default : ''),
-                insertText: 'input name="' + inp.name + '" type="' + inp.type + '" value="${1:' + valuePlaceholder + '}" />$0',
-                isSnippet: true,
-            });
-        }
+    for (const s of STRUCTURAL_ELEMENTS) {
+        if (allowed && allowed.indexOf(s.name) === -1) continue;
+        if (index.categories.has(s.name)) continue;
+        items.push(structuralItem(s, existingNames, alreadyHasBody));
     }
     return items;
 }
@@ -820,202 +1161,256 @@ function escapeSnippet(s) {
     return String(s).replace(/[\\$}]/g, '\\$&');
 }
 
-function findNamedChildren(scope, tag) {
-    if (!scope) return [];
-    return scope.children.filter((c) => c.tag === tag && c.attrs.name);
-}
-
-// Best-effort effective MaterialX type for `el`: its own `type=`
-// attribute wins; otherwise, for an <input> whose parent is a node
-// instance (a category the library knows about), the type comes from
-// that category's nodedef(s), narrowed by the parent node's own `type=`
-// when it has one (mirrors inputsForCategory's own narrowing, and the
-// "name" value-completion case a few lines below it).
-// `ignoreAttr`: when the caller is itself completing `el`'s own `type=`
-// value, that attribute already exists in the tree as a half-typed (often
-// empty-string) value  -  skip it rather than "resolving" the type to the
-// very thing being typed, and fall through to the nodedef-derived type.
-function resolveElementType(index, el, ignoreAttr) {
+// Best-effort effective MaterialX type for `el`: its own `type=` wins,
+// else an <input> of a node instance takes its nodedef's declared type.
+// `ignoreAttr` 'type' skips a half-typed type= being completed right now.
+function resolveElementType(index, el, ignoreAttr, root) {
     if (el.attrs && el.attrs.type && ignoreAttr !== 'type') return el.attrs.type.value;
-    if (el.tag === 'input' && el.parent && el.parent.tag && index.categories.has(el.parent.tag)) {
-        const parent = el.parent;
-        const wantType = parent.attrs.type ? parent.attrs.type.value : null;
-        const name = el.attrs.name ? el.attrs.name.value : null;
-        if (name) {
-            const match = inputsForCategory(index, parent.tag, wantType).find((i) => i.name === name);
-            if (match) return match.type;
-        }
+    const p = el.parent;
+    const name = attrVal(el, 'name');
+    if (el.tag === 'input' && p && p.tag && name && isNodeCategory(index, root, p.tag)) {
+        const match = inputsForNode(index, root, p).find((i) => i.name === name);
+        if (match) return match.type;
     }
     return null;
 }
 
-// True when `el` (an <input>) already carries a value= or any connection
-// attribute (nodename/nodegraph/interfacename/output, see CONNECTION_ATTRS
-// below): a filename-typed input in that state must not get an
-// auto-inserted value="" (E2's value-XOR-connection rule, and a value
-// that's already there should never be silently replaced).
+// True when `el` already carries value= or a connection attribute: a
+// filename input in that state must not get an auto-inserted value="".
 function hasValueOrConnection(el) {
     if (!el || !el.attrs) return false;
     if (el.attrs.value) return true;
     return CONNECTION_ATTRS.some((a) => !!el.attrs[a]);
 }
 
+// ---------------------------------------------------------------------
+// Attribute-value completions.
+
+function plainItems(kind, list, detail) {
+    const seen = new Set();
+    const out = [];
+    for (const v of list) {
+        if (seen.has(v)) continue;
+        seen.add(v);
+        out.push({ kind, label: v, detail: detail || '', insertText: v, isSnippet: false });
+    }
+    return out;
+}
+
+function portItems(kind, ports) {
+    return ports.map((p) => ({ kind, label: p.name, detail: p.type || '', insertText: p.name, isSnippet: false }));
+}
+
+function docUnitsByType(root) {
+    const out = {};
+    for (const ud of docChildren(root, 'unitdef')) {
+        const ut = attrVal(ud, 'unittype');
+        if (!ut) continue;
+        out[ut] = (out[ut] || []).concat(namesOf(findNamedChildren(ud, 'unit')));
+    }
+    return out;
+}
+
+// value="..." on an <input>: the file picker for filenames, true/false for
+// booleans, and the nodedef's enum (or enumvalues) for enum inputs.
+function inputValueItems(root, index, element) {
+    const t = resolveElementType(index, element, null, root);
+    if (t === 'filename') {
+        return [{ kind: 'file-browse', label: 'Browse for file...', detail: '', insertText: '', isSnippet: false }];
+    }
+    if (t === 'boolean') return plainItems('boolean', ['true', 'false']);
+    let decl = null;
+    const p = element.parent;
+    const name = attrVal(element, 'name');
+    if (p && p.tag === 'nodedef') decl = { enum: attrVal(element, 'enum'), enumvalues: attrVal(element, 'enumvalues'), type: t };
+    else if (p && name && isNodeCategory(index, root, p.tag)) decl = portDecl(index, root, p, name, false);
+    if (!decl || !decl.enum) return [];
+    const labels = decl.enum.split(',').map((s) => s.trim()).filter(Boolean);
+    const values = decl.enumvalues ? decl.enumvalues.split(',').map((s) => s.trim()) : null;
+    const isString = !t || t === 'string' || t === 'stringarray';
+    if (isString || !values || values.length !== labels.length) return plainItems('enum', labels);
+    return values.map((v, i) => ({ kind: 'enum', label: v, detail: labels[i], insertText: v, isSnippet: false }));
+}
+
 function valueItemsFor(root, index, hit) {
     const { element, attrName } = hit;
+    const tag = element.tag;
+    const kind = attrSchema.classifyElement(element);
 
     if (attrName === 'type') {
-        // A node instance's own `type=`: category output types first
-        // (the actually-producible types for this node), then every
-        // other MaterialX type. An <input>'s `type=` with a name already
-        // typed: its library-declared type first.
+        // A node instance: its nodedefs' output types first; an <input>
+        // with a name: its declared type first; then every MaterialX type.
         const ordered = [];
-        if (element.tag && index.categories.has(element.tag)) {
-            ordered.push(...index.categories.get(element.tag).outputTypes);
-        } else if (element.tag === 'input' && element.parent && element.parent.tag && index.categories.has(element.parent.tag)) {
-            const t = resolveElementType(index, element, 'type');
+        const isNode = kind === 'node-instance';
+        if (isNode && index.categories.has(tag)) {
+            ordered.push(...index.categories.get(tag).outputTypes);
+        } else if (isNode) {
+            for (const d of docNodedefsFor(root, tag)) ordered.push(nodedefOutType(nodedefShape(d)));
+        } else if (tag === 'input' && element.parent && isNodeCategory(index, root, element.parent.tag)) {
+            const t = resolveElementType(index, element, 'type', root);
             if (t) ordered.push(t);
         }
-        for (const t of MTLX_TYPES) if (ordered.indexOf(t) === -1) ordered.push(t);
-        // The 'filename' choice, on an <input> with no value/connection
-        // attribute yet, is eligible for the pickFileOnFilenameInput
-        // auto-attach (completionProvider.js decides, per that setting,
-        // whether to append value="" and wire up the picker command; this
-        // pure module only flags eligibility, see hasValueOrConnection).
-        const isInput = element.tag === 'input';
-        return ordered.map((t) => {
-            const item = { kind: 'type', label: t, detail: '', insertText: t, isSnippet: false };
-            if (isInput && t === 'filename' && !hasValueOrConnection(element)) item.filenameValueEligible = true;
+        const all = ordered.filter(Boolean).concat(MTLX_TYPES, ARRAY_TYPES, namesOf(docChildren(root, 'typedef')));
+        if (isNode && !isNodeCategory(index, root, tag)) all.push('multioutput');
+        const isInput = tag === 'input';
+        return plainItems('type', all).map((item) => {
+            if (isInput && item.label === 'filename' && !hasValueOrConnection(element)) item.filenameValueEligible = true;
             return item;
         });
     }
-    if (attrName === 'colorspace') {
-        return COLORSPACES.map((c) => ({ kind: 'colorspace', label: c, detail: '', insertText: c, isSnippet: false }));
+    if (attrName === 'colorspace') return plainItems('colorspace', COLORSPACES);
+    if (attrName === 'version') {
+        if (tag === 'materialx') return plainItems('version', ['1.39'], 'MaterialX specification version');
+        if (index.categories.has(tag)) return plainItems('version', index.categories.get(tag).versions, tag + ' version');
+        return [];
     }
-    if (attrName === 'version' && element.tag && index.categories.has(element.tag)) {
-        return index.categories.get(element.tag).versions
-            .map((v) => ({ kind: 'version', label: v, detail: element.tag + ' version', insertText: v, isSnippet: false }));
+    if (BOOLEAN_ATTRS.has(attrName)) return plainItems('boolean', ['true', 'false']);
+    if (ENUM_VALUES[attrName] && !(attrName === 'space' && tag !== 'geompropdef')) {
+        return plainItems('enum', ENUM_VALUES[attrName]);
     }
-    if (BOOLEAN_ATTRS.has(attrName)) {
-        return ['true', 'false'].map((b) => ({ kind: 'boolean', label: b, detail: '', insertText: b, isSnippet: false }));
+    if (attrName === 'hint') {
+        if (tag === 'typedef') return plainItems('enum', TYPEDEF_HINTS);
+        if (tag === 'input') return plainItems('enum', INPUT_HINTS);
+        return [];
     }
     if (attrName === 'unittype') {
-        return UNITTYPES.map((u) => ({ kind: 'unittype', label: u, detail: '', insertText: u, isSnippet: false }));
+        return plainItems('unittype', (index.unittypes || []).concat(namesOf(docChildren(root, 'unittypedef'))));
     }
     if (attrName === 'unit') {
-        const wantType = element.attrs.unittype ? element.attrs.unittype.value : null;
-        const units = wantType && UNITS_BY_TYPE[wantType]
-            ? UNITS_BY_TYPE[wantType]
-            : UNITTYPES.reduce((acc, t) => acc.concat(UNITS_BY_TYPE[t]), []);
-        return units.map((u) => ({ kind: 'unit', label: u, detail: wantType || '', insertText: u, isSnippet: false }));
+        let wantType = attrVal(element, 'unittype');
+        if (!wantType && tag === 'input' && element.parent && attrVal(element, 'name') !== null && isNodeCategory(index, root, element.parent.tag)) {
+            const decl = portDecl(index, root, element.parent, attrVal(element, 'name'), false);
+            wantType = decl && decl.unittype ? decl.unittype : null;
+        }
+        const byType = Object.assign({}, index.unitsByType);
+        const docUnits = docUnitsByType(root);
+        for (const k of Object.keys(docUnits)) byType[k] = (byType[k] || []).concat(docUnits[k]);
+        const units = wantType ? byType[wantType] || [] : Object.keys(byType).reduce((acc, k) => acc.concat(byType[k]), []);
+        return plainItems('unit', units, wantType || '');
     }
     if (attrName === 'defaultgeomprop') {
-        return DEFAULTGEOMPROP_NAMES.map((g) => ({ kind: 'geomprop', label: g, detail: '', insertText: g, isSnippet: false }));
+        // Names of <geompropdef>s (library and this document) of the input's type.
+        const wantT = resolveElementType(index, element, null, root);
+        const defs = (index.geompropdefs || []).concat(docChildren(root, 'geompropdef')
+            .map((g) => ({ name: g.attrs.name.value, type: attrVal(g, 'type') || '' })));
+        const seen = new Set();
+        return defs
+            .filter((g) => (wantT ? g.type === wantT : attrSchema.isGeompropEligible(g.type)))
+            .filter((g) => !seen.has(g.name) && seen.add(g.name))
+            .map((g) => ({ kind: 'geomprop', label: g.name, detail: g.type, insertText: g.name, isSnippet: false }));
     }
-    if (attrName === 'geomprop') {
-        return GEOMPROP_NAMES.map((g) => ({ kind: 'geomprop', label: g, detail: '', insertText: g, isSnippet: false }));
+    if (attrName === 'geomprop') return tag === 'geompropdef' ? plainItems('geomprop', GEOMPROP_NAMES) : [];
+    if (attrName === 'internalgeomprops') {
+        return plainItems('geomprop', GEOMPROP_NAMES.concat((index.geompropdefs || []).map((g) => g.name),
+            namesOf(docChildren(root, 'geompropdef'))));
     }
     if (attrName === 'target') {
-        return index.allTargets.map((t) => ({ kind: 'target', label: t, detail: '', insertText: t, isSnippet: false }));
+        return plainItems('target', (index.allTargets || []).concat(namesOf(docChildren(root, 'targetdef'))));
+    }
+    if (attrName === 'nodegroup') {
+        const docGroups = docChildren(root, 'nodedef').map((n) => attrVal(n, 'nodegroup')).filter(Boolean);
+        return plainItems('enum', (index.nodegroups || []).concat(docGroups));
     }
     if (attrName === 'nodedef') {
-        // Node instance: its own category's library nodedefs first, then
-        // every document-defined <nodedef name="...">, then the full
-        // library nodedef name list (a node's `nodedef=` may legitimately
-        // name a nodedef for a DIFFERENT node, e.g. inherit scenarios).
+        // Node instance: its own category's nodedefs first, then the
+        // document's <nodedef>s, then every library nodedef name.
         const ordered = [];
-        if (element.tag && index.categories.has(element.tag)) {
-            ordered.push(...index.categories.get(element.tag).nodedefNames);
-        }
-        for (const c of findNamedChildren(materialxRoot(root), 'nodedef')) {
-            if (ordered.indexOf(c.attrs.name.value) === -1) ordered.push(c.attrs.name.value);
-        }
-        for (const n of index.nodedefNames) if (ordered.indexOf(n) === -1) ordered.push(n);
-        return ordered.map((n) => ({ kind: 'nodedef', label: n, detail: '', insertText: n, isSnippet: false }));
+        if (index.categories.has(tag)) ordered.push(...index.categories.get(tag).nodedefNames);
+        ordered.push(...namesOf(docChildren(root, 'nodedef')), ...index.nodedefNames);
+        return plainItems('nodedef', ordered);
+    }
+    if (attrName === 'inherit') {
+        const self = attrVal(element, 'name');
+        const notSelf = (n) => n !== self;
+        if (tag === 'nodedef') return plainItems('nodedef', namesOf(docChildren(root, 'nodedef')).concat(index.nodedefNames).filter(notSelf));
+        if (tag === 'look') return plainItems('reference', namesOf(docChildren(root, 'look')).filter(notSelf));
+        if (tag === 'typedef') return plainItems('type', MTLX_TYPES.concat(ARRAY_TYPES, namesOf(docChildren(root, 'typedef'))).filter(notSelf));
+        if (tag === 'targetdef') return plainItems('target', (index.allTargets || []).concat(namesOf(docChildren(root, 'targetdef'))).filter(notSelf));
+        return [];
     }
     if (attrName === 'nodegraph') {
-        return findNamedChildren(materialxRoot(root), 'nodegraph')
+        // Compound nodegraphs at the same scope ("Compound Nodegraphs"),
+        // never the one enclosing this element; any root nodegraph for an
+        // <implementation>.
+        if (tag === 'implementation') return plainItems('nodegraph', namesOf(docChildren(root, 'nodegraph')), 'nodegraph');
+        const scope = connectionScope(root, element);
+        return findNamedChildren(scope, 'nodegraph')
+            .filter((c) => attrVal(c, 'nodedef') === null && !isAncestor(c, element))
             .map((c) => ({ kind: 'nodegraph', label: c.attrs.name.value, detail: 'nodegraph', insertText: c.attrs.name.value, isSnippet: false }));
     }
     if (attrName === 'nodename') {
-        // Mirrors mtlxSymbols.js's NON_NODE_TAGS: everything except
-        // input/output/token/nodedef children can be a nodename target.
-        // E5: excludes the enclosing node itself (a node can't connect to
-        // its own input), and ranks candidates whose OWN output type
-        // matches this input's resolved type first (still lists the rest,
-        // just after), surfacing the node's type in the item detail.
-        const scope = nearestAncestor(element, 'nodegraph') || materialxRoot(root);
-        const wantType = resolveElementType(index, element);
-        const candidates = scope.children
-            .filter((c) => c.tag && !['input', 'output', 'token', 'nodedef'].includes(c.tag) && c.attrs.name)
-            .filter((c) => c !== element.parent)
-            .map((c) => {
-                const t = c.attrs.type ? c.attrs.type.value
-                    : (index.categories.has(c.tag) ? (index.categories.get(c.tag).outputTypes[0] || '') : '');
-                return { c, t };
-            });
-        candidates.sort((a, b) => {
-            const am = wantType && a.t === wantType ? 0 : 1;
-            const bm = wantType && b.t === wantType ? 0 : 1;
-            return am - bm;
-        });
-        return candidates.map(({ c, t }) => ({ kind: 'nodename', label: c.attrs.name.value, detail: t, insertText: c.attrs.name.value, isSnippet: false }));
+        // Nodes at the connection scope, never the enclosing node itself,
+        // filtered to outputs of this port's type (multioutput: any output).
+        const scope = connectionScope(root, element);
+        const wantType = resolveElementType(index, element, null, root);
+        return scope.children
+            .filter((c) => c.tag && !STRUCTURAL_TAGS.has(c.tag) && c.attrs.name && c !== element.parent)
+            .map((c) => ({ c, types: nodeConnectableTypes(index, root, c) }))
+            .filter(({ types }) => !types.length || types.some((t) => typeCompatible(t, wantType)))
+            .map(({ c, types }) => ({ kind: 'nodename', label: c.attrs.name.value, detail: attrVal(c, 'type') || types[0] || '', insertText: c.attrs.name.value, isSnippet: false }));
     }
     if (attrName === 'output') {
-        let scope = null;
-        if (element.attrs.nodegraph) {
-            scope = findNamedChildren(materialxRoot(root), 'nodegraph').find((c) => c.attrs.name.value === element.attrs.nodegraph.value) || null;
-        } else {
-            scope = nearestAncestor(element, 'nodegraph');
-        }
-        return scope
-            ? findNamedChildren(scope, 'output').map((c) => ({ kind: 'output', label: c.attrs.name.value, detail: c.attrs.type ? c.attrs.type.value : '', insertText: c.attrs.name.value, isSnippet: false }))
-            : [];
+        const wantType = tag === 'output' || tag === 'input' ? resolveElementType(index, element, null, root) : null;
+        return portItems('output', outputCandidates(index, root, element).filter((o) => typeCompatible(o.type, wantType)));
     }
     if (attrName === 'interfacename') {
-        const scope = nearestAncestor(element, 'nodegraph');
-        return scope
-            ? findNamedChildren(scope, 'input').map((c) => ({ kind: 'interfacename', label: c.attrs.name.value, detail: c.attrs.type ? c.attrs.type.value : '', insertText: c.attrs.name.value, isSnippet: false }))
-            : [];
+        const wantType = resolveElementType(index, element, null, root);
+        return portItems('interfacename', interfaceCandidates(index, root, element).filter((o) => typeCompatible(o.type, wantType)));
     }
-    if (attrName === 'value' && element.tag === 'input') {
-        // E10a: a filename-typed input's value gets a "Browse for file..."
-        // item that inserts nothing and instead runs a command (wired up
-        // by completionProvider.js, which has the vscode Uri/positions
-        // this pure module doesn't); sortIndex 0 (via withOrder, since
-        // it's the only item) puts it first.
-        const t = resolveElementType(index, element);
-        if (t === 'filename') {
-            return [{ kind: 'file-browse', label: 'Browse for file...', detail: '', insertText: '', isSnippet: false }];
-        }
-        return [];
+    if (attrName === 'defaultinput') {
+        // "the name of an <input> element within the <nodedef>, which must be the same type as type"
+        const p = element.parent;
+        if (!p || p.tag !== 'nodedef') return [];
+        const wantType = attrVal(element, 'type');
+        return portItems('input-name', findNamedChildren(p, 'input')
+            .map((c) => ({ name: c.attrs.name.value, type: attrVal(c, 'type') || '' }))
+            .filter((c) => !wantType || c.type === wantType));
     }
-    if (attrName === 'name' && element.tag === 'input' && element.parent && element.parent.tag) {
+    if (attrName === 'value' && tag === 'input') return inputValueItems(root, index, element);
+    if (attrName === 'material') {
+        return plainItems('reference', materialxRoot(root).children
+            .filter((c) => c.tag && c.attrs.name && attrVal(c, 'type') === 'material').map((c) => c.attrs.name.value), 'material');
+    }
+    if (attrName === 'collection' || attrName === 'includecollection' || attrName === 'viewercollection') {
+        const self = tag === 'collection' ? attrVal(element, 'name') : null;
+        return plainItems('reference', namesOf(docChildren(root, 'collection')).filter((n) => n !== self), 'collection');
+    }
+    if (attrName === 'looks') {
+        const self = attrVal(element, 'name');
+        return plainItems('reference', namesOf(docChildren(root, 'look')).concat(namesOf(docChildren(root, 'lookgroup'))).filter((n) => n !== self), 'look');
+    }
+    if (attrName === 'default' && tag === 'lookgroup') {
+        const listed = (attrVal(element, 'looks') || '').split(',').map((s) => s.trim()).filter(Boolean);
+        return plainItems('reference', listed.length ? listed : namesOf(docChildren(root, 'look')), 'look');
+    }
+    if (attrName === 'variantset' && tag === 'variantassign') {
+        return plainItems('reference', namesOf(docChildren(root, 'variantset')), 'variantset');
+    }
+    if (attrName === 'variant' && tag === 'variantassign') {
+        const setName = attrVal(element, 'variantset');
+        const sets = docChildren(root, 'variantset').filter((s) => setName === null || s.attrs.name.value === setName);
+        return plainItems('reference', sets.reduce((acc, s) => acc.concat(namesOf(findNamedChildren(s, 'variant'))), []), 'variant');
+    }
+    if (attrName === 'propertyset' && tag === 'propertysetassign') {
+        return plainItems('reference', namesOf(docChildren(root, 'propertyset')), 'propertyset');
+    }
+    if (attrName === 'name' && tag === 'input' && element.parent && element.parent.tag) {
         const parent = element.parent;
-        if (index.categories.has(parent.tag)) {
-            const wantType = parent.attrs.type ? parent.attrs.type.value : null;
+        if (isNodeCategory(index, root, parent.tag)) {
             const hasType = !!(element.attrs && element.attrs.type);
             const present = presentChildInputNames(parent, element);
-            return inputsForCategory(index, parent.tag, wantType)
+            return inputsForNode(index, root, parent)
                 .filter((inp) => !present.has(inp.name))
                 .map((inp) => {
+                    // Appending `" type="<type>` reuses the closing quote already after the cursor.
                     const item = {
                         kind: 'input-name',
                         label: inp.name,
                         detail: inp.type,
-                        // The replace range only covers the partial NAME text
-                        // (inside the already-open quote); appending
-                        // `" type="<type>` here closes that quote and reopens
-                        // one for type=, reusing the closing quote the user
-                        // already has right after the cursor  -  same trick the
-                        // tag-context "<input name=... type=... />" snippet a
-                        // few lines up uses, just without a snippet.
                         insertText: hasType ? inp.name : inp.name + '" type="' + inp.type,
                         isSnippet: false,
                     };
-                    // filenameValueEligible: completionProvider.js appends
-                    // `" value="` to insertText (same reused-closing-quote
-                    // trick, now closing value= instead) and wires up the
-                    // picker, gated on the pickFileOnFilenameInput setting.
+                    // completionProvider.js appends `" value="` and opens the picker (pickFileOnFilenameInput).
                     if (inp.type === 'filename' && !hasValueOrConnection(element)) item.filenameValueEligible = true;
                     return item;
                 });
@@ -1024,58 +1419,74 @@ function valueItemsFor(root, index, hit) {
     return [];
 }
 
-// Attribute-NAME completions for the "space" trigger: offered for
-// whichever element the cursor is inside, narrowed to exactly the
-// attributes mtlxAttributeSchema.js says are valid for that element's
-// KIND (materialx root / node instance / nodedef input / ..., see that
-// module for the full per-kind breakdown), excluding attributes already
-// present and, for a handful of value-conditional attributes (colorspace,
-// the ui* range attributes, unit/unittype), narrowed further by the
-// element's resolved MaterialX type. `interfacename` is additionally
-// dropped unless `el` has an enclosing <nodegraph> to reference (spec:
-// interfacename resolves nodedef/nodegraph interface inputs, mirrors the
-// same scope check the "interfacename" VALUE completion below already
-// applies via nearestAncestor). Required-first, then alphabetical,
-// mirrors the spec's own "(required)" markers.
-// Attribute names whose presence means a value= would conflict with a
-// connection instead (E2): spec's "value XOR nodename/nodegraph/
-// interfacename/output" rule for a node/nodedef/nodegraph-interface input.
-const CONNECTION_ATTRS = ['nodename', 'nodegraph', 'interfacename', 'output'];
+function isAncestor(candidate, el) {
+    let cur = el.parent;
+    while (cur) {
+        if (cur === candidate) return true;
+        cur = cur.parent;
+    }
+    return false;
+}
 
-function attributeNameItems(index, el) {
-    const kind = attrSchema.classifyElement(el, index.categories);
+// ---------------------------------------------------------------------
+// Attribute-name completions: the schema list for the element's kind,
+// minus attributes already present, conflicting, or not applicable to the
+// resolved type; required first, then the schema's curated order.
+
+// Connection attributes (hasValueOrConnection above).
+const CONNECTION_ATTRS = ['nodename', 'nodegraph', 'interfacename', 'output'];
+// Input kinds whose colorspace on a filename depends on the node's output type.
+const VALUE_INPUT_KINDS = new Set(['node-instance-input', 'nodegraph-interface-input', 'variant-input']);
+
+function attributeNameItems(index, el, root) {
+    const kind = attrSchema.classifyElement(el);
     if (!kind) return [];
     const present = new Set(Object.keys(el.attrs || {}));
-    const effType = resolveElementType(index, el);
+    const values = {};
+    for (const k of present) values[k] = el.attrs[k].value;
+    const effType = resolveElementType(index, el, null, root);
     const inNodegraph = !!nearestAncestor(el, 'nodegraph');
-    const hasConnection = CONNECTION_ATTRS.some((a) => present.has(a));
+    const isNodeInput = kind === 'node-instance-input';
+    const nodeParent = isNodeInput && el.parent && isNodeCategory(index, root, el.parent.tag) ? el.parent : null;
+    const decl = nodeParent && values.name ? portDecl(index, root, nodeParent, values.name, false) : null;
+    // A filename input takes colorspace only when the parent node outputs color3/color4.
+    const parentT = el.tag === 'input' && el.parent && el.parent.attrs && el.parent.attrs.type ? el.parent.attrs.type.value : null;
+    const colorspaceOk = (t) => (t === 'filename' ? !parentT || parentT === 'color3' || parentT === 'color4' : attrSchema.isColorspaceEligible(t));
 
-    // E2: when this <input> has no name= yet, `colorspace` can't be
-    // resolved from ITS OWN type (there's nothing to look up by name), so
-    // gate it instead on whether any of the parent node's still-missing
-    // inputs could plausibly want one (color3/color4/filename). An
-    // unknown/unresolvable parent falls through to the normal typeGate
-    // behavior below (permissive: offer it rather than guess wrong).
+    // A nameless node input: colorspace only if some still-missing input of
+    // the parent node could take one (its own type is not resolvable yet).
     let missingInputTypes = null;
-    if (el.tag === 'input' && !present.has('name') && el.parent && el.parent.tag && index.categories.has(el.parent.tag)) {
-        const parent = el.parent;
-        const wantType = parent.attrs.type ? parent.attrs.type.value : null;
-        const presentNames = presentChildInputNames(parent, el);
-        missingInputTypes = inputsForCategory(index, parent.tag, wantType)
-            .filter((i) => !presentNames.has(i.name))
-            .map((i) => i.type);
+    if (nodeParent && !present.has('name')) {
+        const presentNames = presentChildInputNames(nodeParent, el);
+        missingInputTypes = inputsForNode(index, root, nodeParent).filter((i) => !presentNames.has(i.name)).map((i) => i.type);
     }
 
+    const conflictHit = (c) => {
+        const eq = c.indexOf('=');
+        return eq === -1 ? present.has(c) : values[c.slice(0, eq)] === c.slice(eq + 1);
+    };
     const candidates = attrSchema.attributesFor(kind)
         .filter((a) => !present.has(a.name))
-        .filter((a) => a.name !== 'value' || !hasConnection)
+        .filter((a) => !(a.conflicts || []).some(conflictHit))
+        .filter((a) => !a.requiresAny || a.requiresAny.some((r) => present.has(r)))
+        .filter((a) => !a.when || a.when(values))
+        .filter((a) => a.name !== 'interfacename' || inNodegraph)
+        .filter((a) => a.name !== 'output' || connectsToMultiOutput(index, root, el))
         .filter((a) => {
-            if (a.name === 'colorspace' && missingInputTypes) {
-                return missingInputTypes.some((t) => attrSchema.isColorspaceEligible(t));
+            // "Inputs": a node input's unit needs a unittype on the input or
+            // its nodedef; it may declare unittype only if the nodedef does not.
+            if (!decl) return true;
+            if (a.name === 'unit') return present.has('unittype') || !!decl.unittype;
+            if (a.name === 'unittype') return !decl.unittype;
+            return true;
+        })
+        .filter((a) => {
+            if (a.name === 'colorspace' && VALUE_INPUT_KINDS.has(kind)) {
+                if (missingInputTypes && !effType) return missingInputTypes.some((t) => colorspaceOk(t));
+                if (effType === 'filename') return colorspaceOk('filename');
             }
             return !a.typeGate || !effType || a.typeGate(effType);
-        })
-        .filter((a) => a.name !== 'interfacename' || inNodegraph);
+        });
 
     const items = candidates.map((a) => ({
         kind: 'attr-name',
@@ -1085,10 +1496,7 @@ function attributeNameItems(index, el) {
         isSnippet: true,
         __required: !!a.required,
     }));
-    // Required first; Array#sort is a stable sort (guaranteed since
-    // ES2019), so ties keep attrSchema's own array order  -  that array
-    // IS the curated priority (spec-required first, then commonly-used,
-    // then UI/layout, then doc last), not alphabetical.
+    // Stable sort: required first, ties keep the schema's curated order.
     items.sort((x, y) => (x.__required === y.__required ? 0 : x.__required ? -1 : 1));
     if (items.length && items[0].__required) items[0].preselect = true;
     return items.map((it) => { delete it.__required; return it; });

@@ -373,10 +373,22 @@
             return;
         }
         var r = hit.getBoundingClientRect();
-        var opts = { bubbles: true, cancelable: true, button: 0, clientX: r.left + 8, clientY: r.top + 8, view: window };
-        hit.dispatchEvent(new MouseEvent('mousedown', opts));
-        hit.dispatchEvent(new MouseEvent('mouseup', opts));
-        hit.dispatchEvent(new MouseEvent('click', opts));
+        var x0 = r.left + 8, y0 = r.top + 8;
+        var at = function (x, y, buttons) {
+            return { bubbles: true, cancelable: true, composed: true, button: 0, buttons: buttons, clientX: x, clientY: y, view: window, pointerId: 1, pointerType: 'mouse', isPrimary: true };
+        };
+        // A human click: pointer + mouse events, with the 1-4 px jitter real mice make between down and up.
+        hit.dispatchEvent(new PointerEvent('pointerdown', at(x0, y0, 1)));
+        hit.dispatchEvent(new MouseEvent('mousedown', at(x0, y0, 1)));
+        var last = [0, 0];
+        (Array.isArray(msg.jitter) ? msg.jitter : []).forEach(function (d) {
+            last = d;
+            hit.dispatchEvent(new PointerEvent('pointermove', at(x0 + d[0], y0 + d[1], 1)));
+            hit.dispatchEvent(new MouseEvent('mousemove', at(x0 + d[0], y0 + d[1], 1)));
+        });
+        hit.dispatchEvent(new PointerEvent('pointerup', at(x0 + last[0], y0 + last[1], 0)));
+        hit.dispatchEvent(new MouseEvent('mouseup', at(x0 + last[0], y0 + last[1], 0)));
+        hit.dispatchEvent(new MouseEvent('click', at(x0 + last[0], y0 + last[1], 0)));
         vscodeApi.postMessage({ type: 'mtlx-test-graph-selection', report: { clicked: id } });
     }
     document.addEventListener('keydown', function (event) {
