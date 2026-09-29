@@ -7,7 +7,7 @@
   "private": true,
   "main": "main/main.js",
   "devDependencies": {
-    "electron": "43.4.1",
+    "electron": "43.7.6",
     "electron-builder": "26.15.3",
     "jimp": "1.6.1",
     "png-to-ico": "3.0.2"
