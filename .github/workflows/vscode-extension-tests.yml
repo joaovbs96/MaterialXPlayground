@@ -77,6 +77,10 @@ jobs:
       - name: Regenerate embed bundles
         run: node scripts/build.mjs embed
 
+      # Fetch-only vendor files (the OpenUSD runtime) are not committed but ship in the vsix.
+      - name: Fetch vendored runtime files
+        run: npm run vendor
+
       - name: Check every runtime-loaded file is packaged in the vsix
         run: node scripts/check-vsix-files.mjs
 
