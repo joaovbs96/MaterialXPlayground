@@ -56,29 +56,42 @@ const FIXTURE_MATERIALS = [
     },
 ];
 
+// Minimal catalog entries (only mtlxPath is read), independent of the real catalog data.
+const EXAMPLE_PATHS = {
+    AnimatedChristmasTreeOrnament: 'materials/AnimatedChristmasTreeOrnament/ChristmasTreeOrnament016_1K-JPG.mtlx',
+    Motley_Patchwork_Rug: 'materials/Motley_Patchwork_Rug/Motley_Patchwork_Rug.mtlx',
+    standard_surface_carpaint_to_openpbr: 'materials/standard_surface_carpaint_to_openpbr.mtlx',
+    open_pbr_glass: 'vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_glass.mtlx',
+    open_pbr_default: 'vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_default.mtlx',
+    standard_surface_brass_tiled: 'vendor/materialx/resources/Materials/Examples/StandardSurface/standard_surface_brass_tiled.mtlx',
+};
+function ex(id) {
+    return { id, mtlxPath: EXAMPLE_PATHS[id] };
+}
+
 test('galleryIdFor: matches by full resolved path even when id differs from the source basename', () => {
-    const example = exampleCatalog.getExample('AnimatedChristmasTreeOrnament');
+    const example = ex('AnimatedChristmasTreeOrnament');
     assert.equal(newFromExample.galleryIdFor(FIXTURE_MATERIALS, example), 'AnimatedChristmasTreeOrnament');
 });
 
 test('galleryIdFor: matches playground and vendor entries whose id equals the basename', () => {
-    const rug = exampleCatalog.getExample('Motley_Patchwork_Rug');
+    const rug = ex('Motley_Patchwork_Rug');
     assert.equal(newFromExample.galleryIdFor(FIXTURE_MATERIALS, rug), 'Motley_Patchwork_Rug');
 
-    const carpaint = exampleCatalog.getExample('standard_surface_carpaint_to_openpbr');
+    const carpaint = ex('standard_surface_carpaint_to_openpbr');
     assert.equal(newFromExample.galleryIdFor(FIXTURE_MATERIALS, carpaint), 'standard_surface_carpaint_to_openpbr');
 
-    const glass = exampleCatalog.getExample('open_pbr_glass');
+    const glass = ex('open_pbr_glass');
     assert.equal(newFromExample.galleryIdFor(FIXTURE_MATERIALS, glass), 'open_pbr_glass');
 });
 
 test('galleryIdFor: OpenPBR Default resolves to its vendor gallery entry', () => {
-    const example = exampleCatalog.getExample('open_pbr_default');
+    const example = ex('open_pbr_default');
     assert.equal(newFromExample.galleryIdFor(FIXTURE_MATERIALS, example), 'open_pbr_default');
 });
 
 test('galleryIdFor: an id absent from the fixture manifest resolves to null', () => {
-    const example = exampleCatalog.getExample('standard_surface_brass_tiled');
+    const example = ex('standard_surface_brass_tiled');
     assert.equal(newFromExample.galleryIdFor(FIXTURE_MATERIALS, example), null);
 });
 

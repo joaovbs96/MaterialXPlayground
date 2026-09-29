@@ -2025,6 +2025,13 @@ async function scenarioContextHeader(ctx) {
     return { pass, cmdOk, explorerOk, editorOk, editorTitleOk, hiddenFromPaletteOk };
 }
 
+// Core subset for PR CI: extension logic, not WebGL.
+// Providers: validationWorker, hoverDocs, languageFeatures, formatter, completion.
+// Lifecycle/UI: docsPanel, newFromExample, actionsView, insertNode, noSidebarSwitch, openViewCommands, lifecycleCloseReopen.
+// editorSession is the one light render check (webview boots, viewer renders a frame).
+const CORE_SCENARIOS = ['editorSession', 'validationWorker', 'hoverDocs', 'languageFeatures', 'formatter', 'completion',
+    'docsPanel', 'newFromExample', 'actionsView', 'insertNode', 'noSidebarSwitch', 'openViewCommands', 'lifecycleCloseReopen'];
+
 async function run() {
     const fixturesDir = process.env.MTLX_SMOKE_FIXTURES;
     const resultsFile = process.env.MTLX_SMOKE_RESULTS_FILE;
@@ -2109,55 +2116,109 @@ async function run() {
 
         // MTLX_SMOKE_ONLY: comma-separated scenario names for a local rerun (all when empty).
         const only = (process.env.MTLX_SMOKE_ONLY || '').split(',').map((x) => x.trim()).filter(Boolean);
-        const want = (name) => !only.length || only.includes(name);
-        if (want('editorSession')) {
-            const editorSession = await scenarioEditorSession(ctx);
-            out.scenarios.editorE2E = editorSession.editorE2E;
-            out.scenarios.viewerRendered = editorSession.viewerRendered;
-            out.scenarios.saveBridge = editorSession.saveBridge;
+        // MTLX_SMOKE_SUITE=core (PR CI) runs CORE_SCENARIOS; anything else runs every scenario.
+        const core = process.env.MTLX_SMOKE_SUITE === 'core';
+        const want = (name) => (only.length ? only.includes(name) : (!core || CORE_SCENARIOS.includes(name)));
+        // [name, run, timeout seconds, needs a WebGL render]. A timeout, or a
+        // render scenario after the page reported a WebGL failure, is a named
+        // FAIL and the suite moves on.
+        const fmt = (name, key, minFiles) => [name, (c) => scenarioSceneFormat(c, c.fixtures[key], minFiles), 90, true];
+        const plan = [
+            ['editorSession', scenarioEditorSession, 180, true],
+            ['validationWorker', scenarioValidationWorker, 60, false],
+            ['hoverDocs', scenarioHoverDocs, 60, false],
+            ['languageFeatures', scenarioLanguageFeatures, 60, false],
+            ['formatter', scenarioFormatter, 60, false],
+            ['completion', scenarioCompletion, 60, false],
+            ['boundary', scenarioBoundary, 60, false],
+            ['settingsFallback', scenarioSettingsFallback, 60, false],
+            ['docsPanel', scenarioDocsPanel, 90, false],
+            ['docsFilter', scenarioDocsFilter, 120, false],
+            ['sceneAutoOpen', scenarioSceneAutoOpen, 120, true],
+            ['usdScene', scenarioUsdScene, 120, true],
+            ['usdMaterialPreview', scenarioUsdMaterialPreview, 90, true],
+            ['sceneTreePreview', scenarioSceneTreePreview, 90, true],
+            fmt('sceneGltf', 'gltfRootPath', 3),
+            fmt('sceneGlb', 'glbRootPath', 2),
+            fmt('sceneObj', 'objRootPath', 3),
+            ['sceneNoSiblings', scenarioSceneNoSiblings, 90, true],
+            ['sceneMissingRoundTrip', scenarioSceneMissingRoundTrip, 90, true],
+            ['sceneLoadCancel', scenarioSceneLoadCancel, 120, true],
+            ['sceneFormatAutoOpen', scenarioSceneFormatAutoOpen, 120, true],
+            ['newFromExample', scenarioNewFromExample, 120, false],
+            ['newFromExampleTextured', scenarioNewFromExampleTextured, 90, false],
+            ['galleryPanel', scenarioGalleryPanel, 60, false],
+            ['actionsView', scenarioActionsView, 60, false],
+            ['actionsExamples', scenarioActionsExamples, 60, false],
+            ['actionsAbout', scenarioActionsAbout, 60, false],
+            ['actionsGithub', scenarioActionsGithub, 60, false],
+            ['aboutLicense', scenarioAboutLicense, 60, false],
+            ['fullWidth', scenarioFullWidth, 60, true],
+            ['openViewCommands', scenarioOpenViewCommands, 60, false],
+            ['lifecycleCloseReopen', scenarioLifecycleCloseReopen, 90, false],
+            ['textureSwap', scenarioTextureSwap, 180, true],
+            ['selectionSync', scenarioSelectionSync, 120, true],
+            ['graphClickNoEdit', scenarioGraphClickNoEdit, 150, true],
+            ['filesView', scenarioFilesView, 60, false],
+            ['filesVisibility', scenarioFilesVisibility, 60, false],
+            ['insertNode', scenarioInsertNode, 90, false],
+            ['noSidebarSwitch', scenarioNoSidebarSwitch, 60, false],
+            ['openInTextEditor', scenarioOpenInTextEditor, 60, false],
+            ['contextHeader', scenarioContextHeader, 30, false],
+        ];
+        const deadlineAt = Number(process.env.MTLX_SMOKE_DEADLINE_AT) || (Date.now() + 900000);
+        // A forwarded page error naming WebGL, or editorSession's viewer never
+        // rendering a frame, means no render scenario can pass in this session.
+        let noRender = null;
+        const glFailure = () => noRender || ctx.testApi.getErrors().find((t) => /webgl/i.test(t)) || null;
+        // editorSession returns three results that share one editor session.
+        const isMulti = (name, res) => name === 'editorSession' && res && !('pass' in res);
+        for (const [name, fn, timeoutSec, needsGl] of plan) {
+            if (!want(name)) continue;
+            const t = Date.now();
+            let res;
+            const budgetMs = Math.min(timeoutSec * 1000, deadlineAt - Date.now() - 10000);
+            if (budgetMs < 5000) {
+                res = { pass: false, error: 'not run: suite deadline reached' };
+            } else if (needsGl && glFailure()) {
+                res = { pass: false, error: 'not run: WebGL failed earlier in this session: ' + glFailure() };
+            } else {
+                log('START ' + name + ' (timeout ' + Math.round(budgetMs / 1000) + 's)');
+                let timer = null;
+                const guard = new Promise((resolve) => {
+                    const tick = () => {
+                        if (Date.now() - t > budgetMs) { resolve({ pass: false, error: 'timeout after ' + Math.round(budgetMs / 1000) + 's' }); return; }
+                        const gl = needsGl && glFailure();
+                        if (gl) { resolve({ pass: false, error: 'webview reported a WebGL failure: ' + gl }); return; }
+                        timer = setTimeout(tick, 500);
+                    };
+                    tick();
+                });
+                const work = Promise.resolve().then(() => fn(ctx)).catch((e) => ({ pass: false, error: String((e && e.message) || e) }));
+                res = await Promise.race([work, guard]);
+                clearTimeout(timer);
+                if (res && res.error && /^(timeout|webview reported)/.test(res.error)) {
+                    // The abandoned scenario keeps running; close its editors so the next one starts clean.
+                    try { await vscode.commands.executeCommand('workbench.action.closeAllEditors'); } catch (e) { /* best effort */ }
+                }
+            }
+            const seconds = Number(((Date.now() - t) / 1000).toFixed(1));
+            let ok;
+            if (isMulti(name, res)) {
+                ok = ['editorE2E', 'viewerRendered', 'saveBridge'].every((k) => res[k] && res[k].pass);
+                for (const k of ['editorE2E', 'viewerRendered', 'saveBridge']) out.scenarios[k] = Object.assign({ pass: false }, res[k], { seconds });
+            } else {
+                ok = !!(res && res.pass);
+                res = Object.assign({}, res, { seconds });
+                if (name === 'editorSession') for (const k of ['editorE2E', 'viewerRendered', 'saveBridge']) out.scenarios[k] = res;
+                else out.scenarios[name] = res;
+            }
+            if (name === 'editorSession' && !(out.scenarios.viewerRendered && out.scenarios.viewerRendered.pass)) {
+                noRender = 'the Material Viewer never rendered a frame (viewerRendered failed)';
+            }
             writeOut();
+            log('END ' + name + ' ' + (ok ? 'OK' : 'FAIL') + ' ' + seconds + 's' + (ok ? '' : ' ' + JSON.stringify(res).slice(0, 300)));
         }
-
-        if (want('validationWorker')) { out.scenarios.validationWorker = await scenarioValidationWorker(ctx); writeOut(); }
-        if (want('hoverDocs')) { out.scenarios.hoverDocs = await scenarioHoverDocs(ctx); writeOut(); }
-        if (want('languageFeatures')) { out.scenarios.languageFeatures = await scenarioLanguageFeatures(ctx); writeOut(); }
-        if (want('formatter')) { out.scenarios.formatter = await scenarioFormatter(ctx); writeOut(); }
-        if (want('completion')) { out.scenarios.completion = await scenarioCompletion(ctx); writeOut(); }
-        if (want('boundary')) { out.scenarios.boundary = await scenarioBoundary(ctx); writeOut(); }
-        if (want('settingsFallback')) { out.scenarios.settingsFallback = await scenarioSettingsFallback(ctx); writeOut(); }
-        if (want('docsPanel')) { out.scenarios.docsPanel = await scenarioDocsPanel(ctx); writeOut(); }
-        if (want('docsFilter')) { out.scenarios.docsFilter = await scenarioDocsFilter(ctx); writeOut(); }
-        if (want('sceneAutoOpen')) { out.scenarios.sceneAutoOpen = await scenarioSceneAutoOpen(ctx); writeOut(); }
-        if (want('usdScene')) { out.scenarios.usdScene = await scenarioUsdScene(ctx); writeOut(); }
-        if (want('usdMaterialPreview')) { out.scenarios.usdMaterialPreview = await scenarioUsdMaterialPreview(ctx); writeOut(); }
-        if (want('sceneTreePreview')) { out.scenarios.sceneTreePreview = await scenarioSceneTreePreview(ctx); writeOut(); }
-        if (want('sceneGltf')) { out.scenarios.sceneGltf = await scenarioSceneFormat(ctx, ctx.fixtures.gltfRootPath, 3); writeOut(); }
-        if (want('sceneGlb')) { out.scenarios.sceneGlb = await scenarioSceneFormat(ctx, ctx.fixtures.glbRootPath, 2); writeOut(); }
-        if (want('sceneObj')) { out.scenarios.sceneObj = await scenarioSceneFormat(ctx, ctx.fixtures.objRootPath, 3); writeOut(); }
-        if (want('sceneNoSiblings')) { out.scenarios.sceneNoSiblings = await scenarioSceneNoSiblings(ctx); writeOut(); }
-        if (want('sceneMissingRoundTrip')) { out.scenarios.sceneMissingRoundTrip = await scenarioSceneMissingRoundTrip(ctx); writeOut(); }
-        if (want('sceneLoadCancel')) { out.scenarios.sceneLoadCancel = await scenarioSceneLoadCancel(ctx); writeOut(); }
-        if (want('sceneFormatAutoOpen')) { out.scenarios.sceneFormatAutoOpen = await scenarioSceneFormatAutoOpen(ctx); writeOut(); }
-        if (want('newFromExample')) { out.scenarios.newFromExample = await scenarioNewFromExample(ctx); writeOut(); }
-        if (want('newFromExampleTextured')) { out.scenarios.newFromExampleTextured = await scenarioNewFromExampleTextured(ctx); writeOut(); }
-        if (want('galleryPanel')) { out.scenarios.galleryPanel = await scenarioGalleryPanel(ctx); writeOut(); }
-        if (want('actionsView')) { out.scenarios.actionsView = await scenarioActionsView(ctx); writeOut(); }
-        if (want('actionsExamples')) { out.scenarios.actionsExamples = await scenarioActionsExamples(ctx); writeOut(); }
-        if (want('actionsAbout')) { out.scenarios.actionsAbout = await scenarioActionsAbout(ctx); writeOut(); }
-        if (want('actionsGithub')) { out.scenarios.actionsGithub = await scenarioActionsGithub(ctx); writeOut(); }
-        if (want('aboutLicense')) { out.scenarios.aboutLicense = await scenarioAboutLicense(ctx); writeOut(); }
-        if (want('fullWidth')) { out.scenarios.fullWidth = await scenarioFullWidth(ctx); writeOut(); }
-        if (want('openViewCommands')) { out.scenarios.openViewCommands = await scenarioOpenViewCommands(ctx); writeOut(); }
-        if (want('lifecycleCloseReopen')) { out.scenarios.lifecycleCloseReopen = await scenarioLifecycleCloseReopen(ctx); writeOut(); }
-        if (want('textureSwap')) { out.scenarios.textureSwap = await scenarioTextureSwap(ctx); writeOut(); }
-        if (want('selectionSync')) { out.scenarios.selectionSync = await scenarioSelectionSync(ctx); writeOut(); }
-        if (want('graphClickNoEdit')) { out.scenarios.graphClickNoEdit = await scenarioGraphClickNoEdit(ctx); writeOut(); }
-        if (want('filesView')) { out.scenarios.filesView = await scenarioFilesView(ctx); writeOut(); }
-        if (want('filesVisibility')) { out.scenarios.filesVisibility = await scenarioFilesVisibility(ctx); writeOut(); }
-        if (want('insertNode')) { out.scenarios.insertNode = await scenarioInsertNode(ctx); writeOut(); }
-        if (want('noSidebarSwitch')) { out.scenarios.noSidebarSwitch = await scenarioNoSidebarSwitch(ctx); writeOut(); }
-        if (want('openInTextEditor')) { out.scenarios.openInTextEditor = await scenarioOpenInTextEditor(ctx); writeOut(); }
-        if (want('contextHeader')) { out.scenarios.contextHeader = await scenarioContextHeader(ctx); writeOut(); }
     } catch (e) {
         out.fatalError = String((e && e.stack) || e);
         log('FATAL: ' + (e && e.message || e));

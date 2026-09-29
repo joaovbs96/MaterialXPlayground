@@ -274,4 +274,5 @@ jobs:
         run: sudo apt-get update -y && sudo apt-get install -y xvfb
 
       - name: Run the packaged-extension smoke test
-        run: xvfb-run -a node tests/vscode-host/smoke.mjs --extension-dir "$RUNNER_TEMP/vsix-extracted/extension" --vscode stable
+        # No GPU on the runner: --software-gl gives VS Code a SwiftShader WebGL2 (blocklisted by default).
+        run: xvfb-run -a node tests/vscode-host/smoke.mjs --extension-dir "$RUNNER_TEMP/vsix-extracted/extension" --vscode stable --software-gl

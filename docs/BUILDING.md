@@ -157,6 +157,10 @@ Fingerprints in `gallery/manifest.json` (`scripts/build-gallery.mjs`) normalize 
 
 `.github/workflows/package-prerelease.yml` is a manual `workflow_dispatch` (**"Use workflow from"** set to any branch) that packages a pre-release `.vsix` from that branch's tip and uploads it as a downloadable workflow artifact (14-day retention). It reproduces `release.yml`'s `package` job (build, the stale-artifact gate, `npm run check`, the gallery reuse-from-the-live-site path, `--prune-ids-auto`, the locked `vsce`, the `.vsix` content sanity checks) plus `scripts/check-vsix-files.mjs`, always passing `--pre-release`, then optionally runs the real VS Code smoke test (`tests/vscode-host/smoke.mjs`) against the packaged `.vsix`, same as `vscode-extension-tests.yml`'s `smoke` job. Nothing is published: no release, tag, Marketplace, or Open VSX upload.
 
+PR CI runs `--suite core` (about a dozen extension-logic scenarios plus one render check, defined as `CORE_SCENARIOS` in `smoke-suite.js`); the pre-release and release workflows and local runs default to `--suite full`.
+
+The smoke runs pass `--software-gl` (Chromium SwiftShader switches; GPU-less runners otherwise blocklist WebGL2) and print a START/END line per scenario; each scenario has its own timeout and the suite stops at `MTLX_SMOKE_DEADLINE_S` (default 900) with a pass/fail table.
+
 Version: `YYYY.M.patch` like a real release, but with `patch` offset by `900000 + <run number>` so it can never collide with or sort below a real release cut in the same month. The artifact is named `materialx-playground-<version>-pre-<branch>-<sha7>.vsix`. Because `release.yml`'s packaging commands are duplicated here rather than shared (extracting a composite action into the production release pipeline was judged too risky to do without a way to exercise it locally), `scripts/package-vsix.mjs` checks on every run that the two workflows' packaging commands haven't drifted apart; a failure there means one of the two workflows was edited without the other.
 
 ## Publishing to the VS Code Marketplace

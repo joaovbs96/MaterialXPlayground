@@ -17,9 +17,12 @@ const { extractFilenameRefs } = require('../../vscode_extension/src/docScanner.j
 const REPO_ROOT = catalog.REPO_ROOT;
 const hasVendorMaterialx = fs.existsSync(path.join(REPO_ROOT, 'vendor', 'materialx', 'resources', 'Materials', 'Examples'));
 
+const hasGallery = fs.existsSync(path.join(REPO_ROOT, 'gallery', 'manifest.json'));
+const SKIP_REAL = hasGallery && hasVendorMaterialx ? false : 'gitignored gallery/manifest.json or vendor/materialx is absent on this checkout';
+
 // ---- getCatalog(): the real, manifest-driven catalog -----------------
 
-test('getCatalog: every entry has a unique id, matching the full 54-material gallery', () => {
+test('getCatalog: every entry has a unique id, matching the full 54-material gallery', { skip: SKIP_REAL }, () => {
     const entries = catalog.getCatalog();
     assert.equal(entries.length, 54, 'expected the full website/desktop gallery (54 materials)');
     const ids = new Set();
@@ -80,14 +83,24 @@ const MANIFEST_FIXTURE = [
     },
 ];
 
-test('buildCatalog: manifest-driven, one entry per material, destName === manifest id', () => {
-    const entries = catalog.buildCatalog(MANIFEST_FIXTURE);
-    assert.equal(entries.length, 2);
-    const glass = entries.find((e) => e.id === 'open_pbr_glass');
+// Two tracked Playground sources, so the builder can read them on a clean checkout.
+const PLAYGROUND_FIXTURE = [
+    MANIFEST_FIXTURE[1],
+    { id: 'animated_noise', name: 'Animated Noise', family: 'Playground', familyLabel: 'Playground', origin: 'playground', docPath: 'examples/animated_noise.mtlx', shader: 'standard_surface', tags: ['Playground', 'Procedural'], license: { label: 'Apache License 2.0', origin: 'site' } },
+];
+
+test('defFromManifestEntry: a materialx-origin entry maps to the vendor path, examples source and suffixed license', () => {
+    const glass = catalog.defFromManifestEntry(MANIFEST_FIXTURE[0]);
     assert.equal(glass.destName, 'open_pbr_glass');
     assert.equal(glass.mtlxPath, 'vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_glass.mtlx');
     assert.equal(glass.source, catalog.SOURCE_EXAMPLES);
     assert.equal(glass.license, 'Apache License 2.0 (MaterialX project)');
+});
+
+test('buildCatalog: manifest-driven, one entry per material, destName === manifest id', () => {
+    const entries = catalog.buildCatalog(PLAYGROUND_FIXTURE);
+    assert.equal(entries.length, 2);
+    assert.equal(entries.find((e) => e.id === 'animated_noise').destName, 'animated_noise');
     const rug = entries.find((e) => e.id === 'Motley_Patchwork_Rug');
     assert.equal(rug.source, catalog.SOURCE_PLAYGROUND);
     assert.equal(rug.license, 'MIT License');
@@ -96,19 +109,19 @@ test('buildCatalog: manifest-driven, one entry per material, destName === manife
 
 test('buildCatalog: a broken manifest entry (unreadable source) is skipped, not fatal', () => {
     const broken = [{ id: 'nope', name: 'Nope', family: 'OpenPbr', familyLabel: 'OpenPBR', origin: 'materialx', docPath: 'resources/Materials/Examples/OpenPbr/does_not_exist.mtlx' }];
-    const entries = catalog.buildCatalog([...broken, ...MANIFEST_FIXTURE]);
+    const entries = catalog.buildCatalog([...broken, ...PLAYGROUND_FIXTURE]);
     assert.equal(entries.length, 2); // the broken one is dropped, the other two still build
 });
 
 test('buildCatalog: an injected fallbackDefs list is used verbatim when materials is empty', () => {
     const fixtureDefs = [{
-        id: 'open_pbr_glass', label: 'Glass', shadingModel: 'open_pbr_surface', source: catalog.SOURCE_EXAMPLES,
-        license: 'Apache License 2.0', destName: 'open_pbr_glass', family: 'OpenPbr', familyLabel: 'OpenPBR',
-        mtlxPath: 'vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_glass.mtlx',
+        id: 'animated_noise', label: 'Animated Noise', shadingModel: 'standard_surface', source: catalog.SOURCE_PLAYGROUND,
+        license: 'Apache License 2.0', destName: 'animated_noise', family: 'Playground', familyLabel: 'Playground',
+        mtlxPath: 'examples/animated_noise.mtlx',
     }];
     const entries = catalog.buildCatalog(null, fixtureDefs);
     assert.equal(entries.length, 1);
-    assert.equal(entries[0].id, 'open_pbr_glass');
+    assert.equal(entries[0].id, 'animated_noise');
 });
 
 test('buildCatalog: with no manifest and no injected fallback, scans vendor/materialx + the fixed Playground list', { skip: !hasVendorMaterialx }, () => {

@@ -9,6 +9,8 @@
 // transitively) touches vscode at module scope.
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import fs from 'node:fs';
+import path from 'node:path';
 import Module, { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -43,14 +45,40 @@ const MATERIALS = [
     },
 ];
 
-test('buildGalleryData: one card per catalog entry, in catalog order, full 54-material catalog', () => {
+
+// gallery/manifest.json is gitignored: tests on the real 54-material data skip without it.
+const HAS_GALLERY = fs.existsSync(path.join(exampleCatalog.REPO_ROOT, 'gallery', 'manifest.json'));
+const SKIP_REAL = HAS_GALLERY ? false : 'gallery/manifest.json is gitignored and absent on this checkout';
+
+// Inline catalog fixture (no filesystem reads), same entry shape as getCatalog().
+const MX = 'Apache License 2.0 (MaterialX project)';
+function fx(id, label, family, familyLabel, shadingModel, license, tags, mtlxPath) {
+    return { id, label, family, familyLabel, shadingModel, license, tags, mtlxPath };
+}
+const FIXTURE_CATALOG = [
+    fx('AnimatedChristmasTreeOrnament', 'Animated Christmas Tree Ornament', 'Playground', 'Playground', 'standard_surface', 'CC0 1.0 Universal', ['Playground', 'Textured'], 'materials/AnimatedChristmasTreeOrnament/ChristmasTreeOrnament016_1K-JPG.mtlx'),
+    fx('Motley_Patchwork_Rug', 'Motley Patchwork Rug', 'Playground', 'Playground', 'standard_surface', 'MIT License', ['Playground', 'Textured'], 'materials/Motley_Patchwork_Rug/Motley_Patchwork_Rug.mtlx'),
+    fx('open_pbr_glass', 'Glass', 'OpenPbr', 'OpenPBR', 'open_pbr_surface', MX, ['OpenPBR', 'Procedural'], 'vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_glass.mtlx'),
+    fx('open_pbr_default', 'Default', 'OpenPbr', 'OpenPBR', 'open_pbr_surface', MX, ['OpenPBR', 'Procedural'], 'vendor/materialx/resources/Materials/Examples/OpenPbr/open_pbr_default.mtlx'),
+    fx('standard_surface_gold', 'Gold', 'StandardSurface', 'Standard Surface', 'standard_surface', MX, ['Standard Surface', 'Procedural'], 'vendor/materialx/resources/Materials/Examples/StandardSurface/standard_surface_gold.mtlx'),
+    fx('standard_surface_chess_set', 'Chess Set', 'StandardSurface', 'Standard Surface', 'standard_surface', MX, ['Standard Surface', 'Textured'], 'vendor/materialx/resources/Materials/Examples/StandardSurface/standard_surface_chess_set.mtlx'),
+    fx('usd_preview_wood', 'Wood', 'UsdPreviewSurface', 'USD Preview Surface', 'UsdPreviewSurface', MX, ['USD Preview Surface', 'Textured'], 'vendor/materialx/resources/Materials/Examples/UsdPreviewSurface/usd_preview_wood.mtlx'),
+];
+
+test('buildGalleryData: one card per catalog entry, in catalog order, catalog', () => {
+    const cards = galleryModel.buildGalleryData(FIXTURE_CATALOG, MATERIALS);
+    assert.equal(cards.length, FIXTURE_CATALOG.length);
+    assert.deepEqual(cards.map((c) => c.id), FIXTURE_CATALOG.map((e) => e.id));
+});
+
+test('buildGalleryData: real catalog yields one card per entry, full 54-material catalog', { skip: SKIP_REAL }, () => {
     const cards = galleryModel.buildGalleryData(exampleCatalog.getCatalog(), MATERIALS);
     assert.equal(cards.length, 54);
     assert.deepEqual(cards.map((c) => c.id), exampleCatalog.getCatalog().map((e) => e.id));
 });
 
 test('buildGalleryData: thumbId set only for entries the fixture manifest matches', () => {
-    const cards = galleryModel.buildGalleryData(exampleCatalog.getCatalog(), MATERIALS);
+    const cards = galleryModel.buildGalleryData(FIXTURE_CATALOG, MATERIALS);
     const ornament = cards.find((c) => c.id === 'AnimatedChristmasTreeOrnament');
     const rug = cards.find((c) => c.id === 'Motley_Patchwork_Rug');
     const glass = cards.find((c) => c.id === 'open_pbr_glass');
@@ -62,7 +90,7 @@ test('buildGalleryData: thumbId set only for entries the fixture manifest matche
 });
 
 test('buildGalleryData: every card carries family/familyLabel/tags for the filter chips', () => {
-    const cards = galleryModel.buildGalleryData(exampleCatalog.getCatalog(), MATERIALS);
+    const cards = galleryModel.buildGalleryData(FIXTURE_CATALOG, MATERIALS);
     for (const c of cards) {
         assert.ok(c.family, c.id + ': missing family');
         assert.ok(c.familyLabel, c.id + ': missing familyLabel');
@@ -80,7 +108,7 @@ test('familyChips: "All" first, only families actually present, in GALLERY_FAMIL
     assert.deepEqual(chips.map((c) => c.id), ['all', 'StandardSurface', 'OpenPbr', 'Playground']);
 });
 
-test('familyChips: against the real catalog, every gallery family is present', () => {
+test('familyChips: against the real catalog, every gallery family is present', { skip: SKIP_REAL }, () => {
     const chips = galleryModel.familyChips(exampleCatalog.getCatalog());
     const ids = chips.map((c) => c.id);
     assert.deepEqual(ids, ['all', 'StandardSurface', 'OpenPbr', 'GltfPbr', 'UsdPreviewSurface', 'DisneyPrincipled', 'SimpleHair', 'Playground']);
@@ -89,7 +117,7 @@ test('familyChips: against the real catalog, every gallery family is present', (
 // ---- filterCards: family exact, tags AND, query across several fields -
 
 test('filterCards: family filter is an exact match, "all" (or omitted) keeps everything', () => {
-    const cards = galleryModel.buildGalleryData(exampleCatalog.getCatalog(), MATERIALS);
+    const cards = galleryModel.buildGalleryData(FIXTURE_CATALOG, MATERIALS);
     const openPbr = galleryModel.filterCards(cards, { family: 'OpenPbr' });
     assert.ok(openPbr.length > 0 && openPbr.every((c) => c.family === 'OpenPbr'));
     assert.equal(galleryModel.filterCards(cards, { family: 'all' }).length, cards.length);
@@ -97,7 +125,7 @@ test('filterCards: family filter is an exact match, "all" (or omitted) keeps eve
 });
 
 test('filterCards: tags are AND semantics (every requested tag must be present)', () => {
-    const cards = galleryModel.buildGalleryData(exampleCatalog.getCatalog(), MATERIALS);
+    const cards = galleryModel.buildGalleryData(FIXTURE_CATALOG, MATERIALS);
     const textured = galleryModel.filterCards(cards, { tags: ['Textured'] });
     assert.ok(textured.length > 0 && textured.every((c) => c.tags.includes('Textured')));
     const impossible = galleryModel.filterCards(cards, { tags: ['Textured', 'Procedural'] });
@@ -105,7 +133,7 @@ test('filterCards: tags are AND semantics (every requested tag must be present)'
 });
 
 test('filterCards: query matches name, family label, shading model, license or a tag, case-insensitively', () => {
-    const cards = galleryModel.buildGalleryData(exampleCatalog.getCatalog(), MATERIALS);
+    const cards = galleryModel.buildGalleryData(FIXTURE_CATALOG, MATERIALS);
 
     const byName = galleryModel.filterCards(cards, { query: 'gold' });
     assert.ok(byName.length >= 1 && byName.every((c) => c.label.toLowerCase().includes('gold')));
@@ -124,7 +152,7 @@ test('filterCards: query matches name, family label, shading model, license or a
 });
 
 test('filterCards: filters combine (family AND tag AND query)', () => {
-    const cards = galleryModel.buildGalleryData(exampleCatalog.getCatalog(), MATERIALS);
+    const cards = galleryModel.buildGalleryData(FIXTURE_CATALOG, MATERIALS);
     const combined = galleryModel.filterCards(cards, { family: 'StandardSurface', tags: ['Textured'], query: 'chess' });
     assert.equal(combined.length, 1);
     assert.equal(combined[0].id, 'standard_surface_chess_set');
@@ -133,7 +161,7 @@ test('filterCards: filters combine (family AND tag AND query)', () => {
 // ---- isKnownCardId -------------------------------------------------
 
 test('isKnownCardId: only ids present in the exact card list are accepted', () => {
-    const cards = galleryModel.buildGalleryData(exampleCatalog.getCatalog(), MATERIALS);
+    const cards = galleryModel.buildGalleryData(FIXTURE_CATALOG, MATERIALS);
     assert.equal(galleryModel.isKnownCardId(cards, cards[0].id), true);
     assert.equal(galleryModel.isKnownCardId(cards, 'not-a-real-id'), false);
 });

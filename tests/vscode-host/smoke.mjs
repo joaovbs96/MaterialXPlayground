@@ -20,20 +20,66 @@ const SUITE_PATH = path.join(__dirname, 'suite', 'smoke-suite.js');
 
 function log(msg) { console.log('[smoke] ' + msg); }
 
+// Chromium switches for a software (SwiftShader) WebGL2 on GPU-less machines
+// such as CI runners, where the GPU blocklist otherwise refuses WebGL2.
+const SOFTWARE_GL_ARGS = ['--ignore-gpu-blocklist', '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'];
+
 function parseArgs(argv) {
-    const out = { extensionDir: null, vscode: 'stable' };
+    const out = { extensionDir: null, vscode: 'stable', softwareGl: process.env.MTLX_SMOKE_SOFTWARE_GL === '1', launchArgs: [], suite: process.env.MTLX_SMOKE_SUITE || 'full' };
     for (let i = 0; i < argv.length; i++) {
         if (argv[i] === '--extension-dir') out.extensionDir = argv[++i];
         else if (argv[i] === '--vscode') out.vscode = argv[++i];
+        else if (argv[i] === '--suite') out.suite = argv[++i];
+        else if (argv[i] === '--software-gl') out.softwareGl = true;
+        // Extra VS Code/Chromium switch, e.g. --launch-arg=--disable-gpu to simulate a GPU-less runner.
+        else if (argv[i].startsWith('--launch-arg=')) out.launchArgs.push(argv[i].slice('--launch-arg='.length));
     }
     return out;
+}
+
+// Prints the table for whatever results exist; returns true only if all passed.
+function report(resultsFile, t0, note) {
+    let results = null;
+    try {
+        results = JSON.parse(fs.readFileSync(resultsFile, 'utf8'));
+    } catch (e) {
+        console.error('[smoke] no results file was written: ' + (e && e.message || e));
+        return false;
+    }
+    const scenarios = results.scenarios || {};
+    const names = Object.keys(scenarios);
+    const lines = [];
+    lines.push('# VS Code packaged-extension smoke test');
+    lines.push('');
+    lines.push('vscode: ' + (results.vscodeVersion || 'unknown') + (results.fatalError ? ' -- FATAL: ' + results.fatalError : '') + (note ? ' -- ' + note : ''));
+    lines.push('wall time: ' + ((Date.now() - t0) / 1000).toFixed(1) + 's');
+    lines.push('');
+    lines.push('| scenario | pass | seconds |');
+    lines.push('|---|---|---|');
+    let allPass = !results.fatalError && !note && names.length > 0;
+    let passed = 0;
+    for (const name of names) {
+        const sc = scenarios[name] || {};
+        if (sc.pass) passed++; else allPass = false;
+        lines.push('| ' + name + ' | ' + (sc.pass ? 'OK' : 'FAILED') + ' | ' + (sc.seconds != null ? sc.seconds : '') + ' |');
+        log(name + ': ' + (sc.pass ? 'OK' : 'FAILED (' + JSON.stringify(sc).slice(0, 300) + ')'));
+    }
+    lines.push('');
+    lines.push('passed ' + passed + '/' + names.length);
+    const summary = lines.join('\n');
+    console.log(summary);
+    if (process.env.GITHUB_STEP_SUMMARY) {
+        fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary + '\n');
+    }
+    log('passed ' + passed + '/' + names.length + ', total wall time: ' + ((Date.now() - t0) / 1000).toFixed(1) + 's');
+    return allPass;
 }
 
 async function main() {
     const t0 = Date.now();
     const args = parseArgs(process.argv.slice(2));
     if (!args.extensionDir) {
-        console.error('[smoke] usage: node smoke.mjs --extension-dir <dir> [--vscode stable|x.y.z]');
+        console.error('[smoke] usage: node smoke.mjs --extension-dir <dir> [--vscode stable|x.y.z] [--suite core|full]');
         process.exitCode = 1;
         return;
     }
@@ -69,6 +115,18 @@ async function main() {
     fs.mkdirSync(path.dirname(RESULTS_FILE), { recursive: true });
     try { fs.unlinkSync(RESULTS_FILE); } catch (e) { /* first run */ }
 
+    // Whole-suite budget, shared with the suite (it skips what does not fit);
+    // the watchdog below is the backstop if VS Code itself wedges.
+    const deadlineSec = Number(process.env.MTLX_SMOKE_DEADLINE_S) || 900;
+    const deadlineAt = Date.now() + deadlineSec * 1000;
+    const watchdog = setTimeout(() => {
+        log('WATCHDOG: VS Code still running ' + deadlineSec + 's + 60s after launch; reporting partial results.');
+        report(RESULTS_FILE, t0, 'watchdog: host did not exit');
+        process.exit(1);
+    }, deadlineSec * 1000 + 60000);
+
+    const glArgs = (args.softwareGl ? SOFTWARE_GL_ARGS : []).concat(args.launchArgs);
+    if (glArgs.length) log('extra launch args: ' + glArgs.join(' '));
     log('launching VS Code against ' + wsDir + ' (extensionDevelopmentPath=' + extensionDir + ') ...');
     try {
         await runTests({
@@ -84,6 +142,7 @@ async function main() {
                 '--disable-telemetry',
                 '--user-data-dir', userDataDir,
                 '--extensions-dir', extDir,
+                ...glArgs,
             ],
             extensionTestsEnv: {
                 MTLX_TEST_TRANSPORT: '1',
@@ -96,6 +155,9 @@ async function main() {
                 MTLX_SMOKE_EXTRA_ONLY: process.env.MTLX_SMOKE_EXTRA_ONLY || '',
                 // Comma-separated scenario names to run (all when empty), for local reruns.
                 MTLX_SMOKE_ONLY: process.env.MTLX_SMOKE_ONLY || '',
+                // core (PR CI subset) or full (default).
+                MTLX_SMOKE_SUITE: args.suite,
+                MTLX_SMOKE_DEADLINE_AT: String(deadlineAt),
             },
         });
         log('host exited cleanly.');
@@ -109,41 +171,8 @@ async function main() {
         }
     }
 
-    let results = null;
-    try {
-        results = JSON.parse(fs.readFileSync(RESULTS_FILE, 'utf8'));
-    } catch (e) {
-        console.error('[smoke] no results file was written: ' + (e && e.message || e));
-        process.exitCode = 1;
-        return;
-    }
-
-    const scenarios = results.scenarios || {};
-    const names = Object.keys(scenarios);
-    const lines = [];
-    lines.push('# VS Code packaged-extension smoke test');
-    lines.push('');
-    lines.push('vscode: ' + (results.vscodeVersion || 'unknown') + (results.fatalError ? ' -- FATAL: ' + results.fatalError : ''));
-    lines.push('wall time: ' + ((Date.now() - t0) / 1000).toFixed(1) + 's');
-    lines.push('');
-    lines.push('| scenario | pass |');
-    lines.push('|---|---|');
-    let allPass = !results.fatalError && names.length > 0;
-    for (const name of names) {
-        const sc = scenarios[name] || {};
-        if (!sc.pass) allPass = false;
-        lines.push('| ' + name + ' | ' + (sc.pass ? 'OK' : 'FAILED') + ' |');
-        log(name + ': ' + (sc.pass ? 'OK' : 'FAILED (' + JSON.stringify(sc).slice(0, 300) + ')'));
-    }
-    const summary = lines.join('\n');
-    console.log(summary);
-
-    if (process.env.GITHUB_STEP_SUMMARY) {
-        fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary + '\n');
-    }
-
-    log('total wall time: ' + ((Date.now() - t0) / 1000).toFixed(1) + 's');
-    process.exitCode = allPass ? 0 : 1;
+    clearTimeout(watchdog);
+    process.exitCode = report(RESULTS_FILE, t0) ? 0 : 1;
 }
 
 main().catch((e) => {
