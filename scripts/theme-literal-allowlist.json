@@ -86,18 +86,13 @@
   },
   {
     "file": "js/builder-app.jsx",
-    "match": "/^#(0b1220|27272a|3f3f46)$/i",
-    "reason": "Builder preview stage and checkerboard: art behind the embed preview, not UI theme."
+    "match": "/^#(27272a|3f3f46)$/i",
+    "reason": "Builder transparency checkerboard: art behind the embed preview, not UI theme."
   },
   {
     "file": "js/builder-app.jsx",
     "match": "/^border-black[/]25$/",
     "reason": "Swatch outline over user-chosen Look colors."
-  },
-  {
-    "file": "js/builder-app.jsx",
-    "match": "/^rgba[(]1$/",
-    "reason": "Builder preview stage grid lines (stay literal per token spec)."
   },
   {
     "file": "js/builder-app.jsx",

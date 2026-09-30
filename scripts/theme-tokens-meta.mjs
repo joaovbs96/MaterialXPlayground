@@ -40,19 +40,19 @@ export const tokens = {
     "stage": {
         "group": "surface",
         "kind": "derivable",
-        "derive": "equals background in dark; must stay equal to the viewport clear literal 0x111827 until the engine reads it",
+        "derive": "equals background in dark (matches the viewport clear literal 0x111827); light equals graph-canvas (empty and idle stages are UI)",
         "role": "DOM containers behind 3D renders and image previews; embed page behind the canvas."
     },
     "stage-fg-muted": {
         "group": "surface",
         "kind": "derivable",
-        "derive": "equals fg-muted in dark; tuned for the dark stage in every theme",
+        "derive": "equals fg-muted in dark; light tuned for the light stage",
         "role": "Text drawn directly on the stage (no chip): empty and cancelled viewport messages."
     },
     "stage-fg-subtle": {
         "group": "surface",
         "kind": "derivable",
-        "derive": "equals fg-subtle in dark; tuned for the dark stage in every theme",
+        "derive": "equals fg-subtle in dark; light tuned for the light stage",
         "role": "Dim hint text drawn directly on the stage (drop hints on empty viewports)."
     },
     "veil": {
@@ -582,6 +582,18 @@ export const tokens = {
         "kind": "derivable",
         "derive": "equals line",
         "role": "React Flow Background dots/lines (resolved hex)."
+    },
+    "builder-stage": {
+        "group": "graph",
+        "kind": "derivable",
+        "derive": "dark literal #0b1220; light equals graph-canvas",
+        "role": "Embed Builder live-preview stage ground behind the embedded viewer."
+    },
+    "builder-stage-grid": {
+        "group": "graph",
+        "kind": "derivable",
+        "derive": "dark literal #6b7280 (used at alpha 36/255); light equals graph-grid",
+        "role": "Embed Builder preview stage grid lines (solid base, alpha in usage)."
     },
     "graph-edge-draft": {
         "group": "graph",
@@ -1206,9 +1218,14 @@ export const contrast = [
         "kind": "decorative"
     },
     {
+        "fg": "builder-stage-grid",
+        "bg": "builder-stage",
+        "kind": "decorative"
+    },
+    {
         "fg": "hud-selection",
         "bg": "stage",
-        "kind": "ui"
+        "kind": "decorative"
     },
     {
         "fg": "stage-fg-muted",
@@ -1449,7 +1466,8 @@ export const contrast = [
         "fg": "type-untyped",
         "bg": "graph-canvas",
         "kind": "ui"
-    },
+    }
+,
     {
         "fg": "line-control",
         "bg": "surface-sunken",

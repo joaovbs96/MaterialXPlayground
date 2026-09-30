@@ -99,6 +99,8 @@
   --mtlx-code-block-bg: 11 17 32;
   --mtlx-graph-canvas: 17 24 39;
   --mtlx-graph-grid: 55 65 81;
+  --mtlx-builder-stage: 11 18 32;
+  --mtlx-builder-stage-grid: 107 114 128;
   --mtlx-graph-edge-draft: 96 165 250;
   --mtlx-graph-edge-selected: 59 130 246;
   --mtlx-graph-node: 31 41 55;
@@ -166,9 +168,9 @@
   --mtlx-chrome: 243 244 246;
   --mtlx-control: 255 255 255;
   --mtlx-chip: 229 231 235;
-  --mtlx-stage: 17 24 39;
-  --mtlx-stage-fg-muted: 209 213 219;
-  --mtlx-stage-fg-subtle: 156 163 175;
+  --mtlx-stage: 243 244 246;
+  --mtlx-stage-fg-muted: 55 65 81;
+  --mtlx-stage-fg-subtle: 75 85 99;
   --mtlx-veil: 249 250 251;
   --mtlx-scrim: 51 65 85;
   --mtlx-hover: 229 231 235;
@@ -257,6 +259,8 @@
   --mtlx-code-block-bg: 245 247 250;
   --mtlx-graph-canvas: 243 244 246;
   --mtlx-graph-grid: 161 168 179;
+  --mtlx-builder-stage: 243 244 246;
+  --mtlx-builder-stage-grid: 161 168 179;
   --mtlx-graph-edge-draft: 59 130 246;
   --mtlx-graph-edge-selected: 37 99 235;
   --mtlx-graph-node: 255 255 255;

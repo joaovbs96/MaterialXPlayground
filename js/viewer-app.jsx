@@ -1605,7 +1605,7 @@
                                 <LoadingOverlay
                                     show={busy}
                                     label={status}
-                                    className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-veil/70"
+                                    className="mtlx-loading-overlay absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-veil/70"
                                     labelClassName="text-sm text-fg-secondary animate-pulse"
                                     barWidthClass="w-56"
                                 />

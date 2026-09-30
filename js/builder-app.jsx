@@ -932,8 +932,8 @@ function PreviewStage({
                 className={'rounded-lg border border-line overflow-hidden flex items-center justify-center '
                     + (compact ? 'h-[660px]' : 'flex-1 min-h-0')}
                 style={{
-                    backgroundColor: '#0b1220',
-                    backgroundImage: 'linear-gradient(rgba(107,114,128,0.14) 1px, transparent 1px), linear-gradient(90deg, rgba(107,114,128,0.14) 1px, transparent 1px)',
+                    backgroundColor: MtlxTheme.var('builder-stage'),
+                    backgroundImage: 'linear-gradient(rgb(var(--mtlx-builder-stage-grid) / calc(36 / 255)) 1px, transparent 1px), linear-gradient(90deg, rgb(var(--mtlx-builder-stage-grid) / calc(36 / 255)) 1px, transparent 1px)',
                     backgroundSize: '20px 20px',
                 }}
             >

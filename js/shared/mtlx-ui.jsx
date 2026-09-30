@@ -1613,7 +1613,7 @@ const useRenderContextRecovery = ({ groups, isHidden, onLost }) => {
 // in-overlay Cancel pill).
 const LoadingOverlay = ({ show, label, className, labelClassName, barWidthClass, fraction, testId, children }) => {
     if (!show) return null;
-    const wrapCls = className || 'absolute inset-0 flex flex-col items-center justify-center gap-3 text-fg-muted z-10 bg-veil/80';
+    const wrapCls = className || 'mtlx-loading-overlay absolute inset-0 flex flex-col items-center justify-center gap-3 text-fg-muted z-10 bg-veil/80';
     const labelCls = labelClassName || 'animate-pulse';
     const hasFraction = typeof fraction === 'number' && Number.isFinite(fraction);
     const barCls = 'mtlx-loading-bar ' + (barWidthClass || 'w-48');
