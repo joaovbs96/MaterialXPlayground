@@ -413,7 +413,7 @@
 
 /* Same idea for the What is MaterialX hero <img>, light theme only (dark keeps the white SVG as is):
    the image content is pushed out of its box and the box is painted accent-fill through the logo mask. */
-:root[data-theme="light"] img.mtlx-hero-bowtie {
+:root[data-theme-base="light"] img.mtlx-hero-bowtie {
     object-position: -9999px 0;
     background-color: rgb(var(--mtlx-accent-fill));
     -webkit-mask: url("../images/materialx-logo.svg") no-repeat center / contain;
