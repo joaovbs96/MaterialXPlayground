@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test, expect } from './lib/test-base.mjs';
 
 // @scene: exercises the Performance/Default/Quality control in
