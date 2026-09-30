@@ -35,8 +35,12 @@ test('reflection detail fades monotonically with roughness', async ({ page, embe
     const loaded = await callLoad(page, idx, metalXml(ROUGHNESS[i]));
     expect(loaded.ok, loaded.message).toBe(true);
     await waitForEventCount(page, idx, 'mtlx-renderables', i + 2);
-    await iframe.waitForFunction(() => !!window.__mtlxViewerHandle?.snapshotPixels);
-    await page.waitForTimeout(300);
+    // load() resolves on parse; wait until the view actually binds this roughness.
+    await iframe.waitForFunction((r) => {
+      const u = window.__mtlxViewerHandle?.uniforms;
+      const key = u && Object.keys(u).find((k) => /specular_roughness$/.test(k));
+      return !!key && Math.abs(u[key].value - r) < 1e-6;
+    }, ROUGHNESS[i]);
     // Mean absolute Laplacian of luminance over the sphere's central disc.
     energy.push(await iframe.evaluate((n) => {
       const img = window.__mtlxViewerHandle.snapshotPixels(n, n);
