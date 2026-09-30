@@ -8,5 +8,40 @@
     "file": "js/gen/theme-tokens.css",
     "match": "/./",
     "reason": "Generated from the token source."
+  },
+  {
+    "file": "js/shared/render-environment.js",
+    "match": "/^#(f6f6f6|ffffff|e3e3e3|c8c8c8|1d2635|242e40|131a28|0c1220)$/i",
+    "reason": "Studio backdrop cyclorama gradient stops (STUDIO_STOPS): viewport art per backdrop mode, not UI theme."
+  },
+  {
+    "file": "js/shared/render-environment.js",
+    "match": "/^0x(111827|000000)$/",
+    "reason": "environmentBackdrop clear colors: viewport backdrop coupled to stage, not UI."
+  },
+  {
+    "file": "js/shared/render-environment.js",
+    "match": "/^0xffffff$/",
+    "reason": "SpotLight color: render-internal lighting, not UI."
+  },
+  {
+    "file": "js/shared/mtlx-ui.jsx",
+    "match": "/^(border-white|#f00|#ff0|#0f0|#0ff|#00f|#f0f|#fff|rgba\\(2)$/",
+    "reason": "ColorPicker gradients and white handles: functional color-space rendering, not themeable."
+  },
+  {
+    "file": "js/shared/mtlx-ui.jsx",
+    "match": "/^rgba\\(0$/",
+    "reason": "ColorPicker black-to-transparent gradient stop: functional color-space rendering."
+  },
+  {
+    "file": "js/shared/compare-ui.jsx",
+    "match": "/^(bg-white\\/(80|90)|bg-black\\/60|text-white\\/(90|50))$/",
+    "reason": "Compare slider handle and render-overlay chips: must contrast with arbitrary render pixels in every theme."
+  },
+  {
+    "file": "js/shared/hero-grid.jsx",
+    "match": "/^rgba\\(0$/",
+    "reason": "CSS mask alpha stops: coverage, not visible color."
   }
 ]

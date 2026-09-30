@@ -58,6 +58,9 @@ function trackedFiles() {
 }
 
 const allow = loadAllowlist();
+// Always fatal: legacy rgba() quantized alpha to 8 bits, raw floats shift pixels.
+const ALPHA_RE = /rgb\(var\(--mtlx-[\w-]+\)\s*\/\s*(\d*\.?\d+)\s*\)/g;
+const alphaBad = [];
 const perFile = new Map();
 const perArea = new Map();
 const kinds = new Map();
@@ -72,6 +75,12 @@ for (const file of trackedFiles()) {
     continue;
   }
   for (const line of src.split(/\r?\n/)) {
+    for (const m of line.matchAll(ALPHA_RE)) {
+      const a = Number(m[1]);
+      if (Math.abs(Math.round(a * 255) / 255 - a) < 1e-9) continue;
+      if (allow.some((e) => e.file === file && (e.test ? e.test.test(m[0]) : m[0].includes(e.text)))) continue;
+      alphaBad.push(`${file}: ${m[0]}`);
+    }
     for (const [kind, re] of RULES) {
       re.lastIndex = 0;
       for (const m of line.matchAll(re)) {
@@ -98,4 +107,9 @@ console.log("[check-theme-literals] hits per area:");
 for (const a of ["shell", "docs", "viewer", "graph", "shared", "usd", "hosts"]) console.log(`  ${String(perArea.get(a) || 0).padStart(5)}  ${a}`);
 console.log("[check-theme-literals] hits per kind: " + [...kinds].map(([k, n]) => `${k}=${n}`).join(", "));
 console.log(`[check-theme-literals] total: ${total} (allowlisted: ${allowed})${STRICT ? " [strict]" : " [report only]"}`);
+if (alphaBad.length) {
+  console.error("[check-theme-literals] FAIL: non-8-bit alpha in rgb(var(--mtlx-*) / a). Use `/ calc(N / 255)` with N = Math.round(a * 255) (or MtlxTheme.rgba) so it matches legacy rgba():");
+  for (const b of alphaBad) console.error("  " + b);
+  process.exit(1);
+}
 if (STRICT && total > 0) process.exit(1);

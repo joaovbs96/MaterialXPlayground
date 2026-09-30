@@ -76,6 +76,8 @@
     <script src="js/shared/theme-tokens.js"></script>
     <script src="js/shared/theme.js"></script>
     <link rel="stylesheet" href="js/gen/theme-tokens.css">
+    <!-- Token utility rules go BEFORE embed.css so its hand rules (bg-transparent) still win, as the old palette mirrors did. -->
+    <link rel="stylesheet" href="embed/gen/theme-utilities.css">
     <!-- Root-relative per the <base> note above: this is embed/embed.css,
          written without the leading "embed/" it would need from this
          file's own directory. -->

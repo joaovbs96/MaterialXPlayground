@@ -56,7 +56,8 @@
         current: function () { return theme; },
         get: get,
         var: function (token) { return 'rgb(var(--mtlx-' + token + '))'; },
-        rgba: function (token, a) { return 'rgb(var(--mtlx-' + token + ') / ' + a + ')'; },
+        // Legacy rgba() quantizes alpha to 8 bits; match it so composited pixels stay identical.
+        rgba: function (token, a) { return 'rgb(var(--mtlx-' + token + ') / calc(' + Math.round(a * 255) + ' / 255))'; },
         onChange: onChange,
         typeFallback: typeFallback,
         tailwindConfig: tailwindConfig,

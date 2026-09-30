@@ -276,8 +276,8 @@
                     el = document.createElement('div');
                     el.textContent = isMac ? 'Use ⌘ + scroll to zoom' : 'Use Ctrl + scroll to zoom';
                     el.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);'
-                        + 'padding:6px 14px;border-radius:9999px;background:rgba(17,24,39,0.85);'
-                        + 'color:#f3f4f6;font:13px system-ui,sans-serif;pointer-events:none;'
+                        + 'padding:6px 14px;border-radius:9999px;background:' + MtlxTheme.rgba('hud', 0.85) + ';'
+                        + 'color:' + MtlxTheme.var('hud-fg-strong') + ';font:13px system-ui,sans-serif;pointer-events:none;'
                         + 'opacity:0;transition:opacity 200ms ease;z-index:30;white-space:nowrap;';
                     parent.appendChild(el);
                 }

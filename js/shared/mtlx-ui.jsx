@@ -13,34 +13,34 @@
 // disabled:* added so a disabled secondary button (e.g. the Scene Render
 // settings popover's Reset/Cancel) actually looks non-interactive instead
 // of reading as clickable while silently doing nothing.
-const BTN_SECONDARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors disabled:opacity-50 disabled:text-gray-500 disabled:cursor-not-allowed disabled:pointer-events-none';
-const BTN_PRIMARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors';
+const BTN_SECONDARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors disabled:opacity-50 disabled:text-fg-subtle disabled:cursor-not-allowed disabled:pointer-events-none';
+const BTN_PRIMARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-accent-fill/70 border-accent-base text-on-accent hover:bg-accent-fill-hover/70 transition-colors';
 // Graph editor toolbar button style. `whitespace-nowrap shrink-0` matters:
 // js/graph-app.jsx's label-collapse measurement needs buttons that don't
 // flex-shrink, so overflow is visible to it instead of silently absorbed.
-const BTN_TOOLBAR = 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors whitespace-nowrap shrink-0';
+const BTN_TOOLBAR = 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-control/80 backdrop-blur border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors whitespace-nowrap shrink-0';
 // Menu-bar variant: no resting edge or fill, both revealed on hover (the
 // VS Code menu bar idiom). The border stays declared but transparent so
 // the button never changes size between states. No backdrop-blur: the
 // menu bar it sits on is opaque, so there is nothing to blur.
-const BTN_MENUBAR = 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border border-transparent bg-transparent text-gray-300 hover:bg-gray-700/80 hover:border-gray-600 transition-colors whitespace-nowrap shrink-0';
+const BTN_MENUBAR = 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border border-transparent bg-transparent text-fg-secondary hover:bg-hover/80 hover:border-line-strong transition-colors whitespace-nowrap shrink-0';
 // Labeled overlay pills for the tool HUDs (viewer/compare) and the
 // collapsed-sidebar pills: deliberately 11px normal weight, not the
 // bolder PILL_ACTION, to match the sidebar's own labeled pills.
-const HUD_PILL = 'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-gray-600/50 bg-gray-900/70 backdrop-blur text-gray-300 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 transition-colors whitespace-nowrap';
-const HUD_PILL_ACTIVE = 'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-blue-500 bg-blue-600/80 backdrop-blur text-white transition-colors whitespace-nowrap';
+const HUD_PILL = 'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-hud-line/50 bg-hud/70 backdrop-blur text-hud-fg hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong transition-colors whitespace-nowrap';
+const HUD_PILL_ACTIVE = 'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-accent-base bg-accent-fill/80 backdrop-blur text-on-accent transition-colors whitespace-nowrap';
 
 // Collapsible parameter-group header (graph editor sidebar + definition
 // panel). Negative margins matching the panel's own px-2.5 pull the
 // border edge-to-edge instead of sitting inset.
 const GROUP_HEADER_CLASS = 'w-[calc(100%+1.25rem)] flex items-center gap-1.5 -mx-2.5 px-2.5 py-1.5 border-t border-b '
-    + 'border-gray-700 bg-gray-900/40 text-[10px] font-semibold uppercase tracking-wider text-gray-400 '
-    + 'hover:bg-gray-900/70 hover:text-gray-200 transition-colors';
+    + 'border-line bg-chrome/40 text-[10px] font-semibold uppercase tracking-wider text-fg-muted '
+    + 'hover:bg-chrome/70 hover:text-fg-soft transition-colors';
 
 // Small square icon buttons for list rows (reorder controls, etc).
-const ICON_BTN_SM = 'flex-none w-6 h-6 inline-flex items-center justify-center rounded border border-gray-600 bg-gray-800/80 text-gray-400 hover:bg-gray-700/80 hover:text-gray-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-gray-800/80 disabled:hover:text-gray-400';
-const ICON_BTN_SM_PRIMARY = 'flex-none w-6 h-6 inline-flex items-center justify-center rounded border bg-blue-600/80 border-blue-500 text-gray-100 hover:bg-blue-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-blue-600/80 disabled:hover:text-gray-100';
-const ICON_BTN_SM_DANGER = ICON_BTN_SM + ' hover:text-red-400 hover:border-red-800/60';
+const ICON_BTN_SM = 'flex-none w-6 h-6 inline-flex items-center justify-center rounded border border-line-strong bg-control/80 text-fg-muted hover:bg-hover/80 hover:text-fg-soft transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-control/80 disabled:hover:text-fg-muted';
+const ICON_BTN_SM_PRIMARY = 'flex-none w-6 h-6 inline-flex items-center justify-center rounded border bg-accent-fill/80 border-accent-base text-on-accent-soft hover:bg-accent-fill transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-accent-fill/80 disabled:hover:text-on-accent-soft';
+const ICON_BTN_SM_DANGER = ICON_BTN_SM + ' hover:text-error hover:border-error-border/60';
 
 // Formats a caught value for display: an Error's .message, or the value
 // itself stringified (some rejections/throws aren't Error instances).
@@ -83,7 +83,7 @@ const DialogFrame = ({
     open, title, titleClassName, panelClassName, onClose, children,
     headerRight, closeDisabled, backdropCloseDisabled = false,
     keepMounted = false,
-    overlayClassName = 'absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70',
+    overlayClassName = 'absolute inset-0 z-50 flex items-center justify-center bg-scrim/70',
 }) => {
     if (!open && !keepMounted) return null;
     return (
@@ -92,15 +92,15 @@ const DialogFrame = ({
             onMouseDown={backdropCloseDisabled ? undefined : onClose}
         >
             <div className={panelClassName} onMouseDown={(e) => e.stopPropagation()}>
-                <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
-                    <span className={titleClassName || 'text-[13px] font-bold text-gray-100'}>{title}</span>
+                <div className="flex items-center justify-between px-4 py-2.5 border-b border-line bg-chrome/70">
+                    <span className={titleClassName || 'text-[13px] font-bold text-fg'}>{title}</span>
                     <div className="flex items-center gap-2">
                         {headerRight}
                         <button
                             onClick={onClose}
                             disabled={closeDisabled}
                             title="Close"
-                            className={'text-gray-400 hover:text-gray-200 leading-none px-1' + (closeDisabled !== undefined ? ' disabled:opacity-40' : '')}
+                            className={'text-fg-muted hover:text-fg-soft leading-none px-1' + (closeDisabled !== undefined ? ' disabled:opacity-40' : '')}
                         ><MtlxIcon name="x" className="w-4 h-4" /></button>
                     </div>
                 </div>
@@ -118,37 +118,37 @@ const DialogFrame = ({
     const st = document.createElement('style');
     st.id = 'mtlx-rec-css';
     st.textContent = [
-        '.mtlx-rec-overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgba(17,24,39,.7);font-family:inherit;}',
-        '.mtlx-rec-panel{width:360px;max-width:calc(100vw - 24px);background:#111827;border:1px solid #374151;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,.5);color:#f3f4f6;}',
-        '.mtlx-rec-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid #374151;background:#1f2937;border-radius:10px 10px 0 0;}',
-        '.mtlx-rec-title{font-size:13px;font-weight:700;color:#f3f4f6;}',
-        '.mtlx-rec-close{background:none;border:none;padding:4px;color:#9ca3af;cursor:pointer;line-height:0;}',
-        '.mtlx-rec-close:hover{color:#f3f4f6;}',
+        '.mtlx-rec-overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgb(var(--mtlx-veil) / calc(179 / 255));font-family:inherit;}',
+        '.mtlx-rec-panel{width:360px;max-width:calc(100vw - 24px);background:rgb(var(--mtlx-surface-base));border:1px solid rgb(var(--mtlx-line));border-radius:10px;box-shadow:0 10px 40px rgb(var(--mtlx-shadow) / calc(128 / 255));color:rgb(var(--mtlx-fg));}',
+        '.mtlx-rec-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid rgb(var(--mtlx-line));background:rgb(var(--mtlx-surface-raised));border-radius:10px 10px 0 0;}',
+        '.mtlx-rec-title{font-size:13px;font-weight:700;color:rgb(var(--mtlx-fg));}',
+        '.mtlx-rec-close{background:none;border:none;padding:4px;color:rgb(var(--mtlx-fg-muted));cursor:pointer;line-height:0;}',
+        '.mtlx-rec-close:hover{color:rgb(var(--mtlx-fg));}',
         '.mtlx-rec-icon{width:16px;height:16px;display:block;}',
         '.mtlx-rec-body{padding:14px;display:flex;flex-direction:column;gap:10px;}',
         '.mtlx-rec-row{display:flex;align-items:center;justify-content:space-between;gap:10px;}',
-        '.mtlx-rec-label{font-size:11px;color:#9ca3af;flex-shrink:0;}',
-        '.mtlx-rec-seg{display:inline-flex;border:1px solid #374151;border-radius:8px;overflow:hidden;}',
-        '.mtlx-rec-seg-btn{appearance:none;border:none;background:#1f2937;color:#9ca3af;font-size:11px;padding:5px 9px;cursor:pointer;border-right:1px solid #374151;}',
+        '.mtlx-rec-label{font-size:11px;color:rgb(var(--mtlx-fg-muted));flex-shrink:0;}',
+        '.mtlx-rec-seg{display:inline-flex;border:1px solid rgb(var(--mtlx-line));border-radius:8px;overflow:hidden;}',
+        '.mtlx-rec-seg-btn{appearance:none;border:none;background:rgb(var(--mtlx-control));color:rgb(var(--mtlx-fg-muted));font-size:11px;padding:5px 9px;cursor:pointer;border-right:1px solid rgb(var(--mtlx-line));}',
         '.mtlx-rec-seg-btn:last-child{border-right:none;}',
-        '.mtlx-rec-seg-btn:hover:not(:disabled){background:#374151;color:#f3f4f6;}',
-        '.mtlx-rec-seg-btn.is-active{background:#2563eb;color:#fff;}',
+        '.mtlx-rec-seg-btn:hover:not(:disabled){background:rgb(var(--mtlx-hover));color:rgb(var(--mtlx-fg));}',
+        '.mtlx-rec-seg-btn.is-active{background:rgb(var(--mtlx-accent-fill));color:rgb(var(--mtlx-on-accent));}',
         '.mtlx-rec-seg-btn:disabled{opacity:.5;cursor:not-allowed;}',
-        '.mtlx-rec-hint{font-size:11px;color:#9ca3af;}',
-        '.mtlx-rec-error{font-size:11px;color:#dc2626;}',
-        '.mtlx-rec-success{font-size:11px;color:#9ca3af;}',
-        '.mtlx-rec-progress{height:6px;border-radius:4px;background:#374151;overflow:hidden;}',
-        '.mtlx-rec-progress-fill{height:100%;background:#2563eb;transition:width .15s ease;}',
-        '.mtlx-rec-progress-text{font-size:11px;color:#9ca3af;}',
-        '.mtlx-rec-preview{display:block;margin:0 auto;max-height:200px;max-width:100%;border-radius:6px;border:1px solid #374151;background:#000;}',
-        '.mtlx-rec-footer{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 14px;border-top:1px solid #374151;}',
-        '.mtlx-rec-btn{appearance:none;border:1px solid #374151;background:#1f2937;color:#f3f4f6;font-size:11px;padding:6px 12px;border-radius:6px;cursor:pointer;}',
-        '.mtlx-rec-btn:hover:not(:disabled){background:#374151;}',
+        '.mtlx-rec-hint{font-size:11px;color:rgb(var(--mtlx-fg-muted));}',
+        '.mtlx-rec-error{font-size:11px;color:rgb(var(--mtlx-error-fill));}',
+        '.mtlx-rec-success{font-size:11px;color:rgb(var(--mtlx-fg-muted));}',
+        '.mtlx-rec-progress{height:6px;border-radius:4px;background:rgb(var(--mtlx-chip));overflow:hidden;}',
+        '.mtlx-rec-progress-fill{height:100%;background:rgb(var(--mtlx-accent-fill));transition:width .15s ease;}',
+        '.mtlx-rec-progress-text{font-size:11px;color:rgb(var(--mtlx-fg-muted));}',
+        '.mtlx-rec-preview{display:block;margin:0 auto;max-height:200px;max-width:100%;border-radius:6px;border:1px solid rgb(var(--mtlx-line));background:#000;}',
+        '.mtlx-rec-footer{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 14px;border-top:1px solid rgb(var(--mtlx-line));}',
+        '.mtlx-rec-btn{appearance:none;border:1px solid rgb(var(--mtlx-line));background:rgb(var(--mtlx-control));color:rgb(var(--mtlx-fg));font-size:11px;padding:6px 12px;border-radius:6px;cursor:pointer;}',
+        '.mtlx-rec-btn:hover:not(:disabled){background:rgb(var(--mtlx-hover));}',
         '.mtlx-rec-btn:disabled{opacity:.5;cursor:not-allowed;}',
-        '.mtlx-rec-btn--primary{background:#2563eb;border-color:#2563eb;color:#fff;}',
-        '.mtlx-rec-btn--primary:hover:not(:disabled){background:#1d4ed8;}',
-        '.mtlx-rec-btn--danger{background:#dc2626;border-color:#dc2626;color:#fff;}',
-        '.mtlx-rec-btn--danger:hover:not(:disabled){background:#b91c1c;}',
+        '.mtlx-rec-btn--primary{background:rgb(var(--mtlx-accent-fill));border-color:rgb(var(--mtlx-accent-fill));color:rgb(var(--mtlx-on-accent));}',
+        '.mtlx-rec-btn--primary:hover:not(:disabled){background:rgb(var(--mtlx-accent-fill-pressed));}',
+        '.mtlx-rec-btn--danger{background:rgb(var(--mtlx-error-fill));border-color:rgb(var(--mtlx-error-fill));color:rgb(var(--mtlx-on-accent));}',
+        '.mtlx-rec-btn--danger:hover:not(:disabled){background:rgb(var(--mtlx-error-fill-hover));}',
     ].join('');
     document.head.appendChild(st);
 })();
@@ -564,7 +564,7 @@ function PresetsDialog({ open, onClose, onPick, busy, busyPath, overlayClassName
             closeDisabled={busy}
             backdropCloseDisabled={busy}
             overlayClassName={overlayClassName}
-            panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[28rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+            panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[28rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
         >
             <div className="overflow-y-auto custom-scrollbar px-2 py-2 text-[12px]">
                 {MTLX_PRESETS.map((preset) => {
@@ -576,14 +576,14 @@ function PresetsDialog({ open, onClose, onPick, busy, busyPath, overlayClassName
                             disabled={busy}
                             title={presetKey(preset)}
                             className={'w-full text-left px-2.5 py-2 rounded flex items-center justify-between gap-2 transition-colors '
-                                + (busy ? 'cursor-not-allowed opacity-60' : 'hover:bg-gray-700/70 cursor-pointer')}
+                                + (busy ? 'cursor-not-allowed opacity-60' : 'hover:bg-hover/70 cursor-pointer')}
                         >
                             <span className="min-w-0">
-                                <span className="block text-gray-100 font-medium truncate">{preset.label}</span>
-                                <span className="block text-gray-400 text-[11px] truncate">{preset.desc}</span>
+                                <span className="block text-fg font-medium truncate">{preset.label}</span>
+                                <span className="block text-fg-muted text-[11px] truncate">{preset.desc}</span>
                             </span>
                             {rowBusy && (
-                                <span className="shrink-0 w-3.5 h-3.5 rounded-full border-2 border-gray-500 border-t-blue-400 animate-spin" />
+                                <span className="shrink-0 w-3.5 h-3.5 rounded-full border-2 border-line-heavy border-t-progress animate-spin" />
                             )}
                         </button>
                     );
@@ -623,7 +623,7 @@ const rowMeta = (key, surface) => {
 // Manifest rows for a surface in manifest order (bool Toggle, enum MtlxSelect,
 // number SliderField); writes go through MtlxRenderSettings.apply. `keys`
 // renders a subset for cards that own only some of a group's rows.
-function RenderSettingsSection({ surface, groups, keys, variant = 'sidebar', exclude, labelClassName = 'text-gray-200' }) {
+function RenderSettingsSection({ surface, groups, keys, variant = 'sidebar', exclude, labelClassName = 'text-fg-soft' }) {
     const RS = window.MtlxRenderSettings;
     const [, forceTick] = React.useState(0);
     React.useEffect(() => {
@@ -651,7 +651,7 @@ function RenderSettingsSection({ surface, groups, keys, variant = 'sidebar', exc
                     <span className={labelClassName + ' inline-flex items-center gap-1.5'}>
                         {row.label}
                         {row.experimental && (
-                            <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                            <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-experimental-fill/30 border border-experimental-hue/50 text-experimental">Experimental</span>
                         )}
                     </span>
                 );
@@ -662,7 +662,7 @@ function RenderSettingsSection({ surface, groups, keys, variant = 'sidebar', exc
                                 {labelNode}
                                 <Toggle checked={!!value} onChange={onChange} />
                             </label>
-                            {showHint && row.hint && <div className="mt-1 text-[11px] text-gray-400">{row.hint}</div>}
+                            {showHint && row.hint && <div className="mt-1 text-[11px] text-fg-muted">{row.hint}</div>}
                         </div>
                     );
                 }
@@ -682,7 +682,7 @@ function RenderSettingsSection({ surface, groups, keys, variant = 'sidebar', exc
                                     size="sm"
                                 />
                             </div>
-                            {showHint && row.hint && <div className="mt-1 text-[11px] text-gray-400">{row.hint}</div>}
+                            {showHint && row.hint && <div className="mt-1 text-[11px] text-fg-muted">{row.hint}</div>}
                         </div>
                     );
                 }
@@ -703,7 +703,7 @@ function RenderSettingsSection({ surface, groups, keys, variant = 'sidebar', exc
                                     size="sm"
                                 />
                             </div>
-                            {showHint && row.hint && <div className="mt-1 text-[11px] text-gray-400">{row.hint}</div>}
+                            {showHint && row.hint && <div className="mt-1 text-[11px] text-fg-muted">{row.hint}</div>}
                         </div>
                     );
                 }
@@ -716,7 +716,7 @@ function RenderSettingsSection({ surface, groups, keys, variant = 'sidebar', exc
                             decimals={row.type === 'int' ? 0 : undefined}
                             onSlider={onChange} onNumber={onChange}
                         />
-                        {showHint && row.hint && <div className="mt-1 text-[11px] text-gray-400">{row.hint}</div>}
+                        {showHint && row.hint && <div className="mt-1 text-[11px] text-fg-muted">{row.hint}</div>}
                     </div>
                 );
             })}
@@ -767,7 +767,7 @@ function SettingsDialog({ anchorRef, open, onClose, children, surface }) {
             data-mtlx-settings-dialog
             onPointerDown={(e) => e.stopPropagation()}
             style={Object.assign({ position: 'fixed', zIndex: 9999, width: SETTINGS_DIALOG_W }, pos || {})}
-            className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden"
+            className="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden"
         >
             <div className="px-3 py-3 space-y-3 text-[12px]">
                 {/* Settings rows go here — one block per setting, so
@@ -838,7 +838,7 @@ const formatDecompileDuration = (ms) => {
 function renderStageBody(stage, loadState, startStageLoad) {
     if (!stage.load) {
         return (
-            <pre className="flex-1 min-h-0 overflow-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-gray-300 px-4 py-3 whitespace-pre">
+            <pre className="flex-1 min-h-0 overflow-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-fg-secondary px-4 py-3 whitespace-pre">
                 {stage.code}
             </pre>
         );
@@ -846,7 +846,7 @@ function renderStageBody(stage, loadState, startStageLoad) {
     const retryBtn = (
         <button
             onClick={() => startStageLoad(stage)}
-            className="h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
+            className="h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80"
         >
             Retry
         </button>
@@ -855,7 +855,7 @@ function renderStageBody(stage, loadState, startStageLoad) {
     if (status === 'cancelled') {
         return (
             <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-4 py-6 text-[12px]">
-                <span className="text-gray-400">Cancelled</span>
+                <span className="text-fg-muted">Cancelled</span>
                 {retryBtn}
             </div>
         );
@@ -863,7 +863,7 @@ function renderStageBody(stage, loadState, startStageLoad) {
     if (status === 'error') {
         return (
             <div className="px-4 py-3 flex flex-col gap-2">
-                <div className="bg-red-900/40 border border-red-700 text-red-200 rounded px-3 py-2 text-[12px]">
+                <div className="bg-error-bg-strong/40 border border-error-border-strong text-error-text-strong rounded px-3 py-2 text-[12px]">
                     {loadState.error}
                 </div>
                 <div>{retryBtn}</div>
@@ -872,18 +872,18 @@ function renderStageBody(stage, loadState, startStageLoad) {
     }
     if (status === 'ready') {
         return (
-            <pre className="flex-1 min-h-0 overflow-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-gray-300 px-4 py-3 whitespace-pre">
+            <pre className="flex-1 min-h-0 overflow-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-fg-secondary px-4 py-3 whitespace-pre">
                 {loadState.code}
             </pre>
         );
     }
     return (
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-4 py-6 text-[12px]">
-            <span className="w-4 h-4 rounded-full border-2 border-gray-500 border-t-blue-400 animate-spin" />
-            <span className="text-gray-400">Decompiling...</span>
+            <span className="w-4 h-4 rounded-full border-2 border-line-heavy border-t-progress animate-spin" />
+            <span className="text-fg-muted">Decompiling...</span>
             <button
                 onClick={() => loadState && loadState.controller && loadState.controller.abort()}
-                className="h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
+                className="h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80"
             >
                 Cancel
             </button>
@@ -1075,7 +1075,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
             title="Export Shader Code"
             onClose={onClose}
             overlayClassName={overlayClassName}
-            panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[44rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col"
+            panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[44rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col"
             headerRight={
                 <React.Fragment>
                     <button
@@ -1084,8 +1084,8 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                         title="Copy the current stage's code to the clipboard"
                         className={'h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors disabled:opacity-40 '
                             + (copied
-                                ? 'bg-green-600/70 border-green-500 text-white'
-                                : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
+                                ? 'bg-success-fill/70 border-success-hue text-on-accent'
+                                : 'bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80')}
                     >
                         <MtlxIcon name={copied ? 'copy-check' : 'copy'} className="w-3.5 h-3.5" />
                         <span>{copied ? 'Copied' : 'Copy'}</span>
@@ -1094,7 +1094,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                         onClick={handleDownload}
                         disabled={busy || !!error || !stages}
                         title="Download the current export"
-                        className="h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors disabled:opacity-40 bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
+                        className="h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors disabled:opacity-40 bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80"
                     >
                         <MtlxIcon name="file-download" className="w-3.5 h-3.5" />
                         <span>Download</span>
@@ -1103,13 +1103,13 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
             }
         >
             {!renderables.length ? (
-                <div className="px-4 py-3 text-[12px] text-gray-400">
+                <div className="px-4 py-3 text-[12px] text-fg-muted">
                     The document contains no renderable material.
                 </div>
             ) : (
                 <React.Fragment>
                     <div className="px-4 py-2.5 flex items-center gap-2 flex-wrap">
-                        <label className="flex items-center gap-1.5 text-[11px] text-gray-400">
+                        <label className="flex items-center gap-1.5 text-[11px] text-fg-muted">
                             <span>Target</span>
                             <MtlxSelect
                                 value={targetKey}
@@ -1123,7 +1123,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                             />
                         </label>
                         {renderables.length > 1 && (
-                            <label className="flex items-center gap-1.5 text-[11px] text-gray-400">
+                            <label className="flex items-center gap-1.5 text-[11px] text-fg-muted">
                                 <span>Material</span>
                                 <MtlxSelect
                                     value={matIndex}
@@ -1138,21 +1138,21 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                             </label>
                         )}
                         {targetKey === 'slx' && stageLoads.decompiled && stageLoads.decompiled.status === 'ready' && stageLoads.decompiled.ms != null && (
-                            <span className="ml-auto text-[11px] text-gray-500">
+                            <span className="ml-auto text-[11px] text-fg-subtle">
                                 Decompilation took {formatDecompileDuration(stageLoads.decompiled.ms)}
                             </span>
                         )}
                     </div>
                     {targetKey === 'slx' && (
-                        <div className="mx-4 mb-2 flex items-center gap-2 rounded border border-gray-600/60 bg-gray-900/40 px-3 py-2 text-[11px] text-gray-400">
-                            <MtlxIcon name="info-circle" className="w-3.5 h-3.5 flex-shrink-0 text-gray-500" />
+                        <div className="mx-4 mb-2 flex items-center gap-2 rounded border border-line-strong/60 bg-surface-sunken/40 px-3 py-2 text-[11px] text-fg-muted">
+                            <MtlxIcon name="info-circle" className="w-3.5 h-3.5 flex-shrink-0 text-fg-subtle" />
                             <div>
                                 <p>ShadingLanguageX shader code is generated by the MXSLC ShadingLanguageX WASM bindings.</p>
                                 {stages && stages.length > 1 && (
                                     <p>"Original" is the .mxsl file as loaded; "Decompiled" is your current graph converted back to ShadingLanguageX.</p>
                                 )}
                                 <p className="pt-1">
-                                    <a href="https://github.com/jakethorn/ShadingLanguageX" target="_blank" rel="noopener noreferrer" className={PILL_ACTION_SM}>
+                                    <a href="https://github.com/jakethorn/ShadingLanguageX" target="_blank" rel="noopener noreferrer" className={PILL_PAGE_SM}>
                                         <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z" /></svg>
                                         ShadingLanguageX on GitHub
                                     </a>
@@ -1168,8 +1168,8 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                                     onClick={() => setStageIdx(i)}
                                     className={'h-6 text-[11px] px-2 rounded border transition-colors '
                                         + (i === stageIdx
-                                            ? 'bg-blue-600/80 border-blue-500 text-white'
-                                            : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
+                                            ? 'bg-accent-fill/80 border-accent-base text-on-accent'
+                                            : 'bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80')}
                                 >
                                     {st.label}
                                 </button>
@@ -1178,12 +1178,12 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                     )}
                     {error ? (
                         <div className="px-4 py-3">
-                            <div className="bg-red-900/40 border border-red-700 text-red-200 rounded px-3 py-2 text-[12px]">
+                            <div className="bg-error-bg-strong/40 border border-error-border-strong text-error-text-strong rounded px-3 py-2 text-[12px]">
                                 {error}
                             </div>
                         </div>
                     ) : busy ? (
-                        <div className="text-gray-400 animate-pulse px-4 py-3 text-[12px]">{'Generating…'}</div>
+                        <div className="text-fg-muted animate-pulse px-4 py-3 text-[12px]">{'Generating…'}</div>
                     ) : stages ? (
                         renderStageBody(stages[stageIdx], stageLoads[stages[stageIdx].id], startStageLoad)
                     ) : null}
@@ -1580,7 +1580,7 @@ const useRenderContextRecovery = ({ groups, isHidden, onLost }) => {
 // in-overlay Cancel pill).
 const LoadingOverlay = ({ show, label, className, labelClassName, barWidthClass, fraction, testId, children }) => {
     if (!show) return null;
-    const wrapCls = className || 'absolute inset-0 flex flex-col items-center justify-center gap-3 text-gray-400 z-10 bg-gray-900/80';
+    const wrapCls = className || 'absolute inset-0 flex flex-col items-center justify-center gap-3 text-fg-muted z-10 bg-veil/80';
     const labelCls = labelClassName || 'animate-pulse';
     const hasFraction = typeof fraction === 'number' && Number.isFinite(fraction);
     const barCls = 'mtlx-loading-bar ' + (barWidthClass || 'w-48');
@@ -1591,9 +1591,9 @@ const LoadingOverlay = ({ show, label, className, labelClassName, barWidthClass,
                 <div
                     role="progressbar" aria-label={typeof label === 'string' ? label : undefined}
                     aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(Math.max(0, Math.min(1, fraction)) * 100)}
-                    className={(barWidthClass || 'w-48') + ' h-1.5 rounded-full bg-gray-700 overflow-hidden'}
+                    className={(barWidthClass || 'w-48') + ' h-1.5 rounded-full bg-chip overflow-hidden'}
                 >
-                    <div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: (Math.max(0, Math.min(1, fraction)) * 100) + '%' }} />
+                    <div className="h-full rounded-full bg-accent-base transition-all" style={{ width: (Math.max(0, Math.min(1, fraction)) * 100) + '%' }} />
                 </div>
             ) : (
                 <div role="progressbar" aria-label={typeof label === 'string' ? label : undefined} aria-valuemin="0" aria-valuemax="100" className={barCls} />
@@ -1716,7 +1716,7 @@ const EnvDialog = ({
             data-mtlx-env-dialog
             onPointerDown={(e) => e.stopPropagation()}
             style={Object.assign({ position: 'fixed', zIndex: 9999, width: ENV_DIALOG_W }, pos || {})}
-            className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl p-3 space-y-2.5 text-[11px] text-gray-300"
+            className="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl p-3 space-y-2.5 text-[11px] text-fg-secondary"
         >
             <div>
                 <FilePickerField
@@ -1732,7 +1732,7 @@ const EnvDialog = ({
                 />
             </div>
             {importError && (
-                <div className="text-red-400">{importError}</div>
+                <div className="text-error">{importError}</div>
             )}
             {showBackdropPicker && (
                 <div>
@@ -1760,7 +1760,7 @@ const EnvDialog = ({
                     disabled={!keyLightAvail}
                     title="Automatically extract a strong sun into a directional light so sharp highlights stay crisp (rebuilds the environment)"
                     className={`h-5 px-2 rounded border transition-colors disabled:opacity-40 ${
-                        keyLightOn ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300'
+                        keyLightOn ? 'bg-accent-fill/80 border-accent-base text-on-accent' : 'bg-control/80 border-line-strong text-fg-secondary'
                     }`}
                 >
                     {keyLightOn ? 'On' : 'Off'}
@@ -1769,7 +1769,7 @@ const EnvDialog = ({
             <div>
                 <div className="flex items-center justify-between mb-0.5">
                     <span>Rotation</span>
-                    <span className="font-mono text-gray-400">{Math.round(rotation)}°</span>
+                    <span className="font-mono text-fg-muted">{Math.round(rotation)}°</span>
                 </div>
                 <input
                     type="range" min="0" max="360" step="1"
@@ -1777,13 +1777,13 @@ const EnvDialog = ({
                     title="Right click to reset"
                     onChange={(e) => onRotationChange(Number(e.target.value))}
                     onContextMenu={rangeResetOnContextMenu({ defaultValue: 0, min: 0, max: 360, commit: (v) => onRotationChange(Number(v)) })}
-                    className="w-full accent-blue-500"
+                    className="w-full accent-accent-base"
                 />
             </div>
             <div>
                 <div className="flex items-center justify-between mb-0.5">
                     <span>Exposure</span>
-                    <span className="font-mono text-gray-400">{formatEv(linearToEv(exposure))}</span>
+                    <span className="font-mono text-fg-muted">{formatEv(linearToEv(exposure))}</span>
                 </div>
                 <input
                     type="range" min={EV_MIN} max={EV_MAX} step={EV_STEP}
@@ -1791,7 +1791,7 @@ const EnvDialog = ({
                     title="Right click to reset"
                     onChange={(e) => onExposureChange(evToLinear(e.target.value))}
                     onContextMenu={rangeResetOnContextMenu({ defaultValue: 0, min: EV_MIN, max: EV_MAX, commit: (v) => onExposureChange(evToLinear(v)) })}
-                    className="w-full accent-blue-500"
+                    className="w-full accent-accent-base"
                 />
             </div>
             {/* Bottom-most: resets rotation/exposure too, so it must not
@@ -1799,7 +1799,7 @@ const EnvDialog = ({
                 imported environment). */}
             <button
                 onClick={handleResetClick}
-                className="w-full h-6 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                className="w-full h-6 rounded border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors"
             >
                 Reset
             </button>
@@ -1866,7 +1866,7 @@ const defaultGeomFor = (nodegroup) => (
     SHADERBALL_GROUPS.indexOf(String(nodegroup || '').toLowerCase()) !== -1 ? 'shaderball-scene' : 'buffer2d'
 );
 
-const TEXT_INPUT_CLS = 'w-full bg-gray-900 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500';
+const TEXT_INPUT_CLS = 'w-full bg-surface-sunken border border-line rounded px-2.5 py-1.5 text-sm text-fg-soft placeholder-fg-subtle focus:outline-none focus:border-focus';
 
 // Fixed-height (20px) field label row shared by every field on the page,
 // so a label with a ReloadsPill lines up exactly with one that has none
@@ -1874,10 +1874,10 @@ const TEXT_INPUT_CLS = 'w-full bg-gray-900 border border-gray-700 rounded px-2.5
 function FieldLabel({ label, pill, hint }) {
     return (
         <div className="h-5 flex items-center justify-between mb-1">
-            <span className="text-xs font-medium text-gray-400">{label}</span>
+            <span className="text-xs font-medium text-fg-muted">{label}</span>
             {(hint || pill) && (
                 <span className="flex items-center gap-1.5 shrink-0">
-                    {hint && <span className="text-[11px] text-gray-500">{hint}</span>}
+                    {hint && <span className="text-[11px] text-fg-subtle">{hint}</span>}
                     {pill}
                 </span>
             )}
@@ -1897,9 +1897,9 @@ function Toggle({ checked, onChange, disabled }) {
             onClick={() => onChange(!checked)}
             className={'relative inline-flex h-5 w-[34px] shrink-0 items-center rounded-full border transition-colors '
                 + (disabled ? 'opacity-40 cursor-not-allowed ' : 'cursor-pointer ')
-                + (checked ? 'bg-blue-500 border-blue-500' : 'bg-gray-700 border-gray-600')}
+                + (checked ? 'bg-accent-base border-accent-base' : 'bg-chip border-line-strong')}
         >
-            <span className={'inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform '
+            <span className={'inline-block h-3.5 w-3.5 transform rounded-full bg-on-accent transition-transform '
                 + (checked ? 'translate-x-[15px]' : 'translate-x-[2px]')} />
         </button>
     );
@@ -2013,7 +2013,7 @@ function SliderField({ label, unit, value, min, max, step, onSlider, onNumber, p
                     title={rangeTitle}
                     onChange={(e) => onSlider(e.target.value)}
                     onContextMenu={resetOnContextMenu}
-                    className="flex-1 accent-blue-500 h-1.5"
+                    className="flex-1 accent-accent-base h-1.5"
                 />
                 <input
                     type="number" min={min} max={max} step={step}
@@ -2038,10 +2038,10 @@ function SliderField({ label, unit, value, min, max, step, onSlider, onNumber, p
 function Chip({ active, disabled, dashed, onClick, icon, title, children }) {
     const base = 'h-[30px] inline-flex items-center gap-1.5 px-3 rounded-full border text-[11px] transition-colors whitespace-nowrap';
     const cls = disabled
-        ? base + ' opacity-40 cursor-not-allowed text-gray-500 border-gray-700' + (dashed ? ' border-dashed' : '')
+        ? base + ' opacity-40 cursor-not-allowed text-fg-subtle border-line' + (dashed ? ' border-dashed' : '')
         : active
-            ? base + ' border-blue-500/70 bg-blue-500/10 text-blue-200'
-            : base + ' border-gray-600 text-gray-300 hover:border-gray-500 cursor-pointer';
+            ? base + ' border-accent-base/70 bg-accent-wash/10 text-accent-fg-bright'
+            : base + ' border-line-strong text-fg-secondary hover:border-line-heavy cursor-pointer';
     return (
         <button type="button" title={title} disabled={disabled} onClick={onClick} className={cls}>
             {icon && <MtlxIcon name={icon} className="w-3.5 h-3.5" />}
@@ -2053,28 +2053,28 @@ function Chip({ active, disabled, dashed, onClick, icon, title, children }) {
 // Collapsible settings card shell shared by all seven fields cards. Open
 // state is local (per brief) so it survives re-renders but always starts
 // from `defaultOpen`, which the caller sets from the current column count.
-// Opaque twin of the old bg-gray-800/35: the same colour once composited
+// Opaque twin of a 35% raised-surface fill: the same colour once composited
 // over the page ground, but solid. These cards sit over the hero grid on
 // builder and docs, and a translucent fill lets that grid show through.
-const CARD_SURFACE = 'color-mix(in srgb, var(--site-gray-800, #1f2937) 35%, var(--site-gray-900, #111827))';
+const CARD_SURFACE = 'color-mix(in srgb, rgb(var(--mtlx-surface-raised)) 35%, rgb(var(--mtlx-surface-base)))';
 
 function SectionCard({ icon, title, pill, summary, defaultOpen, dense, children }) {
     const [open, setOpen] = React.useState(defaultOpen);
     return (
-        <div className="rounded-lg border border-gray-700" style={{ background: CARD_SURFACE }}>
+        <div className="rounded-lg border border-line" style={{ background: CARD_SURFACE }}>
             <button
                 type="button"
                 onClick={() => setOpen((o) => !o)}
                 className="w-full h-[42px] flex items-center gap-2 px-3.5 text-left"
             >
-                <MtlxIcon name={icon} className="w-4 h-4 text-gray-400 shrink-0" />
-                <span className="text-[13px] font-semibold text-gray-200 shrink-0">{title}</span>
+                <MtlxIcon name={icon} className="w-4 h-4 text-fg-muted shrink-0" />
+                <span className="text-[13px] font-semibold text-fg-soft shrink-0">{title}</span>
                 {pill}
-                <span className="flex-1 min-w-0 text-right text-xs text-gray-500 truncate" title={typeof summary === 'string' ? summary : undefined}>{summary}</span>
-                <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                <span className="flex-1 min-w-0 text-right text-xs text-fg-subtle truncate" title={typeof summary === 'string' ? summary : undefined}>{summary}</span>
+                <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="w-3.5 h-3.5 text-fg-subtle shrink-0" />
             </button>
             {open && (
-                <div className={(dense ? 'px-3.5 pb-3 pt-3 space-y-2.5' : 'px-3.5 pb-3.5 pt-3.5 space-y-3.5') + ' border-t border-gray-700/60'}>
+                <div className={(dense ? 'px-3.5 pb-3 pt-3 space-y-2.5' : 'px-3.5 pb-3.5 pt-3.5 space-y-3.5') + ' border-t border-line/60'}>
                     {children}
                 </div>
             )}
@@ -2094,11 +2094,11 @@ function GeometryTile({ label, icon, selected, disabled, title, onClick, badge }
             title={title}
             onClick={onClick}
             className={'relative h-[84px] rounded-lg border flex flex-col items-center pt-3 px-1.5 gap-1.5 transition-colors '
-                + (disabled ? 'opacity-50 cursor-not-allowed border-gray-700 text-gray-500'
-                    : selected ? 'border-blue-500 text-blue-100 ring-1 ring-blue-500/15 bg-blue-500/5' : 'border-gray-700 text-gray-300 hover:border-gray-600')}
+                + (disabled ? 'opacity-50 cursor-not-allowed border-line text-fg-subtle'
+                    : selected ? 'border-accent-base text-on-accent-muted ring-1 ring-accent-wash/15 bg-accent-wash/5' : 'border-line text-fg-secondary hover:border-line-strong')}
         >
             {badge && (
-                <span className="absolute top-1 right-1 flex-none text-[8px] uppercase tracking-wide px-1 py-0 rounded border bg-gray-700/60 border-gray-500/50 text-gray-300">{badge}</span>
+                <span className="absolute top-1 right-1 flex-none text-[8px] uppercase tracking-wide px-1 py-0 rounded border bg-chip/60 border-line-heavy/50 text-fg-secondary">{badge}</span>
             )}
             <MtlxIcon name={icon} className="w-5 h-5 shrink-0" />
             <span className="text-[11px] leading-tight text-center min-h-[26px] flex items-center">{label}</span>
@@ -2120,7 +2120,7 @@ function CustomModelTile({ name, selected, expanded, accept, onSelect, onExpand,
     return (
         <div
             className={'relative rounded-lg border overflow-hidden w-full transition-colors '
-                + (selected ? 'border-blue-500 text-blue-100 ring-1 ring-blue-500/15 bg-blue-500/5' : 'border-gray-700 text-gray-300 hover:border-gray-600')
+                + (selected ? 'border-accent-base text-on-accent-muted ring-1 ring-accent-wash/15 bg-accent-wash/5' : 'border-line text-fg-secondary hover:border-line-strong')
                 + (className ? ' ' + className : '')}
         >
             <span
@@ -2132,27 +2132,27 @@ function CustomModelTile({ name, selected, expanded, accept, onSelect, onExpand,
                 <span className="text-[11px] truncate">{GEOM_LABELS['custom']}</span>
             </button>
             {expanded && (
-                <div className="h-7 flex border-t border-gray-700/60">
+                <div className="h-7 flex border-t border-line/60">
                     <div className="relative min-w-0 flex-1 flex items-center px-3">
                         <span className={'truncate text-[11px]' + (name ? ' pr-5' : '')}>
-                            {name || <span className="text-gray-500">No model loaded</span>}
+                            {name || <span className="text-fg-subtle">No model loaded</span>}
                         </span>
                         {name && (
                             <button
                                 type="button"
                                 title="Clear"
                                 onClick={(e) => { e.stopPropagation(); onClear(); }}
-                                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-200"
+                                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-fg-subtle hover:text-fg-soft"
                             >
                                 <MtlxIcon name="x" className="w-3 h-3" />
                             </button>
                         )}
                     </div>
-                    <div className="border-l border-gray-700/60 flex items-center px-2.5 shrink-0">
+                    <div className="border-l border-line/60 flex items-center px-2.5 shrink-0">
                         <button
                             type="button"
                             onClick={(e) => { e.stopPropagation(); openPicker(); }}
-                            className="inline-flex items-center gap-1 text-[11px] text-gray-300 hover:text-gray-100 whitespace-nowrap"
+                            className="inline-flex items-center gap-1 text-[11px] text-fg-secondary hover:text-fg whitespace-nowrap"
                         >
                             <MtlxIcon name="file-import" className="w-3.5 h-3.5" />
                             Choose
@@ -2191,7 +2191,7 @@ function FilePickerField({
     // onChoose branch has no such input, so this only applies below).
     inputTestId,
 }) {
-    const buttonCls = 'inline-flex items-center gap-1 border border-l-0 border-gray-700 rounded-r-md bg-gray-800 hover:bg-gray-700 text-[11px] px-2 text-gray-300 whitespace-nowrap'
+    const buttonCls = 'inline-flex items-center gap-1 border border-l-0 border-line rounded-r-md bg-control hover:bg-hover text-[11px] px-2 text-fg-secondary whitespace-nowrap'
         + (mono ? ' font-mono' : '');
     const [draft, setDraft] = React.useState(value || '');
     // A ref (not state) so blurring alone never re-triggers the seed
@@ -2202,7 +2202,7 @@ function FilePickerField({
         if (draft !== (value || '') && onCommit) onCommit(draft);
     };
     const showClear = !!onClear && !!value;
-    const fieldBase = 'bg-gray-900 border border-gray-700 rounded-l-md px-2 text-[11px] text-gray-300 h-full w-full'
+    const fieldBase = 'bg-surface-sunken border border-line rounded-l-md px-2 text-[11px] text-fg-secondary h-full w-full'
         + (mono ? ' font-mono' : '') + (showClear ? ' pr-6' : '');
     return (
         <div className="flex h-[26px]">
@@ -2219,12 +2219,12 @@ function FilePickerField({
                         onChange={(e) => setDraft(e.target.value)}
                         onBlur={() => { focusedRef.current = false; commit(); }}
                         onKeyDown={(e) => { if (e.key === 'Enter') { e.currentTarget.blur(); } }}
-                        className={fieldBase + ' placeholder-gray-500 focus:outline-none'}
+                        className={fieldBase + ' placeholder-fg-subtle focus:outline-none'}
                     />
                 ) : (
                     <div title={value} className={fieldBase + ' flex items-center'}>
                         <span className="truncate">
-                            {value || <span className="text-gray-500">{placeholder}</span>}
+                            {value || <span className="text-fg-subtle">{placeholder}</span>}
                         </span>
                     </div>
                 )}
@@ -2234,7 +2234,7 @@ function FilePickerField({
                         title="Clear"
                         disabled={disabled}
                         onClick={onClear}
-                        className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-200"
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 text-fg-subtle hover:text-fg-soft"
                     >
                         <MtlxIcon name="x" className="w-3 h-3" />
                     </button>
@@ -2311,8 +2311,8 @@ const ViewportControls = ({
     selectSize = 'sm',
     buttonClassName = (active) => `h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors ${
         active
-            ? 'bg-blue-600/80 border-blue-500 text-white'
-            : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80'
+            ? 'bg-accent-fill/80 border-accent-base text-on-accent'
+            : 'bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80'
     }`,
     // Optional grouped layout. `clusters` is an array of arrays of slot ids;
     // each inner array becomes one <div className={clusterClassName}>.
@@ -2728,7 +2728,7 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
         onChange(nv);
     };
 
-    const swatchCls = className || 'h-7 w-10 bg-transparent border border-gray-600 rounded cursor-pointer flex-none';
+    const swatchCls = className || 'h-7 w-10 bg-transparent border border-line-strong rounded cursor-pointer flex-none';
 
     // Portaled onto <body> via ReactDOM.createPortal: `position: fixed`
     // alone isn't enough, since ancestor `backdrop-blur` (like transform/
@@ -2738,7 +2738,7 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
             ref={popRef}
             onPointerDown={(e) => e.stopPropagation()}
             style={Object.assign({ position: 'fixed', zIndex: 9999, width: POP_W }, pos || {})}
-            className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl p-2.5 space-y-2"
+            className="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl p-2.5 space-y-2"
         >
             <div
                 ref={svRef}
@@ -2769,7 +2769,7 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
             </div>
             <div className="flex items-center gap-1.5">
                 <div
-                    className="h-6 w-6 flex-none rounded border border-gray-600"
+                    className="h-6 w-6 flex-none rounded border border-line-strong"
                     style={{ background: rgbToHex(rgb) }}
                 />
                 <input
@@ -2782,7 +2782,7 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
                         if (e.key === 'Escape') { setHexDraft(rgbToHex(rgb)); e.target.blur(); }
                     }}
                     spellCheck={false}
-                    className="flex-1 min-w-0 bg-gray-900 border border-gray-600 rounded px-1.5 py-0.5 text-[11px] font-mono text-gray-200"
+                    className="flex-1 min-w-0 bg-surface-sunken border border-line-strong rounded px-1.5 py-0.5 text-[11px] font-mono text-fg-soft"
                 />
             </div>
             {/* 0-255 byte row — same linear-RGB convention as the hex row
@@ -2791,7 +2791,7 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
             <div className="flex items-center gap-1.5">
                 {['R', 'G', 'B'].map((label, i) => (
                     <div key={label} className="flex items-center gap-1 flex-1 min-w-0">
-                        <span className="text-[10px] text-gray-500 flex-none">{label}</span>
+                        <span className="text-[10px] text-fg-subtle flex-none">{label}</span>
                         <input
                             type="number"
                             min="0"
@@ -2819,7 +2819,7 @@ const ColorSwatch = ({ rgb, onChange, title, className }) => {
                                     e.target.blur();
                                 }
                             }}
-                            className="w-full min-w-0 bg-gray-900 border border-gray-600 rounded px-1 py-0.5 text-[11px] font-mono text-gray-200"
+                            className="w-full min-w-0 bg-surface-sunken border border-line-strong rounded px-1 py-0.5 text-[11px] font-mono text-fg-soft"
                         />
                     </div>
                 ))}
@@ -2910,36 +2910,37 @@ const popoverNaturalHeight = (el, fallback) => {
 };
 
 // --mx-select-* theming hook. Each falls back through the matching
-// js/site-tokens.css token to a literal, so the embed bundle (no
-// Tailwind, no site-tokens.css there) still renders correctly.
+// --mtlx-* theme token, with a channel fallback so a page without
+// theme-tokens.css still renders correctly.
 const MXS_FONT = 'var(--mx-select-font, var(--site-font-sans, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif))';
 const MXS_FONT_SIZE = 'var(--mx-select-font-size, 11px)';
-const MXS_ACCENT = 'var(--mx-select-accent, var(--site-blue-600, #2563eb))';
-const MXS_ACCENT_TEXT = 'var(--mx-select-accent-text, var(--site-gray-100, #f3f4f6))';
-const MXS_SURFACE = 'var(--mx-select-surface, var(--site-gray-800, #1f2937))';
-const MXS_SURFACE_HOVER = 'var(--mx-select-surface-hover, var(--site-gray-700, #374151))';
-const MXS_TEXT = 'var(--mx-select-text, var(--site-gray-300, #d1d5db))';
-const MXS_TEXT_STRONG = 'var(--mx-select-text-strong, var(--site-gray-100, #f3f4f6))';
-const MXS_MUTED = 'var(--mx-select-muted, var(--site-gray-500, #6b7280))';
-const MXS_BORDER = 'var(--mx-select-border, var(--site-gray-600, #4b5563))';
+const MXS_ACCENT = 'var(--mx-select-accent, rgb(var(--mtlx-selection, 37 99 235)))';
+const MXS_ACCENT_TEXT = 'var(--mx-select-accent-text, rgb(var(--mtlx-fg, 243 244 246)))';
+const MXS_SURFACE = 'var(--mx-select-surface, rgb(var(--mtlx-surface-raised, 31 41 55)))';
+const MXS_CONTROL = 'var(--mx-select-surface, rgb(var(--mtlx-control, 31 41 55)))';
+const MXS_SURFACE_HOVER = 'var(--mx-select-surface-hover, rgb(var(--mtlx-hover, 55 65 81)))';
+const MXS_TEXT = 'var(--mx-select-text, rgb(var(--mtlx-fg-secondary, 209 213 219)))';
+const MXS_TEXT_STRONG = 'var(--mx-select-text-strong, rgb(var(--mtlx-fg, 243 244 246)))';
+const MXS_MUTED = 'var(--mx-select-muted, rgb(var(--mtlx-fg-subtle, 107 114 128)))';
+const MXS_BORDER = 'var(--mx-select-border, rgb(var(--mtlx-line-strong, 75 85 99)))';
 const MXS_RADIUS = 'var(--mx-select-radius, 8px)';
-const MXS_BADGE_WARN = 'var(--mx-select-badge-warn, var(--site-amber-300, #fcd34d))';
+const MXS_BADGE_WARN = 'var(--mx-select-badge-warn, rgb(var(--mtlx-experimental, 252 211 77)))';
 // Translucent derivations so the highlight reads as a tint over the
 // popover ground, not a solid slab. color-mix is already a baseline here
 // (embed/embed-controls.css, js/builder-app.jsx).
 const MXS_ACCENT_SOFT = 'color-mix(in srgb, ' + MXS_ACCENT + ' 30%, transparent)';
 const MXS_SURFACE_SOFT = 'color-mix(in srgb, ' + MXS_SURFACE + ' 95%, transparent)';
 // Toolbar triggers sit alongside BTN_TOOLBAR buttons, which fill at
-// gray-800/80 over backdrop-blur. Matching that 80% is what stops a
+// control/80 over backdrop-blur. Matching that 80% is what stops a
 // select reading as a darker slab than the icon buttons beside it.
-const MXS_SURFACE_BAR = 'color-mix(in srgb, ' + MXS_SURFACE + ' 80%, transparent)';
+const MXS_SURFACE_BAR = 'color-mix(in srgb, ' + MXS_CONTROL + ' 80%, transparent)';
 const MXS_SURFACE_BAR_HOVER = 'color-mix(in srgb, ' + MXS_SURFACE_HOVER + ' 80%, transparent)';
-// `sidebar` variant: matches the docs sidebar's search field (bg-gray-900,
-// border-gray-700) rather than the field variant's lighter gray-800 panel
+// `sidebar` variant: matches the docs sidebar's search field (surface-sunken,
+// line) rather than the field variant's lighter raised panel
 // fill, so a trigger sitting right under that field reads as one group.
-const MXS_SIDEBAR_SURFACE = 'var(--mx-select-sidebar-surface, var(--site-gray-900, #111827))';
-const MXS_SIDEBAR_SURFACE_HOVER = 'var(--mx-select-sidebar-surface-hover, var(--site-gray-800, #1f2937))';
-const MXS_SIDEBAR_BORDER = 'var(--mx-select-sidebar-border, var(--site-gray-700, #374151))';
+const MXS_SIDEBAR_SURFACE = 'var(--mx-select-sidebar-surface, rgb(var(--mtlx-surface-sunken, 17 24 39)))';
+const MXS_SIDEBAR_SURFACE_HOVER = 'var(--mx-select-sidebar-surface-hover, rgb(var(--mtlx-hover-subtle, 31 41 55)))';
+const MXS_SIDEBAR_BORDER = 'var(--mx-select-sidebar-border, rgb(var(--mtlx-line, 55 65 81)))';
 
 // theme prop keys -> the custom property each one feeds. Used to stamp
 // theme overrides as inline custom properties, and to know which
@@ -2975,8 +2976,8 @@ const SELECT_BADGE_TONES = { Experimental: 'warn' };
 // warn's text color is the MXS_BADGE_WARN var (applied inline per row);
 // the tint/border stay literal, there's no separate themed var for them.
 const SELECT_BADGE_TONE_CLS = {
-    warn: 'bg-amber-600/30 border-amber-500/50',
-    neutral: 'bg-gray-700/60 border-gray-500/50 text-gray-300',
+    warn: 'bg-experimental-fill/30 border-experimental-hue/50',
+    neutral: 'bg-chip/60 border-line-heavy/50 text-fg-secondary',
 };
 const resolveSelectBadge = (badge) => {
     if (badge == null) return null;
@@ -3350,7 +3351,7 @@ const MtlxSelect = ({
             ? (triggerHover ? MXS_SURFACE_BAR_HOVER : MXS_SURFACE_BAR)
             : variant === 'sidebar'
                 ? (triggerHover ? MXS_SIDEBAR_SURFACE_HOVER : MXS_SIDEBAR_SURFACE)
-                : (triggerHover ? MXS_SURFACE_HOVER : MXS_SURFACE),
+                : (triggerHover ? MXS_SURFACE_HOVER : MXS_CONTROL),
         borderColor: variant === 'sidebar' ? MXS_SIDEBAR_BORDER : MXS_BORDER,
     };
     // Fit-to-text sizing, skipped for `block` triggers (w-full already
@@ -3488,7 +3489,7 @@ const MtlxSelect = ({
                                     type="button"
                                     title="Clear"
                                     onClick={(e) => { e.stopPropagation(); modelFooter.onClear(); }}
-                                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-200"
+                                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-fg-subtle hover:text-fg-soft"
                                 >
                                     <MtlxIcon name="x" className="w-3 h-3" />
                                 </button>
@@ -3846,8 +3847,8 @@ const MtlxMenu = ({
                             // itself is the button and carries aria-checked.
                             <span className="flex-none pl-6 inline-flex items-center" aria-hidden="true">
                                 <span className={'relative inline-flex h-4 w-7 shrink-0 items-center rounded-full border transition-colors '
-                                    + (row.checked ? 'bg-blue-500 border-blue-500' : 'bg-gray-700 border-gray-600')}>
-                                    <span className={'inline-block h-2.5 w-2.5 rounded-full bg-white transition-transform '
+                                    + (row.checked ? 'bg-accent-base border-accent-base' : 'bg-chip border-line-strong')}>
+                                    <span className={'inline-block h-2.5 w-2.5 rounded-full bg-on-accent transition-transform '
                                         + (row.checked ? 'translate-x-[13px]' : 'translate-x-[2px]')} />
                                 </span>
                             </span>
@@ -3907,7 +3908,7 @@ class PreviewErrorBoundary extends React.Component {
     render() {
         if (this.state.error) {
             return (
-                <div className="rounded-lg border border-red-900/60 bg-red-950/30 text-red-300 text-xs p-3">
+                <div className="rounded-lg border border-error-bg-strong/60 bg-error-bg/30 text-error-text text-xs p-3">
                     {'3D preview crashed: ' + String((this.state.error && this.state.error.message) || this.state.error)}
                 </div>
             );

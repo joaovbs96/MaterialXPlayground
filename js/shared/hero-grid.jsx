@@ -2,9 +2,9 @@
 // shared by home-app.jsx and vscode-app.jsx. No imports; self-exports
 // via Object.assign(window, {}) like the other lazy-loaded files.
 
-// 40px cells, faint gray-500 lines, faded into the page background across
+// 40px cells, faint line-heavy lines, faded into the page background across
 // the fade element's own height (see HeroGrid below for the exact extent).
-const HERO_GRID_IMAGE = 'linear-gradient(to right, rgba(107,114,128,0.16) 1px, transparent 1px), linear-gradient(to bottom, rgba(107,114,128,0.16) 1px, transparent 1px)';
+const HERO_GRID_IMAGE = 'linear-gradient(to right, rgb(var(--mtlx-line-heavy) / calc(41 / 255)) 1px, transparent 1px), linear-gradient(to bottom, rgb(var(--mtlx-line-heavy) / calc(41 / 255)) 1px, transparent 1px)';
 
 // Render as the FIRST child of a `relative` rootRef element. Measures
 // against the shell's tagged view wrapper (data-mtlx-view-wrap) and

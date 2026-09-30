@@ -452,6 +452,7 @@ const EAGER_EMBED_FILES = [
   "embed/gen/mtlx-engine.js",
   "embed/gen/mtlx-ui.js",
   "embed/gen/viewer-app.js",
+  "embed/gen/theme-utilities.css",
   "embed/embed-boot.js",
 ];
 
