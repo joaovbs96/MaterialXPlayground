@@ -123,6 +123,22 @@ test.describe('VS Code webview simulation', () => {
     expect(result.pageErrors).toEqual([]);
   });
 
+  test('Viewer canvas fills its pane at several pane sizes', async ({ page, vscodeServer }) => {
+    await page.setViewportSize({ width: 776, height: 700 });
+    await bootWebview(page, vscodeServer, { initialHash: '#!viewer', docsOnly: false, globalName: 'MaterialViewerApp' });
+    await page.waitForSelector('canvas', { timeout: 30000 });
+    for (const [w, h] of [[776, 700], [541, 776], [388, 500], [1082, 719]]) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.waitForTimeout(1500);
+      await expect.poll(() => page.evaluate(() => {
+        const c = document.querySelector('canvas');
+        const b = c.getBoundingClientRect();
+        const p = c.parentElement.getBoundingClientRect();
+        return b.width === p.width && b.height === p.height && p.height > 0.5 * window.innerHeight ? 'fill' : JSON.stringify({ b: [b.width, b.height], p: [p.width, p.height] });
+      })).toBe('fill');
+    }
+  });
+
   test('Docs (standalone node-documentation) panel boots', async ({ page, vscodeServer }) => {
     const result = await bootWebview(page, vscodeServer, {
       initialHash: '#!docs',

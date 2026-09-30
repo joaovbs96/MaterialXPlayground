@@ -352,22 +352,22 @@ export function gltfLightToRecord(lightDef, matrixArray, primPath, name) {
 
 // Maps one glTF camera def + its node's world matrix onto a USD-shaped
 // camera record. Orthographic cameras are emitted faithfully (apertures
-// from xmag/ymag) even though the current Scene Viewer camera rig only
-// ever computes a perspective fov from aperture/focalLength; see the
-// caller's warning.
+// from xmag/ymag, in USD's tenths of a scene unit) even though the Scene
+// Viewer renders them as perspective; see the caller's warning.
 export function gltfCameraToRecord(cameraDef, matrixArray, primPath, name) {
   const record = {
     primPath, name, matrix: matrixArray,
-    focalLength: 50, horizontalAperture: 36, verticalAperture: 24,
-    clippingRange: [0.1, 1000000], focusDistance: 0, projection: "perspective",
+    focalLength: 50, horizontalAperture: 20.955, verticalAperture: 15.2908,
+    horizontalApertureOffset: 0, verticalApertureOffset: 0,
+    clippingRange: [1, 1000000], focusDistance: 0, projection: "perspective",
   };
   if (cameraDef.type === "orthographic") {
     const params = cameraDef.orthographic || {};
     const xmag = Number.isFinite(params.xmag) ? params.xmag : 1;
     const ymag = Number.isFinite(params.ymag) ? params.ymag : 1;
     record.projection = "orthographic";
-    record.horizontalAperture = xmag * 2;
-    record.verticalAperture = ymag * 2;
+    record.horizontalAperture = xmag * 2 * 10;
+    record.verticalAperture = ymag * 2 * 10;
     record.clippingRange = [
       Number.isFinite(params.znear) ? params.znear : 0.01,
       Number.isFinite(params.zfar) ? params.zfar : 1000000,
@@ -380,6 +380,9 @@ export function gltfCameraToRecord(cameraDef, matrixArray, primPath, name) {
   record.horizontalAperture = horizontalAperture;
   record.verticalAperture = verticalAperture;
   record.focalLength = focalLength;
+  // No aspectRatio: glTF uses the viewport's, so yfov stays the vertical field
+  // of view and the renderer takes the horizontal extent from the viewport.
+  if (!(Number.isFinite(params.aspectRatio) && params.aspectRatio > 0)) record.aspectFromViewport = true;
   record.clippingRange = [
     Number.isFinite(params.znear) ? params.znear : 0.01,
     Number.isFinite(params.zfar) ? params.zfar : 1000000,
@@ -654,13 +657,38 @@ export async function loadGltfStage({ files, rootPath, signal, onProgress } = {}
       return materialPath;
     };
 
+    // Outliner path (js/usd-scene-app.jsx): the node ancestry under the glTF
+    // scene, one unique segment per sibling. Selection keeps using primPath.
+    const treeSegments = new Map();
+    const usedTreeNames = new Map();
+    const treeSegmentOf = (object) => {
+      if (treeSegments.has(object)) return treeSegments.get(object);
+      let used = usedTreeNames.get(object.parent);
+      if (!used) { used = new Set(); usedTreeNames.set(object.parent, used); }
+      const segment = sanitizeMtlxName(object.name || (object.isMesh ? "mesh" : "node"), used);
+      treeSegments.set(object, segment);
+      return segment;
+    };
+    const treePathOf = (object) => {
+      const segments = [];
+      for (let node = object; node && node !== sceneRoot; node = node.parent) segments.unshift(treeSegmentOf(node));
+      return "/" + segments.join("/");
+    };
+
     const meshRecords = [];
+    // Every glTF node in traversal order (meshes too) for the outliner, so empty
+    // transforms show up and count; cameras and lights have their own paths.
+    const nodePaths = [];
     sceneRoot.traverse((object) => {
       if (object.isPoints || object.isLine || object.isLineSegments) {
         warnings.push("Skipped a non-triangle primitive (points/lines): " + (object.name || "(unnamed)"));
         return;
       }
-      if (!object.isMesh) return;
+      if (!object.isMesh) {
+        const attached = object.parent && (object.parent.isCamera || object.parent.isLight);
+        if (object !== sceneRoot && !object.isCamera && !object.isLight && !attached) nodePaths.push(treePathOf(object));
+        return;
+      }
       const geometry = object.geometry;
       const posAttr = geometry && geometry.attributes && geometry.attributes.position;
       if (!posAttr || !posAttr.count) {
@@ -703,8 +731,11 @@ export async function loadGltfStage({ files, rootPath, signal, onProgress } = {}
       const materialPath = materialPathFor(materialIndex, hasVertexColor);
 
       const primName = sanitizeMtlxName(object.name || "mesh", usedPrimNames);
+      const treePath = treePathOf(object);
+      nodePaths.push(treePath);
       meshRecords.push({
         primPath: "/" + primName,
+        treePath,
         name: object.name || "",
         positions,
         ...(normals ? { normals } : {}),
@@ -791,6 +822,7 @@ export async function loadGltfStage({ files, rootPath, signal, onProgress } = {}
         version: rawJson.asset && rawJson.asset.version,
       },
       meshes: meshRecords,
+      nodes: nodePaths,
       materials: materialEntries,
       assets,
       cameras: cameraRecords,

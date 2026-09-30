@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${cspSource}; style-src ${cspSource}; script-src 'nonce-${nonce}';">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="${cardsStyleUri}">
+<link rel="stylesheet" href="${styleUri}">
+<title>New Material from Example</title>
+</head>
+<body>
+<div id="app">
+    <div id="mtlx-gallery-toolbar-host"></div>
+    <div id="mtlx-gallery-grid" class="mtlx-gallery-grid" role="list" aria-label="Example materials"></div>
+    <div id="mtlx-gallery-empty" class="mtlx-gallery-empty" hidden>No examples match your filters.</div>
+</div>
+<script nonce="${nonce}" src="${cardsScriptUri}"></script>
+<script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>

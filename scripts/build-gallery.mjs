@@ -13,7 +13,7 @@ import { readFile, writeFile, mkdir, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -109,6 +109,12 @@ function toPosix(p) {
 
 function dedupe(arr) {
   return [...new Set(arr)];
+}
+
+/** CRLF -> LF so the fingerprint is identical on a Windows checkout
+ * (core.autocrlf) and a Linux CI checkout of the same text content. */
+export function normalizeEol(text) {
+  return text.replace(/\r\n/g, "\n");
 }
 
 function titleCase(snakeCase) {
@@ -221,14 +227,14 @@ function extractLineComment(xml, lineNumber) {
  * directory), folding in their filename refs (also resolved per-doc) and
  * raw text. Returns unique texture count/bytes and the concatenated text
  * (root doc first, then includes) for renderable/shader extraction. */
-async function collectDocument(rootPath, rootXml) {
+export async function collectDocument(rootPath, rootXml) {
   const seenRefs = new Set();
   const refs = [];
   // Fingerprint of everything this material renders from. A deploy reuses
   // the previously published thumbnail when this is unchanged, so it has
   // to cover the root doc, every include, and every texture byte.
   const hash = createHash("sha256");
-  hash.update(rootXml);
+  hash.update(normalizeEol(rootXml));
   const pieces = [rootXml];
   const visited = new Set([rootPath]);
   const queue = [{ dir: path.dirname(rootPath), xml: rootXml }];
@@ -245,7 +251,7 @@ async function collectDocument(rootPath, rootXml) {
       }
       const incXml = await readFile(incPath, "utf8");
       hash.update(href);
-      hash.update(incXml);
+      hash.update(normalizeEol(incXml));
       pieces.push(incXml);
       queue.push({ dir: path.dirname(incPath), xml: incXml });
     }
@@ -410,4 +416,7 @@ async function main() {
   log(`gallery manifest: ${materials.length} materials, ${texturedCount} textured, ${totalTextureBytes} texture bytes total.`);
 }
 
-await main();
+// Only run the full (vendor-scanning, network-free but disk-heavy) build
+// when executed directly - importing this module for its exports (unit
+// tests) must never trigger it as a side effect.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();

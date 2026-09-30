@@ -72,7 +72,7 @@ const BANNER = `    <!-- =======================================================
          focus-outline CSS near the bottom) are fragments defined in
          scripts/build-webview.mjs — edit them there instead. Loaders:
          RGBELoader, GLTFLoader, DRACOLoader, OBJLoader, OrbitControls.
-         Contains seven \${...} placeholders substituted at runtime by
+         Contains eight \${...} placeholders substituted at runtime by
          vscode_extension/src/editorProvider.js's buildHtml().
          ================================================================ -->`;
 
@@ -81,7 +81,7 @@ const BANNER = `    <!-- =======================================================
 const CSP_BLOCK = `    <!-- Content-Security-Policy: webviews block everything by default
          unless explicitly allowed. Directives, one per concern:
            default-src 'none'          — deny-by-default baseline.
-           script-src  \${cspSource} 'unsafe-inline' 'unsafe-eval'
+           script-src  \${cspSource} blob: 'unsafe-inline' 'unsafe-eval'
                        'wasm-unsafe-eval'
                        — \${cspSource} for this extension's own local
                          resources (bootstrap.js) and, via
@@ -95,7 +95,11 @@ const CSP_BLOCK = `    <!-- Content-Security-Policy: webviews block everything b
                          build step, by design — js/shell.jsx,
                          js/graph-app.jsx, etc. are all loaded that way);
                          'wasm-unsafe-eval' for WebAssembly.instantiate
-                         (js/materialx/<version>/JsMaterialXGenShader.wasm).
+                         (js/materialx/<version>/JsMaterialXGenShader.wasm);
+                         blob: for the USD Scene Viewer's module Worker,
+                         whose imports are page-made blob: URLs because
+                         workers cannot load from \${cspSource}
+                         (js/usd/usd-webview-worker-shim.js).
            style-src   \${cspSource} 'unsafe-inline'
                        — the vendored Tailwind Play build injects a
                          <style> tag at runtime from \${cspSource}, and the
@@ -103,11 +107,10 @@ const CSP_BLOCK = `    <!-- Content-Security-Policy: webviews block everything b
                          throughout.
            font-src    \${cspSource}  — KaTeX web fonts (lazy-loaded by the
                        docs view), served from vendor/katex/fonts/.
-           img-src     \${cspSource} https: blob: data:
-                       — blob: for object-URL textures/snapshots the app
-                         creates itself, data: for small inline assets,
-                         https: kept for any remote-fetched preset/texture
-                         images (web-parity fallback — see connect-src).
+           img-src     \${cspSource} blob: data:
+                       blob: is for object-URL textures/snapshots the app
+                       creates itself, data: for small inline assets. No
+                       https:, since the webview never renders a remote image.
            connect-src \${cspSource} https://raw.githubusercontent.com
                        blob: data:
                        — fetch() for local resources (vendored libs,
@@ -124,7 +127,7 @@ const CSP_BLOCK = `    <!-- Content-Security-Policy: webviews block everything b
                          object-URL and inline-asset fetches issued
                          against the img-src sources above.
            worker-src  blob:  DRACOLoader (r128) decodes in a blob-URL
-                       Worker; script-src alone (no blob:) blocks it here.
+                       Worker, and the USD Scene Viewer's worker is one too.
          TRADEOFF: 'unsafe-inline' is in script-src (not just style-src)
          because index.html's inline scripts (embed-mode detection, the
          ReactDOM.createRoot(...) boot call) and this template's own
@@ -133,10 +136,10 @@ const CSP_BLOCK = `    <!-- Content-Security-Policy: webviews block everything b
          runs third-party code via 'unsafe-eval'. -->
     <meta http-equiv="Content-Security-Policy" content="
         default-src 'none';
-        script-src \${cspSource} 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval';
+        script-src \${cspSource} blob: 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval';
         style-src \${cspSource} 'unsafe-inline';
         font-src \${cspSource};
-        img-src \${cspSource} https: blob: data:;
+        img-src \${cspSource} blob: data:;
         connect-src \${cspSource} https://raw.githubusercontent.com blob: data:;
         worker-src blob:;
     ">`;
@@ -159,12 +162,13 @@ const BOOTSTRAP_BLOCK = `    <!-- Bootstrap: MUST be the first script to run, be
          initial hash from data-initial-hash, flags window.__MTLX_VSCODE__
          (and, from data-docs-only, window.__MTLX_DOCS_ONLY__ — read by
          js/site-header.js to hide the file-bound Viewer/Graph tabs in the
-         standalone docs panel), installs the in-page link interceptor,
+         standalone docs panel; data-scene-only does the same for the USD
+         scene editor), installs the in-page link interceptor,
          and wires up the extension <-> webview postMessage contract. See
          vscode_extension/media/bootstrap.js.
          data-extension-version/data-vscode-version feed window.__MTLX_VSCODE_VERSIONS__,
          read by js/shell.jsx's AboutDialog. -->
-    <script src="\${bootstrapUri}" data-initial-hash="\${initialHash}" data-docs-only="\${docsOnly}" data-extension-version="\${extensionVersion}" data-vscode-version="\${vscodeVersion}"></script>`;
+    <script src="\${bootstrapUri}" data-initial-hash="\${initialHash}" data-docs-only="\${docsOnly}" data-scene-only="\${sceneOnly}" data-extension-version="\${extensionVersion}" data-vscode-version="\${vscodeVersion}"></script>`;
 
 // Webview-only :focus{outline:none}: VS Code's Chromium shows a native
 // focus outline that a regular browser's :focus-visible heuristics
@@ -178,9 +182,22 @@ const FOCUS_CSS_BLOCK = `
            normally suppress. */
         :focus {
             outline: none;
+        }
+
+        /* WEBVIEW-ONLY - do NOT mirror this rule back to index.html / the
+           real site. VS Code injects its own default webview styles
+           (body { padding: 0 20px; }, confirmed via getComputedStyle in a
+           running webview, see the fullWidth smoke scenario), leaving a
+           ~20px gap on each side between the webview edge and every view
+           (playground, docs panel, Scene Viewer). !important beats VS
+           Code's non-!important default regardless of which <style> tag
+           runs first or last in the document. */
+        body {
+            padding: 0 !important;
+            margin: 0 !important;
         }`;
 
-const PLACEHOLDERS = ["${cspSource}", "${baseUri}", "${bootstrapUri}", "${initialHash}", "${docsOnly}", "${extensionVersion}", "${vscodeVersion}"];
+const PLACEHOLDERS = ["${cspSource}", "${baseUri}", "${bootstrapUri}", "${initialHash}", "${docsOnly}", "${sceneOnly}", "${extensionVersion}", "${vscodeVersion}"];
 
 /** Count non-overlapping occurrences of `needle` in `haystack`. */
 function countOccurrences(haystack, needle) {

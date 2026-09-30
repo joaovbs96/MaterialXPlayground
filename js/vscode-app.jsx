@@ -31,16 +31,22 @@ const VSCODE_HOW = [
     },
 ];
 
-// Eight "Features" items, two columns on desktop, in mockup order.
+// "Features" items, two columns on desktop, in mockup order.
 const VSCODE_FEATURES = [
     { icon: 'share', title: 'Node Graph Editor', desc: 'The full graph editor: nested nodegraphs, live 3D preview, validation, node docs dialog. Every edit lands in the .mtlx buffer immediately; Ctrl+S saves the file.' },
     { icon: 'camera', title: 'Material Viewer', tag: 'Read only', desc: (<>Image-based lighting, geometry picker, turntable, save as PNG. Switching to it always shows the graph editor's current state, unsaved edits included.</>) },
-    { icon: 'folder', title: 'Textures and includes resolved', desc: (<>Sibling textures and <code className={CODE_CLASS}>{'xi:include'}</code> documents are found on disk automatically, using the same crawler as the web app's drag-and-drop loader.</>) },
-    { icon: 'file-code', title: 'Syntax highlighting', desc: (<>.mtlx files get a "MaterialX" language mode: XML highlighting, <code className={CODE_CLASS}>{'<!-- -->'}</code> comment toggling with Ctrl+/, auto-closing quotes, and <code className={CODE_CLASS}>{'< >'}</code> or quotes wrapping a selection.</>) },
-    { icon: 'file-check', title: 'Live validation', desc: 'Two tiers as you type (400ms debounce): XML well-formedness with precise squiggles, then MaterialX validate() through the bundled WASM build with its real messages. Results in the Problems panel and a MaterialX status bar item.' },
+    { icon: 'download', title: 'Exports use a native Save dialog', desc: "Screenshots, turntable GIFs, .mtlx and zip exports, and generated shader code all open VS Code's own Save dialog, defaulting to the open document's folder." },
+    { icon: 'file-code', title: 'Syntax highlighting and file icon', desc: (<>.mtlx files get a "MaterialX" language mode with XML highlighting, <code className={CODE_CLASS}>{'<!-- -->'}</code> comment toggling, auto-closing quotes, a matching file icon, and an Open Preview button on the editor toolbar.</>) },
+    { icon: 'list-details', title: 'Outline and navigation', desc: 'Materials, node graphs, node definitions and their inputs and outputs show up in the Outline, breadcrumbs and Go to Symbol. Go to Definition and Find All References work for node, nodegraph, output, interfacename and nodedef references.' },
+    { icon: 'color-swatch', title: 'Color swatches and picker', desc: "Color3 and color4 values show an inline swatch in the text editor. Opening the picker writes the new color back converted into that value's own color space." },
+    { icon: 'sparkles', title: 'Snippets', desc: 'Ready-made snippets for a new document, a standard_surface or OpenPBR material, a texture chain, a normal map chain, a node graph, and a typed input.' },
+    { icon: 'code', title: 'Auto-complete', desc: "Suggests node categories, an element's inputs with their types, and only the attributes that element actually supports, plus valid attribute values: types, color spaces, units, versions, node definitions, targets and references." },
+    { icon: 'file-check', title: 'Live validation', desc: 'Runs off the editor thread as you type: XML well-formedness first, then MaterialX validate() through the bundled WASM build. Documents using xi:include get XML checks only. Results show in the Problems panel and a status bar item.' },
     { icon: 'book', title: 'Hover docs', tag: 'In the text editor', desc: (<>In the .mtlx text editor, hover a node tag like <code className={CODE_CLASS}>{'<standard_surface>'}</code> or a <code className={CODE_CLASS}>{'node="..."'}</code> value to see its description and port table from the MaterialX spec, with links to the Interactive Documentation panel and the official spec.</>) },
     { icon: 'external-link', title: 'Node Library Documentation panel', desc: 'Browse the whole node library without a file open, from the Command Palette or a .mtlx context menu. Hover deep-links land on the exact node and signature. Its 3D previews start switched off to keep the webview light.' },
-    { icon: 'settings-cog', title: 'Configurable', desc: 'Pick which view opens first, where the Playground opens, and whether it auto-opens. Optionally make it the default editor for .mtlx.' },
+    { icon: 'folder', title: 'Textures load straight from disk', desc: (<>Sibling textures and <code className={CODE_CLASS}>{'xi:include'}</code> documents are found automatically, including large 4K and 8K textures. References must stay inside the workspace folder that contains the document.</>) },
+    { icon: 'file-plus', title: 'New Material from Example', desc: 'Copies one of 14 ready-made materials, four from the Playground and ten from the MaterialX examples, into your workspace along with any textures it needs, then opens it.' },
+    { icon: 'cube', title: 'Scene Viewer', tag: 'Read only', desc: 'Open .usd, .usda, .usdc, .usdz, .gltf, .glb and .obj files: sublayers, references, payloads, buffers, materials, and the MaterialX materials and textures they use load straight from the workspace.' },
 ];
 
 // Three equal-width cards below the install steps.
@@ -75,19 +81,34 @@ const VSCODE_ASIDE = [
 // Settings table rows, in mockup order. `values` marks each default inline.
 const VSCODE_SETTINGS = [
     {
-        setting: 'materialx.defaultView',
+        setting: 'materialxPlayground.defaultView',
         values: (<>"graph" <span className="text-gray-500 text-xs font-mono">(default)</span>, "viewer"</>),
         desc: 'Which view is visible first when a .mtlx file opens. Both views load the document either way; the header nav switches between them.',
     },
     {
-        setting: 'materialx.openBehavior',
+        setting: 'materialxPlayground.openBehavior',
         values: (<>"splitRight" <span className="text-gray-500 text-xs font-mono">(default)</span>, "sameGroup"</>),
         desc: 'Open the Playground beside the text editor, reusing the right-hand group on repeat opens, or in the active editor group.',
     },
     {
-        setting: 'materialx.autoOpenPlayground',
+        setting: 'materialxPlayground.autoOpenPlayground',
         values: (<>true <span className="text-gray-500 text-xs font-mono">(default)</span>, false</>),
         desc: 'Automatically open the Playground beside the text editor whenever a .mtlx file is opened. Fires once per file open; closing the Playground does not re-trigger it.',
+    },
+    {
+        setting: 'materialxPlayground.pickFileOnFilenameInput',
+        values: (<>true <span className="text-gray-500 text-xs font-mono">(default)</span>, false</>),
+        desc: 'When a filename input is added from auto-complete, open a file picker right away to choose the file.',
+    },
+    {
+        setting: 'materialxPlayground.syncSelection',
+        values: (<>true <span className="text-gray-500 text-xs font-mono">(default)</span>, false</>),
+        desc: 'Keep the text cursor, the MaterialX Outline and the Graph Editor selection in sync.',
+    },
+    {
+        setting: 'materialxPlayground.autoOpenSceneViewer',
+        values: (<>true <span className="text-gray-500 text-xs font-mono">(default)</span>, false</>),
+        desc: 'Automatically open the Scene Viewer whenever a USD, glTF, GLB or OBJ scene file is opened: beside the text editor for a file VS Code opens as text, or replacing the tab for a file VS Code shows as binary. Fires once per file open.',
     },
 ];
 
@@ -95,15 +116,17 @@ const VSCODE_SETTINGS = [
 const VSCODE_LIMITS = [
     { title: 'Manual installs and updates', desc: 'Distributed as a .vsix from GitHub Releases only. No Marketplace listing yet, so no automatic updates: check this page or the releases feed for new versions.' },
     { title: 'Graph edits re-serialize the document', desc: (<>Only the Node Graph Editor edits the file; the Material Viewer is read-only. Any graph edit replaces the buffer with the app's own serialization of the whole document, so attribute order and formatting can differ from what you typed by hand.</>) },
-    { title: 'One MaterialX version, no Compare view', desc: 'The .vsix bundles only the default MaterialX build (v1.39.5). The Material Comparison view, the one feature that needs several versions side by side, stays web-only; the webview nav has just Viewer and Graph.' },
-    { title: 'Some web-app UI is hidden', desc: 'Home, New/Import/Presets, drag-and-drop, the Viewer\'s file sidebar, and Send-to buttons do not apply to a single open file, so the webview hides them. The Docs tab is replaced by the separate docs command.' },
+    { title: 'One MaterialX version, no Compare view', desc: 'The .vsix bundles only the default MaterialX build (v1.39.5). The Material Comparison view, the one feature that needs several versions side by side, stays web-only; the webview nav has just Material Viewer and Graph.' },
+    { title: 'References must stay in the workspace folder', desc: 'Textures and included files must be inside the workspace folder that contains the document, or next to the document itself when no folder is open.' },
+    { title: 'Some web-app UI is hidden', desc: 'Home, New/Import/Presets, drag-and-drop, the Material Viewer\'s file sidebar, and Send-to buttons do not apply to a single open file, so the webview hides them. The Docs tab is replaced by the separate docs command.' },
     { title: 'Memory scales with open tabs', desc: 'Each open .mtlx tab is its own webview with its own MaterialX WASM instance and WebGL context, kept alive while backgrounded so switching tabs is instant. The first shader compile after opening a file can take a few seconds while the WASM build warms up.' },
-    { title: 'Semantic squiggle positions are best-effort', desc: 'MaterialX validate() reports messages without character offsets, so the extension places each squiggle by locating the named element in the text. It can land on the wrong occurrence of a common name. XML well-formedness errors are exact.' },
+    { title: 'Semantic squiggle positions are best-effort', desc: 'MaterialX validate() reports messages without character offsets, so the extension places each squiggle by locating the named element in the text. Very large documents and ones using xi:include get XML checks only.' },
+    { title: 'Scene Viewer limits', desc: 'Read only, shows the opened file only, and loads at most 4,000 referenced files up to 4 GiB. Graph edits to a material from a scene cannot be saved back into the scene file; use Export .mtlx instead.' },
 ];
 
-// Three "Requirements and privacy" items, all sharing the green check icon.
+// "Requirements and privacy" items, all sharing the green check icon.
 const VSCODE_REQUIREMENTS = [
-    { title: 'VS Code 1.85 or newer', desc: 'Desktop VS Code on Windows, macOS, or Linux, with GPU-accelerated webviews (WebGL2) for the 3D views.' },
+    { title: 'VS Code 1.100 or newer', desc: 'Desktop VS Code on Windows, macOS, or Linux, with GPU-accelerated webviews (WebGL2) for the 3D views.' },
     { title: 'No dependencies, no build step', desc: 'Plain JavaScript with zero npm dependencies. Everything the webview needs ships inside the .vsix.' },
     { title: 'Works offline, no telemetry', desc: 'No data leaves your machine. The package includes an offline snapshot of the MaterialX spec, templates, and examples.' },
 ];
@@ -232,7 +255,7 @@ function VscodeApp({ active } = {}) {
     const facts = [
         { k: 'Latest', v: version || 'latest' },
         { k: 'Package', v: '.vsix' + (sizeLabel ? ' · ' + sizeLabel : '') },
-        { k: 'VS Code', v: '1.85 or newer' },
+        { k: 'VS Code', v: '1.100 or newer' },
         { k: 'Distribution', v: '.vsix only, for now' },
         { k: 'License', v: 'Apache 2.0' },
         {
@@ -273,8 +296,8 @@ function VscodeApp({ active } = {}) {
                             <span className={EXPERIMENTAL_BADGE_CLASS}>Experimental</span>
                         </div>
                         <p className="text-gray-400 text-base leading-6 max-w-[34em]">
-                            Open <strong className={STRONG_CLASS}>.mtlx</strong> files inside VS Code with the same Material
-                            Viewer and Node Graph Editor as the web app, plus <strong className={STRONG_CLASS}>live validation</strong> and{' '}
+                            Open <strong className={STRONG_CLASS}>.mtlx</strong> files inside VS Code with the same
+                            Material Viewer and Node Graph Editor as the web app, plus <strong className={STRONG_CLASS}>live validation</strong> and{' '}
                             <strong className={STRONG_CLASS}>hover docs</strong> right in the text editor. Everything runs
                             locally: the extension bundles the site and the MaterialX WebAssembly build, and it works fully offline.
                         </p>
@@ -304,7 +327,7 @@ function VscodeApp({ active } = {}) {
                             <span className="font-mono text-gray-400">{fileName}</span>
                             {sizeLabel && (<><span className="text-gray-600">·</span><span>{sizeLabel}</span></>)}
                             <span className="text-gray-600">·</span>
-                            <span>Requires VS Code 1.85+</span>
+                            <span>Requires VS Code 1.100+</span>
                             <span className="text-gray-600">·</span>
                             <span>Windows, macOS, Linux</span>
                             <span className="text-gray-600">·</span>
@@ -424,7 +447,7 @@ function VscodeApp({ active } = {}) {
                             <span className="w-8 h-8 rounded-full bg-gray-800 border border-gray-600 text-blue-300 text-[13px] font-semibold flex items-center justify-center tabular-nums">1</span>
                             <div className="flex flex-col gap-2 pt-1 min-w-0">
                                 <h3 className="text-[15px] font-semibold text-gray-100">Download the package</h3>
-                                <p className="text-sm leading-[21px] text-gray-400">Grab the latest <code className={CODE_CLASS}>.vsix</code> from the button above. It is a single file (about 64 MB, since it bundles the whole app for offline use).</p>
+                                <p className="text-sm leading-[21px] text-gray-400">Grab the latest <code className={CODE_CLASS}>.vsix</code> from the button above. It is a single file that bundles the whole app for offline use.</p>
                                 <div>
                                     <a href={downloadHref} className="inline-flex items-center gap-1.5 h-[34px] px-3 rounded-lg border border-gray-600 bg-gray-800 hover:bg-gray-700 text-[13px] font-medium text-gray-100 max-w-full transition-colors">
                                         <MtlxIcon name="download" className="w-[15px] h-[15px] text-blue-400 shrink-0" />
@@ -464,9 +487,10 @@ function VscodeApp({ active } = {}) {
                             <div className="flex flex-col gap-2 pt-1 min-w-0">
                                 <h3 className="text-[15px] font-semibold text-gray-100">Open a .mtlx file</h3>
                                 <p className="text-sm leading-[21px] text-gray-400">
-                                    The Playground opens beside the text editor automatically (setting <code className={CODE_CLASS}>materialx.autoOpenPlayground</code>).
+                                    The Playground opens beside the text editor automatically (setting <code className={CODE_CLASS}>materialxPlayground.autoOpenPlayground</code>).
                                     If it does not, right-click the file and choose <strong className={STRONG_CLASS}>Open With... {'→'} MaterialX Playground</strong>,
-                                    or run <strong className={STRONG_CLASS}>MaterialX Playground: Open MaterialX Document</strong> from the Command
+                                    or run <strong className={STRONG_CLASS}>MaterialX Playground: Open in Graph Editor</strong> or
+                                    <strong className={STRONG_CLASS}> Open in Material Viewer</strong> from the Command
                                     Palette (<Kbd>Ctrl</Kbd>+<Kbd>Shift</Kbd>+<Kbd>P</Kbd>).
                                 </p>
                             </div>

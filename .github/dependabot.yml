@@ -6,9 +6,16 @@
 # (bump package.json, `npm run vendor` / `npm run build`, commit the
 # regenerated files) — an automated version-only PR would always fail
 # CI's stale-artifact gate.
+#
+# .github/vsce is the one npm exception: it is a private, unbuilt CI
+# tool lockfile with no committed artifacts to go stale.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /.github/vsce
     schedule:
       interval: weekly

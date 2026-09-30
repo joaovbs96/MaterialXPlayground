@@ -134,6 +134,19 @@ export const STAMP_TABLE = [
     replacement: (meta) => `const MTLX_DEFAULT_VERSION = '${meta.version}';`,
     expect: (meta) => meta.version,
   },
+  {
+    path: "vscode_extension/language/mtlx.snippets.json",
+    describe: "mtlxdoc snippet's <materialx version=\"...\"> literal",
+    // The <materialx> root element's own version attribute is the
+    // MaterialX FORMAT version (major.minor, e.g. "1.39"), not the full
+    // library release (meta.version, e.g. "1.39.5"), the same bare X.Y shape
+    // as the MTLX_DEFAULT_VERSION entry above, just one component
+    // shorter, so it's compared against a derived major.minor via
+    // expect() rather than meta.tag.
+    re: /<materialx version=\\"(\d+\.\d+)\\"/,
+    replacement: (meta) => `<materialx version=\\"${meta.version.split(".").slice(0, 2).join(".")}\\"`,
+    expect: (meta) => meta.version.split(".").slice(0, 2).join("."),
+  },
 ];
 
 /** Applies every STAMP_TABLE replacement in place; errors (rather than

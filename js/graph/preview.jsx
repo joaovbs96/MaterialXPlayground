@@ -1004,7 +1004,9 @@
                 if (parsed.functionalGraphs && parsed.functionalGraphs.indexOf(mxElName(g)) !== -1) continue;
                 return previewNodegraph(g);
             }
-            return fail('Nothing to preview yet \u2014 add a node (Tab) or drop a .mtlx.');
+            return fail(window.__MTLX_VSCODE__
+                ? 'Nothing to preview yet. Add a node with Tab.'
+                : 'Nothing to preview yet. Add a node with Tab or drop a .mtlx file.');
         };
 
         // Shaderball preview of the current target (selection, else doc

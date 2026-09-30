@@ -376,6 +376,26 @@
             const [mtlxPaths, setMtlxPaths] = React.useState([]);
             const [chosenMtlx, setChosenMtlx] = React.useState(null);
             const [parsed, setParsed] = React.useState(null); // { mx, doc, nodegraphs, label }
+            // View-only mode: set when the current document arrived via a
+            // handoff flagged readOnly (e.g. a Scene Viewer material), and
+            // cleared by New Document, Open, an unflagged handoff, or the
+            // VS Code host document. docReadOnlySource names the origin
+            // for the banner (a scene file name).
+            const [docReadOnly, setDocReadOnly] = React.useState(false);
+            const [docReadOnlySource, setDocReadOnlySource] = React.useState('');
+            const docReadOnlyRef = React.useRef(false);
+            docReadOnlyRef.current = docReadOnly;
+            // .mxsl provenance for the file map: {compiledMtlxKey: {source,
+            // filename}}, populated by expandMxsl() in ingest() (see
+            // mxslc-engine.js). filename is the as-dropped .mxsl path
+            // (before it was re-keyed to compiledMtlxKey). mxslOriginFor()
+            // looks one path up; mxslOriginal mirrors it for the CURRENTLY
+            // loaded document (set only at loadDocument()'s choke point),
+            // which the ShadingLanguageX export target's "Original" reads.
+            const mxslOriginalsRef = React.useRef({});
+            const mxslOriginFor = (path) => (path && Object.prototype.hasOwnProperty.call(mxslOriginalsRef.current, path)
+                ? { path, ...mxslOriginalsRef.current[path] } : null);
+            const [mxslOriginal, setMxslOriginal] = React.useState(null); // { path, source, filename } | null
             const [scope, setScope] = React.useState('');     // '' = document root
             const [flow, setFlow] = React.useState({ nodes: [], edges: [] });
             // Live mirror, so a rebuild triggered from a ref-held handler
@@ -641,6 +661,10 @@
             // stdlib (kept separate) so snapshots stay small on big graphs.
             const parsedRef = React.useRef(null);
             parsedRef.current = parsed;
+            // True only while the current document is one the VS Code
+            // host itself sent (handleImport's IN_VSCODE branch); gates
+            // the soft externalReload path so it never targets a mismatch.
+            const hostDocRef = React.useRef(false);
             // Lets smartFitView (invoked from the F-key handler's stale
             // closure, registered once on mount) always see the current
             // sidebar state instead of the value from first render.
@@ -680,6 +704,11 @@
             // fromId }. Consumed once parsed settles, right after the
             // imported node itself is selected in root scope.
             const pendingImplRef = React.useRef(null);
+            // Set by handleImport when a payload carries readOnly: true;
+            // consumed by loadDocument right after it sets the new parsed
+            // document, so docReadOnly always tracks the document actually
+            // showing rather than the previous one.
+            const pendingReadOnlyRef = React.useRef(null); // { source } | null
             // { id, scope } of the node whose "Explore Node Graph" pill/menu
             // opened the CURRENT scope, so leaving a library implementation
             // graph returns to (and frames) that node instead of scope root.
@@ -913,6 +942,17 @@
             // sidebar), read by every viewport/overlay measurement below
             // instead of panelRef, so the sidebar's width is never double-counted.
             const canvasHostRef = React.useRef(null);
+            // Top edge (px) of the canvas HUD: 8, or the view-only banner's
+            // measured bottom + 8 while it shows (it wraps on narrow canvases).
+            const [hudTop, setHudTop] = React.useState(8);
+            const bannerObsRef = React.useRef(null);
+            const lockBannerRef = React.useCallback((el) => {
+                if (bannerObsRef.current) { bannerObsRef.current.disconnect(); bannerObsRef.current = null; }
+                if (!el) { setHudTop(8); return; }
+                const update = () => setHudTop(el.offsetTop + el.offsetHeight + 8);
+                update();
+                if (typeof ResizeObserver === 'function') { bannerObsRef.current = new ResizeObserver(update); bannerObsRef.current.observe(el); }
+            }, []);
             const [isFullscreen, setIsFullscreen] = React.useState(false);
             React.useEffect(() => watchFullscreen(
                 (el) => setIsFullscreen(!!el && el === panelRef.current)
@@ -1094,6 +1134,20 @@
                 el.style.flexWrap = prevWrap;
                 el.style.justifyContent = prevJustify;
             };
+
+            // Below this bar width the three grid columns cannot all fit,
+            // so the bar stacks its clusters into rows (class toggled, no state).
+            const GTB_STACK_BELOW = 780;
+            const toolbarBarRef = React.useRef(null);
+            React.useLayoutEffect(() => {
+                const el = toolbarBarRef.current;
+                if (!el) return;
+                const apply = () => el.classList.toggle('gtb-stack', el.clientWidth < GTB_STACK_BELOW);
+                apply();
+                const ro = new ResizeObserver(apply);
+                ro.observe(el);
+                return () => ro.disconnect();
+            });
 
             // Top-left cluster: this row (see its JSX) is a direct
             // child of the menu bar's first grid column, and is
@@ -1326,8 +1380,20 @@
                     // matching what VS Code's own tier-2 validator checks.
                     noteDocXml(raw);
                     const p = await parseMtlxDocument(resolved);
-                    p.label = path;
+                    // A document compiled from .mxsl is labelled with its
+                    // original .mxsl name.
+                    const mxslOrigin = mxslOriginFor(path);
+                    p.label = mxslOrigin ? mxslOrigin.filename : path;
                     setParsed(p);
+                    // Consume the view-only handoff flag here, the single
+                    // point where a newly loaded document actually becomes
+                    // the active one. Any load not preceded by handleImport
+                    // (Open, a scope drop, etc.) leaves this null → editable.
+                    const ro = pendingReadOnlyRef.current;
+                    pendingReadOnlyRef.current = null;
+                    setDocReadOnly(!!ro);
+                    setDocReadOnlySource(ro ? ro.source : '');
+                    setMxslOriginal(mxslOrigin);
                     setScope('');
                     // Same default-target reset as opening a document fresh:
                     // a stale selection/pin from a PREVIOUS document (multi-
@@ -1371,6 +1437,12 @@
                     setMtlxPaths([]);
                     setChosenMtlx(null);
                     setSelectedId(null);
+                    hostDocRef.current = false;
+                    pendingReadOnlyRef.current = null;
+                    setDocReadOnly(false);
+                    setDocReadOnlySource('');
+                    mxslOriginalsRef.current = {};
+                    setMxslOriginal(null);
                     setParsed(p);
                     setScope('');
                     setStatus(null);
@@ -1395,14 +1467,29 @@
             // `additive` (File > Import): never replaces the session, new
             // .mtlx files join the mtlxPaths candidates list instead of
             // loading; textures still merge and rebind live previews.
-            const ingest = async (map, rootKey, additive) => {
+            // `fromHost` (VS Code only): marks the resulting document as
+            // one the host itself sent, see hostDocRef above.
+            const ingest = async (map, rootKey, additive, fromHost) => {
                 setError(null);
+                const mxslOrigins = {}; // populated below, merged into mxslOriginalsRef after the replace/merge decision
+                const mxslFailures = []; // {rootKey, message} for .mxsl roots that failed to compile
                 try {
                     await expandZips(map);
+                    // Compile any ShadingLanguageX (.mxsl) files to MaterialX
+                    // XML and re-key them as .mtlx, so everything below (root-
+                    // document detection, xi:include resolution, texture
+                    // binding) treats them exactly like an authored .mtlx.
+                    await expandMxsl(map, mxslOrigins, mxslFailures);
                 } catch (e) {
                     setError(errMsg(e));
                     return;
                 }
+                // Some .mxsl roots may have compiled while others failed,
+                // appended to whichever status message this ingest shows.
+                const mxslWarn = mxslFailures.length
+                    ? ' (' + mxslFailures.map((f) => f.rootKey + ': ' + f.message).join('; ') + ')'
+                    : '';
+                let loadPromise = null;
                 const droppedMtlx = Object.keys(map).filter((k) => /\.mtlx$/i.test(k));
                 // Same session semantics as the material viewer: a .mtlx
                 // drop replaces the session (unless none existed yet, or
@@ -1411,6 +1498,10 @@
                 let merged;
                 if (droppedMtlx.length && hadSession && !additive) {
                     merged = Object.assign({}, map);
+                    // Same replace-not-merge semantics as fileMapRef right
+                    // below: a stale Original from the OLD session must not
+                    // survive into the new one.
+                    mxslOriginalsRef.current = mxslOrigins;
                     setParsed(null);
                     setScope('');
                     setFlow({ nodes: [], edges: [] });
@@ -1425,13 +1516,14 @@
                     }
                 } else {
                     merged = Object.assign({}, fileMapRef.current, map);
+                    mxslOriginalsRef.current = Object.assign({}, mxslOriginalsRef.current, mxslOrigins);
                 }
                 fileMapRef.current = merged;
                 setFileMap(merged);
                 const mtlx = Object.keys(merged).filter((k) => /\.mtlx$/i.test(k));
                 setMtlxPaths(mtlx);
                 if (!mtlx.length) {
-                    setStatus('Files received — now drop the .mtlx document itself.');
+                    setStatus('Files received. Now drop the .mtlx or .mxsl document itself.' + mxslWarn);
                     return;
                 }
                 if (droppedMtlx.length) {
@@ -1439,18 +1531,24 @@
                         // Added, not loaded: the existing multi-document
                         // dropdown (mtlxPaths) is how the user reaches them.
                         setStatus('Added ' + droppedMtlx.length + ' .mtlx document'
-                            + (droppedMtlx.length === 1 ? '' : 's') + ' to the session, pick one below to switch.');
+                            + (droppedMtlx.length === 1 ? '' : 's') + ' to the session: use the document picker at the top right to switch.' + mxslWarn);
                         return;
                     }
                     const pick = (rootKey && mtlx.indexOf(rootKey) !== -1)
                         ? rootKey : (mtlx.length === 1 ? mtlx[0] : null);
                     setChosenMtlx(pick);
-                    if (pick) loadDocument(pick, merged);
-                    else setStatus('This drop contains several .mtlx files — pick one below.');
+                    hostDocRef.current = !!fromHost;
+                    if (pick) loadPromise = loadDocument(pick, merged);
+                    else setStatus('This drop contains several .mtlx files: pick one from the document picker at the top right.' + mxslWarn);
                 } else if (chosenMtlx) {
-                    loadDocument(chosenMtlx, merged); // includes may now resolve
+                    loadPromise = loadDocument(chosenMtlx, merged); // includes may now resolve
                 } else {
-                    setStatus('Files added — pick a .mtlx below.');
+                    setStatus('Files added. Pick a .mtlx below.' + mxslWarn);
+                }
+                // loadDocument clears status/error on success, surface a
+                // partial .mxsl compile failure after it settles.
+                if (mxslFailures.length) {
+                    Promise.resolve(loadPromise).then(() => setError('Some .mxsl files did not compile' + mxslWarn));
                 }
             };
 
@@ -1500,7 +1598,7 @@
                     // file (e.g. an unbalanced tag mid-keystroke) — keep
                     // the current graph up instead of blanking it.
                     externalParseFailedRef.current = true;
-                    setError('External edit could not be parsed — keeping the current graph (' + errMsg(e) + ').');
+                    setError('External edit could not be parsed, keeping the current graph (' + errMsg(e) + ').');
                     return;
                 }
 
@@ -1587,7 +1685,9 @@
             const closeConfirm = () => { pendingActionRef.current = null; setConfirmCloseOpen(false); };
             useEscapeToClose(closeConfirm, confirmCloseOpen);
             const guardedIngest = (map) => {
-                const hasMtlx = Object.keys(map).some((k) => /\.mtlx$/i.test(k));
+                // .mxsl becomes .mtlx once ingest() runs expandMxsl(), so it
+                // must be treated as a replacing document here too.
+                const hasMtlx = Object.keys(map).some((k) => /\.(mtlx|mxsl)$/i.test(k));
                 confirmReplace(hasMtlx, () => ingest(map));
             };
             // Kept current every render for the [] -dep drag-drop effect
@@ -1631,14 +1731,30 @@
                     pendingImplRef.current = (payload.implOf && payload.select)
                         ? { nodedef: payload.implOf, fromId: 'n:' + payload.select, returnHash: payload.returnHash || null }
                         : null;
-                    const safeName = (payload.name || 'material').replace(/[^a-z0-9_\-]+/gi, '_') || 'material';
+                    // View-only handoff (Scene Viewer material). Every
+                    // handoff sets this explicitly, null included, so a
+                    // later unflagged import always clears a stale lock.
+                    pendingReadOnlyRef.current = payload.readOnly ? { source: payload.readOnlySource || '' } : null;
+                    // Scene Viewer view-only handoffs name the document after
+                    // its internal id (e.g. '__inline_mtlx_gold'); swap in the
+                    // material's own name so the header/tab/export default
+                    // don't leak that id. Falls back to the id with its
+                    // internal prefix stripped when materialName is absent.
+                    const rawHandoffName = payload.name || 'material';
+                    const displayHandoffName = /^__(?:inline|usdshade|usdpreview)_/.test(rawHandoffName)
+                        ? (payload.materialName || rawHandoffName.replace(/^__(?:inline|usdshade|usdpreview)_/, ''))
+                        : rawHandoffName;
+                    const safeName = (displayHandoffName || 'material').replace(/[^a-z0-9_\-]+/gi, '_') || 'material';
                     const map = Object.assign({}, payload.files || {}, {
                         [safeName + '.mtlx']: new Blob([payload.xml], { type: 'application/xml' }),
                     });
-                    // The soft (no-confirm) path is for a host-driven reload of
-                    // the SAME document already open (VS Code always; Electron
-                    // only when payload.reload flags its own file watcher).
-                    if (IN_VSCODE || (IN_ELECTRON && payload.reload)) {
+                    // Soft (no-confirm) reload of the SAME document: VS Code
+                    // requires hostDocRef to confirm it; Electron requires
+                    // payload.reload (its own file watcher).
+                    if (IN_VSCODE) {
+                        if (parsedRef.current && hostDocRef.current) externalReloadRef.current(map);
+                        else ingestRef.current(map, undefined, false, true);
+                    } else if (IN_ELECTRON && payload.reload) {
                         if (parsedRef.current) externalReloadRef.current(map);
                         else ingestRef.current(map);
                     } else {
@@ -1764,7 +1880,11 @@
             // Default document: fetched through the normal ingest() path so
             // the session behaves exactly as if the user dropped the file.
             // Skipped silently when offline or when the user was faster.
+            // Skipped entirely under VS Code: the host always sends the
+            // opened document, so an unrelated default would be misleading
+            // (and could otherwise win a race against a slow host payload).
             React.useEffect(() => {
+                if (IN_VSCODE) return;
                 setBusy(true);
                 fetch(DEFAULT_GRAPH_URL)
                     .then((r) => {
@@ -1786,7 +1906,7 @@
                         const hasSession = Object.keys(fileMapRef.current)
                             .some((k) => /\.mtlx$/i.test(k));
                         if (!hasSession && !draftPendingRef.current && !IN_VSCODE) {
-                            setStatus("Couldn't reach GitHub for the default document — drop a .mtlx anywhere, use Open, or pick a Preset (top left).");
+                            setStatus("Couldn't reach GitHub for the default document. Drop a .mtlx or .mxsl anywhere, use Open, or pick a Preset (top left).");
                         }
                     });
             }, []);
@@ -2160,7 +2280,7 @@
                     },
                     exportForUser: () => {
                         const p = parsedRef.current;
-                        const name = String((p && p.label) || 'document').split('/').pop().replace(/\.mtlx$/i, '');
+                        const name = String((p && p.label) || 'document').split('/').pop().replace(/\.(mtlx|mxsl)$/i, '');
                         const resolved = scanExportTexturesRef.current().resolved;
                         exportZipRef.current(name, resolved);
                     },
@@ -2273,6 +2393,8 @@
                     setPreviewSel((prev) =>
                         (prev && prev.id === node.id && prev.scope === scope) ? prev : { scope, id: node.id });
                 }
+                // A modifier click extends a multi-selection: nothing single to sync.
+                if (!(evt && (evt.shiftKey || evt.ctrlKey || evt.metaKey))) notifyHostSelection(node.id);
             };
 
             // Click an edge → select it (Del disconnects); click the pane →
@@ -2301,6 +2423,92 @@
                         n.selected ? Object.assign({}, n, { selected: false }) : n),
                 }));
             };
+
+            // ---- Selection sync with the VS Code host (E18, bootstrap.js).
+            // Only USER picks are reported (onNodeClick, pane click, node
+            // list); host 'mtlx-select' goes through focusNode, which never reports.
+            const notifyHostSelection = (id) => {
+                if (!IN_VSCODE || typeof window.__mtlxNotifySelection !== 'function') return;
+                const m = id ? /^[nogid]:(.+)$/.exec(id) : null;
+                if (id && !m) return;
+                window.__mtlxNotifySelection(m ? (scopeRef.current ? scopeRef.current + '/' + m[1] : m[1]) : null);
+            };
+            const onPaneClick = () => {
+                clearSelection();
+                notifyHostSelection(null);
+            };
+            const selectedIdRef = React.useRef(selectedId);
+            selectedIdRef.current = selectedId;
+            // Pans only when the card is not fully inside the canvas; keeps the zoom.
+            const panIntoViewIfNeeded = (id) => {
+                const inst = rfInstRef.current;
+                const host = canvasHostRef.current;
+                if (!inst || !host || typeof inst.getNode !== 'function') return;
+                const n = inst.getNode(id);
+                if (!n || !n.width || !n.height) return;
+                const vp = inst.getViewport();
+                const rect = host.getBoundingClientRect();
+                const pos = n.positionAbsolute || n.position;
+                const x0 = pos.x * vp.zoom + vp.x;
+                const y0 = pos.y * vp.zoom + vp.y;
+                if (x0 >= 0 && y0 >= 0 && x0 + n.width * vp.zoom <= rect.width && y0 + n.height * vp.zoom <= rect.height) return;
+                inst.setCenter(pos.x + n.width / 2, pos.y + n.height / 2, { zoom: vp.zoom, duration: 300 });
+            };
+            // Host 'mtlx-select' { scope, id }: enters the scope if needed and
+            // selects the card; unknown targets are ignored. False = no document yet.
+            const applyHostSelect = (detail) => {
+                const p = parsedRef.current;
+                if (!p) return false;
+                const target = String(detail.scope || '');
+                let id = String(detail.id || '');
+                if (!id) return true;
+                if (target && !((p.nodegraphs && p.nodegraphs.indexOf(target) !== -1)
+                        || (p.functionalGraphs && p.functionalGraphs.indexOf(target) !== -1))) return true;
+                if (target !== scopeRef.current) {
+                    scopeOriginRef.current = null;
+                    pendingScopeSelectRef.current = id;
+                    changeScope(target);
+                    return true;
+                }
+                const nodes = flowRef.current.nodes || [];
+                let node = nodes.find((n) => n.id === id);
+                if (!node && id.indexOf('d:') === 0) node = nodes.find((n) => n.data && n.data.nodedef === id.slice(2));
+                if (!node) return true;
+                id = node.id;
+                if (selectedIdRef.current === id && node.selected) return true;
+                focusNode(id, false);
+                panIntoViewIfNeeded(id);
+                return true;
+            };
+            const applyHostSelectRef = React.useRef(applyHostSelect);
+            applyHostSelectRef.current = applyHostSelect;
+            React.useEffect(() => {
+                if (!IN_VSCODE) return undefined;
+                const consume = (detail) => {
+                    if (detail && applyHostSelectRef.current(detail) && window.__mtlxPendingSelect === detail) {
+                        delete window.__mtlxPendingSelect;
+                    }
+                };
+                const onSelect = (e) => consume(e.detail);
+                window.addEventListener('mtlx-select', onSelect);
+                window.__mtlxGraphSelectionState = () => ({
+                    loaded: !!parsedRef.current,
+                    scope: scopeRef.current,
+                    selectedId: selectedIdRef.current,
+                    selectedCards: (flowRef.current.nodes || []).filter((n) => n.selected).map((n) => n.id),
+                    cardCount: (flowRef.current.nodes || []).length,
+                });
+                return () => {
+                    window.removeEventListener('mtlx-select', onSelect);
+                    delete window.__mtlxGraphSelectionState;
+                };
+            }, []);
+            // A select that arrived before the document (or this view) was ready.
+            React.useEffect(() => {
+                if (IN_VSCODE && parsed && window.__mtlxPendingSelect && applyHostSelectRef.current(window.__mtlxPendingSelect)) {
+                    delete window.__mtlxPendingSelect;
+                }
+            }, [parsed]);
 
             // ---- Right-click context menus --------------------------------
             // Selection rule, as every desktop node editor does it: right-
@@ -3139,7 +3347,7 @@
                             await new Promise((r) => setTimeout(r, 250));
                             return resolveDocXml((attempt || 0) + 1);
                         }
-                        return { xml: null, error: 'a preview render is stuck mid-generation — please try again.' };
+                        return { xml: null, error: 'a preview render is stuck mid-generation, please try again.' };
                     }
                     return { xml: null, error: errMsg(e) };
                 }
@@ -3154,7 +3362,7 @@
             // Derives the default export base name (no extension) from
             // the parsed document's label — shared by exportMtlx and the
             // Export dialog's prefilled filename field.
-            const defaultExportBase = () => String((parsed && parsed.label) || 'document').split('/').pop().replace(/\.mtlx$/i, '');
+            const defaultExportBase = () => String((parsed && parsed.label) || 'document').split('/').pop().replace(/\.(mtlx|mxsl)$/i, '');
 
             // Hand the current document off to the material viewer (item
             // F2.2's "Send to Viewer"). Serializes through the same
@@ -3237,6 +3445,11 @@
             // Save and Ctrl+S always write identical content.
             const doSaveInApp = async (forceDialog) => {
                 if (!parsed || !IN_ELECTRON || !window.mtlxDesktop) return false;
+                if (docReadOnlyRef.current) {
+                    // Silent otherwise; the amber "View only" strip already
+                    // explains the lock.
+                    return false;
+                }
                 if (typeof window.__mtlxGetGraphXml !== 'function') {
                     setStatus('Save failed: graph view is not ready.');
                     return false;
@@ -3312,19 +3525,28 @@
                     return false;
                 }
                 if (!window.JSZip) {
-                    setError('Export failed: the JSZip library is not loaded — reload the page and try again.');
+                    setError('Export failed: the JSZip library is not loaded, reload the page and try again.');
                     return false;
                 }
                 const zip = new JSZip();
                 let keptNote = null;
+                // Relocates refs that would otherwise escape the zip root
+                // (e.g. '../textures/foo.png') under textures/, collision-safe.
+                const zipPathByRef = assignZipTexturePaths((resolvedTextures || []).map((t) => t.ref));
+                const zipPathOf = (ref) => {
+                    const entry = zipPathByRef[String(ref || '').replace(/\\/g, '/')];
+                    return entry ? entry.zipPath : '';
+                };
 
                 if (!convertTo || convertTo === 'keep') {
-                    zip.file(name + '.mtlx', attribution ? await attributeExportedXml(xml) : xml);
-                    const seenPaths = new Set();
+                    const rewrittenXml = rewriteFilenameRefs(xml, zipPathByRef, null);
+                    zip.file(name + '.mtlx', attribution ? await attributeExportedXml(rewrittenXml) : rewrittenXml);
+                    const seenRefs = new Set();
                     for (const t of (resolvedTextures || [])) {
-                        const zipPath = String(t.ref || '').replace(/\\/g, '/').replace(/^\.?\/+/, '');
-                        if (!zipPath || seenPaths.has(zipPath)) continue;
-                        seenPaths.add(zipPath);
+                        if (seenRefs.has(t.ref)) continue;
+                        seenRefs.add(t.ref);
+                        const zipPath = zipPathOf(t.ref);
+                        if (!zipPath) continue;
                         const blob = fileMapRef.current[t.key];
                         if (blob) zip.file(zipPath, blob);
                     }
@@ -3333,14 +3555,15 @@
                     // Pass 1 converts each source; pass 2 writes kept/failed
                     // originals first, then converted files, falling back to
                     // the original path+bytes on a collision with one of those.
-                    const seenPaths = new Set();
+                    const seenRefs = new Set();
                     const convertedByRef = {};
                     const kept = [];
                     const entries = [];
                     for (const t of (resolvedTextures || [])) {
-                        const zipPath = String(t.ref || '').replace(/\\/g, '/').replace(/^\.?\/+/, '');
-                        if (!zipPath || seenPaths.has(zipPath)) continue;
-                        seenPaths.add(zipPath);
+                        if (seenRefs.has(t.ref)) continue;
+                        seenRefs.add(t.ref);
+                        const zipPath = zipPathOf(t.ref);
+                        if (!zipPath) continue;
                         const blob = fileMapRef.current[t.key];
                         if (!blob) continue;
                         const srcExt = (t.key.split('.').pop() || t.ref.split('.').pop() || '').toLowerCase();
@@ -3367,7 +3590,7 @@
                         writtenPaths.add(swappedPath);
                         convertedByRef[zipPath] = result.ext;
                     }
-                    const convertedXml = rewriteFilenameRefs(xml, (ref) => convertedByRef[ref]);
+                    const convertedXml = rewriteFilenameRefs(xml, zipPathByRef, (zipPath) => convertedByRef[zipPath]);
                     zip.file(name + '.mtlx', attribution ? await attributeExportedXml(convertedXml) : convertedXml);
                     if (kept.length > 0) {
                         keptNote = kept.length + ' texture(s) could not be converted and were packaged unchanged.';
@@ -3602,6 +3825,22 @@
                 }
                 setShaderExport({ renderables: rs });
             };
+
+            // ShaderExportDialog's `generate()` for the ShadingLanguageX
+            // target: unlike the shadergen targets, this is whole-document
+            // (no `renderable` scoping — mxslc's decompiler has no concept
+            // of "just this material") and runs against the SEPARATE mxsl
+            // WASM module (js/mxslc-engine.js), never `parsed.mx`. "Original"
+            // is the as-authored .mxsl source IF this document was compiled
+            // from one (mxslOriginal, set in loadDocument()); "Decompiled"
+            // re-decompiles the CURRENT (possibly hand-edited) document via
+            // resolveDocXml(), the same serializer Export/Document XML use.
+            const generateSlxExportStages = async () => {
+                const { xml, error } = await resolveDocXml();
+                if (xml == null) throw new Error('Could not build the document XML: ' + error);
+                return slxExportStages(xml, mxslOriginal && mxslOriginal.source);
+            };
+
             // Export dialog's onExport: routes to .mtlx/.zip through the
             // same exportBusyRef-guarded wrappers as the toolbar. Errors
             // thrown here are caught by ExportDialog, keeping it open to retry.
@@ -3625,6 +3864,13 @@
                 setXmlDialogXml(xml);
                 setXmlDialogOpen(true);
             };
+
+            // Same toolbar/menu action, split by host: VS Code already has a
+            // real text editor for this file, so open that instead of the
+            // read-only XML dialog (web/desktop have no such editor).
+            const openXmlOrTextEditor = IN_VSCODE
+                ? () => { if (window.__mtlxOpenTextEditor) window.__mtlxOpenTextEditor(); }
+                : openXmlDialog;
 
             // Background validation: recomputes validateStatus from
             // docXmlRef's cached text via validateMtlxXml, which builds a
@@ -3693,9 +3939,10 @@
             // e.g. NG_standard_surface_surfaceshader. Every mutating action
             // in this scope must bail when this is true.
             const scopeLocked = React.useMemo(() => {
+                if (docReadOnly) return true; // whole-document view-only handoff
                 if (!scope || !parsed) return false;
                 return !isDocLocal(graphByName(scope));
-            }, [parsed, scope, docRev]);
+            }, [parsed, scope, docRev, docReadOnly]);
             const scopeLockedRef = React.useRef(false);
             scopeLockedRef.current = scopeLocked;
             // Shared guard for every writer below: tells the caller to bail.
@@ -4754,7 +5001,10 @@
                     // A signature group's `versions` array is built from
                     // the same nodeDefInfo objects as entry.defs, so
                     // versions[0] IS a defs[] entry (default/first version).
-                    const sig = (entry.signatures || []).find((sg) => sg.type === typeHint);
+                    // Exact output type first, else a multi-output signature
+                    // with a matching output (the wiring picks that output).
+                    const sigs = entry.signatures || [];
+                    const sig = sigs.find((sg) => sg.type === typeHint) || sigs.find((sg) => sigHasOutputType(sg, typeHint));
                     if (sig && sig.versions && sig.versions[0]) {
                         def = sig.versions[0];
                         pinNodedef = true;
@@ -4900,12 +5150,20 @@
                     // node (or collapsed nodegraph) — feed it from the new
                     // node's matching output.
                     const existingName = pending.nodeId.slice(2);
-                    const existingEl = pending.nodeId.indexOf('g:') === 0
-                        ? (docChild(doc, existingName) || mxSafe(() => doc.getNodeGraph(existingName), null))
-                        : mxSafe(() => created.container.getNode(existingName), null);
-                    if (!existingEl) return;
-                    point = ensureTypedInput(doc, existingEl, pending.port, pending.portType);
-                    if (!point) return;
+                    if (pending.nodeId.indexOf('o:') === 0) {
+                        // An <output> target is itself the connection point
+                        // (same resolution as connectionPoint's 'o:' branch).
+                        point = mxSafe(() => created.container.getOutput(existingName), null)
+                            || mxSafe(() => created.container.getChild(existingName), null);
+                        if (!point) return;
+                    } else {
+                        const existingEl = pending.nodeId.indexOf('g:') === 0
+                            ? (docChild(doc, existingName) || mxSafe(() => doc.getNodeGraph(existingName), null))
+                            : mxSafe(() => created.container.getNode(existingName), null);
+                        if (!existingEl) return;
+                        point = ensureTypedInput(doc, existingEl, pending.port, pending.portType);
+                        if (!point) return;
+                    }
                     const outs = created.outputs || [];
                     const outMatch = outs.find((o) => o.type === pending.portType) || outs[0];
                     writeConnSource(point, created.id, outMatch && outMatch.name, outs);
@@ -5754,7 +6012,7 @@
                         // already completed successfully by this point.
                         if (ambiguousConsumers.length) {
                             setError('Ungrouped, but ' + ambiguousConsumers.length
-                                + ' reference(s) with no explicit output selector could not be resolved — check the XML view.');
+                                + ' reference(s) with no explicit output selector could not be resolved, check the XML view.');
                         }
                     } catch (e) {
                         setError('Ungroup failed: ' + errMsg(e));
@@ -6439,6 +6697,46 @@
             // A finished drag SNAPSHOTS the whole on-screen layout into
             // the document as xpos/ypos (1 unit = 240px). Purely spatial —
             // no docRev bump, but it changes Export's output, so it marks dirty.
+            // A click is not a move: real mice jitter 1-3 px between down and
+            // up, so a pointer travel under DRAG_SLOP_PX (screen px) snaps the
+            // nodes back and never touches the document.
+            const DRAG_SLOP_PX = 5;
+            const dragStartPosRef = React.useRef(null);
+            const pointerDownRef = React.useRef(null);
+            const onCanvasPointerDownCapture = (e) => { pointerDownRef.current = { x: e.clientX, y: e.clientY }; };
+            const dragPositions = (nodes) => {
+                const m = {};
+                (nodes || []).forEach((n) => { if (n && n.position) m[n.id] = { x: n.position.x, y: n.position.y }; });
+                return m;
+            };
+            const onNodeDragStart = (evt, node, nodes) => { dragStartPosRef.current = dragPositions(nodes && nodes.length ? nodes : [node]); };
+            const onSelectionDragStart = (evt, nodes) => { dragStartPosRef.current = dragPositions(nodes); };
+            const pointerTravel = (evt) => {
+                const down = pointerDownRef.current;
+                const p = evt && evt.changedTouches && evt.changedTouches[0] ? evt.changedTouches[0] : evt;
+                if (!down || !p || typeof p.clientX !== 'number') return Infinity;
+                return Math.hypot(p.clientX - down.x, p.clientY - down.y);
+            };
+            const dragMoved = (evt, nodes) => {
+                const start = dragStartPosRef.current;
+                dragStartPosRef.current = null;
+                if (!start) return pointerTravel(evt) >= DRAG_SLOP_PX;
+                const end = dragPositions(nodes);
+                const moved = Object.keys(end).some((id) => !start[id] || start[id].x !== end[id].x || start[id].y !== end[id].y);
+                if (!moved) return false;
+                if (pointerTravel(evt) >= DRAG_SLOP_PX) return true;
+                setFlow((prev) => ({
+                    edges: prev.edges,
+                    nodes: prev.nodes.map((n) => (start[n.id] ? { ...n, position: { ...start[n.id] } } : n)),
+                }));
+                return false;
+            };
+            const onNodeDragStopMoved = (evt, node, nodes) => {
+                if (dragMoved(evt, nodes && nodes.length ? nodes : [node])) { onNodeDragStop(); return; }
+                // d3-drag swallows the click after any pointer travel, so a jittery click selects here.
+                if (node && pointerTravel(evt) > 0) onNodeClick(evt, node);
+            };
+            const onSelectionDragStopMoved = (evt, nodes) => { if (dragMoved(evt, nodes)) onNodeDragStop(); };
             const onNodeDragStop = () => {
                 if (scopeLockedRef.current) return;
                 const c = scopeContainer();
@@ -6938,7 +7236,7 @@
                 !IN_VSCODE && {
                     label: 'Open…', icon: 'file-upload',
                     onSelect: () => { if (openInputRef.current) openInputRef.current.click(); },
-                    title: 'Open a .mtlx or .zip, replacing the current session (drag and drop works anywhere on the page)',
+                    title: 'Open a .mtlx, .mxsl, or .zip, replacing the current session (drag and drop works anywhere on the page)',
                 },
                 IN_ELECTRON && {
                     label: 'Open Recent…', icon: 'history',
@@ -6951,7 +7249,7 @@
                 !IN_VSCODE && {
                     label: 'Import…', icon: 'file-import',
                     onSelect: () => { if (importInputRef.current) importInputRef.current.click(); },
-                    title: 'Add textures or more .mtlx documents to the session without replacing it',
+                    title: 'Add textures, or more .mtlx documents or .mxsl files to the session without replacing it',
                 },
                 !IN_VSCODE && {
                     label: 'Presets…', icon: 'presets', onSelect: () => setPresetPickerOpen(true),
@@ -6970,15 +7268,18 @@
                         : 'Browse and restore a previous editing session recovered from autosave',
                 },
                 !IN_VSCODE && { separator: true },
-                IN_ELECTRON && {
-                    label: 'Save', icon: 'file-download', keys: 'Ctrl+S', disabled: !parsed,
-                    onSelect: () => doSaveInApp(false),
-                    title: 'Save the current document to its file (or choose a location if it has none yet)',
+                (IN_ELECTRON || IN_VSCODE) && {
+                    label: 'Save', icon: 'file-download', keys: 'Ctrl+S', disabled: !parsed || docReadOnly,
+                    onSelect: () => {
+                        if (IN_VSCODE) { if (window.__mtlxRequestGraphSave) window.__mtlxRequestGraphSave(); return; }
+                        doSaveInApp(false);
+                    },
+                    title: docReadOnly ? 'View only: export a copy instead' : 'Save the current document to its file (or choose a location if it has none yet)',
                 },
                 IN_ELECTRON && {
-                    label: 'Save As…', icon: 'file-download', keys: 'Ctrl+Shift+S', disabled: !parsed,
+                    label: 'Save As…', icon: 'file-download', keys: 'Ctrl+Shift+S', disabled: !parsed || docReadOnly,
                     onSelect: () => doSaveInApp(true),
-                    title: 'Save the current document to a new file',
+                    title: docReadOnly ? 'View only: export a copy instead' : 'Save the current document to a new file',
                 },
                 IN_ELECTRON && {
                     label: window.__MTLX_PLATFORM__ === 'darwin' ? 'Reveal in Finder'
@@ -7000,8 +7301,10 @@
                 },
                 { separator: true },
                 {
-                    label: 'View .mtlx XML', icon: 'code', disabled: !parsed, onSelect: openXmlDialog,
-                    title: 'View the raw MaterialX XML for the current document',
+                    label: IN_VSCODE ? 'Open Text Editor' : 'View .mtlx XML', icon: 'code', disabled: !parsed,
+                    onSelect: openXmlOrTextEditor,
+                    title: IN_VSCODE ? 'Open this document\'s text editor beside the Node Graph view'
+                        : 'View the raw MaterialX XML for the current document',
                 },
                 IN_ELECTRON && { separator: true },
                 IN_ELECTRON && {
@@ -7022,7 +7325,7 @@
                 { separator: true },
                 {
                     label: 'Copy', icon: 'copy', keys: 'Ctrl+C', onSelect: () => copySelectionRef.current(),
-                    disabled: !parsed || !selectedIds.length,
+                    disabled: !parsed || !selectedIds.length || scopeLocked,
                     title: 'Copy the selected nodes to the in-page clipboard',
                 },
                 {
@@ -7214,7 +7517,7 @@
                     {/* Menu bar and canvas+sidebar body row below are real
                         flex children; only dialogs and full-editor overlays
                         further down stay absolutely positioned on top. */}
-                    <div className="gtb-bar flex-none grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-2 px-2 py-1.5 bg-gray-900 border-b border-gray-700">
+                    <div ref={toolbarBarRef} className="gtb-bar flex-none grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-2 px-2 py-1.5 bg-gray-900 border-b border-gray-700">
                         {/* Top-left cluster: the File and Edit menus, plus
                             the undo/redo pair that stays out of them, the
                             way Word keeps those on the toolbar too. */}
@@ -7227,7 +7530,7 @@
                                     ref={openInputRef}
                                     type="file"
                                     multiple
-                                    accept=".mtlx,.zip"
+                                    accept=".mtlx,.mxsl,.zip"
                                     className="hidden"
                                     onChange={onPickFiles}
                                 />
@@ -7237,7 +7540,7 @@
                                     ref={importInputRef}
                                     type="file"
                                     multiple
-                                    accept=".mtlx,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
+                                    accept={'.mtlx,.mxsl,.zip,' + window.textureAccept()}
                                     className="hidden"
                                     onChange={onPickImportFiles}
                                 />
@@ -7267,13 +7570,23 @@
                             >
                                 <MtlxIcon name="arrow-forward-up" className="w-3.5 h-3.5" />
                             </button>
+                            <div className="w-px h-5 bg-gray-700 shrink-0" aria-hidden="true" />
+                            <button
+                                onClick={openXmlOrTextEditor}
+                                disabled={!parsed}
+                                title={IN_VSCODE ? 'Open Text Editor' : 'View .mtlx XML'}
+                                aria-label={IN_VSCODE ? 'Open Text Editor' : 'View .mtlx XML'}
+                                className={BTN_MENUBAR + (parsed ? '' : ' opacity-50 cursor-not-allowed')}
+                            >
+                                <MtlxIcon name="code" className="w-3.5 h-3.5" />
+                            </button>
                         </div>
 
                         {/* Column 2: the breadcrumb. The side columns are
                             equal-width (minmax(0,1fr)), so this stays dead
                             centre no matter what the clusters contain, and items-start keeps it on the bar's top row when a cluster wraps. */}
                         {parsed ? (
-                            <div className="flex items-center h-7 min-w-0">
+                            <div className="gtb-crumb flex items-center h-7 min-w-0">
                                 <div className="text-[11px] font-sans text-gray-400 max-w-full truncate">
                                     <button className="hover:text-gray-200 underline decoration-dotted" onClick={goUpScope}>
                                         {/* A docs-page implementation handoff (scopeOriginRef.returnHash)
@@ -7282,9 +7595,17 @@
                                         {(scopeOriginRef.current && scopeOriginRef.current.graph === scope && scopeOriginRef.current.returnHash)
                                             ? 'Back to Node Specs' : parsed.label}
                                     </button>
+                                    {docReadOnly && (
+                                        <span
+                                            title={'View only: material from ' + (docReadOnlySource || 'a scene')}
+                                            className="inline-flex items-center align-middle ml-1.5 px-1 rounded text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-300 bg-amber-900/40 border border-amber-700/40"
+                                        >
+                                            View only
+                                        </span>
+                                    )}
                                     {scope && <span className="inline-flex items-center align-middle text-gray-500 mx-1"><MtlxIcon name="chevron-right" className="w-3 h-3" /></span>}
                                     {scope && <span className="text-blue-300">{scope}</span>}
-                                    {scope && scopeLocked && <span className="text-amber-300"> (library, view only)</span>}
+                                    {scope && scopeLocked && !docReadOnly && <span className="text-amber-300"> (library, view only)</span>}
                                 </div>
                             </div>
                         ) : <div />}
@@ -7296,6 +7617,7 @@
                             the MiniMap, bottom-aligned with it, instead of
                             underneath it (kept, not hidden: see below). */}
                         <style>{'.gtb-collapsed .gtb-label { display: none !important; } .gtb-wrap { flex-wrap: wrap !important; } '
+                            + '.gtb-bar.gtb-stack { grid-template-columns: minmax(0, 1fr) !important; row-gap: 4px; } .gtb-stack .gtb-crumb { justify-content: flex-start; } '
                             + '.mtlx-graph-editor-canvas .react-flow__attribution { margin: 0 ' + (minimapMarginRight + 200 + 8) + 'px 8px 0 !important; }'}</style>
                         <div ref={topRightClusterRef} className="flex items-center gap-1.5 flex-nowrap justify-end min-w-0">
                             {mtlxPaths.length > 1 && (
@@ -7316,8 +7638,10 @@
                             {parsed && (
                                 <button
                                     onClick={openAddSearch}
-                                    title="Add a node from the standard library (shortcut: Tab)"
-                                    className={BTN_MENUBAR}
+                                    disabled={scopeLocked}
+                                    aria-label="Add Node"
+                                    title={scopeLocked ? 'View only' : 'Add a node from the standard library (shortcut: Tab)'}
+                                    className={BTN_MENUBAR + (scopeLocked ? ' opacity-50 cursor-not-allowed' : '')}
                                 >
                                     <MtlxIcon name="share" className="w-3.5 h-3.5" />
                                     <span className="gtb-label">Add Node</span>
@@ -7327,11 +7651,12 @@
                             {parsed && (
                                 <button
                                     onClick={() => deleteSelectionRef.current()}
-                                    disabled={!canDelete}
-                                    title={canDelete
+                                    disabled={!canDelete || scopeLocked}
+                                    aria-label="Delete Nodes"
+                                    title={scopeLocked ? 'View only' : canDelete
                                         ? 'Delete the selected node(s) and disconnect the selected edge(s) (Del)'
                                         : 'Select nodes or edges to delete'}
-                                    className={BTN_MENUBAR + (canDelete ? '' : ' opacity-50 cursor-not-allowed')}
+                                    className={BTN_MENUBAR + ((canDelete && !scopeLocked) ? '' : ' opacity-50 cursor-not-allowed')}
                                 >
                                     <MtlxIcon name="trash" className="w-3.5 h-3.5" />
                                     <span className="gtb-label">Delete Nodes</span>
@@ -7341,6 +7666,7 @@
                             {parsed && (
                                 <button
                                     onClick={() => setValidateOpen(true)}
+                                    aria-label="Validate"
                                     title="Run the MaterialX library's document validation"
                                     /* Borderless at rest like the rest of the bar, but a
                                        validation result keeps its coloured edge: that
@@ -7361,6 +7687,7 @@
                             <button
                                 onClick={() => setHelpOpen(true)}
                                 title="Help & Keybinds"
+                                aria-label="Help"
                                 className={BTN_MENUBAR}
                             >
                                 <MtlxIcon name="help" className="w-3.5 h-3.5" />
@@ -7369,6 +7696,7 @@
                             <button
                                 onClick={() => toggleFullscreen(panelRef.current)}
                                 title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
+                                aria-label={isFullscreen ? 'Exit' : 'Fullscreen'}
                                 className={'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border transition-colors whitespace-nowrap shrink-0 '
                                     + (isFullscreen
                                         ? 'bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70'
@@ -7398,7 +7726,7 @@
                                     setSortKey={setScopeListSort}
                                     sortDir={scopeListDir}
                                     setSortDir={setScopeListDir}
-                                    onSelect={(id) => focusNode(id, true)}
+                                    onSelect={(id) => { focusNode(id, true); notifyHostSelection(id); }}
                                     onOpen={(name) => changeScope(name)}
                                     onOpenImpl={(implGraph, id) => openImplGraph(implGraph, id)}
                                     onCollapse={() => setLeftOpen(false)}
@@ -7433,6 +7761,8 @@
                             sidebar is a SIBLING, so its inputs keep the native
                             menu. */}
                         <div ref={canvasHostRef} className="mtlx-graph-editor-canvas relative flex-1 min-w-0"
+                            onPointerDownCapture={onCanvasPointerDownCapture}
+                            onMouseDownCapture={onCanvasPointerDownCapture}
                             onContextMenu={(e) => e.preventDefault()}>
                             <div className="absolute inset-0">
                                 <ReactFlowComp
@@ -7445,8 +7775,10 @@
                                     onEdgesChange={onEdgesChange}
                                     onSelectionStart={onSelectionStart}
                                     onSelectionEnd={onSelectionEnd}
-                                    onNodeDragStop={onNodeDragStop}
-                                    onSelectionDragStop={onNodeDragStop}
+                                    onNodeDragStart={onNodeDragStart}
+                                    onSelectionDragStart={onSelectionDragStart}
+                                    onNodeDragStop={onNodeDragStopMoved}
+                                    onSelectionDragStop={onSelectionDragStopMoved}
                                     onNodeDoubleClick={onNodeDoubleClick}
                                     onNodeContextMenu={onNodeContextMenu}
                                     onSelectionContextMenu={onSelectionContextMenu}
@@ -7454,7 +7786,7 @@
                                     onPaneContextMenu={onPaneContextMenu}
                                     onNodeClick={onNodeClick}
                                     onEdgeClick={onEdgeClick}
-                                    onPaneClick={clearSelection}
+                                    onPaneClick={onPaneClick}
                                     onConnect={onConnect}
                                     onConnectStart={onConnectStart}
                                     onConnectEnd={onConnectEnd}
@@ -7555,32 +7887,42 @@
                                 </ReactFlowComp>
                             </div>
 
-                            {/* Explicit view-only notice: a full-width strip
-                                pinned above every other HUD element (which
-                                shift down to top-9 while this is showing). */}
+                            {/* View-only notice: inset strip above the HUD, which
+                                sits below its measured height (hudTop); min-w-0
+                                lets the text wrap instead of overflowing. */}
                             {scopeLocked && (
-                                <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-center gap-2 px-3 py-1 bg-amber-900/40 border-b border-amber-700/50 text-[11px] text-amber-200 backdrop-blur">
-                                    <MtlxIcon name="lock" className="w-3.5 h-3.5" />
-                                    <span>View only: {scope} is part of the standard library and cannot be edited.</span>
+                                <div ref={lockBannerRef} className="absolute top-2 left-2 right-2 z-20 flex flex-wrap items-center justify-center gap-2 px-3 py-1.5 bg-amber-900/40 border border-amber-700/50 rounded-md text-[11px] text-amber-200 backdrop-blur">
+                                    <MtlxIcon name="lock" className="w-3.5 h-3.5 shrink-0" />
+                                    {docReadOnly ? (
+                                        <>
+                                            <span className="min-w-0">
+                                                {'View only: material from ' + (docReadOnlySource || 'a scene') + '. Export .mtlx to save an editable copy.'}
+                                            </span>
+                                            <button
+                                                onClick={openExportDialog}
+                                                className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium bg-amber-800/60 hover:bg-amber-800 text-amber-100 transition-colors"
+                                            >
+                                                Export .mtlx
+                                            </button>
+                                        </>
+                                    ) : (
+                                        <span className="min-w-0">View only: {scope} is part of the standard library and cannot be edited.</span>
+                                    )}
                                 </div>
                             )}
 
-                            {/* Top-left HUD: the collapsed node-list chip and
-                                the scope select share one anchored row so
-                                they never stack on top of each other. */}
-                            {parsed && (!leftOpen || scopeOptions.length > 0) && (
-                                <div className={'absolute left-2 z-30 flex items-center gap-2 ' + (scopeLocked ? 'top-9' : 'top-2')}>
-                                    {!leftOpen && (
-                                        <button
-                                            onClick={() => setLeftOpen(true)}
-                                            title="Show the node list (L)"
-                                            className={HUD_PILL}
-                                        >
-                                            <span>Explore Nodegraph</span>
-                                            <MtlxIcon name="chevrons-right" className="w-3.5 h-3.5" />
-                                        </button>
-                                    )}
+                            {/* Top-left HUD, one anchored column: the scope select
+                                and the Leave pill share the first row (Leave wraps
+                                under the select when narrow), Explore beneath; it
+                                stops short of the top-right Preview Panel pill. */}
+                            {parsed && (!leftOpen || scopeOptions.length > 0 || scope) && (
+                                <div className={'absolute left-2 z-30 flex flex-col items-start gap-1.5 ' + (paramsOpen ? 'max-w-[calc(100%_-_1rem)]' : 'max-w-[calc(100%_-_9rem)]')} style={{ top: hudTop }}>
+                                    {(scopeOptions.length > 0 || scope) && (
+                                    <div className="flex flex-wrap items-center gap-1.5 max-w-full min-w-0">
+                                    {/* Each item shrinks from its content width down to
+                                        a basis before the row wraps; names truncate. */}
                                     {scopeOptions.length > 0 && (
+                                        <div className="flex flex-[1_1_10rem] max-w-max min-w-0">
                                         <MtlxSelect
                                             value={scope}
                                             options={scopeOptions}
@@ -7593,35 +7935,47 @@
                                             title="Scope: the document root, or step inside a nodegraph"
                                             size="md"
                                             font="mono"
-                                            className="max-w-[20rem]"
+                                            className="w-full max-w-[20rem] min-w-0"
                                             popWidth={320}
                                             // Full name per option, so a truncated
                                             // row (long graph names) still has a tooltip.
                                             titles={Object.fromEntries(scopeOptions.map((o) => [o.value, o.label]))}
                                         />
+                                        </div>
+                                    )}
+                                    {/* Same go-up action as Backspace. */}
+                                    {scope && (
+                                        <div className="flex flex-[1_1_8rem] max-w-max min-w-0">
+                                        <button
+                                            onClick={goUpScope}
+                                            title={'Leave ' + scope + ' (Backspace)'}
+                                            className={HUD_PILL + ' w-full min-w-0'}
+                                        >
+                                            <MtlxIcon name="arrow-left" className="w-3.5 h-3.5 shrink-0" />
+                                            <span className="truncate max-w-[14rem]">Leave {scope}</span>
+                                        </button>
+                                        </div>
+                                    )}
+                                    </div>
+                                    )}
+                                    {!leftOpen && (
+                                        <button
+                                            onClick={() => setLeftOpen(true)}
+                                            title="Show the node list (L)"
+                                            className={HUD_PILL}
+                                        >
+                                            <span>Explore Nodegraph</span>
+                                            <MtlxIcon name="chevrons-right" className="w-3.5 h-3.5" />
+                                        </button>
                                     )}
                                 </div>
                             )}
 
                             {/* Error banner, centered along the top */}
                             {error && (
-                                <div className={'absolute left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg ' + (scopeLocked ? 'top-9' : 'top-2')}>
+                                <div className={'absolute left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg'} style={{ top: hudTop }}>
                                     {error}
                                 </div>
-                            )}
-
-                            {/* Leave-nodegraph pill: centered at the canvas
-                                host's top edge, only while scoped inside a
-                                nodegraph. Same go-up action as Backspace. */}
-                            {scope && (
-                                <button
-                                    onClick={goUpScope}
-                                    title={scope + ' (Backspace)'}
-                                    className={HUD_PILL + ' absolute left-1/2 -translate-x-1/2 z-30 max-w-[16rem] ' + (scopeLocked ? 'top-9' : 'top-2')}
-                                >
-                                    <MtlxIcon name="arrow-left" className="w-3.5 h-3.5 shrink-0" />
-                                    <span className="truncate">Leave {scope}</span>
-                                </button>
                             )}
 
                             {/* Types window (bottom left): zoom/fit cluster docked
@@ -7674,7 +8028,8 @@
                             <button
                                 onClick={() => setParamsOpen(true)}
                                 title="Expand the preview panel"
-                                className={HUD_PILL + ' absolute right-2 z-30 ' + (scopeLocked ? 'top-9' : 'top-2')}
+                                className={HUD_PILL + ' absolute right-2 z-30'}
+                                style={{ top: hudTop }}
                             >
                                 <MtlxIcon name="chevrons-left" className="w-3.5 h-3.5" />
                                 <span>Preview Panel</span>
@@ -7703,8 +8058,8 @@
                                     <button
                                         onClick={() => setPinnedTarget(pinnedTarget ? null : previewTarget)}
                                         title={pinnedTarget
-                                            ? 'Preview is pinned to this node — click to unpin and follow the selection again'
-                                            : 'Pin the preview to this node — it stays put regardless of what you select next'}
+                                            ? 'Preview is pinned to this node, click to unpin and follow the selection again'
+                                            : 'Pin the preview to this node, it stays put regardless of what you select next'}
                                         className={'absolute top-1 left-1 z-10 w-6 h-6 flex items-center justify-center rounded-full border backdrop-blur transition-colors '
                                             + (pinnedTarget
                                                 ? 'bg-blue-600/80 border-blue-400 text-white hover:bg-blue-500/80'
@@ -7874,7 +8229,7 @@
                                                 style={{ background: typeColor(currentSigGroup ? currentSigGroup.type : '') }} />
                                             <select
                                                 className="flex-1 min-w-0 h-6 bg-gray-900 border border-gray-600 rounded px-1.5 py-0 text-[10px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none"
-                                                title="Switch this node to another signature: inputs keeping their name, type and a customized value survive (wires included); the rest — including untouched defaults — follow the new signature"
+                                                title="Switch this node to another signature: inputs keeping their name, type and a customized value survive (wires included); the rest, including untouched defaults, follow the new signature"
                                                 value={currentSigGroup ? currentSigGroup.key : ''}
                                                 onChange={(e) => {
                                                     const g = panelSigGroups.find((g2) => g2.key === e.target.value);
@@ -7906,7 +8261,7 @@
                                             >ver</span>
                                             <select
                                                 className="flex-1 min-w-0 h-6 bg-gray-900 border border-gray-600 rounded px-1.5 py-0 text-[10px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none"
-                                                title="Switch this node to another version — ports are identical, only defaults may differ"
+                                                title="Switch this node to another version. Ports are identical, only defaults may differ"
                                                 value={currentDefName}
                                                 onChange={(e) => {
                                                     const v = currentSigGroup.versions.find((v2) => v2.name === e.target.value);
@@ -8140,7 +8495,7 @@
                                     ),
                                 ] : (
                                     <div className="text-[11px] text-gray-500 py-2">
-                                        Click a node to inspect and edit its parameters.
+                                        {docReadOnly ? 'Click a node to inspect its parameters.' : 'Click a node to inspect and edit its parameters.'}
                                     </div>
                                 )}
                             </div>
@@ -8168,7 +8523,9 @@
                             renderables={shaderExport.renderables}
                             initialIndex={0}
                             generate={({ renderable, label, targetKey }) =>
-                                generateTargetSources({ mx: parsed.mx, renderable, label, targetKey })}
+                                targetKey === "slx"
+                                    ? generateSlxExportStages()
+                                    : generateTargetSources({ mx: parsed.mx, renderable, label, targetKey })}
                             overlayClassName="absolute inset-0 z-[55] flex items-center justify-center bg-gray-950/70"
                         />
                     )}
@@ -8281,7 +8638,9 @@
                             <div className="text-center bg-gray-800/90 border border-gray-700 rounded-xl px-8 py-6">
                                 <MtlxIcon name="file-upload" className="w-10 h-10 block mx-auto mb-3 text-gray-400" />
                                 <div className="text-sm text-gray-300 font-medium">
-                                    {status || 'Drop a .mtlx (or a folder / .zip containing one) to begin.'}
+                                    {status || (IN_VSCODE
+                                        ? 'No document loaded yet.'
+                                        : 'Drop a .mtlx (or a folder / .zip containing one) to begin.')}
                                 </div>
                                 {/* Mentions the Open button and page-wide drag-drop,
                                     neither of which exist under VS Code (single opened

@@ -486,7 +486,7 @@ function WhatIsMaterialXApp({ active } = {}) {
                             camera={HERO_CAMERA} frame={false} glow className="h-[280px] sm:h-[340px] lg:h-[380px]"
                             chip={{ label: 'Gold', file: 'standard_surface_gold.mtlx' }}
                             actions={[
-                                { label: 'Open in Viewer', icon: 'camera', busy: heroBusy === 'viewer', onClick: () => openHeroIn('viewer') },
+                                { label: 'Open in Material Viewer', icon: 'camera', busy: heroBusy === 'viewer', onClick: () => openHeroIn('viewer') },
                                 { label: 'Open in Graph Editor', icon: 'share', busy: heroBusy === 'graph', onClick: () => openHeroIn('graph') },
                             ]}
                         />
@@ -561,7 +561,7 @@ function WhatIsMaterialXApp({ active } = {}) {
                         <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-2 transition-all duration-150 opacity-0 translate-y-1 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:translate-y-0 focus-within:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:translate-y-0 [@media(hover:none)]:pointer-events-auto">
                             <button type="button" disabled={!!seeItBusy} onClick={() => openSeeItIn('viewer')} className={PILL_ACTION_SM}>
                                 <MtlxIcon name="camera" className="w-3 h-3 text-gray-500 transition-colors" />
-                                {seeItBusy === 'viewer' ? 'Loading' : 'Open in Viewer'}
+                                {seeItBusy === 'viewer' ? 'Loading' : 'Open in Material Viewer'}
                             </button>
                             <button type="button" disabled={!!seeItBusy} onClick={() => openSeeItIn('graph')} className={PILL_ACTION_SM}>
                                 <MtlxIcon name="share" className="w-3 h-3 text-gray-500 transition-colors" />
@@ -655,7 +655,7 @@ function WhatIsMaterialXApp({ active } = {}) {
                                     className="h-56 sm:h-64"
                                     busyLock={!!showcaseBusy}
                                     actions={[
-                                        { label: 'Viewer', icon: 'camera', busy: showcaseBusy === key + '|viewer', onClick: () => openShowcaseIn(m, 'viewer') },
+                                        { label: 'Material Viewer', icon: 'camera', busy: showcaseBusy === key + '|viewer', onClick: () => openShowcaseIn(m, 'viewer') },
                                         { label: 'Graph Editor', icon: 'share', busy: showcaseBusy === key + '|graph', onClick: () => openShowcaseIn(m, 'graph') },
                                     ]}
                                 />

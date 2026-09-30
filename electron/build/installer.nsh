@@ -18,7 +18,7 @@
   WriteRegStr SHELL_CONTEXT "Software\Classes\${MTLX_PROGID}\shell\${MTLX_CASCADE_KEY}" "SubCommands" ""
   WriteRegStr SHELL_CONTEXT "Software\Classes\${MTLX_PROGID}\shell\${MTLX_CASCADE_KEY}" "Icon" `"$appExe",0`
 
-  WriteRegStr SHELL_CONTEXT "Software\Classes\${MTLX_PROGID}\shell\${MTLX_CASCADE_KEY}\shell\01Viewer" "MUIVerb" "Open in Viewer"
+  WriteRegStr SHELL_CONTEXT "Software\Classes\${MTLX_PROGID}\shell\${MTLX_CASCADE_KEY}\shell\01Viewer" "MUIVerb" "Open in Material Viewer"
   WriteRegStr SHELL_CONTEXT "Software\Classes\${MTLX_PROGID}\shell\${MTLX_CASCADE_KEY}\shell\01Viewer\command" "" `"$appExe" --mtlx-route=viewer "%1"`
 
   WriteRegStr SHELL_CONTEXT "Software\Classes\${MTLX_PROGID}\shell\${MTLX_CASCADE_KEY}\shell\02GraphEditor" "MUIVerb" "Open in Graph Editor"

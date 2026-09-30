@@ -13,7 +13,6 @@
   </open_pbr_surface>
   <surfacematerial name="ChristmasTreeOrnament016_1K_JPG" xpos="7.85" ypos="2.0875" type="material">
     <input name="surfaceshader" nodename="ChristmasTreeOrnament016_1K_JPG_OpenPbrSurface" type="surfaceshader" />
-    <input name="displacementshader" nodename="displacement" type="displacementshader" />
   </surfacematerial>
   <tiledimage name="ChristmasTreeOrnament016_1K_JPG_Color" xpos="3.975" ypos="0.1" type="color3">
     <input name="file" value="ChristmasTreeOrnament016_1K-JPG_Color.jpg" colorspace="srgb_texture" type="filename" />
@@ -21,16 +20,6 @@
     <input name="texcoord" type="vector2" nodename="texcoord1" />
     <input name="uvoffset" type="vector2" nodename="convert1" />
   </tiledimage>
-  <tiledimage name="ChristmasTreeOrnament016_1K_JPG_Displacement" xpos="3.975" ypos="3.1333" type="float">
-    <input name="file" value="ChristmasTreeOrnament016_1K-JPG_Displacement.jpg" type="filename" />
-    <input name="uvtiling" value="1.0, 1.0" type="vector2" />
-    <input name="texcoord" type="vector2" nodename="texcoord1" />
-    <input name="uvoffset" type="vector2" nodename="convert1" />
-  </tiledimage>
-  <displacement name="displacement" xpos="5.2667" ypos="3.225" type="displacementshader">
-    <input name="displacement" nodename="ChristmasTreeOrnament016_1K_JPG_Displacement" type="float" />
-    <input name="scale" value="1.0" type="float" />
-  </displacement>
   <tiledimage name="ChristmasTreeOrnament016_1K_JPG_Metalness" xpos="3.975" ypos="0.8583" type="float">
     <input name="file" value="ChristmasTreeOrnament016_1K-JPG_Metalness.jpg" type="filename" />
     <input name="uvtiling" value="1.0, 1.0" type="vector2" />

@@ -349,10 +349,10 @@
         },
     });
 
-    // Drives renderer.setSize plus a caller-supplied `layout(w, h)` hook,
-    // shared by the ResizeObserver path and the fixed-resolution capture
-    // path. onVisibility reports hidden transitions from the same callback; the caller owns what happens next, this sizer just skips its own resize.
-    const createSizer = ({ canvas, renderer, fallbackWidth, fallbackHeight, layout, onVisibility }) => {
+    // Drives renderer.setSize plus a caller `layout(w, h)` hook for the ResizeObserver and capture paths.
+    // onVisibility reports hidden transitions (the caller owns them, this sizer just skips its resize);
+    // onResized runs after an observed resize so the caller can redraw the cleared buffer.
+    const createSizer = ({ canvas, renderer, fallbackWidth, fallbackHeight, layout, onVisibility, onResized }) => {
         let suspended = false;
         let wasHidden = false;
         const applySize = (w, h) => {
@@ -376,6 +376,7 @@
             const w = canvas.clientWidth || fallbackWidth;
             const h = canvas.clientHeight || fallbackHeight;
             applySize(w, h);
+            if (onResized) onResized();
         };
         let observer = null;
         if (window.ResizeObserver) {

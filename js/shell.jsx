@@ -189,6 +189,8 @@ const VIEW_DEPS = {
             'embed/mtlx-viewer.js',
             // Decodes .ktx2 compressed textures (loadKtx2Texture, js/mtlx-engine.js).
             'vendor/three/KTX2Loader.js',
+            // Plain JS (no JSX), shared with tests/unit via a direct Node eval.
+            'js/graph/zip-export-paths.js',
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',
@@ -271,8 +273,9 @@ const VIEW_DEPS = {
             'vendor/dagre/dagre.min.js',
             'embed/mtlx-viewer.js',
         ],
-        // The docs implementation panel loads this bundle in the webview,
-        // where embed/ is not packaged (see graph.webviewSkip).
+        // The docs implementation panel and the Scene Viewer's material panel
+        // load this in the webview, where embed/ is not packaged (see
+        // graph.webviewSkip); their 3D preview shows the fallback there.
         webviewSkip: ['embed/mtlx-viewer.js'],
         babelScripts: [
             'js/graph/model.jsx',
@@ -783,7 +786,7 @@ function DesktopSettingsDialog() {
                             <MtlxSelect
                                 value={documentOpenView}
                                 options={['graph', 'viewer']}
-                                labels={{ graph: 'Graph Editor', viewer: 'Viewer' }}
+                                labels={{ graph: 'Graph Editor', viewer: 'Material Viewer' }}
                                 defValue="graph"
                                 onChange={changeDocumentOpenView}
                                 ariaLabel="Open Documents Into"
@@ -844,75 +847,55 @@ function DesktopSettingsDialog() {
     );
 }
 
-// Curated display name + license URL per vendor-manifest.json `source`
-// string, deduped by name when rendered (several sources share a library).
-// License URLs are GitHub blob links pinned to HEAD, or to a commit/tag
-// when the source itself is pinned to one.
-const VENDOR_LIBRARY_MAP = {
-    '@babel/standalone@7.26.10': { name: 'Babel', licenseUrl: 'https://github.com/babel/babel/blob/HEAD/LICENSE' },
-    '@highlightjs/cdn-assets@11.9.0': { name: 'highlight.js', licenseUrl: 'https://github.com/highlightjs/highlight.js/blob/HEAD/LICENSE' },
-    'dagre@0.8.5': { name: 'Dagre', licenseUrl: 'https://github.com/dagrejs/dagre/blob/HEAD/LICENSE' },
-    'jszip@3.10.1': { name: 'JSZip', licenseUrl: 'https://github.com/Stuk/jszip/blob/HEAD/LICENSE.markdown' },
-    'katex@0.16.47': { name: 'KaTeX', licenseUrl: 'https://github.com/KaTeX/KaTeX/blob/HEAD/LICENSE' },
-    'pako@1.0.11': { name: 'pako', licenseUrl: 'https://github.com/nodeca/pako/blob/HEAD/LICENSE' },
-    'react@18.3.1': { name: 'React', licenseUrl: 'https://github.com/facebook/react/blob/HEAD/LICENSE' },
-    'react-dom@18.3.1': { name: 'React', licenseUrl: 'https://github.com/facebook/react/blob/HEAD/LICENSE' },
-    'reactflow@11.11.4': { name: 'React Flow', licenseUrl: 'https://github.com/xyflow/xyflow/blob/HEAD/LICENSE' },
-    'three@0.128.0': { name: 'three.js', licenseUrl: 'https://github.com/mrdoob/three.js/blob/HEAD/LICENSE' },
-    'three-147@0.147.0': { name: 'three.js', licenseUrl: 'https://github.com/mrdoob/three.js/blob/HEAD/LICENSE' },
-    'utif@3.1.0': { name: 'UTIF.js', licenseUrl: 'https://github.com/photopea/UTIF.js/blob/HEAD/LICENSE' },
-    'https://cdn.tailwindcss.com/3.4.17': { name: 'Tailwind CSS', licenseUrl: 'https://github.com/tailwindlabs/tailwindcss/blob/HEAD/LICENSE' },
-    'https://raw.githubusercontent.com/tailwindlabs/tailwindcss/v3.4.17/LICENSE': { name: 'Tailwind CSS', licenseUrl: 'https://github.com/tailwindlabs/tailwindcss/blob/HEAD/LICENSE' },
-    'https://raw.githubusercontent.com/google/draco/1.5.7/LICENSE': { name: 'Draco', licenseUrl: 'https://github.com/google/draco/blob/HEAD/LICENSE' },
-    'https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/webgl/encoder/build/basis_encoder.js': { name: 'Basis Universal', licenseUrl: 'https://github.com/BinomialLLC/basis_universal/blob/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/LICENSE' },
-    'https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/webgl/encoder/build/basis_encoder.wasm': { name: 'Basis Universal', licenseUrl: 'https://github.com/BinomialLLC/basis_universal/blob/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/LICENSE' },
-    'https://raw.githubusercontent.com/BinomialLLC/basis_universal/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/LICENSE': { name: 'Basis Universal', licenseUrl: 'https://github.com/BinomialLLC/basis_universal/blob/99f52d63aa6799cbdaecfe977111dc5ec3b31d47/LICENSE' },
-    'https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/LICENSES.txt': { name: 'OpenUSD WebView Bindings', licenseUrl: 'https://github.com/joaovbs96/USDBindings/releases/tag/v2026.9.1' },
-    'https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/usdWebViewBindings.js': { name: 'OpenUSD WebView Bindings', licenseUrl: 'https://github.com/joaovbs96/USDBindings/releases/tag/v2026.9.1' },
-    'https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/usdWebViewBindingsModule.js': { name: 'OpenUSD WebView Bindings', licenseUrl: 'https://github.com/joaovbs96/USDBindings/releases/tag/v2026.9.1' },
-    'https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/usdWebViewBindingsModule.wasm': { name: 'OpenUSD WebView Bindings', licenseUrl: 'https://github.com/joaovbs96/USDBindings/releases/tag/v2026.9.1' },
-};
-// MaterialX ships via vendor/materialx (gitignored, fetched separately by
-// `npm run vendor:offline`) so it never appears in vendor-manifest.json;
-// list it and other hand-vendored assets not in VENDOR_LIBRARY_MAP by hand.
+// Hand-vendored assets not in window.MTLX_VENDOR_DEPS (js/gen/vendor-deps.js,
+// generated from scripts/vendor-deps.mjs), listed here by hand.
 const MATERIALX_LIBRARY = { name: 'MaterialX', licenseUrl: 'https://github.com/AcademySoftwareFoundation/MaterialX/blob/HEAD/LICENSE' };
 const STATIC_LIBRARIES = [
     MATERIALX_LIBRARY,
     // Inlined as SVG paths in js/shared/ui-commons.js and js/site-header.js,
-    // not fetched at runtime, so it never appears in vendor-manifest.json.
+    // not fetched at runtime, so it never appears in vendor-deps.js.
     { name: 'Tabler Icons', licenseUrl: 'https://github.com/tabler/tabler-icons/blob/HEAD/LICENSE' },
     // js/vendor/EXRLoader.js: a patched copy of three.js's EXRLoader, see
     // js/vendor/VENDORED-CHANGES.md for the exact diff and provenance.
     { name: 'three.js EXRLoader (patched)', licenseUrl: 'https://github.com/mrdoob/three.js/blob/HEAD/LICENSE' },
     // images/materialx-logo.svg, used only to identify the MaterialX
-    // project (README.md "Trademarks"), not fetched from vendor-manifest.json.
+    // project (README.md "Trademarks"), not fetched from vendor-deps.js.
     { name: 'MaterialX logo (Academy Software Foundation)', licenseUrl: 'https://github.com/AcademySoftwareFoundation/artwork' },
 ];
 
-// Fallback for a manifest `source` string with no VENDOR_LIBRARY_MAP entry:
-// renders the raw package/repo name instead of silently dropping it, so a
-// newly vendored library can never go missing from this list unnoticed.
-function fallbackLibraryFor(source) {
-    const pkgMatch = /^([^@]+)@/.exec(source);
-    if (pkgMatch) return { name: pkgMatch[1], licenseUrl: null };
-    const ghMatch = /github(?:usercontent)?\.com\/([^/]+\/[^/]+)/.exec(source);
-    if (ghMatch) return { name: ghMatch[1], licenseUrl: null };
-    return { name: source, licenseUrl: null };
+// Credits list built synchronously from window.MTLX_VENDOR_DEPS plus the
+// hand-vendored STATIC_LIBRARIES above, deduped by name and sorted by name.
+function buildVendorEntries() {
+    const deps = window.MTLX_VENDOR_DEPS || {};
+    // The .vsix leaves out `vscode: false` deps, so the extension does not credit them.
+    const libs = Object.keys(deps).filter((id) => !(window.__MTLX_VSCODE__ && deps[id].vscode === false))
+        .map((id) => ({ name: deps[id].name, licenseUrl: deps[id].licenseUrl }));
+    libs.push(...STATIC_LIBRARIES);
+    const seen = new Set();
+    return libs.filter((lib) => {
+        if (seen.has(lib.name)) return false;
+        seen.add(lib.name);
+        return true;
+    }).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 // About dialog opened from the header help button, available in every
-// host now, and the only place the two disclaimer paragraphs render since
-// the footer strip is gone. Taller/wider than DesktopSettingsDialog to fit the license text.
+// host; it repeats the two disclaimer paragraphs of the web footer strip.
+// Taller/wider than DesktopSettingsDialog to fit the license text.
 let __licenseCache = null;
-let __vendorEntriesCache = null;
-let __libVersionsCache = null;
 function AboutDialog() {
     const [open, setOpen] = React.useState(false);
     const [about, setAbout] = React.useState(null);
     const [license, setLicense] = React.useState(__licenseCache);
     const [licenseError, setLicenseError] = React.useState(false);
-    const [vendorEntries, setVendorEntries] = React.useState(__vendorEntriesCache);
-    const [libVersions, setLibVersions] = React.useState(__libVersionsCache);
+    const vendorEntries = React.useMemo(buildVendorEntries, []);
+    const libVersions = React.useMemo(() => {
+        const deps = window.MTLX_VENDOR_DEPS || {};
+        return {
+            three: deps.three ? deps.three.version : null,
+            react: deps.react ? deps.react.version : null,
+        };
+    }, []);
     const [webRelease, setWebRelease] = React.useState(undefined); // undefined = loading, null = none yet
     const panelRef = React.useRef(null);
 
@@ -930,43 +913,22 @@ function AboutDialog() {
                 window.mtlxSourceFacts.then((facts) => setWebRelease((facts && facts.version) || null));
             }
             if (__licenseCache === null) {
-                fetch('LICENSE')
-                    .then((res) => { if (!res.ok) throw new Error('bad response'); return res.text(); })
+                // vsce renames the repo's root LICENSE to LICENSE.txt inside
+                // the packaged .vsix (LicenseProcessor). Inside VS Code the
+                // webview is always serving that packaged/staged tree, so
+                // try LICENSE.txt FIRST there to avoid VS Code logging a
+                // resource 404 on every About open; everywhere else
+                // (web, Electron) the file is still named LICENSE. Both
+                // fetch('LICENSE')/fetch('LICENSE.txt') calls stay as
+                // literal strings so scripts/check-vsix-files.mjs's
+                // checkRenamedRootFileFallbacks can still find them.
+                const fetchOk = (name) => fetch(name).then((res) => { if (!res.ok) throw new Error('bad response'); return res.text(); });
+                const fetchLicense = () => (isVSCode
+                    ? fetchOk('LICENSE.txt').catch(() => fetchOk('LICENSE'))
+                    : fetchOk('LICENSE').catch(() => fetchOk('LICENSE.txt')));
+                fetchLicense()
                     .then((text) => { __licenseCache = text; setLicense(text); })
                     .catch(() => setLicenseError(true));
-            }
-            if (__vendorEntriesCache === null) {
-                fetch('vendor/vendor-manifest.json')
-                    .then((res) => { if (!res.ok) throw new Error('bad response'); return res.json(); })
-                    .then((manifest) => {
-                        const entries = manifest.entries || [];
-                        const libs = entries.map((e) => {
-                            const source = String(e.source);
-                            return VENDOR_LIBRARY_MAP[source] || fallbackLibraryFor(source);
-                        });
-                        libs.push(...STATIC_LIBRARIES);
-                        const seen = new Set();
-                        const unique = libs.filter((lib) => {
-                            if (seen.has(lib.name)) return false;
-                            seen.add(lib.name);
-                            return true;
-                        }).sort((a, b) => a.name.localeCompare(b.name));
-                        __vendorEntriesCache = unique;
-                        setVendorEntries(unique);
-
-                        // three.js + React versions for the version block
-                        // below, parsed straight off their manifest `source`
-                        // strings ("three@0.128.0" / "react@18.3.1").
-                        const threeEntry = entries.find((e) => /^three@/.test(String(e.source)));
-                        const reactEntry = entries.find((e) => /^react@/.test(String(e.source)));
-                        const versions = {
-                            three: threeEntry ? String(threeEntry.source).split('@')[1] : null,
-                            react: reactEntry ? String(reactEntry.source).split('@')[1] : null,
-                        };
-                        __libVersionsCache = versions;
-                        setLibVersions(versions);
-                    })
-                    .catch(() => { /* silently skip the third-party list */ });
             }
         };
         window.addEventListener('mtlx-about', onOpen);
@@ -993,6 +955,21 @@ function AboutDialog() {
         window.addEventListener('pointerdown', onDown);
         return () => window.removeEventListener('pointerdown', onDown);
     }, [open]);
+
+    // VS Code test seam: bootstrap.js defines __mtlxAboutReport only for
+    // the extension's test transport (mirrors __mtlxSceneReport in
+    // usd-scene-app.jsx). Fires once the license fetch settles, reporting
+    // the same license text and version string the dialog renders.
+    React.useEffect(() => {
+        if (!isVSCode || typeof window.__mtlxAboutReport !== 'function') return;
+        if (license === null && !licenseError) return;
+        const extensionVersion = (window.__MTLX_VSCODE_VERSIONS__ || {}).extension;
+        window.__mtlxAboutReport({
+            license: license || '',
+            licenseError,
+            extensionVersionText: extensionVersion ? 'v' + extensionVersion : 'n/a',
+        });
+    }, [isVSCode, license, licenseError]);
 
     if (!open) return null;
 
@@ -1039,7 +1016,7 @@ function AboutDialog() {
                     {isElectron ? (
                         about ? (
                             <div>
-                                <div>Version {about.appVersion}</div>
+                                <div>Version {about.appVersion ? 'v' + about.appVersion : 'n/a'}</div>
                                 <div>Electron {about.electron} &middot; Chromium {about.chrome} &middot; Node {about.node}</div>
                             </div>
                         ) : (
@@ -1047,7 +1024,7 @@ function AboutDialog() {
                         )
                     ) : isVSCode ? (
                         <div>
-                            <div>Extension {vscodeVersions.extension || 'n/a'}</div>
+                            <div>Extension {vscodeVersions.extension ? 'v' + vscodeVersions.extension : 'n/a'}</div>
                             <div>VS Code {vscodeVersions.vscode || 'n/a'}</div>
                         </div>
                     ) : (
@@ -1080,9 +1057,9 @@ function AboutDialog() {
                     ) : null}
                 </div>
 
-                {/* Only place these two paragraphs render now (footer strip
-                    is gone). .mtlx-about-disclaimer neutralizes
-                    .mtlx-about-experimental's own amber styling. */}
+                {/* Same two paragraphs as the web footer strip (the only place
+                    they show in VS Code and Electron). .mtlx-about-disclaimer
+                    neutralizes .mtlx-about-experimental's own amber styling. */}
                 {disclaimerParts.experimental ? (
                     <div
                         className="mtlx-about-disclaimer flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200 mt-1 mb-3"
@@ -1269,7 +1246,7 @@ function Shell() {
     React.useEffect(() => {
         if (EMBED) return;
         const titles = {
-            home: 'MaterialX Playground — Node Library, Viewer & Graph Editor',
+            home: 'MaterialX Playground — Node Library, Material Viewer & Graph Editor',
             docs: 'MaterialX Playground — Node Library & Documentation',
             viewer: 'MaterialX Playground — Material Viewer',
             graph: 'MaterialX Playground — Node Graph Editor',
@@ -1281,7 +1258,7 @@ function Shell() {
             gallery: 'MaterialX Playground - Material Gallery',
             roadmap: 'MaterialX Playground - Roadmap',
         };
-        document.title = titles[activeView] || 'MaterialX Playground — Node Library, Viewer & Graph Editor';
+        document.title = titles[activeView] || 'MaterialX Playground — Node Library, Material Viewer & Graph Editor';
     }, [activeView]);
 
     const renderView = (view) => {

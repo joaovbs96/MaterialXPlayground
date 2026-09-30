@@ -22,7 +22,11 @@
             expandAll, collapseAll, expandedLibs, toggleLib, expandedGroups, toggleGroup,
             selectedNode, setSelectedNode,
             stats, applyDocFilter, showPreviews, togglePreviews, onShowHelp, collapsed, onCollapse,
+            fileFilter, onPickFiles, onClearFileFilter, showFilePicker,
         }) {
+            // Hidden <input type=file>, clicked via the "Filter by file"
+            // button below; App does the reading/scanning (pickFileFilter).
+            const fileInputRef = React.useRef(null);
             // Type dot colors: shared site palette (js/shared/ui-commons.js),
             // keyed by port type name so both MtlxSelect triggers and rows
             // match the graph legend / port-table dots.
@@ -202,6 +206,51 @@
                                 className="flex-1 min-w-0"
                             />
                         </div>
+                        {/* File-based filter: narrows the tree to categories
+                            present in one or more locally picked .mtlx
+                            files (AND'd with the search/type filters above).
+                            Under VS Code the host drives this itself via the
+                            `mtlx-docs-filter` window event, so the picker
+                            button is hidden but the chip still shows. */}
+                        {(showFilePicker || fileFilter) && (
+                            <div className="flex items-center gap-1.5 mb-2 flex-wrap" role="group" aria-label="Filter by file">
+                                {showFilePicker && (
+                                    <React.Fragment>
+                                        <input
+                                            ref={fileInputRef}
+                                            type="file"
+                                            accept=".mtlx"
+                                            multiple
+                                            className="hidden"
+                                            onChange={(e) => {
+                                                onPickFiles(e.target.files);
+                                                e.target.value = '';
+                                            }}
+                                        />
+                                        <button
+                                            onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                                            title="Filter the node tree to categories used in one or more .mtlx files"
+                                            className="text-xs px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-gray-200 hover:bg-gray-700"
+                                        >
+                                            Filter by file
+                                        </button>
+                                    </React.Fragment>
+                                )}
+                                {fileFilter && (
+                                    <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-blue-500/[0.12] text-blue-300 max-w-full">
+                                        <span className="truncate">In {fileFilter.file}</span>
+                                        <button
+                                            onClick={onClearFileFilter}
+                                            title="Clear the file filter"
+                                            aria-label="Clear the file filter"
+                                            className="flex-none text-blue-300/80 hover:text-blue-100"
+                                        >
+                                            <MtlxIcon name="x" className="w-3 h-3" />
+                                        </button>
+                                    </span>
+                                )}
+                            </div>
+                        )}
                     </div>
                     <div className="px-4 pb-4 pt-1">
                     {docFilter !== 'all' && !forceOpen && Object.keys(treeData).length === 0 && (

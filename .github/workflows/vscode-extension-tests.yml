@@ -16,6 +16,11 @@ on:
       - 'vendor/**'
       - 'scripts/build-webview.mjs'
       - 'scripts/check-vsix-files.mjs'
+      - 'scripts/vendor-deps.mjs'
+      - 'scripts/lib/vendor/**'
+      - '.github/vsce/**'
+      - 'scripts/lib/vsce.mjs'
+      - 'tests/unit/vscode-*.test.mjs'
       - 'tests/vscode/**'
       - 'package.json'
       - 'package-lock.json'
@@ -30,6 +35,11 @@ on:
       - 'vendor/**'
       - 'scripts/build-webview.mjs'
       - 'scripts/check-vsix-files.mjs'
+      - 'scripts/vendor-deps.mjs'
+      - 'scripts/lib/vendor/**'
+      - '.github/vsce/**'
+      - 'scripts/lib/vsce.mjs'
+      - 'tests/unit/vscode-*.test.mjs'
       - 'tests/vscode/**'
       - 'package.json'
       - 'package-lock.json'
@@ -51,12 +61,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Node
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm
@@ -67,8 +77,73 @@ jobs:
       - name: Regenerate embed bundles
         run: node scripts/build.mjs embed
 
+      # Fetch-only vendor files (the OpenUSD runtime) are not committed but ship in the vsix.
+      - name: Fetch vendored runtime files
+        run: npm run vendor
+
       - name: Check every runtime-loaded file is packaged in the vsix
         run: node scripts/check-vsix-files.mjs
 
+      - name: Run the VS Code extension unit tests
+        run: node --test tests/unit/vscode-*.test.mjs
+
       - name: Run the VS Code webview simulation suite
         run: npm run test:vscode
+
+  # Packages a real .vsix and boots one real VS Code session against it
+  # (tests/vscode-host/smoke.mjs), proving the PACKAGED extension works,
+  # not just the dev tree the `test` job above exercises.
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Vendor the offline MaterialX snapshot
+        run: npm run vendor:offline
+
+      # Installed from the lockfile into RUNNER_TEMP, not the repo tree,
+      # with install scripts off -- same locked tool release.yml uses.
+      - name: Install vsce (locked)
+        run: |
+          mkdir -p "$RUNNER_TEMP/vsce"
+          cp .github/vsce/package.json .github/vsce/package-lock.json "$RUNNER_TEMP/vsce/"
+          cd "$RUNNER_TEMP/vsce" && npm ci --ignore-scripts --no-audit --no-fund
+
+      # Same packaging args release.yml's package job uses (--no-dependencies,
+      # the Marketplace listing/changelog paths), so this exercises the exact
+      # file set a real release would ship.
+      - name: Package VS Code extension (.vsix)
+        run: |
+          VSIX="$RUNNER_TEMP/materialx-playground-smoke.vsix"
+          "$RUNNER_TEMP/vsce/node_modules/.bin/vsce" package --no-dependencies \
+            --readme-path vscode_extension/MARKETPLACE.md --changelog-path CHANGELOG.md --out "$VSIX"
+          unzip -q "$VSIX" -d "$RUNNER_TEMP/vsix-extracted"
+
+      - name: Install tests/vscode-host dependencies
+        run: npm ci
+        working-directory: tests/vscode-host
+
+      # GitHub-hosted ubuntu-latest runners ship the GUI libs VS Code's
+      # Electron needs but not xvfb itself -- same gap release.yml's
+      # desktop-smoke job hits and fixes the same way.
+      - name: Install xvfb
+        run: sudo apt-get update -y && sudo apt-get install -y xvfb
+
+      - name: Run the packaged-extension smoke test
+        # No GPU on the runner: --software-gl gives VS Code a SwiftShader WebGL2 (blocklisted by default).
+        run: xvfb-run -a node tests/vscode-host/smoke.mjs --extension-dir "$RUNNER_TEMP/vsix-extracted/extension" --vscode stable --software-gl --suite core

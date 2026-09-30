@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- <base> makes url()/load() resolve vendor/<dir> against this, not the page's own path. -->
+<base href="nested/">
+<script>
+    window.MTLX_VENDOR_DEPS = {
+        emscripten: { dir: 'emscripten-fake', name: 'Emscripten Fake', module: { entry: 'module.js', kind: 'emscripten-esm' } },
+        esmdep: { dir: 'esm-fake', name: 'ESM Fake', module: { entry: 'module.js', kind: 'esm' } },
+        scriptdep: { dir: 'script-fake', name: 'Script Fake', module: { entry: 'module.js', kind: 'script', global: 'FakeGlobal' } },
+        fixabledep: { dir: 'script-fake', name: 'Fixable Fake', module: { entry: 'missing.js', kind: 'script', global: 'FakeGlobal' } },
+        vscodedep: { dir: 'script-fake', name: 'VSCode Fake', vscode: false, module: { entry: 'module.js', kind: 'script', global: 'FakeGlobal' } },
+        nomoduledep: { dir: 'script-fake', name: 'No Module Fake' },
+    };
+</script>
+<script src="/js/shared/vendor-runtime.js"></script>
+</head>
+<body></body>
+</html>

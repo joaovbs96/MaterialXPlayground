@@ -438,7 +438,14 @@ function resolveStageMetrics(summary, rootMetrics) {
     if (headerUp) warnings.push(`[info] Native USD summary omitted upAxis; using root USDA header value ${headerUp}`);
     else if (!rootMetrics?.ascii) warnings.push('[info] Native USD summary omitted upAxis for a binary root; using USD default Y (authored binary metadata unavailable)');
   }
-  return { metersPerUnit, upAxis, warnings };
+  // Scene card qualifier: whether the root header authored each value, null when a
+  // binary or truncated root makes that unknowable.
+  const known = !!rootMetrics?.ascii && !rootMetrics.truncated;
+  const authored = {
+    metersPerUnit: known ? Number.isFinite(rootMetrics.metersPerUnit) : null,
+    upAxis: known ? !!headerUp : null,
+  };
+  return { metersPerUnit, upAxis, warnings, authored };
 }
 
 function copyTexture(texture, assets) {
@@ -1771,9 +1778,19 @@ function loadMaterialDocs() {
   return materialDocsModule;
 }
 
+// Houdini publishes an auto-created UsdPreviewSurface next to the MaterialX
+// network; the native payload then types the record UsdPreviewSurface but still
+// carries that network, which wins over the flattened preview constants.
+function hasNativeMaterialX(material) {
+  const mx = material?.materialX;
+  return !!(mx && (mx.data || mx.path));
+}
+
 // Encodes a synthesized MaterialX document, points the material record at it
 // and publishes it as a top-level asset the renderer can resolve.
-function attachSynthesizedMaterialX(result, material, mtlxPath, xml, materialName) {
+function attachSynthesizedMaterialX(result, material, requestedPath, xml, materialName) {
+  // Two materials with the same leaf name must not share (and shadow) one asset.
+  const mtlxPath = uniqueMaterialAssetPath(result, requestedPath);
   const bytes = new TextEncoder().encode(xml);
   material.materialX = {
     path: mtlxPath,
@@ -1954,7 +1971,109 @@ function graphEntriesOfType(graph, matches) {
   });
 }
 
-function collectCameras(api, root, graph, warn, evaluatedTransforms = null) {
+// Every Material prim in the composed stage, bound or not. The native payload
+// only carries materials a drawn mesh binds, so unbound ones (a library, a
+// Volume-only binding) reach the outliner through this path list.
+function collectMaterialPrims(graph) {
+  const prims = [];
+  const seen = new Set();
+  for (const entry of graphEntriesOfType(graph, name => name === "material")) {
+    const path = text(entry.path);
+    if (seen.has(path)) continue;
+    seen.add(path);
+    prims.push({ path, name: text(entry.name) || path.split("/").filter(Boolean).pop() || path });
+  }
+  return prims;
+}
+
+// UsdGeomCamera schema fallbacks, for a lens attribute the runtime returns no
+// record or no number for.
+const CAMERA_SCHEMA_DEFAULTS = {
+  focalLength: 50, horizontalAperture: 20.955, verticalAperture: 15.2908,
+  horizontalApertureOffset: 0, verticalApertureOffset: 0,
+  clippingRange: [1, 1000000], focusDistance: 0, projection: "perspective",
+};
+const CAMERA_LENS_ATTRIBUTES = [
+  "focalLength", "horizontalAperture", "verticalAperture",
+  "horizontalApertureOffset", "verticalApertureOffset", "clippingRange", "focusDistance",
+];
+
+// Numbers of a `.timeSamples` map at `time`, linearly interpolated between the
+// bracketing samples and held past either end, as USD resolves float values.
+function sampledNumbersAtTime(samples, time) {
+  const parsed = (samples ?? []).map(([at, value]) => [at, parseNumbers(value)])
+    .filter(([at, nums]) => Number.isFinite(at) && nums.length)
+    .sort((a, b) => a[0] - b[0]);
+  if (!parsed.length) return null;
+  if (!Number.isFinite(time) || time <= parsed[0][0]) return parsed[0][1];
+  for (let i = 1; i < parsed.length; i++) {
+    const [t1, v1] = parsed[i];
+    if (time > t1) continue;
+    const [t0, v0] = parsed[i - 1];
+    if (time === t1) return v1;
+    if (v0.length !== v1.length) return v0;
+    const u = (time - t0) / (t1 - t0);
+    return v0.map((value, k) => value + (v1[k] - value) * u);
+  }
+  return parsed[parsed.length - 1][1];
+}
+
+// Own attributes (child prim blocks stripped) a USD text scope authors for
+// `names`: the default value text and the `.timeSamples` pairs of each.
+function collectScopeAttributes(scopeText, names) {
+  const own = stripChildBlocks(scopeText, extractChildBlocks(scopeText));
+  const found = new Map();
+  const re = /(?:^|\n)[ \t]*(?:(?:uniform|custom|varying)[ \t]+)*[A-Za-z_][\w[\]]*[ \t]+([A-Za-z_][\w:]*)(\.timeSamples)?[ \t]*=[ \t]*/g;
+  let m;
+  while ((m = re.exec(own))) {
+    if (!names.includes(m[1])) continue;
+    const rest = own.slice(m.index + m[0].length);
+    const entry = found.get(m[1]) ?? { value: null, timeSamples: null };
+    if (m[2]) {
+      const body = leadingBraceBody(rest);
+      if (body !== null) entry.timeSamples = parseTimeSamples(body);
+    } else {
+      entry.value = leadingValueText(rest) || entry.value;
+    }
+    found.set(m[1], entry);
+  }
+  return found;
+}
+
+// A camera prim's block in one text layer: by its full path, else a typed
+// `def Camera` of the same leaf name (a referenced camera asset's own layer).
+function findCameraBlockBody(usdaText, primPath) {
+  const byPath = findMaterialBlockBody(usdaText, primPath);
+  if (byPath != null) return byPath;
+  const leaf = primPath.split("/").filter(Boolean).pop();
+  const match = leaf ? new RegExp('\\bdef\\s+Camera\\s+"' + escapeRegExp(leaf) + '"[^{]*\\{').exec(usdaText) : null;
+  return match ? leadingBraceBody(usdaText.slice(match.index + match[0].length - 1)) : null;
+}
+
+// getPrimAttributes reads the default time only, so a lens authored purely as
+// time samples arrives as the schema fallback. The text layers keep the samples:
+// the first layer (root first) with an opinion decides, evaluated at `time`.
+function sampledCameraLens(usdaLayers, rootPath, primPath, time) {
+  const lens = new Map();
+  const isRoot = layer => normalizePath(layer.path) === rootPath;
+  const layers = (usdaLayers ?? []).slice().sort((a, b) => Number(isRoot(b)) - Number(isRoot(a)));
+  const decided = new Set();
+  for (const layer of layers) {
+    const body = findCameraBlockBody(layer.text, primPath);
+    if (body == null) continue;
+    for (const [name, entry] of collectScopeAttributes(body, CAMERA_LENS_ATTRIBUTES)) {
+      if (decided.has(name)) continue;
+      decided.add(name);
+      const nums = entry.timeSamples ? sampledNumbersAtTime(entry.timeSamples, time) : null;
+      if (nums) lens.set(name, nums);
+    }
+  }
+  return lens;
+}
+
+// Lens values are read at `stageTime`, the stage start time evaluatedTransforms
+// uses; composed default-time reads cover every attribute without text samples.
+function collectCameras(api, root, graph, warn, evaluatedTransforms = null, usdaLayers = [], stageTime = Number.NaN) {
   const cameraEntries = graphEntriesOfType(graph, name => name === "camera");
   const cameras = [];
   for (const entry of cameraEntries) {
@@ -1963,24 +2082,31 @@ function collectCameras(api, root, graph, warn, evaluatedTransforms = null) {
     const { matrix: worldSoFar, leafMap, unsupported } = composeWorldMatrix(api, root, primPath, warn, "Camera");
     if (unsupported) continue;
     const map = leafMap;
-    const numberOf = (name, fallback) => {
+    let sampled = new Map();
+    try { sampled = sampledCameraLens(usdaLayers, root, primPath, stageTime); } catch { /* composed reads only */ }
+    const numbersOf = (name) => {
+      if (sampled.has(name)) return sampled.get(name);
       const record = map.get(name);
-      const nums = record ? parseNumbers(record.value) : [];
-      return nums.length ? nums[0] : fallback;
+      return record ? parseNumbers(record.value) : [];
     };
-    const clipRecord = map.get("clippingRange");
-    const clipNums = clipRecord ? parseNumbers(clipRecord.value) : [];
-    const projectionRecord = map.get("projection");
+    const numberOf = (name) => numbersOf(name)[0] ?? CAMERA_SCHEMA_DEFAULTS[name];
+    const clipNums = numbersOf("clippingRange");
+    const projection = text(map.get("projection")?.value)?.trim().replace(/^"|"$/g, "");
     cameras.push({
       primPath,
       name: segments[segments.length - 1] || primPath,
       matrix: evaluatedTransforms?.get(primPath) ?? worldSoFar,
-      focalLength: numberOf("focalLength", 50),
-      horizontalAperture: numberOf("horizontalAperture", 36),
-      verticalAperture: numberOf("verticalAperture", 24),
-      clippingRange: [clipNums[0] ?? 0.1, clipNums[1] ?? 1000000],
-      focusDistance: numberOf("focusDistance", 0),
-      projection: projectionRecord ? text(projectionRecord.value) : "perspective",
+      focalLength: numberOf("focalLength"),
+      horizontalAperture: numberOf("horizontalAperture"),
+      verticalAperture: numberOf("verticalAperture"),
+      horizontalApertureOffset: numberOf("horizontalApertureOffset"),
+      verticalApertureOffset: numberOf("verticalApertureOffset"),
+      clippingRange: [
+        clipNums[0] ?? CAMERA_SCHEMA_DEFAULTS.clippingRange[0],
+        clipNums[1] ?? CAMERA_SCHEMA_DEFAULTS.clippingRange[1],
+      ],
+      focusDistance: numberOf("focusDistance"),
+      projection: projection || CAMERA_SCHEMA_DEFAULTS.projection,
     });
   }
   return cameras;
@@ -2084,7 +2210,7 @@ function collectLights(api, root, graph, warn, evaluatedTransforms = null) {
     });
   }
   const domes = lights.filter(light => light.type.toLowerCase() === "domelight");
-  if (domes.length > 1) warn(`Stage has ${domes.length} dome lights; using ${domes[0].primPath}`);
+  if (domes.length > 1) warn(`Scene has ${domes.length} dome lights; using ${domes[0].primPath}`);
   for (const light of lights) {
     const kind = light.type.toLowerCase();
     if (kind === "domelight") {
@@ -2291,6 +2417,329 @@ async function recoverInstanceNormals(api, root, pointInstancerPaths, drawSnapsh
   return warnings;
 }
 
+// --- Material probe stage ------------------------------------------------
+// The native extractor stops at an outputs:surface that targets a missing prim
+// (never trying outputs:mtlx:surface) and only returns bound materials.
+const MATERIAL_PROBE_PROXY_CAP = 512;
+const MATERIAL_PROBE_SCOPE = "__mtlxMaterialProbe";
+const USD_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+// A record with nothing to render: no shader id, no network, no textures.
+function materialRecordIsBare(material) {
+  if (!material || material.shaderId || hasNativeMaterialX(material)) return false;
+  return !Object.keys(material).some(key => /Texture$/.test(key) && material[key]);
+}
+
+function materialProbeablePath(path) {
+  const parts = String(path ?? "").split("/").filter(Boolean);
+  return !!parts.length && !parts[0].startsWith("__") && parts.every(part => USD_IDENTIFIER.test(part));
+}
+
+// Pure: the probe layer and where each target lands in it. Each target gets a scope
+// with a same-named Material referencing the original (native names match) and a
+// bound proxy mesh. Prims stay multi-line: a one-line prim aborts the wasm.
+function buildMaterialProbeLayer(rootVfsPath, targets) {
+  const lines = ["#usda 1.0", "", `def Scope "${MATERIAL_PROBE_SCOPE}"`, "{"];
+  const probePaths = new Map();
+  let index = 0;
+  for (const { path, block } of targets ?? []) {
+    if (!materialProbeablePath(path) || probePaths.has(path)) continue;
+    const leaf = path.split("/").filter(Boolean).pop();
+    const scope = `m${index++}`;
+    const probePath = `/${MATERIAL_PROBE_SCOPE}/${scope}/${leaf}`;
+    probePaths.set(path, probePath);
+    lines.push(
+      `    def Scope "${scope}"`,
+      "    {",
+      `        def Material "${leaf}" (`,
+      `            prepend references = @${rootVfsPath}@<${path}>`,
+      "        )",
+      "        {",
+      ...(block ? ["            token outputs:surface.connect = None"] : []),
+      "        }",
+      "",
+      '        def Mesh "__mtlxProbeMesh" (',
+      '            prepend apiSchemas = ["MaterialBindingAPI"]',
+      "        )",
+      "        {",
+      "            int[] faceVertexCounts = [3]",
+      "            int[] faceVertexIndices = [0, 1, 2]",
+      "            point3f[] points = [(0, 0, 0), (1, 0, 0), (0, 1, 0)]",
+      `            rel material:binding = <${probePath}>`,
+      "        }",
+      "    }",
+    );
+  }
+  lines.push("}");
+  return { text: lines.join("\n") + "\n", probePaths };
+}
+
+// Publishes every byte payload of a probed record (network, resources, textures)
+// as a top-level asset, keeping the transfer list free of duplicates.
+function publishMaterialAssets(result, material) {
+  const known = new Set(result.assets.map(asset => asset.path));
+  const transfer = new Set(result.transfer);
+  const publish = (path, data) => {
+    if (!data?.buffer) return;
+    if (!transfer.has(data.buffer)) { transfer.add(data.buffer); result.transfer.push(data.buffer); }
+    if (path && !known.has(path)) { known.add(path); result.assets.push({ path, data: data.buffer }); }
+  };
+  for (const [key, value] of Object.entries(material)) {
+    if (/Texture$/.test(key) && value?.data) publish(value.path, value.data);
+  }
+  const mx = material.materialX;
+  if (mx) {
+    for (const resource of mx.resources ?? []) publish(resource.path, resource.data);
+    publish(mx.path, mx.data);
+  }
+}
+
+// Gives a network a path no other asset uses, keeping its prefix so the renderer
+// still treats `__inline_` payloads as native inline documents.
+function uniqueMaterialAssetPath(result, path) {
+  const taken = new Set(result.assets.map(asset => asset.path));
+  if (!taken.has(path)) return path;
+  const dot = path.lastIndexOf(".");
+  const stem = dot > 0 ? path.slice(0, dot) : path;
+  const ext = dot > 0 ? path.slice(dot) : "";
+  for (let index = 2; ; index++) {
+    const candidate = `${stem}__${index}${ext}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+function adoptProbedMaterial(result, material, path) {
+  if (material.materialX) {
+    const unique = uniqueMaterialAssetPath(result, material.materialX.path);
+    material.materialX.path = unique;
+    material.sourceAsset = unique;
+  }
+  return { ...material, path };
+}
+
+// Extracts through a temporary stage that references each target material: bare
+// bound records whose outputs:mtlx:surface is authored get their MaterialX network
+// back, and unbound Material prims get a payload at all. Only targets are extracted.
+function probeMaterialPayloads(api, root, result) {
+  const out = { warnings: [], unbound: [], replaced: [] };
+  if (typeof api.createDataFile !== "function" || typeof api.openStage !== "function"
+      || typeof api.extractMaterialPayloads !== "function") return out;
+  const terminalCache = new Map();
+  const hasMtlxTerminal = path => {
+    if (!terminalCache.has(path)) {
+      const record = readPrimAttrMap(api, root, path).get("outputs:mtlx:surface");
+      terminalCache.set(path, !!record && record.isAuthored !== false);
+    }
+    return terminalCache.get(path);
+  };
+  const boundPaths = new Set(result.materials.map(material => material.path));
+  const bare = result.materials
+    .filter(material => materialProbeablePath(material.path) && materialRecordIsBare(material) && hasMtlxTerminal(material.path))
+    .map(material => material.path);
+  let unbound = (result.materialPrims ?? []).map(prim => prim.path)
+    .filter(path => materialProbeablePath(path) && !boundPaths.has(path));
+  if (unbound.length > MATERIAL_PROBE_PROXY_CAP) {
+    out.warnings.push(`[info] ${unbound.length - MATERIAL_PROBE_PROXY_CAP} unbound materials past the first ${MATERIAL_PROBE_PROXY_CAP} have no preview`);
+    unbound = unbound.slice(0, MATERIAL_PROBE_PROXY_CAP);
+  }
+  if (!bare.length && !unbound.length) return out;
+  const targets = bare.map(path => ({ path, block: true }))
+    .concat(unbound.map(path => ({ path, block: hasMtlxTerminal(path) })));
+  const { text: layerText, probePaths } = buildMaterialProbeLayer(vfsNormalizePath(root), targets);
+  const probePath = `__usd_material_probe_${Date.now()}.usda`;
+  let snapshots = [];
+  try {
+    api.createDataFile(probePath, new TextEncoder().encode(layerText));
+    const summary = api.openStage(probePath, true);
+    if (!summary || summary.error) {
+      out.warnings.push(`[info] Material probe stage could not be opened${summary?.error ? `: ${summary.error}` : ""}`);
+      return out;
+    }
+    snapshots = snapshotPayloads(api.extractMaterialPayloads(probePath));
+  } catch (error) {
+    out.warnings.push(`[info] Material probe failed: ${error?.message ?? error}`);
+    return out;
+  } finally {
+    // Native close only: the wrapper's closeStage unlinks every input file.
+    const module = globalThis.__USD_WEBVIEW_MODULE__;
+    try { module?.CloseStage?.(vfsNormalizePath(probePath)); } catch {}
+  }
+  const probed = new Map();
+  for (const entry of snapshots) {
+    const path = text(entry.material?.path) ?? text(entry.path);
+    if (path && entry.material && !materialRecordIsBare(entry.material)) probed.set(path, entry.material);
+  }
+  for (const path of bare) {
+    const material = probed.get(probePaths.get(path));
+    const index = result.materials.findIndex(record => record.path === path);
+    if (!material || index < 0) continue;
+    result.materials[index] = adoptProbedMaterial(result, material, path);
+    publishMaterialAssets(result, result.materials[index]);
+    out.replaced.push(path);
+    out.warnings.push(`[info] ${path}: its UsdPreviewSurface output (outputs:surface) could not be read, so its MaterialX output (outputs:mtlx:surface) is shown`);
+  }
+  for (const path of unbound) {
+    const material = probed.get(probePaths.get(path));
+    if (!material) continue;
+    const record = { ...adoptProbedMaterial(result, material, path), unbound: true };
+    publishMaterialAssets(result, record);
+    out.unbound.push(record);
+  }
+  return out;
+}
+
+// --- Fallback bindings ---------------------------------------------------
+// The native draw gives a mesh with no material binding anywhere in its ancestry
+// the stage's material anyway. Pure: true when the InspectPrimRelationships chain
+// (the prim and its ancestors) carries no material binding relationship at all.
+function relationshipChainHasNoBinding(chain) {
+  const entries = arrayItems(chain);
+  if (!entries.length) return false;
+  return entries.every(entry => arrayItems(entry?.relationships).every(relationship =>
+    relationship?.isMaterialBinding !== true && !/^material:binding/.test(String(relationship?.name ?? ""))));
+}
+
+// Clears the material of drawn meshes that bind none, so they render neutral grey
+// and never open another mesh's material. Instanced meshes are left as drawn.
+function dropFallbackMaterialBindings(api, root, meshes) {
+  if (typeof api.inspectPrimRelationships !== "function") return 0;
+  let dropped = 0;
+  for (const mesh of meshes) {
+    if (!mesh?.path || mesh.instanceOwnerPath || !(text(mesh.materialPath) ?? text(mesh.material?.path))) continue;
+    let chain;
+    try { chain = api.inspectPrimRelationships(root, mesh.path); } catch { continue; }
+    if (!relationshipChainHasNoBinding(chain)) continue;
+    delete mesh.materialPath;
+    delete mesh.material;
+    dropped++;
+  }
+  return dropped;
+}
+
+// --- USDZ package entries ------------------------------------------------
+// Pure: stored entries of a USDZ (zip) from its central directory, as
+// Map<innerPath, { offset, size }> with offset at the entry's data. Empty on
+// anything malformed; compressed entries are skipped (USDZ stores only).
+function readUsdzEntries(bytes) {
+  const entries = new Map();
+  if (!(bytes instanceof Uint8Array) || bytes.length < 22) return entries;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let eocd = -1;
+  for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 22 - 65535); i--) {
+    if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) return entries;
+  const count = view.getUint16(eocd + 10, true);
+  let cursor = view.getUint32(eocd + 16, true);
+  const decoder = new TextDecoder();
+  for (let n = 0; n < count; n++) {
+    if (cursor + 46 > bytes.length || view.getUint32(cursor, true) !== 0x02014b50) break;
+    const method = view.getUint16(cursor + 10, true);
+    const size = view.getUint32(cursor + 20, true);
+    const nameLength = view.getUint16(cursor + 28, true);
+    const extraLength = view.getUint16(cursor + 30, true);
+    const commentLength = view.getUint16(cursor + 32, true);
+    const local = view.getUint32(cursor + 42, true);
+    const name = decoder.decode(bytes.subarray(cursor + 46, cursor + 46 + nameLength));
+    cursor += 46 + nameLength + extraLength + commentLength;
+    if (method !== 0 || local + 30 > bytes.length || view.getUint32(local, true) !== 0x04034b50) continue;
+    const offset = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
+    if (offset + size > bytes.length || name.endsWith("/")) continue;
+    entries.set(normalizePath(name), { offset, size });
+  }
+  return entries;
+}
+
+// Pure: the package entry an asset path names, as { pkg, inner, key } with key
+// "<package>[<entry>]" (the path package files are published under), or null.
+// Takes "/<package>[<entry>]" or a relative entry path exactly one package holds.
+function packageAssetRef(value, packages) {
+  const text = String(value ?? "");
+  if (!text || !packages?.size || /^[a-z]+:/i.test(text) || /<UDIM>|&lt;/i.test(text)) return null;
+  const anchored = /^\/?([^[\]]+)\[([^[\]]+)\]$/.exec(text);
+  if (anchored) {
+    const pkg = normalizePath(anchored[1]);
+    const inner = normalizePath(anchored[2]);
+    return packages.get(pkg)?.has(inner) ? { pkg, inner, key: `${pkg}[${inner}]` } : null;
+  }
+  if (/[[\]]/.test(text) || text.startsWith("/")) return null;
+  const inner = normalizePath(text);
+  const owners = [];
+  for (const [pkg, names] of packages) if (names.has(inner)) owners.push(pkg);
+  return owners.length === 1 ? { pkg: owners[0], inner, key: `${owners[0]}[${inner}]` } : null;
+}
+
+// Pure: points filename values of a native inline document at package keys.
+// `packages` maps package path to its entry names.
+function rewritePackageTextureRefs(xml, packages) {
+  const refs = [];
+  const source = String(xml ?? "");
+  // A fileprefix would be prepended again by the renderer; leave such documents alone.
+  if (!packages?.size || /<materialx\b[^>]*\bfileprefix\s*=/.test(source)) return { xml: source, refs };
+  const rewritten = source.replace(/<[^>]*\btype\s*=\s*(["'])filename\1[^>]*>/gi, tag => tag.replace(
+    /\bvalue\s*=\s*(["'])(.*?)\1/i,
+    (whole, quote, value) => {
+      const ref = packageAssetRef(value, packages);
+      if (!ref) return whole;
+      refs.push(ref);
+      return `value=${quote}${ref.key}${quote}`;
+    },
+  ));
+  return { xml: rewritten, refs };
+}
+
+// Pure: points USD asset overrides ("@0/x.jpg@", applied over the document by the
+// renderer) at package keys too; left relative they undo the document's paths.
+function rewritePackageOverrideRefs(overrides, packages) {
+  const refs = [];
+  if (!Array.isArray(overrides)) return refs;
+  for (const override of overrides) {
+    const match = /^@(.*)@$/.exec(String(override?.value ?? "").trim());
+    const ref = match ? packageAssetRef(match[1], packages) : null;
+    if (!ref) continue;
+    override.value = `@${ref.key}@`;
+    refs.push(ref);
+  }
+  return refs;
+}
+
+// Points every inline network and USD asset override at package keys and publishes
+// the package entries they now name (the native payload omits some of them).
+function resolveInlinePackageTextures(result, records, packages) {
+  if (!packages.size) return;
+  const names = new Map(Array.from(packages, ([pkg, info]) => [pkg, info.entries]));
+  const known = new Set(result.assets.map(asset => asset.path));
+  const publish = refs => {
+    for (const { pkg, key, inner } of refs) {
+      if (known.has(key)) continue;
+      const info = packages.get(pkg);
+      const entry = info.entries.get(inner);
+      // slice, not subarray: the package bytes may be cached and must not be detached.
+      const data = info.data.slice(entry.offset, entry.offset + entry.size);
+      known.add(key);
+      result.assets.push({ path: key, data: data.buffer });
+      result.transfer.push(data.buffer);
+    }
+  };
+  for (const material of records) {
+    publish(rewritePackageOverrideRefs(material.overrides, names));
+    const mx = material.materialX;
+    if (!mx?.data || !String(material.sourceAsset ?? "").startsWith("__inline_")) continue;
+    let xml;
+    try { xml = new TextDecoder().decode(mx.data); } catch { continue; }
+    const { xml: next, refs } = rewritePackageTextureRefs(xml, names);
+    if (!refs.length) continue;
+    const bytes = new TextEncoder().encode(next);
+    const oldBuffer = mx.data.buffer;
+    mx.data = bytes;
+    for (const asset of result.assets) if (asset.path === mx.path) asset.data = bytes.buffer;
+    const stale = result.transfer.indexOf(oldBuffer);
+    if (stale >= 0) result.transfer.splice(stale, 1);
+    result.transfer.push(bytes.buffer);
+    publish(refs);
+  }
+}
+
 // A .mtlx referenced with a Windows backslash path fails to compose and the
 // draw binds some other material; from the "Could not open asset" line, add
 // the uploaded file as the bound material and repoint the mesh (no recompose).
@@ -2402,11 +2851,12 @@ function copyStageResult(summary, draw, payloads, cameras, lights, metrics = nul
     addTransfer(data.buffer);
     return { path, data: data.buffer };
   });
-  const warnings = Array.from(new Set(nativeWarnings));
+  const warnings = rewriteRuntimeWarnings(Array.from(new Set(nativeWarnings)));
   return {
     rootPath: summary?.rootFile ?? "",
     upAxis: metrics?.upAxis ?? summary?.upAxis,
     metersPerUnit: metrics?.metersPerUnit ?? summary?.metersPerUnit,
+    metricsAuthored: metrics?.authored ?? null,
     summary: summary ?? null,
     meshes,
     materials: materialList,
@@ -2416,6 +2866,27 @@ function copyStageResult(summary, draw, payloads, cameras, lights, metrics = nul
     warnings: Array.from(new Set(warnings)),
     transfer,
   };
+}
+
+// The runtime warns when xformOpOrder names ops with no authored value; USD
+// skips them, so fold those warnings into one info note per prim.
+function rewriteRuntimeWarnings(list) {
+  const re = /Unable to get attribute associated with the xformOp '(?:xformOp:)?([A-Za-z0-9_:]+)', on the prim at path <([^>]+)>/;
+  const byPrim = new Map();
+  const out = [];
+  for (const text of list) {
+    const m = re.exec(String(text));
+    if (!m) { out.push(text); continue; }
+    let ops = byPrim.get(m[2]);
+    if (!ops) { ops = []; byPrim.set(m[2], ops); out.push({ prim: m[2] }); }
+    const op = m[1].split(":")[0];
+    if (!ops.includes(op)) ops.push(op);
+  }
+  return out.map(item => {
+    if (typeof item === "string" || !item || !item.prim) return item;
+    const name = item.prim.split("/").filter(Boolean).pop() || item.prim;
+    return `[info] The file lists transform steps without values (${byPrim.get(item.prim).join(", ")} on ${name}); they were ignored.`;
+  });
 }
 
 // Exact Catmull-Clark triangle count needs each face's vertex count: a face
@@ -2474,6 +2945,8 @@ async function load(request) {
   // native materialX.data payload is unavailable can still fall back to its
   // sourceAsset's own uploaded bytes when enumerating override candidates.
   const mtlxFileTextsByPath = new Map();
+  // USDZ packages by path, for the textures their inline networks name.
+  const usdzPackages = new Map();
   const uploadedPaths = new Set();
   for (const file of request.files ?? []) {
     if (!file?.path) continue;
@@ -2527,6 +3000,11 @@ async function load(request) {
       } else if (isTextLayer) {
         scanWarnings.push(`USD text layer too large to read material edits from: ${file.path} (${(data.length / 1048576).toFixed(1)} MB)`);
       }
+    } else if (/\.usdz$/i.test(normalizedPath)) {
+      try {
+        const entries = readUsdzEntries(data);
+        if (entries.size) usdzPackages.set(normalizedPath, { data, entries });
+      } catch { /* not a readable package: its textures stay unresolved */ }
     } else if (/\.mtlx$/i.test(String(file.path)) && data.length <= OVERRIDE_SCAN_MAX_BYTES) {
       try {
         resolvedText = cachedText !== undefined ? cachedText : new TextDecoder().decode(data);
@@ -2545,7 +3023,7 @@ async function load(request) {
   if (!loadedFiles) throw new Error("USD file buffers were empty or not transferable");
   const root = normalizePath(request.rootPath);
   if (!root) throw new Error("USD rootPath is required");
-  postMessage({ id: request.id, type: "progress", value: { phase: "parse", done: 0, total: 0, fraction: 0.3, message: "Composing stage" } });
+  postMessage({ id: request.id, type: "progress", value: { phase: "parse", done: 0, total: 0, fraction: 0.3, message: "Composing scene" } });
   stderrBuffer.length = 0;
   const summary = api.openStage(root, true);
   const openStageStderrLines = stderrBuffer.slice();
@@ -2554,7 +3032,7 @@ async function load(request) {
   // failed load never leaves a half-composed stage marked as closeable.
   activeStage = root;
   const stageMetrics = resolveStageMetrics(summary, rootMetrics);
-  postMessage({ id: request.id, type: "progress", value: { phase: "parse", done: 1, total: 1, fraction: 0.4, message: "Composed stage" } });
+  postMessage({ id: request.id, type: "progress", value: { phase: "parse", done: 1, total: 1, fraction: 0.4, message: "Composed scene" } });
   if (!api.createStageDriver(root)) throw new Error("OpenUSD stage driver could not be created");
   const evaluatedTransforms = snapshotEvaluatedTransforms(api, root, summary);
   const stageTime = stageStartTime(api, root, summary);
@@ -2631,6 +3109,7 @@ async function load(request) {
       mesh.castsShadow = readMeshCastsShadow(api, root, mesh.path);
     }
   }
+  const fallbackBindingCount = dropFallbackMaterialBindings(api, root, drawSnapshot.meshes);
   postMessage({ id: request.id, type: "progress", value: { phase: "extract-materials", done: 0, total: 0, fraction: 0.8, message: "Extracting material payloads" } });
   const payloads = api.extractMaterialPayloads(root);
   // Payload material/texture views have the same lifetime as draw views.  Do
@@ -2743,26 +3222,36 @@ async function load(request) {
     "Unsupported USD volume rendering: " + path + " (VDB volume data was not imported)"
   );
   const cameraWarnings = [];
-  const cameras = collectCameras(api, root, graph, message => cameraWarnings.push(message), evaluatedTransforms);
+  const cameras = collectCameras(
+    api, root, graph, message => cameraWarnings.push(message), evaluatedTransforms, usdaTexts, stageTime
+  );
   markDefaultCamera(api, root, graph, cameras);
   const lightWarnings = [];
   const lights = collectLights(api, root, graph, message => lightWarnings.push(message), evaluatedTransforms);
   const result = copyStageResult(summary, drawSnapshot, payloadSnapshot, cameras, lights, stageMetrics);
+  result.materialPrims = collectMaterialPrims(graph);
   result.warnings.push(...stageMetrics.warnings, ...volumeWarnings);
+  if (fallbackBindingCount) {
+    result.warnings.push(`[info] ${fallbackBindingCount} mesh${fallbackBindingCount === 1 ? " has" : "es have"} no material binding (the USD runtime had assigned another material to it)`);
+  }
+  const materialProbe = probeMaterialPayloads(api, root, result);
+  result.warnings.push(...materialProbe.warnings);
   const connectionWarnedLayers = new Set();
-  for (const material of result.materials) {
+  // Builds or annotates one record's MaterialX document; `warn` receives its notes.
+  const synthesizeMaterialDocument = async (material, warn) => {
     const mtlxTexts = decodeMtlxTextsForMaterial(material, mtlxFileTextsByPath);
     const overrides = collectMaterialOverrides(api, root, usdaTexts, mtlxTexts, material.path, stageTime);
     if (overrides.length) material.overrides = overrides;
 
-    const isPreviewSurface = String(material.shaderId || "") === "UsdPreviewSurface";
+    const isPreviewSurface = String(material.shaderId || "") === "UsdPreviewSurface"
+      && !hasNativeMaterialX(material);
     const materialLeaf = String(material.path || "").split("/").filter(Boolean).pop() || "material";
     const built = buildUsdShadeMaterialX(api, root, material.path, usdaTexts, {
       allowPreviewSurface: isPreviewSurface,
     });
     if (built) {
       attachSynthesizedMaterialX(result, material, `__usdshade_${materialLeaf}.mtlx`, built.xml, built.materialName);
-      continue;
+      return;
     }
     // Binary layers carry no text to read the network from, so the flattened
     // native payload becomes a UsdPreviewSurface document instead.
@@ -2775,26 +3264,32 @@ async function load(request) {
       });
       if (converted?.xml) {
         attachSynthesizedMaterialX(result, material, `__usdpreview_${materialLeaf}.mtlx`, converted.xml, converted.materialName);
-        result.warnings.push(`${material.path}: UsdPreviewSurface converted from the flattened payload (channel picks, wrap modes and texture transforms are not available in binary layers)`);
-        continue;
+        warn(`${material.path}: UsdPreviewSurface converted from the flattened payload (channel picks, wrap modes and texture transforms are not available in binary layers)`);
+        return;
       }
     }
     const sourceAsset = text(material.sourceAsset) || "";
     if (sourceAsset.startsWith("__inline_")) {
       const gaps = collectInlineConnectionGaps(api, root, material, usdaTexts);
       if (gaps.length) {
-        result.warnings.push(`${material.path}: some USD shader connections could not be read and use default values (${gaps.join(", ")})`);
+        warn(`${material.path}: some USD shader connections could not be read and use default values (${gaps.join(", ")})`);
       }
     } else if (sourceAsset && !sourceAsset.startsWith("__usdshade_")) {
       const layerPath = findUsdConnectionLayer(usdaTexts, material.path);
       if (layerPath && !connectionWarnedLayers.has(layerPath)) {
         connectionWarnedLayers.add(layerPath);
-        result.warnings.push(
+        warn(
           "USD connections are not supported yet: " + layerPath + " connects shader inputs in USD, which is ignored. Materials keep the connections from their MaterialX files; input values set in USD still apply."
         );
       }
     }
-  }
+  };
+  for (const material of result.materials) await synthesizeMaterialDocument(material, message => result.warnings.push(message));
+  // Unbound records stay out of stage.materials (no compile, no counts); their notes
+  // would describe materials nothing draws, so they are dropped.
+  for (const material of materialProbe.unbound) await synthesizeMaterialDocument(material, () => {});
+  result.unboundMaterials = materialProbe.unbound;
+  resolveInlinePackageTextures(result, result.materials.concat(result.unboundMaterials), usdzPackages);
   // Unbound meshes with a displayColor share one synthetic material, tinted
   // per mesh by the renderer. Runs after the loop above so the record never
   // reaches collectMaterialOverrides / buildUsdShadeMaterialX.

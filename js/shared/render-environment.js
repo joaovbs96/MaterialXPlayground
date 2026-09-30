@@ -369,6 +369,13 @@ void main() {
     // drawn one. Pure: see tests/unit/usd-scene-studio-catcher.test.mjs.
     const studioCatcherVisible = (studio, hasShadowMap) => !!(studio && hasShadowMap);
 
+    // Sky visibility and clear colour per backdrop mode. Pure: see
+    // tests/unit/usd-scene-environment-backdrop.test.mjs.
+    const environmentBackdrop = (mode, lightingEnabled, hasMap) => {
+        if (mode === 'environment' && !lightingEnabled) return { sky: false, clearColor: 0x000000, clearAlpha: 1 };
+        return { sky: mode === 'environment' && hasMap, clearColor: 0x111827, clearAlpha: mode === 'none' ? 0 : 1 };
+    };
+
     // The preview's shell-owned skybox mesh + procedural studio cyclorama
     // and contact shadow. envKeyLight/envSoftKeyDir/envRotationRad stay
     // engine-owned and are passed in at call time, not closed over.
@@ -688,6 +695,8 @@ void main() {
         let disposed = false;
         let bounds = null;
         let studioScale = 1;
+        // Environment lighting off also blacks out an Environment backdrop (the light is hidden).
+        let lightingEnabled = true;
         const baseRotation = Number(studio.backdropBaseRotation) || Math.PI;
         const rotationSign = Number(studio.backdropRotationSign) || -1;
 
@@ -721,8 +730,9 @@ void main() {
             studioLight.visible = isStudio();
             // Shadow only: MaterialX RawShaderMaterials ignore three lights.
             studioLight.intensity = 0;
-            environmentSky.visible = mode === 'environment' && !!skyMaterial.map;
-            if (renderer.setClearColor) renderer.setClearColor(0x111827, mode === 'none' ? 0 : 1);
+            const backdrop = environmentBackdrop(mode, lightingEnabled, !!skyMaterial.map);
+            environmentSky.visible = backdrop.sky;
+            if (renderer.setClearColor) renderer.setClearColor(backdrop.clearColor, backdrop.clearAlpha);
         };
         const setBackdrop = (nextMode) => {
             mode = modes.has(nextMode) ? nextMode : 'studio';
@@ -745,6 +755,12 @@ void main() {
             // re-uploads, permanently stripping the mip chain FIS needs.
             applyVisibility();
             return true;
+        };
+        // Called by the renderer's environment-lighting toggle; re-syncs the backdrop only.
+        const setLightingEnabled = (on) => {
+            lightingEnabled = on !== false;
+            applyVisibility();
+            return lightingEnabled;
         };
         const setRotation = (radians) => {
             rotation = Number.isFinite(Number(radians)) ? Number(radians) : 0;
@@ -830,6 +846,8 @@ void main() {
             contentRoot,
             setBackdrop,
             getBackdrop: () => mode,
+            setLightingEnabled,
+            getLightingEnabled: () => lightingEnabled,
             isStudio,
             getFloorY,
             getFloorClearance,
@@ -921,6 +939,7 @@ void main() {
         createStageEnvironment,
         studioFloorPolarLimit,
         studioCatcherVisible,
+        environmentBackdrop,
         STUDIO_GRADIENT_FRAGMENT_SHADER,
         disposeFetchedEnv,
         createEnvMapGate,

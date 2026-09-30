@@ -816,11 +816,90 @@ const copyTextToClipboard = async (text) => {
     return ok;
 };
 
+// ShadingLanguageX needs js/mxslc-engine.js, never loaded by the embed
+// bundle, and its vendored compiler, never packaged in the .vsix.
+const slxTargetAvailable = () => typeof window.slxExportStages === 'function' && !window.__MTLX_VSCODE__;
+
+// "Decompilation took Xs" formatting for the ShadingLanguageX target: one
+// decimal under 10s, whole seconds under a minute, "Ymin Xs" past that.
+const formatDecompileDuration = (ms) => {
+    const totalSec = ms / 1000;
+    if (totalSec < 0.1) return 'less than 0.1s';
+    if (totalSec < 10) return totalSec.toFixed(1) + 's';
+    const wholeSec = Math.round(totalSec);
+    if (wholeSec < 60) return wholeSec + 's';
+    return Math.floor(wholeSec / 60) + 'min ' + (wholeSec % 60) + 's';
+};
+
+// Body of ShaderExportDialog's code pane for one stage. A plain stage
+// (`code`) just renders it; a lazy stage (`load`) shows a spinner with
+// Cancel while loading, "Cancelled" with Retry after an abort, the error
+// with Retry on failure, or the resolved code once ready.
+function renderStageBody(stage, loadState, startStageLoad) {
+    if (!stage.load) {
+        return (
+            <pre className="flex-1 min-h-0 overflow-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-gray-300 px-4 py-3 whitespace-pre">
+                {stage.code}
+            </pre>
+        );
+    }
+    const retryBtn = (
+        <button
+            onClick={() => startStageLoad(stage)}
+            className="h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
+        >
+            Retry
+        </button>
+    );
+    const status = loadState ? loadState.status : 'loading';
+    if (status === 'cancelled') {
+        return (
+            <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-4 py-6 text-[12px]">
+                <span className="text-gray-400">Cancelled</span>
+                {retryBtn}
+            </div>
+        );
+    }
+    if (status === 'error') {
+        return (
+            <div className="px-4 py-3 flex flex-col gap-2">
+                <div className="bg-red-900/40 border border-red-700 text-red-200 rounded px-3 py-2 text-[12px]">
+                    {loadState.error}
+                </div>
+                <div>{retryBtn}</div>
+            </div>
+        );
+    }
+    if (status === 'ready') {
+        return (
+            <pre className="flex-1 min-h-0 overflow-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-gray-300 px-4 py-3 whitespace-pre">
+                {loadState.code}
+            </pre>
+        );
+    }
+    return (
+        <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 px-4 py-6 text-[12px]">
+            <span className="w-4 h-4 rounded-full border-2 border-gray-500 border-t-blue-400 animate-spin" />
+            <span className="text-gray-400">Decompiling...</span>
+            <button
+                onClick={() => loadState && loadState.controller && loadState.controller.abort()}
+                className="h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
+            >
+                Cancel
+            </button>
+        </div>
+    );
+}
+
 // Shader source export dialog. `generate()` (caller-supplied) does the
 // codegen; `runRef` is a monotonic id so a stale generate() resolving
 // after the user switched targets can't clobber the newer result.
 function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, generate, overlayClassName }) {
-    const [targetKey, setTargetKey] = React.useState(() => (EXPORT_TARGETS[0] && EXPORT_TARGETS[0].key) || '');
+    const exportTargets = React.useMemo(
+        () => EXPORT_TARGETS.filter((t) => t.key !== 'slx' || slxTargetAvailable()),
+        []
+    );
+    const [targetKey, setTargetKey] = React.useState(() => (exportTargets[0] && exportTargets[0].key) || '');
     const [matIndex, setMatIndex] = React.useState(0);
     const [busy, setBusy] = React.useState(false);
     const [error, setError] = React.useState(null);
@@ -829,6 +908,14 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
     const [copied, setCopied] = React.useState(false);
     const copyTimerRef = React.useRef(null);
     const runRef = React.useRef(0);
+    // Per-stage lazy-load state for stages with `load` instead of `code`
+    // (currently only ShadingLanguageX's Decompiled stage): id -> { status:
+    // 'loading'|'ready'|'cancelled'|'error', code, ms, error, controller }.
+    // `ms` (decompile time in milliseconds) is only set for a load() that
+    // resolves { code, ms } instead of a bare code string.
+    const [stageLoads, setStageLoads] = React.useState({});
+    const stageLoadsRef = React.useRef(stageLoads);
+    React.useEffect(() => { stageLoadsRef.current = stageLoads; }, [stageLoads]);
 
     useEscapeToClose(onClose, open);
 
@@ -841,7 +928,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
     // dialog has no unsaved input to preserve across a stray re-render).
     React.useEffect(() => {
         if (!open) return;
-        setTargetKey((EXPORT_TARGETS[0] && EXPORT_TARGETS[0].key) || '');
+        setTargetKey((exportTargets[0] && exportTargets[0].key) || '');
         setMatIndex(Math.max(0, Math.min(initialIndex, renderables.length - 1)));
         setStages(null);
         setError(null);
@@ -849,6 +936,62 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
         setStageIdx(0);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open]);
+
+    // Closing the dialog aborts any in-flight lazy stage load; it stays
+    // aborted until the dialog reopens and regenerates stages.
+    React.useEffect(() => {
+        if (open) return;
+        Object.values(stageLoadsRef.current).forEach((entry) => {
+            if (entry && entry.controller) entry.controller.abort();
+        });
+    }, [open]);
+
+    // A fresh `stages` array (new target/material, i.e. a new generate()
+    // run) drops any lazy-load state from the previous one and aborts
+    // whatever it had in flight.
+    React.useEffect(() => {
+        setStageLoads({});
+        return () => {
+            Object.values(stageLoadsRef.current).forEach((entry) => {
+                if (entry && entry.controller) entry.controller.abort();
+            });
+        };
+    }, [stages]);
+
+    const startStageLoad = React.useCallback((stage) => {
+        const controller = new AbortController();
+        setStageLoads((prev) => ({ ...prev, [stage.id]: { status: 'loading', controller } }));
+        stage.load(controller.signal)
+            .then((result) => {
+                // A load() may resolve a bare code string or { code, ms }
+                // (ShadingLanguageX's Decompiled stage, ms = decompile time).
+                const hasMs = result && typeof result === 'object' && 'code' in result;
+                const code = hasMs ? result.code : result;
+                const ms = hasMs ? result.ms : undefined;
+                setStageLoads((prev) => {
+                    const cur = prev[stage.id];
+                    if (!cur || cur.controller !== controller) return prev; // superseded
+                    return { ...prev, [stage.id]: { status: 'ready', code, ms } };
+                });
+            })
+            .catch((e) => {
+                setStageLoads((prev) => {
+                    const cur = prev[stage.id];
+                    if (!cur || cur.controller !== controller) return prev; // superseded
+                    if (e && e.name === 'AbortError') return { ...prev, [stage.id]: { status: 'cancelled' } };
+                    return { ...prev, [stage.id]: { status: 'error', error: errMsg(e) } };
+                });
+            });
+    }, []);
+
+    // Start loading the currently shown lazy stage, once, the first time
+    // it's shown (switching to it, or the dialog opening on it directly).
+    React.useEffect(() => {
+        if (!open || !stages) return;
+        const stage = stages[stageIdx];
+        if (!stage || !stage.load || stageLoads[stage.id]) return;
+        startStageLoad(stage);
+    }, [open, stages, stageIdx, stageLoads, startStageLoad]);
 
     // (Re)generate whenever the open dialog's target or material
     // selection changes. See the header comment above for the
@@ -878,9 +1021,19 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
 
     if (!open) return null;
 
+    // A stage's code: inline for a plain stage, or the resolved result of
+    // a lazy stage's load() once it's ready: null while loading, errored,
+    // cancelled, or not started yet.
+    const codeOf = (st) => {
+        if (!st.load) return st.code;
+        const ld = stageLoads[st.id];
+        return ld && ld.status === 'ready' ? ld.code : null;
+    };
+    const currentCode = stages ? codeOf(stages[stageIdx]) : null;
+
     const handleCopy = async () => {
-        if (!stages) return;
-        const ok = await copyTextToClipboard(stages[stageIdx].code);
+        if (currentCode == null) return;
+        const ok = await copyTextToClipboard(currentCode);
         if (!ok) return;
         setCopied(true);
         if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
@@ -889,11 +1042,15 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
 
     const handleDownload = async () => {
         if (!stages) return;
-        const target = EXPORT_TARGETS.find((t) => t.key === targetKey);
+        const target = exportTargets.find((t) => t.key === targetKey);
         const matName = (renderables[matIndex] && renderables[matIndex].name) || 'material';
         const base = (matName + '_' + targetKey).replace(/[^\w.-]+/g, '_');
+        if (stages.some((st) => codeOf(st) == null)) {
+            setError('Export failed: wait for every stage to finish loading before downloading.');
+            return;
+        }
         if (stages.length === 1) {
-            downloadBlob(new Blob([stages[0].code], { type: 'text/plain' }), base + (target.ext[stages[0].id] || '.txt'));
+            downloadBlob(new Blob([codeOf(stages[0])], { type: 'text/plain' }), base + (target.ext[stages[0].id] || '.txt'));
             return;
         }
         if (!window.JSZip) {
@@ -901,7 +1058,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
             return;
         }
         const zip = new JSZip();
-        stages.forEach((st) => zip.file(base + (target.ext[st.id] || '.txt'), st.code));
+        stages.forEach((st) => zip.file(base + (target.ext[st.id] || '.txt'), codeOf(st)));
         let blob;
         try {
             blob = await zip.generateAsync({ type: 'blob' });
@@ -923,7 +1080,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                 <React.Fragment>
                     <button
                         onClick={handleCopy}
-                        disabled={busy || !!error || !stages}
+                        disabled={busy || !!error || !stages || currentCode == null}
                         title="Copy the current stage's code to the clipboard"
                         className={'h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors disabled:opacity-40 '
                             + (copied
@@ -956,7 +1113,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                             <span>Target</span>
                             <MtlxSelect
                                 value={targetKey}
-                                options={EXPORT_TARGETS.map((t) => ({ value: t.key, label: t.label }))}
+                                options={exportTargets.map((t) => ({ value: t.key, label: t.label }))}
                                 onChange={setTargetKey}
                                 defValue={null}
                                 size="md"
@@ -980,7 +1137,29 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                                 />
                             </label>
                         )}
+                        {targetKey === 'slx' && stageLoads.decompiled && stageLoads.decompiled.status === 'ready' && stageLoads.decompiled.ms != null && (
+                            <span className="ml-auto text-[11px] text-gray-500">
+                                Decompilation took {formatDecompileDuration(stageLoads.decompiled.ms)}
+                            </span>
+                        )}
                     </div>
+                    {targetKey === 'slx' && (
+                        <div className="mx-4 mb-2 flex items-center gap-2 rounded border border-gray-600/60 bg-gray-900/40 px-3 py-2 text-[11px] text-gray-400">
+                            <MtlxIcon name="info-circle" className="w-3.5 h-3.5 flex-shrink-0 text-gray-500" />
+                            <div>
+                                <p>ShadingLanguageX shader code is generated by the MXSLC ShadingLanguageX WASM bindings.</p>
+                                {stages && stages.length > 1 && (
+                                    <p>"Original" is the .mxsl file as loaded; "Decompiled" is your current graph converted back to ShadingLanguageX.</p>
+                                )}
+                                <p className="pt-1">
+                                    <a href="https://github.com/jakethorn/ShadingLanguageX" target="_blank" rel="noopener noreferrer" className={PILL_ACTION_SM}>
+                                        <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z" /></svg>
+                                        ShadingLanguageX on GitHub
+                                    </a>
+                                </p>
+                            </div>
+                        </div>
+                    )}
                     {stages && stages.length > 1 && (
                         <div className="px-4 pb-2 flex items-center gap-1.5">
                             {stages.map((st, i) => (
@@ -1006,9 +1185,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                     ) : busy ? (
                         <div className="text-gray-400 animate-pulse px-4 py-3 text-[12px]">{'Generating…'}</div>
                     ) : stages ? (
-                        <pre className="flex-1 min-h-0 overflow-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-gray-300 px-4 py-3 whitespace-pre">
-                            {stages[stageIdx].code}
-                        </pre>
+                        renderStageBody(stages[stageIdx], stageLoads[stages[stageIdx].id], startStageLoad)
                     ) : null}
                 </React.Fragment>
             )}
@@ -1058,11 +1235,19 @@ const useViewEnum = (viewRef, method, initial) => {
 // PNG snapshot of the given render view's frame, downloaded as
 // `<baseName, sanitized>.png`. Silently no-ops on a falsy dataURL;
 // view.snapshot() returns a plain data: URL, so there's no URL to revoke.
+// Inside the VS Code webview (an <a download> click there produces no
+// file -- see downloadBlob below), the data: URL is converted to a Blob
+// and handed to the host save bridge instead.
 const downloadSnapshot = (view, baseName) => {
     const url = view.snapshot();
     if (!url) return;
+    const filename = baseName.replace(/[^\w.-]+/g, '_') + '.png';
+    if (window.__MTLX_VSCODE__ && window.__mtlxHostSave) {
+        fetch(url).then((res) => res.blob()).then((blob) => window.__mtlxHostSave(blob, filename));
+        return;
+    }
     const a = document.createElement('a');
-    a.download = baseName.replace(/[^\w.-]+/g, '_') + '.png';
+    a.download = filename;
     a.href = url;
     a.click();
 };
@@ -1085,8 +1270,17 @@ const snapshotBaseName = (name, geom) => {
 
 // Download a Blob as a file: object URL -> synthetic anchor click ->
 // delayed revoke (gives the download a moment to start before the URL is
-// freed).
+// freed). Inside the VS Code webview an <a download> click produces no
+// file at all (verified: nothing lands in Downloads or the webview's own
+// storage) -- window.__mtlxHostSave (vscode_extension/media/bootstrap.js)
+// round-trips the bytes to the extension host, which writes them via a
+// native Save dialog instead. Web and Electron are untouched: neither
+// sets window.__MTLX_VSCODE__, so both keep the anchor-click path.
 const downloadBlob = (blob, filename) => {
+    if (window.__MTLX_VSCODE__ && window.__mtlxHostSave) {
+        window.__mtlxHostSave(blob, filename);
+        return;
+    }
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = filename;
@@ -1209,7 +1403,7 @@ const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotat
 // Hand a document off to the node graph editor: stash it (plus any loose
 // files) where js/graph-app.jsx's 'mtlx-load-document' listener expects
 // it, fire that event, then hash-route to the graph view.
-const openInGraphEditor = ({ xml, name, files, select, implOf }) => {
+const openInGraphEditor = ({ xml, name, files, select, implOf, readOnly, readOnlySource }) => {
     // Drop out of any active fullscreen (native or the CSS-maximize
     // fallback) before leaving this view — the shell keeps the old view
     // mounted (CSS-hidden), so fullscreen would otherwise persist on it.
@@ -1219,7 +1413,13 @@ const openInGraphEditor = ({ xml, name, files, select, implOf }) => {
     // node than the one the sender was showing.
     // `implOf`: optional nodedef name whose library implementation
     // nodegraph to jump into (docs page's "View implementation" button).
-    window.__mtlxPendingImport = { xml, name, files: files || null, select: select || null, implOf: implOf || null };
+    // `readOnly`/`readOnlySource`: view-only handoff (e.g. a Scene Viewer
+    // material). The editor enters view-only mode until a different
+    // document is loaded.
+    window.__mtlxPendingImport = {
+        xml, name, files: files || null, select: select || null, implOf: implOf || null,
+        readOnly: !!readOnly, readOnlySource: readOnlySource || null,
+    };
     window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: window.__mtlxPendingImport }));
     window.location.hash = '#!graph';
 };

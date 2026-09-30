@@ -54,10 +54,10 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 
 - [parked] **Path tracing mode**: a physically based path tracer next to the real-time view, so materials can be checked against a ground-truth render of the same document, with progressive refinement while the camera is still.
 - [done] **Material gallery**: browse, search and filter the MaterialX example materials with live previews, licenses, permalinks and zip downloads.
-- [done] **Preset picker**: one dialog, backed by the gallery, to pick a starting material in the Viewer, Compare and Graph Editor.
+- [done] **Preset picker**: one dialog, backed by the gallery, to pick a starting material in the Material Viewer, Compare and Graph Editor.
 - [done] **Custom preview models**: load OBJ, GLB and multi-file glTF models, including Draco compressed meshes.
 - [idea] **More backdrop options**: something similar to the backdrop of the Standard Shaderball.
-- [idea] **Support for ShadingLanguageX (SLX) viewing**: via SLX WASM bindings, support for directly rendering a .slx file.
+- [done] **Support for ShadingLanguageX (SLX) viewing**: open .mxsl files in the Material Viewer; they are compiled to MaterialX by the ShadingLanguageX WASM bindings and rendered like any .mtlx document.
 
 ## Node Graph and Tools
 
@@ -68,8 +68,8 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 - [done] **Texture formats**: TIFF textures, and an option to convert every texture in a zip export to PNG, JPEG or EXR.
 - [idea] **Recipes for common node tree patterns**: ability to insert commonly used sequences of nodes from a "gallery" of node patterns - e.g. a texcoord, connected to a place2d, connected to an image.
 - [idea] **Support for a ShadingLanguageX (SLX) node**: via SLX WASM bindings, support for a 'scripted' ShadingLanguageX node, which for export/rendering would be compiled down to actual MaterialX syntax
-- [idea] **Support for ShadingLanguageX (SLX) import**: via SLX WASM bindings, support for importing a .slx as a node graph.
-- [idea] **Support for ShadingLanguageX (SLX) export**: via SLX WASM bindings, support for exporting a node graph as a .slx file.
+- [done] **Support for ShadingLanguageX (SLX) import**: open .mxsl files in the Node Graph Editor, compiled to MaterialX and shown as a node graph.
+- [done] **Support for ShadingLanguageX (SLX) export**: export the current graph as ShadingLanguageX source from Export Shader Code, alongside the original .mxsl when the document came from one. Very large graphs decompile slowly.
 
 ## Node Documentation
 
@@ -79,6 +79,13 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 ## Website
 
 - [done] **About dialog**: credits for every bundled library and asset, and a link to the MaterialX release in use, in the web app, VS Code and the desktop app.
+
+## Themes
+
+- [planned] **Theme colors**: move every color in the app, the embed and the integrations onto one set of named theme colors (surfaces, borders, text, accent, status), with today's dark look as the only theme. Nothing changes visually, checked with before and after screenshots of every view.
+- [planned] **Light mode**: a light theme with a light, dark or system switch that follows the operating system's setting live unless you override it, on the website, in the desktop app, in VS Code and in embeds (as a `theme` attribute). The 3D viewport backdrop stays a separate setting.
+- [idea] **Follow the VS Code theme**: the extension picks light, dark or high contrast from your VS Code theme and uses its colors by default, with a setting to override it.
+- [idea] **Theme presets and custom themes**: more built-in themes and your own color themes, shared by every integration.
 
 ## Desktop App
 
@@ -91,5 +98,6 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 
 ## VSCode Extension
 
-- [idea] **Auto-complete on VSCode**: auto-completion capabilities to assist direct text editing on VSCode.
+- [done] **Auto-complete on VSCode**: snippets for common material patterns plus auto-complete for node names, node inputs, and reference attributes (type, node name, node graph, output, interface name, color space, node definition) while editing `.mtlx` files directly.
+- [idea] **ShadingLanguageX (SLX) in the VSCode extension**: open .mxsl files in the extension, compiled to MaterialX and shown in the viewer and graph editor as view-only documents, with the ShadingLanguageX export target available there too.
 - [in progress] **Officially Releasing extension on VSCode Extensions**: publish the extension on the VS Code Marketplace so it is easier to find, install and update. The publishing pipeline is being set up.

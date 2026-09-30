@@ -99,6 +99,142 @@ export function resolveMtlTexturePath(record, mtlDir, objDir, fileByPath, basena
   return hits && hits.length === 1 ? hits[0] : null;
 }
 
+// True if the OBJ text declares at least one `vn` line. Files with authored
+// normals are used as-is; only normal-free files get smoothing computed.
+export function objHasVertexNormals(text) {
+  for (const rawLine of String(text ?? "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line === "vn" || line.startsWith("vn ") || line.startsWith("vn\t")) return true;
+  }
+  return false;
+}
+
+// Per-triangle smoothing-group id, in face-declaration order, matching the
+// fan triangulation OBJLoader uses for each `f` line (n-2 triangles, all
+// sharing that face's group). `s off`/`s 0` isolates each face into its own
+// id so it never merges with any other face, matching "off = flat". When the
+// file has no `s` lines at all every triangle gets group 0, so grouping is a
+// no-op and only the crease angle governs smoothing.
+export function parseObjSmoothingGroups(text) {
+  let sawSmoothingLine = false;
+  let off = false;
+  let currentGroup = 0;
+  let offCounter = -1;
+  const groups = [];
+  for (const rawLine of String(text ?? "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line[0] === "#") continue;
+    if (line === "s" || /^s\s/.test(line)) {
+      sawSmoothingLine = true;
+      const value = line.slice(1).trim();
+      if (value === "" || value === "off" || value === "0") {
+        off = true;
+      } else {
+        const n = parseInt(value, 10);
+        off = false;
+        currentGroup = Number.isFinite(n) ? n : 0;
+      }
+      continue;
+    }
+    if (line === "f" || /^f\s/.test(line)) {
+      const verts = line.slice(1).trim().split(/\s+/).filter(Boolean);
+      const triCount = Math.max(0, verts.length - 2);
+      if (!triCount) continue;
+      const faceGroup = !sawSmoothingLine ? 0 : off ? offCounter-- : currentGroup;
+      for (let i = 0; i < triCount; i++) groups.push(faceGroup);
+    }
+  }
+  return groups;
+}
+
+// Computes smooth per-corner normals for a non-indexed triangle soup with no
+// authored normals. Vertices are welded by quantized position; a corner's
+// normal is the area-weighted average (unnormalized cross products, so tiny
+// sliver triangles contribute less than large ones) of every face sharing
+// that position whose face normal is within `creaseAngleDeg` of this face's
+// own normal, and whose smoothing-group id matches (when groupIds is given).
+// Runs in O(n * average vertex valence), which is O(n) for typical meshes.
+export function computeSmoothNormals(positions, options = {}) {
+  const creaseAngleDeg = options.creaseAngleDeg != null ? options.creaseAngleDeg : 60;
+  const groupIds = options.groupIds || null;
+  const weldScale = options.weldScale || 1e4;
+  const creaseCos = Math.cos((creaseAngleDeg * Math.PI) / 180);
+
+  const vertexCount = positions.length / 3;
+  const triCount = vertexCount / 3;
+  const faceRaw = new Float64Array(triCount * 3); // area-weighted (unnormalized)
+  const faceUnit = new Float64Array(triCount * 3);
+
+  for (let t = 0; t < triCount; t++) {
+    const i0 = t * 9, i1 = i0 + 3, i2 = i0 + 6;
+    const ax = positions[i1] - positions[i0], ay = positions[i1 + 1] - positions[i0 + 1], az = positions[i1 + 2] - positions[i0 + 2];
+    const bx = positions[i2] - positions[i0], by = positions[i2 + 1] - positions[i0 + 1], bz = positions[i2 + 2] - positions[i0 + 2];
+    const nx = ay * bz - az * by;
+    const ny = az * bx - ax * bz;
+    const nz = ax * by - ay * bx;
+    const fi = t * 3;
+    faceRaw[fi] = nx; faceRaw[fi + 1] = ny; faceRaw[fi + 2] = nz;
+    const len = Math.hypot(nx, ny, nz) || 1;
+    faceUnit[fi] = nx / len; faceUnit[fi + 1] = ny / len; faceUnit[fi + 2] = nz / len;
+  }
+
+  // Numeric open-addressing weld: slot -> group id, chained via next[].
+  const cap = 1 << Math.max(4, Math.ceil(Math.log2(vertexCount * 2 + 1)));
+  const mask = cap - 1;
+  const slotGroup = new Int32Array(cap).fill(-1);
+  const groupRep = new Int32Array(vertexCount);
+  const groupHead = new Int32Array(vertexCount);
+  const next = new Int32Array(vertexCount);
+  const vertGroup = new Int32Array(vertexCount);
+  let groupCount = 0;
+  for (let v = 0; v < vertexCount; v++) {
+    const p = v * 3;
+    const kx = Math.round(positions[p] * weldScale);
+    const ky = Math.round(positions[p + 1] * weldScale);
+    const kz = Math.round(positions[p + 2] * weldScale);
+    let h = (Math.imul(kx | 0, 73856093) ^ Math.imul(ky | 0, 19349663) ^ Math.imul(kz | 0, 83492791)) & mask;
+    let gid = -1;
+    for (;;) {
+      const g = slotGroup[h];
+      if (g < 0) {
+        gid = groupCount++;
+        slotGroup[h] = gid;
+        groupRep[gid] = v;
+        groupHead[gid] = -1;
+        break;
+      }
+      const r = groupRep[g] * 3;
+      if (Math.round(positions[r] * weldScale) === kx && Math.round(positions[r + 1] * weldScale) === ky && Math.round(positions[r + 2] * weldScale) === kz) { gid = g; break; }
+      h = (h + 1) & mask;
+    }
+    next[v] = groupHead[gid];
+    groupHead[gid] = v;
+    vertGroup[v] = gid;
+  }
+
+  const out = new Float32Array(positions.length);
+  for (let v = 0; v < vertexCount; v++) {
+    const t = (v / 3) | 0;
+    const fi = t * 3;
+    const ownGroup = groupIds ? groupIds[t] : 0;
+    const nx0 = faceUnit[fi], ny0 = faceUnit[fi + 1], nz0 = faceUnit[fi + 2];
+    let sx = 0, sy = 0, sz = 0;
+    for (let w = groupHead[vertGroup[v]]; w !== -1; w = next[w]) {
+      const tw = (w / 3) | 0;
+      if (groupIds && groupIds[tw] !== ownGroup) continue;
+      const fwi = tw * 3;
+      const dot = nx0 * faceUnit[fwi] + ny0 * faceUnit[fwi + 1] + nz0 * faceUnit[fwi + 2];
+      if (Math.min(1, Math.max(-1, dot)) < creaseCos) continue;
+      sx += faceRaw[fwi]; sy += faceRaw[fwi + 1]; sz += faceRaw[fwi + 2];
+    }
+    let len = Math.hypot(sx, sy, sz);
+    if (!len) { sx = nx0; sy = ny0; sz = nz0; len = 1; }
+    const o = v * 3;
+    out[o] = sx / len; out[o + 1] = sy / len; out[o + 2] = sz / len;
+  }
+  return out;
+}
+
 // ------------------------------------------------------------------- loader
 
 export async function loadObjStage({ files, rootPath, signal, onProgress } = {}) {
@@ -218,9 +354,52 @@ export async function loadObjStage({ files, rootPath, signal, onProgress } = {})
     return attr ? attr.array : null;
   };
 
+  // OBJLoader always supplies flat per-face normals when the file has no
+  // `vn` lines; recompute smooth ones instead, honoring `s` groups when the
+  // file declares them. smoothCursor tracks position in faceGroups because
+  // meshes/material groups are extracted in the same order faces appear.
+  const hasVN = objHasVertexNormals(text);
+  const faceGroups = hasVN ? null : parseObjSmoothingGroups(text);
+  let globalNormals = null;
+  let globalCursor = 0; // vertex offset into globalNormals
+  let normalsRecomputed = false;
+
+  // Smooth normals are computed once over every mesh so vertices shared
+  // across g/o groups and materials get identical normals (no seams).
+  if (!hasVN) {
+    const slices = [];
+    let total = 0;
+    container.traverse((object) => {
+      if (!object.isMesh) return;
+      const g = object.geometry;
+      const pa = g && g.getAttribute && g.getAttribute("position");
+      if (!pa || !pa.count) return;
+      const gs = g.groups && g.groups.length ? g.groups : [{ start: 0, count: pa.count }];
+      for (const gr of gs) {
+        if (!gr.count) continue;
+        slices.push([pa.array, gr.start, gr.count]);
+        total += gr.count;
+      }
+    });
+    const all = new Float32Array(total * 3);
+    let o = 0;
+    for (const [arr, start, count] of slices) {
+      all.set(arr.subarray(start * 3, (start + count) * 3), o);
+      o += count * 3;
+    }
+    const usable = faceGroups && faceGroups.length === total / 3;
+    globalNormals = computeSmoothNormals(all, { creaseAngleDeg: 60, groupIds: usable ? faceGroups : null });
+  }
+
   const buildMeshRecord = (name, positions, normals, uvs, colors, start, count, materialName) => {
     if (!count) return;
     const posSlice = Float32Array.from(positions.subarray(start * 3, (start + count) * 3));
+    let normalSlice = normals ? Float32Array.from(normals.subarray(start * 3, (start + count) * 3)) : null;
+    if (!hasVN) {
+      normalSlice = globalNormals.slice(globalCursor * 3, (globalCursor + count) * 3);
+      globalCursor += count;
+      normalsRecomputed = true;
+    }
     const geomprops = [];
     if (colors) {
       geomprops.push({
@@ -234,7 +413,7 @@ export async function loadObjStage({ files, rootPath, signal, onProgress } = {})
       primPath: "/" + primName,
       name: name || "",
       positions: posSlice,
-      ...(normals ? { normals: Float32Array.from(normals.subarray(start * 3, (start + count) * 3)) } : {}),
+      ...(normalSlice ? { normals: normalSlice } : {}),
       ...(uvs ? { uvs: Float32Array.from(uvs.subarray(start * 2, (start + count) * 2)) } : {}),
       ...(geomprops.length ? { geomprops } : {}),
       displayColor: null,
@@ -283,6 +462,9 @@ export async function loadObjStage({ files, rootPath, signal, onProgress } = {})
   });
 
   if (!meshRecords.length) throw new Error("No renderable meshes in " + root);
+  if (normalsRecomputed) {
+    warnings.push("[info] OBJ has no normals; smooth normals were computed (60 degree crease)");
+  }
 
   report("extract-geometry", 1, 1, "Extracted meshes");
   report("extract-materials", 1, 1, "Extracted materials");

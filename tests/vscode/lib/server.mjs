@@ -5,6 +5,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { VSCE_VERSION } from '../../../scripts/lib/vsce.mjs';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -97,7 +98,7 @@ export function startWhitelistServer({ root, allowedFiles }) {
   });
 }
 
-/** Runs `npx --yes @vscode/vsce@3.9.2 ls --no-dependencies` (or reads
+/** Runs `npx --yes @vscode/vsce@<VSCE_VERSION> ls --no-dependencies` (or reads
  * MTLX_VSIX_FILE_LIST, one packaged path per line, for fast local
  * iteration) and returns the packaged file set as repo-relative paths. */
 export function getPackagedFileSet({ repoRoot, spawnSyncFn }) {
@@ -106,7 +107,7 @@ export function getPackagedFileSet({ repoRoot, spawnSyncFn }) {
   if (listFile) {
     raw = fs.readFileSync(listFile, 'utf8');
   } else {
-    const result = spawnSyncFn('npx', ['--yes', '@vscode/vsce@3.9.2', 'ls', '--no-dependencies'], {
+    const result = spawnSyncFn('npx', ['--yes', `@vscode/vsce@${VSCE_VERSION}`, 'ls', '--no-dependencies'], {
       cwd: repoRoot,
       encoding: 'utf8',
       shell: true,

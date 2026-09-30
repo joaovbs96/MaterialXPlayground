@@ -7,7 +7,8 @@
 // Extracted verbatim from material-viewer.html's inline script;
 // original 8-space indentation preserved as-is.
 
-const IMG_EXT = /\.(png|jpe?g|webp|gif|bmp|tga|exr|hdr|tif+)$/i;
+// Single source of truth: js/shared/texture-formats.js (window global).
+const IMG_EXT = window.textureExtRegex();
 
 // Geometry names this component actually knows how to render —
 // mirrors ViewportControls' own default `geomList` (js/shared/
@@ -83,7 +84,7 @@ const loadMtlxDocument = async (xmlText, path, version) => {
   } = env;
   const doc = mx.createDocument();
   if (typeof mx.readFromXmlString !== 'function') {
-    throw new Error('readFromXmlString is not bound in this MaterialX build — cannot parse .mtlx files.');
+    throw new Error('readFromXmlString is not bound in this MaterialX build, cannot parse .mtlx files.');
   }
   // CRITICAL: readFromXmlString is ASYNC (a custom post-JS
   // implementation that fetches XIncludes). Missing the await
@@ -208,6 +209,19 @@ function MaterialViewerApp({
   // read it so rapid successive drops (and texture binding after a
   // regen) always see the LATEST files, not a stale closure.
   const fileMapRef = React.useRef({});
+  // .mxsl provenance for the file map: {compiledMtlxKey: {source,
+  // filename}}, populated by expandMxsl() in ingest() (see
+  // mxslc-engine.js). filename is the as-dropped .mxsl path
+  // (before it was re-keyed to compiledMtlxKey). mxslOriginFor()
+  // looks one path up; mxslOriginal mirrors it for the CURRENTLY
+  // loaded document (set only at loadDocument()'s choke point),
+  // which the ShadingLanguageX export target's "Original" reads.
+  const mxslOriginalsRef = React.useRef({});
+  const mxslOriginFor = path => path && Object.prototype.hasOwnProperty.call(mxslOriginalsRef.current, path) ? {
+    path,
+    ...mxslOriginalsRef.current[path]
+  } : null;
+  const [mxslOriginal, setMxslOriginal] = React.useState(null); // { path, source, filename } | null
   const [mtlxPaths, setMtlxPaths] = React.useState([]); // candidates
   const [chosenMtlx, setChosenMtlx] = React.useState(null);
   // Document actually on screen, vs chosenMtlx (the requested
@@ -580,6 +594,24 @@ function MaterialViewerApp({
     });
   };
 
+  // ShaderExportDialog's `generate()` for the ShadingLanguageX
+  // target: unlike the shadergen targets, this is whole-document
+  // (no `renderable` scoping — mxslc's decompiler has no concept
+  // of "just this material") and runs against the SEPARATE mxsl
+  // WASM module (js/mxslc-engine.js), never `loaded.mx`. "Original"
+  // is the as-authored .mxsl source IF this document was compiled
+  // from one (mxslOriginal, set in loadDocument()); "Decompiled"
+  // decompiles the as-loaded XML, which is exactly what's on
+  // screen since the viewer never edits the document.
+  const generateSlxExportStages = () => {
+    // The embed bundle never loads js/mxslc-engine.js, so a
+    // bare `slxExportStages` reference would throw here.
+    if (typeof window.slxExportStages !== 'function') {
+      return Promise.reject(new Error('ShadingLanguageX export is not available: js/mxslc-engine.js is not loaded.'));
+    }
+    return window.slxExportStages(loadedRef.current.sourceXml, mxslOriginal && mxslOriginal.source);
+  };
+
   // Picker onSelect ({ xml, name, files }): the exact same shape
   // handleImport (below) already handles for the 'mtlx-view-document'
   // handoff, so this just closes the picker and reuses it.
@@ -596,12 +628,28 @@ function MaterialViewerApp({
   };
   const ingest = async (map, rootKey) => {
     setError(null);
+    const mxslOrigins = {}; // populated below, merged into mxslOriginalsRef after the replace/merge decision
+    const mxslFailures = []; // {rootKey, message} for .mxsl roots that failed to compile
     try {
       await expandZips(map);
+      // Compile any ShadingLanguageX (.mxsl) files to MaterialX
+      // XML and re-key them as .mtlx, so everything below (root-
+      // document detection, xi:include resolution, texture
+      // binding) treats them exactly like an authored .mtlx.
+      // Guarded: the embed bundle (embed/viewer.html) doesn't
+      // load js/mxslc-engine.js.
+      const mxslcAvailable = typeof window.expandMxsl === 'function';
+      if (mxslcAvailable) {
+        await window.expandMxsl(map, mxslOrigins, mxslFailures);
+      }
     } catch (e) {
       reportError(errMsg(e));
       return;
     }
+    // Some .mxsl roots may have compiled while others failed,
+    // appended to whichever status message this ingest shows.
+    const mxslWarn = mxslFailures.length ? ' (' + mxslFailures.map(f => f.rootKey + ': ' + f.message).join('; ') + ')' : '';
+    let loadPromise = null;
     const droppedMtlx = Object.keys(map).filter(k => /\.mtlx$/i.test(k));
 
     // SESSION SEMANTICS: an .mtlx drop REPLACES the current
@@ -611,6 +659,10 @@ function MaterialViewerApp({
     let merged;
     if (droppedMtlx.length && hadSession) {
       merged = Object.assign({}, map);
+      // Same replace-not-merge semantics as fileMapRef right
+      // below: a stale Original from the OLD session must not
+      // survive into the new one.
+      mxslOriginalsRef.current = mxslOrigins;
       loadedRef.current = null;
       setRenderables([]);
       setChosenMat(0);
@@ -620,13 +672,14 @@ function MaterialViewerApp({
       setMaterialNotices(null);
     } else {
       merged = Object.assign({}, fileMapRef.current, map);
+      mxslOriginalsRef.current = Object.assign({}, mxslOriginalsRef.current, mxslOrigins);
     }
     fileMapRef.current = merged;
     setFileMap(merged);
     const mtlx = Object.keys(merged).filter(k => /\.mtlx$/i.test(k));
     setMtlxPaths(mtlx);
     if (!mtlx.length) {
-      setStatus('Files received — now drop the .mtlx document itself.');
+      setStatus('Files received. Now drop the .mtlx or .mxsl document itself.' + mxslWarn);
       return;
     }
     if (droppedMtlx.length) {
@@ -636,15 +689,20 @@ function MaterialViewerApp({
       // sibling .mtlx via xi:include.
       const pick = rootKey && mtlx.indexOf(rootKey) !== -1 ? rootKey : mtlx.length === 1 ? mtlx[0] : null;
       setChosenMtlx(pick);
-      if (pick) loadDocument(pick, merged);else setStatus('This drop contains several .mtlx files — pick one in the Files panel.');
+      if (pick) loadPromise = loadDocument(pick, merged);else setStatus('This drop contains several .mtlx files. Pick one in the Files panel.' + mxslWarn);
     } else if (chosenMtlx && viewRef.current) {
       // Textures added to a live view: rebind without regenerating.
       trackTexReport(bindDroppedTextures(viewRef.current, merged));
       setStatus(null);
     } else if (chosenMtlx) {
-      loadDocument(chosenMtlx, merged);
+      loadPromise = loadDocument(chosenMtlx, merged);
     } else {
-      setStatus('Textures added — pick a .mtlx in the Files panel.');
+      setStatus('Textures added. Pick a .mtlx in the Files panel.' + mxslWarn);
+    }
+    // loadDocument clears status/error on success, surface a
+    // partial .mxsl compile failure after it settles.
+    if (mxslFailures.length) {
+      Promise.resolve(loadPromise).then(() => reportError('Some .mxsl files did not compile' + mxslWarn));
     }
   };
 
@@ -837,7 +895,12 @@ function MaterialViewerApp({
     // pure waste there — and its 404 is a console error wherever
     // the gitignored build is absent, which fails the embed smoke
     // test in CI. Nothing reads versionAvailable while chromeless.
-    if (chromeless) return undefined;
+    // The VS Code webview never packages a non-default version
+    // either (only the default's WASM ships in the .vsix), and
+    // a 404 through its resource pipeline logs a host-side
+    // "Webview.loadLocalResource" error on every run, so skip
+    // the probe there too.
+    if (chromeless || window.__MTLX_VSCODE__) return undefined;
     let cancelled = false;
     mtlxVersions.filter(v => v !== mtlxDefaultVersion).forEach(v => {
       fetch('js/materialx/' + v + '/JsMaterialXGenShader.js', {
@@ -904,7 +967,7 @@ function MaterialViewerApp({
         // the user's own load is already in flight.
         if (hasSession() || loadedRef.current) return;
         setBusy(false);
-        setStatus(IN_VSCODE || IN_ELECTRON ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx anywhere on the page, or pick a Preset from the toolbar.");
+        setStatus(IN_VSCODE || IN_ELECTRON ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx or .mxsl anywhere on the page, or pick a Preset from the toolbar.");
       });
       return;
     }
@@ -936,7 +999,7 @@ function MaterialViewerApp({
       // the user's own load is already in flight.
       if (hasSession() || loadedRef.current) return;
       setBusy(false);
-      setStatus(IN_VSCODE || IN_ELECTRON ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx anywhere on the page, or pick a Preset from the toolbar.");
+      setStatus(IN_VSCODE || IN_ELECTRON ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx or .mxsl anywhere on the page, or pick a Preset from the toolbar.");
     });
   }, []);
   const onPickFileList = fileList => {
@@ -988,6 +1051,7 @@ function MaterialViewerApp({
         return;
       }
       loadedRef.current = loaded;
+      setMxslOriginal(mxslOriginFor(path));
       setRenderables(loaded.renderables);
       if (onRenderablesRef.current) onRenderablesRef.current(loaded.renderables);
       setChosenMat(0);
@@ -1306,7 +1370,12 @@ function MaterialViewerApp({
   // Document/Materials card summaries and the HUD status chip
   // all read the same "what's currently on screen" values.
   const currentMtlxPath = chosenMtlx || renderedMtlx;
-  const docBasename = currentMtlxPath ? currentMtlxPath.split('/').pop() : 'No document';
+  // A document compiled from .mxsl is labelled with its original
+  // .mxsl name. Looked up by path rather than read from
+  // mxslOriginal: these summaries follow the chosen document,
+  // which can differ from the loaded one (see renderedMtlx).
+  const mxslOrigin = mxslOriginFor(currentMtlxPath);
+  const docBasename = currentMtlxPath ? (mxslOrigin ? mxslOrigin.filename : currentMtlxPath).split('/').pop() : 'No document';
   const currentMaterialName = renderables[chosenMat] && renderables[chosenMat].name || '';
 
   // 28px HUD chip classes, shared by ViewportControls' built-in
@@ -1333,7 +1402,7 @@ function MaterialViewerApp({
     placeholder: "No document loaded",
     multiple: true,
     icon: "files",
-    accept: ".mtlx,.zip,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff,.ktx2",
+    accept: '.mtlx,.mxsl,.zip,' + window.textureAccept(),
     onFiles: onPickFileList
   })), /*#__PURE__*/React.createElement("label", {
     title: "Choose a folder",
@@ -1558,7 +1627,23 @@ function MaterialViewerApp({
   }, error), /*#__PURE__*/React.createElement("div", {
     ref: viewportRef,
     className: `overflow-hidden ${bgClass} ${IN_VSCODE ? 'relative flex-1 min-h-0' : 'absolute inset-0'}`
-  }, /*#__PURE__*/React.createElement(LoadingOverlay, {
+  }, /*#__PURE__*/React.createElement("canvas", {
+    ref: canvasRef,
+    className: "block cursor-grab active:cursor-grabbing"
+    // Absolute so it fills the container even when the parent
+    // height is flex-derived (a % height would fall back to 2:1).
+    // No focus ring: on a transparent embed it reads as a border.
+    ,
+    style: {
+      position: 'absolute',
+      left: 0,
+      top: 0,
+      width: '100%',
+      height: '100%',
+      outline: 'none'
+    },
+    tabIndex: -1
+  }), /*#__PURE__*/React.createElement(LoadingOverlay, {
     show: busy,
     label: status,
     className: "absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70",
@@ -1724,19 +1809,7 @@ function MaterialViewerApp({
     title: "Material to display",
     size: "sm",
     variant: "toolbar"
-  }))), /*#__PURE__*/React.createElement("canvas", {
-    ref: canvasRef,
-    className: "w-full block cursor-grab active:cursor-grabbing"
-    // Always fills its container: VS Code, fullscreen, and
-    // the full-bleed browser default all resolve to 100% here.
-    // No focus ring: on a transparent embed it reads as a border.
-    ,
-    style: {
-      height: '100%',
-      outline: 'none'
-    },
-    tabIndex: -1
-  }), !IN_VSCODE && !chromeless && renderables.length > 0 && (() => {
+  }))), !IN_VSCODE && !chromeless && renderables.length > 0 && (() => {
     const segments = [renderables[chosenMat] && renderables[chosenMat].name, mxSafe(() => renderables[chosenMat].node.getCategory(), ''),
     // renderedVersion reflects what actually rendered; window.__mtlxVersion
     // is only ever stamped for the DEFAULT build (js/mtlx-engine.js), so it's
@@ -1769,15 +1842,15 @@ function MaterialViewerApp({
     name: "chevrons-right",
     className: "w-4 h-4"
   }), /*#__PURE__*/React.createElement("span", {
-    className: "max-w-[5rem] md:max-w-[8rem] truncate"
-  }, "Viewer")));
+    className: "max-w-[7rem] md:max-w-[8rem] truncate"
+  }, "Material Viewer")));
   return (
     /*#__PURE__*/
-    // IN_VSCODE: height chain fills the webview. Browser: a
+    // IN_VSCODE: absolute in #root, since a % height chain collapses to 0 after a resize. Browser: a
     // full-bleed flex row (docked sidebar + stage column), via
     // js/shell.jsx's now-empty viewer wrapClass.
     React.createElement("div", {
-      className: IN_VSCODE ? 'h-full min-h-0 flex flex-col' : `absolute inset-0 overflow-hidden flex ${bgClass}`
+      className: IN_VSCODE ? 'absolute inset-0 min-h-0 flex flex-col' : `absolute inset-0 overflow-hidden flex ${bgClass}`
     }, dragOver && /*#__PURE__*/React.createElement("div", {
       className: `fixed left-0 right-0 bottom-0 z-40 pointer-events-none p-2 sm:p-4 ${chromeless ? 'top-0' : 'top-14'}`
     }, /*#__PURE__*/React.createElement("div", {
@@ -1790,10 +1863,10 @@ function MaterialViewerApp({
     }), " Drop to load"))), !IN_VSCODE && !chromeless && sidebarOpen && /*#__PURE__*/React.createElement("div", {
       className: "flex-none w-80 max-w-[90%] flex flex-col bg-gray-900 border-r border-gray-700 overflow-hidden"
     }, /*#__PURE__*/React.createElement("div", {
-      className: "flex-none flex items-center px-3 py-2 border-b border-gray-700"
+      className: "flex-none flex items-center gap-1.5 px-3 py-2 border-b border-gray-700"
     }, /*#__PURE__*/React.createElement("span", {
       className: "text-[13px] font-semibold text-gray-200"
-    }, "Viewer"), /*#__PURE__*/React.createElement("button", {
+    }, "Material Viewer"), /*#__PURE__*/React.createElement("button", {
       onClick: () => setSidebarOpen(false),
       title: "Collapse the viewer panel",
       className: "flex-none ml-auto text-gray-400 hover:text-gray-200 px-1 leading-none text-sm"
@@ -1819,7 +1892,7 @@ function MaterialViewerApp({
         renderable,
         label,
         targetKey
-      }) => generateTargetSources({
+      }) => targetKey === "slx" ? generateSlxExportStages() : generateTargetSources({
         mx: loadedRef.current.mx,
         renderable,
         label,

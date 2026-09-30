@@ -1,21 +1,62 @@
-// docs-app.jsx — the App component for the MaterialX node documentation
+// docs-app.jsx, the App component for the MaterialX node documentation
 // browser (index.html), extracted from its inline text/babel script.
 // Uses index.html's literal \uXXXX escape-text convention (e.g. {'↗'})
-// in some string literals — same as node-graph.html; preserve exactly.
+// in some string literals, same as node-graph.html; preserve exactly.
 // Loaded as text/babel after js/mtlx-engine.js and js/docs/*.jsx, which
 // it depends on via window globals; reads window.__MTLX_EMBED (set by
 // index.html's early <head> script) for embed-mode behavior. Node data
-// comes from prebuilt js/gen/nodelib*.json — docs browsing is WASM-free;
+// comes from prebuilt js/gen/nodelib*.json, docs browsing is WASM-free;
 // the MaterialX engine loads only for 3D previews.
 
         // Given nodeVersionGroups and a sig hint ({out, ins}, from a VS Code
-        // hover link's `?sig=` — see doc-links.jsx's parseSigHint), returns
+        // hover link's `?sig=`, see doc-links.jsx's parseSigHint), returns
         // the group index to pre-select (-1 if none), disambiguating via hint.ins.
         // Stable empty fallbacks: inline `[]`/`{}` literals get a new
         // identity every render, defeating React.memo on consumers like
-        // PortTable — kept module-level so identity never changes.
+        // PortTable, kept module-level so identity never changes.
         const EMPTY_TABLES = [];
         const EMPTY_COLUMNS = [];
+
+        // MaterialX structural/graph-plumbing elements: never node
+        // categories, so the file-filter tag scan below (and its unit
+        // test) always drops them regardless of what's in the library.
+        const MTLX_STRUCTURAL_TAGS = new Set([
+            'materialx', 'nodegraph', 'nodedef', 'nodegraphoutput', 'input', 'output',
+            'token', 'member', 'implementation', 'typedef', 'attributedef', 'attributeset',
+            'targetdef', 'unitdef', 'unittypedef', 'unit', 'propertyset', 'property',
+            'propertyassign', 'variantset', 'variant', 'variantassign', 'geominfo',
+            'geomprop', 'geomattr', 'geomattrvalue', 'collection', 'collectionadd',
+            'collectionremove', 'look', 'lookgroup', 'materialassign', 'visibility', 'backdrop',
+        ]);
+
+        // Pure, unit-testable (tests/unit/docs-file-filter.test.mjs): scans a
+        // .mtlx document's raw text for element tag names with a plain
+        // regex, no XML parser and no WASM. Returns the distinct tags that
+        // aren't MaterialX structural elements: candidate node categories,
+        // which the caller then intersects against the loaded node library.
+        function scanMtlxFileTags(text) {
+            const tags = new Set();
+            const re = /<\s*([A-Za-z_][\w.]*)\b/g;
+            let m;
+            const str = String(text || '');
+            while ((m = re.exec(str))) {
+                const tag = m[1].toLowerCase();
+                if (!MTLX_STRUCTURAL_TAGS.has(tag)) tags.add(tag);
+            }
+            return Array.from(tags);
+        }
+
+        // Intersects scanMtlxFileTags' output against the loaded node
+        // library (jsonData: { lib: { group: { name: info } } }), so the
+        // file filter only ever narrows to real, known categories.
+        function categoriesFromFileTags(tags, jsonData) {
+            if (!jsonData || !tags || !tags.length) return [];
+            const known = new Set();
+            Object.values(jsonData).forEach((groups) =>
+                Object.values(groups).forEach((nodes) =>
+                    Object.keys(nodes).forEach((name) => known.add(name))));
+            return tags.filter((t) => known.has(t));
+        }
 
         const matchSigHintToGroups = (groups, hint) => {
             if (!groups || !groups.length || !hint || !hint.out) return -1;
@@ -45,6 +86,49 @@
             return candidates[0];
         };
 
+        // Given a node's sigGroups (genData.nodes[name].sigGroups) and the
+        // active out:/in: type-filter tokens, returns the index of the
+        // FIRST group satisfying both (same rule as categoryMatchesTypeFilters
+        // below, but returning the winning index instead of a boolean), or
+        // -1 when no filter is active or none matches.
+        const findMatchingSigIndex = (sigGroups, outType, inType) => {
+            if (!outType && !inType) return -1;
+            if (!sigGroups || !sigGroups.length) return -1;
+            for (let i = 0; i < sigGroups.length; i++) {
+                const sg = sigGroups[i];
+                if (outType) {
+                    const outOk = (sg.type && sg.type.toLowerCase() === outType.toLowerCase())
+                        || (sg.versions || []).some((v) => v.outputTypes
+                            && Object.values(v.outputTypes).some((t) => t && t.toLowerCase() === outType.toLowerCase()));
+                    if (!outOk) continue;
+                }
+                if (inType) {
+                    const inOk = (sg.versions || []).some((v) => v.inputTypes
+                        && Object.values(v.inputTypes).some((t) => t && t.toLowerCase() === inType.toLowerCase()));
+                    if (!inOk) continue;
+                }
+                return i;
+            }
+            return -1;
+        };
+
+        // Computes the next pendingSigRef value for a freshly resolved
+        // selection `sel` ({name, sigHint?}), given the CURRENT pending
+        // hint (or null). A hint-less sel for the SAME node the pending
+        // hint already targets is left alone instead of clearing it: the
+        // URL-sync effect canonicalizes the hash (stripping `?sig=`),
+        // which, via a VS Code webview's location.hash fallback, or an
+        // echoed popstate/hashchange in general, re-runs this resolution
+        // on that canonical, hint-less hash before the match effect below
+        // has had a chance to consume the pending hint. Any OTHER sel
+        // (different node, or one that carries its own hint) still wins
+        // outright, same as before.
+        const nextPendingSig = (current, sel) => {
+            if (sel.sigHint) return { name: sel.name, hint: sel.sigHint };
+            if (current && current.name === sel.name) return current;
+            return null;
+        };
+
         // Which table(s) to render: narrows multi-table documented nodes to
         // the ONE table matching the selected version, or its output type
         // when no version matches. Keep `sigCount > 1` in sync with below.
@@ -66,13 +150,13 @@
             const out = selectedGroup.type;
             // '+'-joined multi-output signature, or the literal
             // 'multioutput' string nodedef.getType() returns: no single
-            // output type to gate on — deferred to the previewer instead.
+            // output type to gate on, deferred to the previewer instead.
             if (!out || out.indexOf('+') !== -1 || out === 'multioutput') return null;
             const inTypes = Object.values(selectedVersion.inputTypes || {});
             const hasClosureInput = inTypes.some((t) => CLOSURE.indexOf(t) !== -1);
             // A surfaceshader with unbound closure (BSDF/EDF) inputs passes
             // the VIEWABLE-ish gate below but renders as a meaningless black
-            // ball — catch it before the generic previewable check.
+            // ball, catch it before the generic previewable check.
             if (out === 'surfaceshader' && hasClosureInput) {
                 return `No preview for "${selectedNode.name}" — its closure inputs (BSDF/EDF) are unbound in an isolated preview; open it in the node graph editor and wire it up to see a result.`;
             }
@@ -90,7 +174,7 @@
 
         function App({ active = true, inline = false, initialHash } = {}) {
             // Embed mode: focused single-node view, iframed by the graph
-            // editor (index.html?embed=1#/<lib>/<group>/<name>) — flag is
+            // editor (index.html?embed=1#/<lib>/<group>/<name>), flag is
             // set synchronously in <head> before first paint.
             const EMBED = !!window.__MTLX_EMBED;
             // inline: mounted in the graph editor's docs dialog, wanting
@@ -109,7 +193,7 @@
             // active value without re-subscribing.
             const activeRef = React.useRef(active);
             activeRef.current = active;
-            // The hash the page LANDED on — read once, before the async spec-DB
+            // The hash the page LANDED on, read once, before the async spec-DB
             // load can race with the user switching shell views (which rewrites
             // location.hash to a '#!' route and would lose a docs deep link).
             const initialHashRef = React.useRef(window.location.hash);
@@ -119,18 +203,40 @@
             const pendingSigRef = React.useRef(null);
             // Companion to pendingSigRef for `?ver=`: the nodedef version to
             // land on once the signature's version list is known. Only ever
-            // SET from a hash, never cleared there — selecting a node
+            // SET from a hash, never cleared there, selecting a node
             // rewrites the URL without the query, so a second pass over the
             // hash would wipe a hint it can no longer see. Consumption
             // clears it, and matching is guarded by node name.
             const pendingVerRef = React.useRef(null);
+            // Set by selectNodeFromSidebar (below) when out:/in: type
+            // filters are active: {name, index} for the FIRST signature of
+            // that node matching them, consumed by the reset effect right
+            // below instead of the default sigIndex 0.
+            const pendingSigIndexRef = React.useRef(null);
             const [jsonData, setJsonData] = React.useState(null);
             const [selectedNode, setSelectedNode] = React.useState(null);
-            // Which signature (port table) of the selected node is shown —
+            // Which signature (port table) of the selected node is shown:
             // and previewed. Reset on every selection change.
             const [sigIndex, setSigIndex] = React.useState(0);
+            // Name of the previously selected node, so a redundant
+            // reselection of the SAME node (the URL-sync effect below
+            // canonicalizes the hash, which, via the VS Code webview's
+            // location.hash fallback, or an echoed hashchange in general:
+            // re-fires onNav on that same hash with the sig hint already
+            // stripped) doesn't stomp a just-applied sigIndex back to 0.
+            const prevSelNameRef = React.useRef(null);
             React.useEffect(() => {
-                setSigIndex(0);
+                const sameNode = selectedNode && prevSelNameRef.current === selectedNode.name;
+                prevSelNameRef.current = selectedNode && selectedNode.name;
+                if (sameNode) return;
+                const pendingIdx = pendingSigIndexRef.current;
+                if (pendingIdx && selectedNode && pendingIdx.name === selectedNode.name) {
+                    pendingSigIndexRef.current = null;
+                    setSigIndex(pendingIdx.index);
+                } else {
+                    pendingSigIndexRef.current = null;
+                    setSigIndex(0);
+                }
                 // A pending sig hint targets ONE specific node by name;
                 // if this selection is for a different node (e.g. a
                 // sidebar click raced the hint before consumption), drop it.
@@ -165,7 +271,7 @@
                     if (hit) {
                         setSelectedNode(hit);
                         // Inline: the dialog owns its own scroll container,
-                        // not the page — and there's no ref to the detail
+                        // not the page, and there's no ref to the detail
                         // pane to scroll instead, so just skip scrolling.
                         if (!inline) window.scrollTo({ top: 0, behavior: 'smooth' });
                     } else if (e.detail.url) {
@@ -197,7 +303,7 @@
 
                 // A permalink (#/lib/group/name) wins over the default first
                 // node. A '#!...' hash means a view switch raced the spec-DB
-                // load — fall back to the landed hash; inline uses initialHash.
+                // load, fall back to the landed hash; inline uses initialHash.
                 let hashForSel;
                 if (inline) {
                     hashForSel = initialHash || '';
@@ -209,17 +315,17 @@
                 if (fromHash) {
                     setExpandedLibs({ [fromHash.lib]: true });
                     setExpandedGroups({ [`${fromHash.lib}-${fromHash.group}`]: true });
-                    // A `?sig=` hint (VS Code hover deep link only — see
+                    // A `?sig=` hint (VS Code hover deep link only, see
                     // doc-links.jsx's parseSigHint) is set right before
                     // setSelectedNode, so the sigIndex-reset effect above sees it.
-                    pendingSigRef.current = fromHash.sigHint ? { name: fromHash.name, hint: fromHash.sigHint } : null;
+                    pendingSigRef.current = nextPendingSig(pendingSigRef.current, fromHash);
                     if (fromHash.verHint) pendingVerRef.current = { name: fromHash.name, version: fromHash.verHint };
                     setSelectedNode(fromHash);
                     return;
                 }
 
                 // Default landing node: OpenPBR's surface shader when
-                // present — a far better first impression (and a
+                // present, a far better first impression (and a
                 // parameter-rich preview) than whatever sorts first.
                 let def = null;
                 for (const lib of Object.keys(parsedData)) {
@@ -251,11 +357,11 @@
             };
 
             // Keeps the address bar in sync via replaceState (no history
-            // entry, no hashchange feedback loop) — one Back exits docs
+            // entry, no hashchange feedback loop), one Back exits docs
             // entirely. Only writes while VISIBLE (skips stomping other views).
             React.useEffect(() => {
                 // An inline instance (mounted inside the graph editor's docs
-                // dialog) must NEVER touch the parent page's URL/history —
+                // dialog) must NEVER touch the parent page's URL/history:
                 // that hash belongs to the graph view's own routing.
                 if (inline) return;
                 if (!selectedNode || !active) return;
@@ -263,7 +369,7 @@
                 if (window.location.hash !== h) {
                     // replaceState resolves h against <base>; under the VS
                     // Code webview that base is a different origin, so it
-                    // throws — fall back to a plain fragment assignment,
+                    // throws, fall back to a plain fragment assignment,
                     // which never leaves the document (at the cost of a
                     // hashchange the onNav listener below re-resolves,
                     // idempotently, to the already-selected node).
@@ -272,7 +378,7 @@
             }, [selectedNode, active]);
             React.useEffect(() => {
                 // The parent page's hash belongs to the graph view when
-                // inline — an inline instance must not react to it.
+                // inline, an inline instance must not react to it.
                 if (inline || !jsonData) return undefined;
                 const onNav = () => {
                     const sel = hashToSel(jsonData, window.location.hash);
@@ -280,8 +386,8 @@
                         setExpandedLibs((p) => Object.assign({}, p, { [sel.lib]: true }));
                         setExpandedGroups((p) => Object.assign({}, p, { [`${sel.lib}-${sel.group}`]: true }));
                         // Same pending-hint queuing as applyData's
-                        // fromHash branch above — see its comment.
-                        pendingSigRef.current = sel.sigHint ? { name: sel.name, hint: sel.sigHint } : null;
+                        // fromHash branch above, see its comment.
+                        pendingSigRef.current = nextPendingSig(pendingSigRef.current, sel);
                         if (sel.verHint) pendingVerRef.current = { name: sel.name, version: sel.verHint };
                         setSelectedNode(sel);
                     }
@@ -312,7 +418,7 @@
 
             // Loads the pregenerated node docs JSON: nodelib.json (Layer 1)
             // + nodelib-index.json (Layer 2, feeds genData below). Both are
-            // committed — a failure here means a hosting/path bug.
+            // committed, a failure here means a hosting/path bug.
             const [autoLoad, setAutoLoad] = React.useState('loading'); // loading | done | failed
             const [dataSource, setDataSource] = React.useState(null);
             const [genData, setGenData] = React.useState(null);
@@ -334,7 +440,7 @@
             }, []);
 
             // Auto-generated port tables (nodes with no spec docs): read
-            // straight off genData, the pregenerated Layer-2 index — no
+            // straight off genData, the pregenerated Layer-2 index, no
             // live WASM read.
             const autoDoc = React.useMemo(() => {
                 if (!selectedNode || !genData) return null;
@@ -345,7 +451,7 @@
             }, [selectedNode, genData]);
 
             // VERSION metadata for EVERY selection, read off
-            // genData.nodes[name].sigGroups — intentionally UNFILTERED
+            // genData.nodes[name].sigGroups, intentionally UNFILTERED
             // (e.g. 'multiply' lists every signature); previewer hides the rest.
             const nodeVersionGroups = React.useMemo(() => {
                 if (!genData || !selectedNode) return null;
@@ -364,7 +470,7 @@
                 if (idx > 0) setSigIndex(idx);
             }, [nodeVersionGroups, selectedNode]);
             // Which VERSION is selected within the resolved signature
-            // group — reset on selection/signature change, since a
+            // group, reset on selection/signature change, since a
             // different signature may resolve to a different default.
             const [versionIndex, setVersionIndex] = React.useState(0);
             // Two effects, ordered: the reset stands aside while a hint is
@@ -410,6 +516,49 @@
             // md+-only Node Library panel collapse; ephemeral, no localStorage
             // (site panel-collapse policy).
             const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
+            // File-based tree filter (js/docs/sidebar.jsx's "Filter by
+            // file" picker, or a host's `mtlx-docs-filter` event): null
+            // (no filter), else { file: label, categories: string[] }
+            // already intersected against the loaded library. AND'd with
+            // the text/type filters below in treeData.
+            const [fileFilter, setFileFilter] = React.useState(null);
+            // The VS Code host drives this filter itself once wired up:
+            // detail null clears it, otherwise { file, categories }. Any
+            // host (or a future non-VS Code one) can dispatch this.
+            React.useEffect(() => {
+                const applyHostFilter = (d) => {
+                    if (!d || d.categories == null) { setFileFilter(null); return; }
+                    setFileFilter({ file: d.file || '', categories: Array.isArray(d.categories) ? d.categories : [] });
+                };
+                const onHostFilter = (e) => {
+                    applyHostFilter(e && e.detail);
+                    if (window.__mtlxPendingDocsFilter === (e && e.detail)) delete window.__mtlxPendingDocsFilter;
+                };
+                window.addEventListener('mtlx-docs-filter', onHostFilter);
+                // The host may have posted the filter (e.g. right after
+                // opening this panel) before this effect ran, in which
+                // case the window event above already fired into the
+                // void. bootstrap.js keeps the last one in
+                // __mtlxPendingDocsFilter for exactly this case.
+                if (window.__mtlxPendingDocsFilter) {
+                    applyHostFilter(window.__mtlxPendingDocsFilter);
+                    delete window.__mtlxPendingDocsFilter;
+                }
+                return () => window.removeEventListener('mtlx-docs-filter', onHostFilter);
+            }, []);
+            // Reads locally picked .mtlx file(s) from the sidebar's hidden
+            // <input type=file>: plain text + regex tag scan, no WASM.
+            const pickFileFilter = async (fileList) => {
+                const files = Array.from(fileList || []);
+                if (!files.length) return;
+                const texts = await Promise.all(files.map((f) => f.text()));
+                const tags = new Set();
+                texts.forEach((t) => scanMtlxFileTags(t).forEach((tag) => tags.add(tag)));
+                const categories = categoriesFromFileTags(Array.from(tags), jsonData);
+                const label = files.length === 1 ? files[0].name : `${files.length} files`;
+                setFileFilter({ file: label, categories });
+            };
+            const clearFileFilter = () => setFileFilter(null);
             const [searchQuery, setSearchQuery] = React.useState('');
             // Pulls out:<type>/in:<type> tokens (case-insensitive) from the
             // search box; whatever's left is the plain name substring.
@@ -481,9 +630,23 @@
                     return true;
                 });
             }, [genData, searchTokens]);
+            // Sidebar tree clicks (js/docs/sidebar.jsx) go through here
+            // instead of the raw setSelectedNode setter: when out:/in:
+            // filters are active, open the first signature matching them
+            // (mirrors the `?sig=` hint mechanism) instead of resetting
+            // to signature 0. No filters active: behavior unchanged.
+            const selectNodeFromSidebar = React.useCallback((sel) => {
+                const { outType, inType } = searchTokens;
+                if (outType || inType) {
+                    const entry = genData && genData.nodes[sel.name];
+                    const idx = findMatchingSigIndex(entry && entry.sigGroups, outType, inType);
+                    if (idx > 0) pendingSigIndexRef.current = { name: sel.name, index: idx };
+                }
+                setSelectedNode(sel);
+            }, [genData, searchTokens]);
             // Global 3D-preview switch, persisted across sessions so slow
             // machines stay preview-free. localStorage is best-effort
-            // (private mode etc. throws) — default is ON.
+            // (private mode etc. throws), default is ON.
             const [showPreviews, setShowPreviews] = React.useState(() => {
                 if (chromeless) return true;
                 try { return localStorage.getItem('mtlx_show_previews') !== '0'; } catch (e) { return true; }
@@ -495,7 +658,7 @@
             });
             // Warms the MaterialX module so the header's version badge
             // resolves and the first preview skips the WASM download.
-            // Docs browsing itself is WASM-free — only warm once previews are enabled.
+            // Docs browsing itself is WASM-free, only warm once previews are enabled.
             React.useEffect(() => {
                 if (!showPreviews) return;
                 getMxEnv().catch(() => {});
@@ -525,7 +688,8 @@
             const treeData = React.useMemo(() => {
                 if (!jsonData) return jsonData;
                 const { name: query, outType, inType } = searchTokens;
-                if (docFilter === 'all' && !query && !outType && !inType) return jsonData;
+                const fileCats = fileFilter && fileFilter.categories ? new Set(fileFilter.categories) : null;
+                if (docFilter === 'all' && !query && !outType && !inType && !fileCats) return jsonData;
                 const filtered = {};
                 Object.entries(jsonData).forEach(([lib, groups]) => {
                     Object.entries(groups).forEach(([group, nodes]) => {
@@ -535,6 +699,7 @@
                             if (docFilter === 'documented' && isUndocumented(info)) return;
                             if (query && !name.toLowerCase().includes(query)) return;
                             if ((outType || inType) && !categoryMatchesTypeFilters(name)) return;
+                            if (fileCats && !fileCats.has(name)) return;
                             kept[name] = info;
                         });
                         if (Object.keys(kept).length > 0) {
@@ -544,7 +709,7 @@
                     });
                 });
                 return filtered;
-            }, [jsonData, docFilter, searchTokens, categoryMatchesTypeFilters]);
+            }, [jsonData, docFilter, searchTokens, categoryMatchesTypeFilters, fileFilter]);
 
             // While searching, show all matches regardless of stored
             // expansion state; clearing the query restores the prior state.
@@ -556,6 +721,31 @@
                     Object.values(gs).forEach(ns => { n += Object.keys(ns).length; }));
                 return n;
             }, [treeData, forceOpen]);
+
+            // VS Code test seam (mirrors graph-app.jsx's
+            // __mtlxGraphSelectionState): the file-filter chip state plus
+            // the filtered tree's node count, read by bootstrap.js on a
+            // 'mtlx-test-trigger-docs-filter' request.
+            const fileFilterRef = React.useRef(fileFilter);
+            fileFilterRef.current = fileFilter;
+            const treeDataRef = React.useRef(treeData);
+            treeDataRef.current = treeData;
+            React.useEffect(() => {
+                if (!IN_VSCODE) return undefined;
+                window.__mtlxDocsFilterState = () => {
+                    const ff = fileFilterRef.current;
+                    let nodeCount = 0;
+                    Object.values(treeDataRef.current || {}).forEach(gs =>
+                        Object.values(gs).forEach(ns => { nodeCount += Object.keys(ns).length; }));
+                    return {
+                        active: !!ff,
+                        file: ff ? ff.file : null,
+                        categoryCount: ff ? ff.categories.length : 0,
+                        nodeCount,
+                    };
+                };
+                return () => { delete window.__mtlxDocsFilterState; };
+            }, []);
 
             // Expand/collapse the whole (visible) tree at once.
             const expandAll = () => {
@@ -596,7 +786,7 @@
 
             // Memoized so portTables/columns/typesOverride/refs keep a
             // stable identity for React.memo'd PortTable/MathText/RichBlocks
-            // — an inline recompute would defeat the memo on unrelated re-renders.
+            //, an inline recompute would defeat the memo on unrelated re-renders.
             const portTables = React.useMemo(
                 () => selectedNode ? getPortTables(selectedNode.info) : EMPTY_TABLES,
                 [selectedNode]
@@ -608,7 +798,7 @@
             const effectiveTables = portTables.length > 0 ? portTables
                 : (isAutoTable ? autoDoc.tables : EMPTY_TABLES);
             // Signature selection is driven by live nodedef VERSION GROUPS,
-            // not by counting markdown tables — fractal3d has ELEVEN
+            // not by counting markdown tables, fractal3d has ELEVEN
             // nodedefs collapsed into ONE table, invisible to effectiveTables.length.
             const sigGroups = nodeVersionGroups || [];
             const sigCount = sigGroups.length;
@@ -643,7 +833,7 @@
             const versionIdx = selectedGroup
                 ? Math.min(versionIndex, Math.max(selectedGroup.versions.length - 1, 0)) : 0;
             const selectedVersion = selectedGroup ? selectedGroup.versions[versionIdx] : null;
-            // Which table(s) to render — see resolveDisplayTables above
+            // Which table(s) to render, see resolveDisplayTables above
             // for the full selection rules.
             const displayTables = React.useMemo(
                 () => resolveDisplayTables(portTables, sigCount, selectedGroup, selectedVersion, autoDoc, sig, effectiveTables),
@@ -670,18 +860,18 @@
                 [sigCount, selectedVersion, portTables]
             );
             // Already a stable reference (selectedVersion.defaults, straight
-            // off the pregenerated data — no new object built here); no
+            // off the pregenerated data, no new object built here); no
             // memo needed.
             const defaultsOverride = selectedVersion && (sigCount > 1 || !selectedVersion.isDefaultVersion)
                 ? selectedVersion.defaults : null;
             // Previewability decided HERE, where the selected signature's exact
-            // types are known, and passed down — see resolvePreviewDisabled
+            // types are known, and passed down, see resolvePreviewDisabled
             // above for the type-gating rules.
             const previewDisabled = resolvePreviewDisabled(selectedGroup, selectedVersion, selectedNode);
             // "View implementation" button: only when the selected
             // signature's impl row (matched by .key, same shape
             // ImplTargetMatrix reads) says a library nodegraph implements it.
-            // Not gated on IN_VSCODE any more — it now just toggles the
+            // Not gated on IN_VSCODE any more, it now just toggles the
             // self-contained inline panel below (js/docs/impl-preview.jsx),
             // which works fine in the docs-only vscode webview too; only
             // the panel's own "View in Graph Editor" button (a real handoff)
@@ -816,7 +1006,7 @@
                                     expandedGroups={expandedGroups}
                                     toggleGroup={toggleGroup}
                                     selectedNode={selectedNode}
-                                    setSelectedNode={setSelectedNode}
+                                    setSelectedNode={selectNodeFromSidebar}
                                     stats={stats}
                                     applyDocFilter={applyDocFilter}
                                     showPreviews={showPreviews}
@@ -824,6 +1014,10 @@
                                     onShowHelp={() => setShowHelp(true)}
                                     collapsed={sidebarCollapsed}
                                     onCollapse={() => setSidebarCollapsed(true)}
+                                    fileFilter={fileFilter}
+                                    onPickFiles={pickFileFilter}
+                                    onClearFileFilter={clearFileFilter}
+                                    showFilePicker={!IN_VSCODE}
                                 />
                             )}
 

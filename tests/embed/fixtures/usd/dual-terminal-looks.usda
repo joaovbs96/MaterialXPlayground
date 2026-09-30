@@ -1,0 +1,52 @@
+#usda 1.0
+(
+    defaultPrim = "Looks"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+# Source of dual-terminal-looks.usdc (usdcat dual-terminal-looks.usda -o dual-terminal-looks.usdc).
+# "Dual" is the Houdini pattern: a MaterialX network on outputs:mtlx:surface plus an
+# auto-created UsdPreviewSurface on outputs:surface. "PreviewOnly" has no MaterialX network.
+def Scope "Looks"
+{
+    def Material "Dual"
+    {
+        token outputs:mtlx:surface.connect = </Looks/Dual/Surface.outputs:out>
+        token outputs:surface.connect = </Looks/Dual/Preview.outputs:surface>
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "ND_standard_surface_surfaceshader"
+            color3f inputs:base_color = (0.8, 0.1, 0.1)
+            float inputs:metalness = 1
+            float inputs:specular_roughness = 0.05
+            token outputs:out
+        }
+
+        def Shader "Preview" (
+            customData = {
+                bool HoudiniIsAutoCreatedShader = 1
+            }
+        )
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.1, 0.8, 0.1)
+            float inputs:roughness = 0.9
+            token outputs:surface
+        }
+    }
+
+    def Material "PreviewOnly"
+    {
+        token outputs:surface.connect = </Looks/PreviewOnly/Preview.outputs:surface>
+
+        def Shader "Preview"
+        {
+            uniform token info:id = "UsdPreviewSurface"
+            color3f inputs:diffuseColor = (0.1, 0.1, 0.8)
+            float inputs:roughness = 0.4
+            token outputs:surface
+        }
+    }
+}

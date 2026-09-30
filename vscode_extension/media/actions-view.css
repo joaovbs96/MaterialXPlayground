@@ -1,0 +1,759 @@
+/* actions-view.css: styling for the materialxPlayground.actions webview
+   view. Uses VS Code theme variables only, no hardcoded colors, so it
+   matches light/dark/high-contrast themes automatically. */
+html, body {
+    height: 100%;
+}
+
+/* The page is a flex column filling the webview's height: header and
+   rows are fixed-size, #root flexes to fill the rest. */
+
+/* An expanded group's own panel (flex: 1 1 auto + overflow-y:auto, see
+   .mtlx-group-panel) absorbs height pressure first, so a short sidebar
+   never hides a button; #root only scrolls as a last resort. */
+body {
+    margin: 0;
+    padding: 8px;
+    box-sizing: border-box;
+    font-family: var(--vscode-font-family);
+    font-size: var(--vscode-font-size, 13px);
+    color: var(--vscode-foreground);
+    background: transparent;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+
+#root {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.mtlx-action-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 0 0 auto;
+}
+
+/* Two half-width rows per visual row (task L): a grid wrapper holds every
+   consecutive run of `layout: 'half'` rows, auto-placing two columns. */
+.mtlx-action-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-bottom: 6px;
+    flex: 0 0 auto;
+}
+
+.mtlx-action-row.half {
+    min-width: 0;
+}
+
+/* An odd-sized run of half rows leaves its last row spanning both grid
+   columns, so it is never a lone half-width cell next to empty space. */
+.mtlx-action-row.half.span-full {
+    grid-column: 1 / -1;
+}
+
+/* Applied by media/actions-view.js's ResizeObserver-driven measurement
+   (a half-width label's scrollWidth > clientWidth) instead of a fixed
+   media query, so it tracks the sidebar's real width at any zoom level. */
+.mtlx-action-grid.single-col {
+    grid-template-columns: 1fr;
+}
+
+/* The layout-decision probe: a hidden, always-two-column clone of the
+   current half-width rows, sized to the live container's width and
+   measured off-screen -- never actually seen or interactive. */
+.mtlx-layout-probe {
+    position: fixed;
+    top: 0;
+    left: -9999px;
+    visibility: hidden;
+    pointer-events: none;
+}
+
+.mtlx-action-row.half .mtlx-action-btn {
+    align-items: center;
+    height: 100%;
+}
+
+.mtlx-action-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 10px;
+    border-radius: 3px;
+    border: 1px solid transparent;
+    font-family: inherit;
+    font-size: inherit;
+    text-align: left;
+    cursor: pointer;
+    background: transparent;
+    color: var(--vscode-foreground);
+}
+
+.mtlx-action-btn.default {
+    background: transparent;
+    border: 1px solid var(--vscode-widget-border);
+}
+
+.mtlx-action-btn.primary {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    border-color: transparent;
+}
+
+.mtlx-action-btn.primary:hover:not(:disabled) {
+    background: var(--vscode-button-hoverBackground);
+}
+
+.mtlx-action-btn.secondary {
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    border: 1px solid var(--vscode-widget-border);
+}
+
+.mtlx-action-btn.secondary:hover:not(:disabled) {
+    background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
+}
+
+.mtlx-action-btn.default:hover:not(:disabled) {
+    background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+.mtlx-action-btn:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: 2px;
+}
+
+.mtlx-action-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.mtlx-action-icon {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+}
+
+.mtlx-action-icon svg {
+    width: 16px;
+    height: 16px;
+    display: block;
+}
+
+.mtlx-action-label {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mtlx-action-chevron {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    margin-left: auto;
+    transition: transform 0.1s ease;
+}
+
+.mtlx-action-chevron svg {
+    width: 14px;
+    height: 14px;
+    display: block;
+}
+
+.mtlx-action-chevron.is-open {
+    transform: rotate(180deg);
+}
+
+/* ---- Sidebar header: brand + About/GitHub toolbar buttons ------------ */
+.mtlx-sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 2px 2px 8px;
+    margin-bottom: 6px;
+    border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, var(--vscode-widget-border));
+    flex: 0 0 auto;
+}
+
+.mtlx-sidebar-brand {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.mtlx-sidebar-logo {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+}
+
+.mtlx-sidebar-title {
+    font-size: inherit;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mtlx-sidebar-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex: 0 0 auto;
+}
+
+/* Icon buttons sized/styled like VS Code's own action-bar toolbar
+   buttons: 22x22 box, 16px glyph, toolbar hover, focusBorder outline. */
+.mtlx-toolbar-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--vscode-foreground);
+    cursor: pointer;
+}
+
+.mtlx-toolbar-btn svg {
+    width: 16px;
+    height: 16px;
+    display: block;
+}
+
+.mtlx-toolbar-btn:hover {
+    background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+.mtlx-toolbar-btn:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: -1px;
+}
+
+/* ---- Header overflow menu ("..."): Tutorials / Report an Issue / What's
+   New, kept out of the toolbar row itself so it never overflows a narrow
+   sidebar (task H). Styled like a native VS Code context menu. */
+.mtlx-more-wrap {
+    position: relative;
+}
+
+.mtlx-more-glyph {
+    font-size: 16px;
+    line-height: 1;
+}
+
+.mtlx-more-menu {
+    position: absolute;
+    top: 26px;
+    right: 0;
+    max-width: calc(100vw - 24px);
+    min-width: 190px;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 4px;
+    background: var(--vscode-menu-background, var(--vscode-dropdown-background, var(--vscode-editorWidget-background, var(--vscode-sideBar-background, var(--vscode-editor-background)))));
+    color: var(--vscode-menu-foreground, var(--vscode-dropdown-foreground, var(--vscode-foreground)));
+    border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border));
+    border-radius: 5px;
+}
+
+.mtlx-more-menu[hidden] {
+    display: none;
+}
+
+.mtlx-more-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.mtlx-more-item svg {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+}
+
+.mtlx-more-item:hover,
+.mtlx-more-item:focus-visible {
+    background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
+    color: var(--vscode-menu-selectionForeground, var(--vscode-foreground));
+    outline: none;
+}
+
+.mtlx-more-item:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.mtlx-more-item:disabled:hover {
+    background: transparent;
+}
+
+/* ---- Embedded expandable groups (Insert Node, New Material from Example) */
+
+/* An expanded group flexes to fill whatever height #root has left,
+   floored so it never fully collapses; its own overflow-y:auto keeps
+   fixed-size rows/toggles around it from ever being pushed out of view. */
+.mtlx-group-panel {
+    flex: 1 1 auto;
+    min-height: 60px;
+    margin: 2px 0 10px;
+    padding-left: 2px;
+    overflow-y: auto;
+}
+
+.mtlx-group-panel[hidden] {
+    display: none;
+}
+
+/* Only .mtlx-insert-tree-scroll below scrolls. min-height stays auto
+   (NOT 0), so #root can't shrink this below the search row + the
+   tree's own 60px floor and overlap the next row -- #root scrolls instead. */
+#mtlx-insert-panel {
+    display: flex;
+    flex-direction: column;
+    /* #root's own flex `gap` spaces this row; .mtlx-group-panel's 10px
+       bottom margin was sized for a panel with no nested scroll area. */
+    margin-bottom: 0;
+}
+
+/* An id selector's own display:flex above outranks .mtlx-group-panel's
+   plain class+attribute [hidden] rule, so it needs its own override. */
+#mtlx-insert-panel[hidden] {
+    display: none;
+}
+
+.mtlx-ex-toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 4px 0 10px;
+    flex: 0 0 auto;
+}
+
+#mtlx-insert-panel .mtlx-ex-toolbar {
+    margin-bottom: 6px;
+}
+
+/* Only this scrolls when the tree grows past the group's own available
+   height, same floor/last-resort rule as .mtlx-group-panel itself. */
+.mtlx-insert-tree-scroll {
+    flex: 1 1 auto;
+    min-height: 60px;
+    overflow-y: auto;
+}
+
+#mtlx-ex-toolbar-host .mtlx-gallery-toolbar {
+    margin: 4px 0 10px;
+}
+
+.mtlx-ex-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+    gap: 8px;
+}
+
+/* ---- Insert Node: search row + its floating popover ------------------ */
+
+/* The search input's inline "x" clear button (design point 2), only shown
+   once there's something to clear. */
+.mtlx-insert-search-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.mtlx-insert-search-wrap .mtlx-gallery-search {
+    padding-right: 26px;
+}
+
+.mtlx-insert-clear {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--vscode-foreground);
+    cursor: pointer;
+}
+
+.mtlx-insert-clear svg {
+    width: 12px;
+    height: 12px;
+    display: block;
+}
+
+.mtlx-insert-clear:hover {
+    background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+.mtlx-insert-clear:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: -1px;
+}
+
+.mtlx-insert-clear[hidden] {
+    display: none;
+}
+
+/* Anchored to the clicked row, positioned in JS (positionCard); a child
+   of <body> so it stays on top of the tree underneath it. Floored so it
+   never fully collapses on a short webview. */
+.mtlx-insert-card {
+    position: fixed;
+    z-index: 80;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    box-sizing: border-box;
+    padding: 8px;
+    background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background, var(--vscode-editor-background)));
+    color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 4px;
+    box-shadow: 0 4px 12px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
+}
+
+.mtlx-insert-card[hidden] {
+    display: none;
+}
+
+/* ---- The tree: library header (static), group rows (collapsible, with
+   a chevron + count), node rows (leaf); a thin left border per level
+   stands in for VS Code's own indent guide. */
+.mtlx-insert-lib {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--vscode-descriptionForeground);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    padding: 6px 6px 2px;
+}
+
+.mtlx-insert-lib:first-child {
+    padding-top: 2px;
+}
+
+.mtlx-insert-indent {
+    margin-left: 8px;
+    padding-left: 7px;
+    border-left: 1px solid var(--vscode-tree-indentGuidesStroke, var(--vscode-widget-border));
+}
+
+.mtlx-insert-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 4px 6px;
+    margin: 1px 0;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    font-family: inherit;
+    font-size: inherit;
+    text-align: left;
+    cursor: pointer;
+    background: transparent;
+    color: var(--vscode-foreground);
+}
+
+.mtlx-insert-row:hover {
+    background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.15));
+}
+
+.mtlx-insert-row:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: -1px;
+}
+
+.mtlx-insert-chevron {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    transform: rotate(-90deg);
+    transition: transform 0.1s ease;
+}
+
+.mtlx-insert-chevron svg {
+    width: 14px;
+    height: 14px;
+    display: block;
+}
+
+.mtlx-insert-chevron.is-open {
+    transform: rotate(0deg);
+}
+
+.mtlx-insert-group-name {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mtlx-insert-count {
+    flex: 0 0 auto;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.mtlx-insert-name {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mtlx-insert-match {
+    background: transparent;
+    color: var(--vscode-list-highlightForeground);
+    font-weight: 600;
+}
+
+/* ---- The card's own content: title row (name + muted library, Back on
+   the right), then a row with the type dropdown and Insert beside it. */
+.mtlx-insert-type-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.mtlx-insert-selected-title-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+.mtlx-insert-selected-name {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mtlx-insert-selected-lib {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mtlx-insert-back {
+    flex: 0 0 auto;
+    padding: 2px 4px;
+    border: none;
+    background: transparent;
+    color: var(--vscode-textLink-foreground);
+    font: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.mtlx-insert-back:hover {
+    color: var(--vscode-textLink-activeForeground);
+}
+
+.mtlx-insert-back:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: -1px;
+}
+
+.mtlx-insert-type-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 6px;
+}
+
+.mtlx-insert-select {
+    flex: 1 1 160px;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 4px 6px;
+    font-family: inherit;
+    font-size: inherit;
+    color: var(--vscode-input-foreground, var(--vscode-foreground));
+    background: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border, transparent);
+    border-radius: 2px;
+}
+
+.mtlx-insert-select:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: -1px;
+}
+
+/* .mtlx-action-btn sets width:100%, which becomes this item's flex-basis
+   at flex:0 0 auto (basis auto reads the width) and forces a wrap; pin an
+   explicit auto width and compact padding to keep it beside the dropdown. */
+.mtlx-insert-type-row #mtlx-insert-btn {
+    flex: 0 0 auto;
+    width: auto;
+    padding: 4px 12px;
+}
+
+/* ---- About overlay: covers the sidebar's own content, not the whole
+   VS Code window (js/shell.jsx's AboutDialog covers the app instead). */
+.mtlx-about-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+    overflow-y: auto;
+}
+
+.mtlx-about-overlay[hidden] {
+    display: none;
+}
+
+.mtlx-about-panel {
+    background: var(--vscode-editorWidget-background);
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 4px;
+    margin: 4px;
+    padding: 10px 12px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+.mtlx-about-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.mtlx-about-title {
+    font-weight: 600;
+    font-size: inherit;
+}
+
+.mtlx-about-versions {
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.mtlx-about-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    font-size: 12px;
+}
+
+.mtlx-about-link {
+    color: var(--vscode-textLink-foreground);
+}
+
+.mtlx-about-link:hover {
+    color: var(--vscode-textLink-activeForeground);
+}
+
+.mtlx-about-disclaimer {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.mtlx-about-disclaimer p {
+    margin: 0;
+}
+
+.mtlx-about-credits {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.mtlx-about-credits-label {
+    color: var(--vscode-foreground);
+}
+
+.mtlx-about-license-label {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.mtlx-about-license-box {
+    flex: 1 1 auto;
+    min-height: 80px;
+    max-height: 40vh;
+    min-width: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    border: 1px solid var(--vscode-widget-border);
+    border-radius: 3px;
+    padding: 6px 8px;
+    background: var(--vscode-editor-background);
+}
+
+/* Reflowed paragraphs (actionsModel.js's reflowLicenseText), not the
+   license file's own hard line breaks -- normal wrapping text that
+   follows the sidebar's actual width instead of a fixed-width <pre>. */
+.mtlx-about-license-text {
+    margin: 0 0 8px;
+    font-family: var(--vscode-font-family);
+    font-size: calc(var(--vscode-font-size, 13px) - 1px);
+    white-space: normal;
+    overflow-wrap: break-word;
+}
+
+.mtlx-about-license-text:last-child {
+    margin-bottom: 0;
+}
+
+.mtlx-about-license-missing {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+}

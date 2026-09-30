@@ -1,11 +1,13 @@
 # MaterialX Playground (VS Code extension, v1)
 
+See [MARKETPLACE.md](MARKETPLACE.md) for the user-facing Marketplace listing; this file is developer documentation.
+
 Opens `.mtlx` files in this repo's MaterialX Playground web app (Material
-Viewer or Node Graph Editor) inside a VS Code webview: sibling textures
+Material Viewer or Node Graph Editor) inside a VS Code webview: sibling textures
 and `xi:include` docs are resolved automatically, and the view live-
 reloads as you edit the text. The **Material Viewer is read/view only**,
 and switching to it always shows the Graph editor's current state (see
-"Viewer/Graph sync" under Usage below). The **Node Graph Editor edits the
+"Material Viewer/Graph sync" under Usage below). The **Node Graph Editor edits the
 document**: every settled graph edit is written straight into the open
 `.mtlx` document buffer, so a text editor on the same file updates live
 and the tab shows unsaved changes; **Ctrl+S** (Cmd+S on macOS) saves the
@@ -36,22 +38,49 @@ dependencies — it runs directly out of a checkout of this repo.
 - **Explorer context menu / editor tab context menu / Command Palette**:
   right-click a `.mtlx` file (in the Explorer or an editor tab), or run
   from the Command Palette (`Ctrl+Shift+P`):
-  - `MaterialX Playground: Open MaterialX Document` — loads the file into both the
-    Material Viewer and the Node Graph Editor at once; `materialx.defaultView`
-    picks which one is shown first, and the header nav switches to the
-    other, already-loaded view. Only available for `.mtlx` files — the
-    Command Palette entry is hidden entirely unless a `.mtlx` file is
-    active, and the command itself is disabled outside that context. See
-    "Opening the playground" below for *where* it opens.
+  - `MaterialX Playground: Open in Graph Editor` and `MaterialX Playground:
+    Open in Material Viewer` load the file into both the Material Viewer
+    and the Node Graph Editor at once (same as `materialxPlayground.open`
+    below), but start on the named view instead of following
+    `materialxPlayground.defaultView`; the header nav still switches to the
+    other, already-loaded view. If a playground tab for that file is
+    already open, these reveal and switch it in place instead of opening a
+    second one. Only available for `.mtlx` files: the Command Palette
+    entries are hidden entirely unless a `.mtlx` file is active, and the
+    commands themselves are disabled outside that context. See "Opening
+    the playground" below for *where* they open. `materialxPlayground.open`
+    (the plain "Open MaterialX Document" command, still following
+    `materialxPlayground.defaultView`) stays registered for the editor
+    toolbar button and auto-open, and any keybinding already bound to it
+    keeps working, but it is hidden from the Command Palette and the
+    Explorer/editor-tab context menus in favor of the two explicit
+    commands above.
   - `MaterialX Playground: Open Node Library Documentation` — opens the node-library docs
     view on its own, with no file involved. Available from the Command
     Palette at any time (no `.mtlx` file needed), and also from the
     Explorer/editor-tab context menu on a `.mtlx` file, right alongside
-    `MaterialX Playground: Open MaterialX Document`.
+    `MaterialX Playground: Open in Graph Editor` / `Open in Material Viewer`.
+  - `MaterialX Playground: New Material from Example` (`src/newFromExample.js`,
+    catalog in `src/exampleCatalog.js`) quick-picks one of 14 curated
+    materials (4 from this repo's own Playground presets, 10 from the
+    MaterialX example documents), copies it and any textures it needs into
+    a folder you pick, then opens the copy. Available from the Command
+    Palette and from a folder's Explorer context menu.
+- **Editor toolbar**: `.mtlx` text editors get an `$(open-preview)` button
+  in the editor title bar (`materialxPlayground.open`, same icon and
+  placement pattern as Markdown's preview button), and `.usd`/`.usda`/
+  `.usdc`/`.usdz`/`.gltf`/`.glb`/`.obj` editors get the equivalent for
+  `materialxPlayground.openScene`. Both are hidden once the matching
+  custom editor is already the active one for that resource.
+- **File icon**: `.mtlx` files get a light/dark SVG icon
+  (`media/mtlx-file-light.svg` / `media/mtlx-file-dark.svg`) contributed
+  through the `mtlx` language's `icon` field in `package.json`, shown in
+  the Explorer and on editor tabs by any icon theme that respects
+  language-contributed icons.
 
 ### Opening the playground
 
-- **Placement** (`materialx.openBehavior`, default `"splitRight"`): when
+- **Placement** (`materialxPlayground.openBehavior`, default `"splitRight"`): when
   a text editor for the same `.mtlx` file is already open and visible,
   the playground opens **beside it**, reusing an existing right-hand
   editor group on repeat opens instead of creating a fresh split every
@@ -62,7 +91,7 @@ dependencies — it runs directly out of a checkout of this repo.
   open somewhere, the extension falls back sensibly — opening in the
   active group, or revealing the existing playground tab, respectively —
   regardless of this setting.
-- **Auto-open** (`materialx.autoOpenPlayground`, default `true`): when
+- **Auto-open** (`materialxPlayground.autoOpenPlayground`, default `true`): when
   enabled, opening (or switching to) a `.mtlx` file automatically opens
   the playground beside it, without stealing keyboard focus from the text
   editor. This fires once per file per "open": closing the playground tab
@@ -115,19 +144,19 @@ dependencies — it runs directly out of a checkout of this repo.
   graph re-renders the undone or redone state. A focused text field (e.g.
   a parameter's label input) handles the chord itself first, as usual:
   its native undo, not the document's. Outside the Node Graph Editor
-  (Viewer, docs view, or no MaterialX Playground editor active) this is a
+  (Material Viewer, docs view, or no MaterialX Playground editor active) this is a
   no-op.
 
-### Viewer/Graph sync
+### Material Viewer/Graph sync
 
 - Both views load the same document, but only one is mounted/visible at a
   time. Switching to the **Material Viewer always shows the Node Graph
   Editor's current state** — including edits not yet saved to disk —
-  at the moment you switch: it's a one-way sync (Graph -> Viewer), read
-  the instant the Viewer becomes visible. The Viewer never edits, so
+  at the moment you switch: it's a one-way sync (Graph -> Material Viewer), read
+  the instant the Material Viewer becomes visible. The Material Viewer never edits, so
   nothing needs to flow back the other way, and an external file change
   already reloads both views regardless.
-- This means the Viewer **recompiles its shader on every switch** to it
+- This means the Material Viewer **recompiles its shader on every switch** to it
   (same cost as any fresh load) — the site's background WASM warm-up is
   what keeps that from stalling the UI, not something instantaneous.
 
@@ -135,7 +164,7 @@ dependencies — it runs directly out of a checkout of this repo.
 
 Nothing needs configuring for the default experience: the custom editor
 is registered with `"priority": "option"`, so a `.mtlx` file opens in VS
-Code's normal text editor, and `materialx.autoOpenPlayground` (default
+Code's normal text editor, and `materialxPlayground.autoOpenPlayground` (default
 `true`, see "Opening the playground" above) opens the Playground beside
 it. If you would rather have `.mtlx` files open straight into the
 Playground with no text editor, make it the default editor in your
@@ -150,6 +179,51 @@ Playground with no text editor, make it the default editor in your
 Auto-open only triggers when a `.mtlx` text editor becomes active, so in
 this mode the Playground opens on its own; the text editor stays
 reachable through *Open With…* -> *Text Editor*.
+
+### Scene Viewer
+
+`MaterialX Playground: Open in Scene Viewer` (Explorer and editor tab context menus, the editor title bar, or *Open With…*) opens a `.usd`, `.usda`, `.usdc`, `.usdz`, `.gltf`, `.glb` or `.obj` file in the site's experimental Scene Viewer (custom editor `materialxPlayground.sceneViewer`, read only, header limited to Scene Viewer and Graph Editor). The extension sends only the root file plus every file its text layers (`.usda`, `.gltf`, `.obj`), GLB JSON chunk and `.mtlx` documents reference, recursively (confined like textures, at most 4,000 files and 4 GiB). There is no folder walk, so unrelated files sitting next to the root are never loaded, and the set is resent when a watched file changes. Binary USD layers (`.usdc`, binary `.usd`) can't be scanned, so their references are loaded on demand: once a load settles, the Scene Viewer reports the layers, textures and UDIM tile patterns it could not open (with the layer that referenced each one), and the extension looks them up relative to that layer with the same containment and limits, scans any new text files for further references, and resends the bigger set. That repeats at most 5 times per open or reload and stops when a round finds nothing new; the "MaterialX Playground" Output channel lists what each round added and what is still missing. Files found this way are kept for later reloads of the same tab. Loading shows one progress bar from finding the referenced files and fetching them (files and MB) through composing and compiling, with a Cancel button that stops the host scan and every fetch in flight and leaves a Reload action. A material opened from the scene ("Open in Graph Editor") opens view only: a banner names the source scene file and offers Export .mtlx, and node add/delete/move, connections, value edits, renames, undo/redo and paste are all no-ops until a different document is opened. Graph edits are never written into the scene file: saving is refused with a message pointing at Export .mtlx.
+
+**Auto-open** (`materialxPlayground.autoOpenSceneViewer`, default `true`):
+when enabled, opening a scene file automatically opens the Scene
+Material Viewer, once per file per "open" (same re-arm rule as `.mtlx` auto-open
+above). VS Code opens some scene files (`.usda`, `.gltf`, `.obj`, or a
+`.usd` it can decode as text) as a real text editor, in which case the
+Scene Viewer opens **beside it**, following
+`materialxPlayground.openBehavior` exactly like the Playground does for
+`.mtlx`, without stealing keyboard focus. Others (`.usdc`, `.usdz`,
+`.glb`, or a `.usd` VS Code shows its binary-file placeholder for) have no
+usable text editor to split against, so their tab is **replaced in
+place** by the Scene Viewer instead.
+
+Double-clicking a mesh's material opens a read-only node graph panel. In
+VS Code that panel is graph-only: there is no 3D preview pane, since it
+would need a second WebGL2 context. Graph edits are saved with Export
+.mtlx, never into the scene file.
+
+### Exports
+
+Every site export button (a screenshot, a turntable GIF, an `.mtlx` file, a
+zip, or generated shader code) normally produces a browser `<a download>`
+click, which does nothing inside a webview. `media/bootstrap.js` instead
+exposes `window.__mtlxHostSave`, which the site's export code calls with
+the file's bytes; bootstrap posts `'mtlx-save-file'` to the extension host,
+and `handleSaveFile` in `src/editorProvider.js` runs a native
+`vscode.window.showSaveDialog`, defaulting to the open document's folder,
+then writes the file and offers a "Reveal in Explorer" action. Files over
+1 GiB are rejected before the base64 payload is even decoded, and a user
+cancel is reported as `ok: false` with no error, not a failure.
+
+### Restricted Mode
+
+In a workspace VS Code has not trusted, the extension stays enabled but
+`materialxPlayground.autoOpenPlayground` and
+`materialxPlayground.autoOpenSceneViewer` are both skipped: opening a
+`.mtlx` or scene file only opens VS Code's own editor for it, not the
+Playground or the Scene Viewer. Run `MaterialX Playground: Open in Graph
+Editor`, `Open in Material Viewer` or `Open in Scene Viewer` to open one
+by hand once you are ready to; validation, hover docs and the node
+library documentation panel are unaffected by workspace trust.
 
 ## Language features (`.mtlx` editing, validation, hover docs)
 
@@ -174,7 +248,7 @@ editor.
     with precise `{line, character}` squiggle ranges.
   - **Tier 2 — MaterialX semantic validation.** Runs only once tier 1 is
     clean: loads the same bundled MaterialX WASM build the Material
-    Viewer/Node Graph Editor use (headless, inside the extension host)
+    Material Viewer/Node Graph Editor use (headless, inside the extension host)
     and actually parses + `validate()`s the document — catching things
     like a node graph referencing a nonexistent node. The message-holder
     overload of `validate()` gives back MaterialX's real diagnostic text
@@ -217,6 +291,24 @@ editor.
   standard libraries) still gets a headline plus the Interactive
   Documentation link; the docs site resolves name-only permalinks by
   search rather than requiring an exact spec match.
+- **Snippets** (`language/mtlx.snippets.json`): a new document, a
+  `standard_surface` material, an OpenPBR material, a texture chain, a
+  normal map chain, a node graph with an output, and a typed input.
+- **Auto-complete**: node categories, an element's inputs with their
+  types, and attribute names, each filtered to what that element kind
+  actually supports (and, for inputs, by the input's type), plus
+  attribute values, including color spaces, units, versions, node
+  definitions, targets and references to other elements in the document.
+- **Color swatches and picker**: `color3`/`color4` input values show an
+  inline swatch in the text editor; opening its picker and choosing a
+  color writes the value back converted into that input's own color
+  space, not a flat sRGB write.
+- **Outline, breadcrumbs and Go to Symbol**: materials, node graphs,
+  node definitions and their inputs/outputs appear in the Outline view,
+  the editor breadcrumbs, and Go to Symbol (`Ctrl+Shift+O`).
+- **Go to Definition and Find All References**: works on `node`,
+  `nodegraph`, `output`, `interfacename` and `nodedef` references in the
+  text, jumping to (or listing) the element that reference resolves to.
 - **Docs panels default to 3D previews off**: the node documentation
   panel's per-node 3D previews — whether opened via
   `MaterialX Playground: Open Node Library Documentation` or a hover's
@@ -227,16 +319,16 @@ editor.
   such session. Toggling previews on in the docs view's own UI sticks
   for the rest of that webview's session (it does not silently flip back
   off); this default is scoped to docs panels only — the Material
-  Viewer/Node Graph Editor views never read this preference at all.
+  Material Viewer/Node Graph Editor views never read this preference at all.
 
 ## Settings
 
-- `materialx.defaultView` (`"viewer"` | `"graph"`, default `"graph"`) —
+- `materialxPlayground.defaultView` (`"viewer"` | `"graph"`, default `"graph"`):
   which view (Material Viewer or Node Graph Editor) is shown first when a
   `.mtlx` file is opened. The document is loaded into both views either
   way; this only picks the initially visible one — use the header nav to
   switch to the other.
-- `materialx.openBehavior` (`"splitRight"` | `"sameGroup"`, default
+- `materialxPlayground.openBehavior` (`"splitRight"` | `"sameGroup"`, default
   `"splitRight"`) — where the playground opens when a text editor for the
   same `.mtlx` file is visible: `"splitRight"` opens it beside that
   editor, reusing an existing right-hand editor group instead of
@@ -244,36 +336,55 @@ editor.
   editor group instead (the previous behavior). See "Opening the
   playground" under Usage above for the fallback behavior when there's
   nothing to split against.
-- `materialx.autoOpenPlayground` (boolean, default `true`) —
+- `materialxPlayground.autoOpenPlayground` (boolean, default `true`):
   automatically open the playground beside the text editor whenever a
   `.mtlx` file is opened. See "Opening the playground" under Usage above
   for exactly when this re-triggers.
+- `materialxPlayground.autoOpenSceneViewer` (boolean, default `true`):
+  automatically open the Scene Viewer whenever a USD, glTF, GLB or OBJ
+  scene file (`.usd`, `.usda`, `.usdc`, `.usdz`, `.gltf`, `.glb`, `.obj`)
+  is opened, beside the text editor for a file VS Code opens as text, or
+  replacing the tab in place for a file VS Code shows as binary. See
+  "Scene Viewer" under Usage above for exactly when this re-triggers.
+
+The previous `materialx.defaultView`, `materialx.openBehavior` and
+`materialx.autoOpenPlayground` names still work if you already have them
+set; VS Code marks them deprecated in favor of the `materialxPlayground.*`
+names above, and an explicitly set new-name value always wins over an
+explicitly set old-name value.
 
 ## Requirements
 
+- **Desktop VS Code 1.100 or newer** (`engines.vscode` in `package.json`),
+  on Windows, macOS or Linux, with a GPU-accelerated webview (WebGL2) for
+  the 3D previews.
 - **One-time setup: `npm install && npm run vendor`.** The webview loads
   the same third-party libraries the site does in a browser (Tailwind,
   React, Babel standalone, three.js and its loaders/controls, KaTeX,
   JSZip, React Flow, dagre — lazy-loaded per view), but all of them are
   vendored into a committed `vendor/` folder at pinned versions and served
   locally — no network access needed to run the webview itself. The one
-  exception is MaterialX spec/template/example documents: these are
-  fetched from `raw.githubusercontent.com` on demand unless a local
-  `vendor/materialx/` snapshot is present, in which case they're read
-  from disk instead. A packaged offline build
-  ships that snapshot and performs zero network access. Run `npm run
-  vendor:offline` to populate that snapshot yourself.
+  exception is the MaterialX specification markdown the hover provider
+  and node docs read (`specDocs.js`) and the Material Viewer's fallback
+  material: these are fetched from `raw.githubusercontent.com` on demand
+  unless present locally, in which case they're read from disk instead.
+  A packaged `.vsix` ships only that reachable subset (three spec files,
+  license, manifest, one fallback material, per `.vscodeignore`, enforced by
+  `scripts/check-vsix-files.mjs`) and performs zero network access; it
+  does not ship the full `vendor/materialx/` snapshot (spec/template/
+  example documents and reference images) that `npm run vendor:offline`
+  produces for local development and the website's own offline build.
 
 ## v1 limitations
 
 - **The webview hides browser-only / multi-document UI** that doesn't make
   sense when the editor is bound to a single already-opened `.mtlx` file:
-  the Home nav, New/Import/Presets, drag & drop, the Viewer's file sidebar
-  (the Viewer fills the tab instead, and its material picker moves to the
-  viewport overlay), the Send-to-Viewer/Send-to-Editor buttons (both views
-  are always in sync already — see "Viewer/Graph sync" below), and the
+  the Home nav, New/Import/Presets, drag & drop, the Material Viewer's file sidebar
+  (the Material Viewer fills the tab instead, and its material picker moves to the
+  viewport overlay), the Send-to-Material-Viewer/Send-to-Editor buttons (both views
+  are always in sync already — see "Material Viewer/Graph sync" below), and the
   docs view's Copy-link and open-in-new-tab actions. The header nav itself
-  drops the Docs tab too, leaving only Viewer and Graph — node
+  drops the Docs tab too, leaving only Material Viewer and Graph — node
   documentation stays reachable through the graph editor's own
   node-documentation dialog and hover links, or the separate
   `MaterialX Playground: Open Node Library Documentation` command, rather
@@ -300,10 +411,12 @@ editor.
   instance, own WebGL context) — memory and GPU context usage multiply
   per open tab. `retainContextWhenHidden` is enabled so backgrounded tabs
   don't lose their state, at the cost of keeping that memory around.
-- **Only the default MaterialX version ships in the `.vsix`**
-  (`.vscodeignore` drops the others), so the Material Comparison view,
-  the one feature that needs several versions side by side, stays
-  web-only; the webview nav has just Viewer and Graph.
+- **The `.vsix` ships only what the webview and extension actually load.**
+  `.vscodeignore` is an allowlist, not a blocklist: the Material Gallery,
+  the USD Scene Viewer runtime, and every MaterialX version except the
+  default one are left out entirely. The Material Comparison view, the
+  one feature that needs several versions side by side, stays web-only;
+  the webview nav has just Material Viewer and Graph.
 - The repo root is the extension's `package.json`/install root, so a
   packaged `.vsix` (`vsce package`) bundles the site's files alongside
   `vscode_extension/` automatically — no separate copy step needed.
@@ -329,6 +442,7 @@ editor.
   `resolveIncludes`, `js/graph-app.jsx` `extractFilenameRefs` +
   `loadPreset`'s BFS), so the same resolution logic runs against the real
   filesystem instead of an in-memory drag-and-drop file map.
+- `src/sceneProvider.js` is the USD Scene Viewer's read-only custom editor. `src/usdFileSet.js` collects the stage's file set with docScanner's containment rules and the editor posts it as `'mtlx-open-scene'` resource URLs; `media/bootstrap.js` fetches them into `File` objects for `js/usd-scene-app.jsx`. Webview workers cannot load from the extension's resource origin, so `js/usd/usd-webview-worker-shim.js` relinks the OpenUSD worker's modules through `blob:` URLs (hence `blob:` in the webview's `script-src`) and serves its `.wasm` from a blob.
 - `src/validator.js` is the two-tier `.mtlx` diagnostics engine described
   under "Live validation" above: a dependency-free XML tokenizer (tier 1)
   plus `src/mtlxNode.js`, a headless (no rendering/WebGL touched) loader
@@ -355,7 +469,7 @@ editor.
   extension's message into the exact
   `window.__mtlxPendingImport`/`__mtlxPendingViewerImport` +
   `'mtlx-load-document'`/`'mtlx-view-document'` contract the site's own
-  "Send to Viewer"/"Send to Editor" buttons use
+  "Send to Material Viewer"/"Send to Editor" buttons use
   (`js/shared/mtlx-ui.jsx`), setting BOTH globals and dispatching BOTH
   events so the document is loaded into both views — the webview is, as
   far as the site's own code can tell, just another caller of that same
@@ -369,16 +483,12 @@ editor.
 
 The site's Emscripten glue loads its packed standard-library filesystem
 and wasm binary (`js/materialx/<version>/JsMaterialX*.data` / `*.wasm`,
-~1.5 MB / ~2 MB) via plain `fetch()`. VS Code's webview resource pipeline alters those large
-binaries in transit — the packed-FS slice offsets shift and the MaterialX
-standard libraries fail to parse, which breaks the docs view and all
-shader generation. So `media/bootstrap.js` intercepts exactly those
-fetches and asks the extension host for the bytes instead
-(`'mtlx-fetch'` -> `wireCommonWebviewMessages` in
-`src/editorProvider.js`, which whitelists the path and reads the file
-with `vscode.workspace.fs.readFile`), bypassing the pipeline. Any bridge
-failure falls back to the webview's native `fetch`, so it is never worse
-than not having the bridge.
+~1.5 MB / ~2 MB) via plain `fetch()`, resolved under `<base href>` to a
+webview-resource URL like any other local asset. VS Code's webview
+resource pipeline (`asWebviewUri`) has been verified to deliver these
+large binaries byte-for-byte (SHA-256 checked against disk, including
+past 1.6 GB), so no interception or extension-host round trip is needed
+for them.
 
 ### How Ctrl+S saves the Node Graph Editor
 
@@ -436,15 +546,15 @@ focus is not in an editable element, then posts `'mtlx-native-undo'` /
 calls `sendUpdate()` right away so the graph re-renders the result
 without waiting for the debounce.
 
-### How the Viewer stays in sync with the Graph editor
+### How the Material Viewer stays in sync with the Graph editor
 
 `media/bootstrap.js` remembers the `name`/texture-blob map from the most
 recent `mtlx-open` message and listens for `hashchange`. Whenever the
 hash becomes `#!viewer` and `window.__mtlxGetGraphXml` exists (the Graph
 editor has a live session), it re-serializes the graph and dispatches the
 same `window.__mtlxPendingViewerImport` + `'mtlx-view-document'` contract
-`mtlx-open` and the site's own "Send to Viewer" button use — so the
-Viewer always reflects the Graph editor's latest state, including
+`mtlx-open` and the site's own "Send to Material Viewer" button use — so the
+Material Viewer always reflects the Graph editor's latest state, including
 unsaved edits, the instant it becomes visible.
 
 ### Diagnostics

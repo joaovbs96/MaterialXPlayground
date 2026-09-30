@@ -28,12 +28,14 @@
                 });
             }
             // Modern nodedefs declare their type on <output> children only.
-            const outTypes = vecToArray(mxSafe(() => def.getActiveOutputs(), [])).map(mxElType).filter(Boolean);
+            const outEls = vecToArray(mxSafe(() => def.getActiveOutputs(), []));
+            const outputs = outEls.map((o) => ({ name: mxElName(o), type: mxElType(o) })).filter((o) => o.type);
+            const outTypes = outputs.map((o) => o.type);
             const type = mxElType(def)
                 || (outTypes.length === 1 ? outTypes[0] : (outTypes.length ? 'multioutput' : ''));
             const outLabel = type === 'multioutput' ? outTypes.join(' + ') : type;
             return {
-                name: mxElName(def), type, outLabel, inputs,
+                name: mxElName(def), type, outLabel, inputs, outputs,
                 version: mxSafe(() => def.getVersionString(), '') || '',
                 isDefaultVersion: !!mxSafe(() => def.getDefaultVersion(), false),
                 sig: (inputs.map((i) => i.type).join(', ') || '\u2014') + ' \u2192 ' + (outLabel || '?'),
@@ -73,7 +75,7 @@
                 });
                 const rep = versions[0];
                 return {
-                    key, type: rep.type, outLabel: rep.outLabel, inputs: rep.inputs,
+                    key, type: rep.type, outLabel: rep.outLabel, inputs: rep.inputs, outputs: rep.outputs,
                     inSummary: uniqTokens(rep.inputs.map((i) => i.type)).join(', '),
                     full: rep.sig, versions,
                 };
@@ -90,6 +92,11 @@
             });
             return groups;
         };
+
+        // True when a signature can feed a `type` port: its single output
+        // type, or any output of a multi-output node (separate3, ...).
+        const sigHasOutputType = (sig, type) => !!sig && (sig.type === type
+            || (sig.outputs || []).some((o) => o.type === type));
 
         let nodeCatalogPromise = null;
         const buildNodeCatalog = () => {
@@ -182,4 +189,4 @@
             return scored.map((x) => x.item);
         };
 
-Object.assign(window, { buildNodeCatalog, nodeDefInfo, groupSignatures, buildDocCatalog, searchRank, searchFilter });
+Object.assign(window, { buildNodeCatalog, nodeDefInfo, groupSignatures, sigHasOutputType, buildDocCatalog, searchRank, searchFilter });

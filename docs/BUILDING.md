@@ -1,102 +1,199 @@
 # How this repo is built
 
-The repo follows a **committed-artifact model**: every generated file is checked in, so *consumers* (a fresh clone, the deployed site, the VS Code extension) never run a build — only *contributors who change an input* do, and CI proves the two never drift. The invariant is:
+- Committed-artifact model: every generated file is checked into git, so a fresh clone runs with no build step. Exceptions are gitignored and fetched on demand: the USD runtime (`npm run vendor`, needed only for USD stages and any `fetchOnly` dependency), non-default MaterialX versions (`npm run vendor:versions`), the offline MaterialX snapshot (`npm run vendor:offline`) and the gallery data (`npm run gallery:data`).
+- `npm run build` regenerates every derived file byte-for-byte.
+- `npm run check` verifies the tree against its inputs without writing anything (CI runs both).
 
-> The committed tree is always the complete, runnable artifact. `npm run build` regenerates all derived state byte-for-byte, and `npm run check` (also run in CI) fails if anything has drifted.
+## Commands
+
+- `npm ci`: install dependencies.
+- `npm run build`: run every build step.
+- `npm run check`: verify every step's output, read-only.
+- `npm run build:<step>`: run one step (`vendor`, `nodelib`, `embed`, `embeddocs`, `tutorials`, `buildid`, `webview`).
+- `npm run vendor`: same as `build:vendor`.
+- `npm run vendor:versions`: fetch non-default MaterialX WASM versions for Compare.
+- `npm run vendor:offline` (`vendor.mjs --with-materialx`): snapshot MaterialX spec/examples into gitignored `vendor/materialx/`, zero-network mode.
 
 ## Build steps
 
-`npm run build` runs `scripts/build.mjs`, which sequences ten steps (each also available individually, and each with a read-only `--check` mode):
+`npm run build` (`scripts/build.mjs`) runs these in order. Each also runs alone as `npm run build:<step>` and has a read-only `--check` mode.
 
-**1. `version` (`scripts/extract-mtlx-version.mjs`)** — the MaterialX version is never hand-typed anywhere in this repo. This step instantiates the vendored WebAssembly module under Node, calls its `getVersionString()`, and writes the result to `js/gen/mtlx-version.json` (`{version, tag, versionIntegers}`). It then *stamps* the few places that need the value as a literal (the header badge fallback in `js/site-header.js`, `js/mtlx-assets.js`, and two lines in the README/docs — which is why those version strings must not be edited by hand). Node-side consumers (`scripts/vendor.mjs`, the VS Code extension's `specDocs.js`) read the JSON directly. Swapping in a new WASM build and running `npm run build` propagates the new version everywhere; `--check` re-extracts from the WASM and fails on any disagreement.
+1. **version** (`scripts/extract-mtlx-version.mjs`) - loads the vendored WASM under Node and reads its version. `JsMaterialXGenShader.wasm` is the single source of truth; this step writes `js/gen/mtlx-version.json` and stamps the literal into `js/mtlx-engine.js` (`MTLX_DEFAULT_VERSION`), `js/site-header.js`, `js/mtlx-assets.js`, `README.md`, and this file (see `STAMP_TABLE` in `scripts/lib/version.mjs`). Never hand-edit those stamped literals.
+2. **versions** (`scripts/fetch-mtlx-versions.mjs`, check-only) - verifies the byte size of any non-default `js/materialx/<version>/` directory present against `scripts/lib/mtlx-versions.mjs`. A missing directory is fine. To populate one, run `npm run vendor:versions`.
+3. **vendor** (`scripts/vendor.mjs`) - collects `scripts/vendor-deps.mjs` (`VENDOR_DEPS`) into `vendor/`, `vendor/vendor-manifest.json`, and `js/gen/vendor-deps.js`. `npm run vendor:offline` also adds gitignored `vendor/materialx/` for zero-network mode.
+4. **nodelib** (`scripts/build-nodelib.mjs`) - pre-parses the node library into `js/gen/nodelib.json` and `js/gen/nodelib-index.json`. The docs view never parses MaterialX live.
+5. **embed** (`scripts/build-embed.mjs`) - precompiles `js/mtlx-engine.js`, `js/shared/mtlx-ui.jsx`, `js/viewer-app.jsx` into `embed/gen/*.js` so the embed ships no Babel. Also enforces that `embed/viewer.html` carries every `vendor/three/**`/`js/vendor/**` script tag `index.html` loads.
+6. **embeddocs** (`scripts/build-embed-docs.mjs`) - renders `docs/EMBEDDING.md` into `js/gen/embedding-docs.html`. Fails on any dangling internal anchor.
+7. **tutorials** (`scripts/build-tutorials.mjs`) - builds the MkDocs subsite into `/tutorials/`. Only runs when `tutorials-src/mkdocs.yml` exists.
+8. **render** (`scripts/check-render-parity.mjs`) - anti-drift guard for `js/shared/render-settings.js`, the store every render/quality toggle routes through. Checks the manifest shape, that storage keys appear only in `render-settings.js` (plus a small allow list), the embed attribute and payload-budget contracts, and regenerates the committed `docs/RENDER-FEATURES.md` surface-parity table.
+9. **buildid** (`scripts/lib/build-id.mjs`) - hashes `index.html`, `js/**` (except `js/materialx/` and `js/gen/build-id.json`), and `vendor/vendor-manifest.json` into `js/gen/build-id.json` and the `window.__MTLX_BUILD` stamp in `index.html`. Merge conflicts on either file: take either side and rerun `npm run build`.
+10. **webview** (`scripts/build-webview.mjs`) - splices `vscode_extension/media/webview.html` from `index.html`.
 
-**2. `versions` (verify-only; `scripts/fetch-mtlx-versions.mjs`)** — never downloads anything as part of `npm run build`. In `--check` mode (i.e. `npm run check`) it verifies the on-disk byte size of every non-default MaterialX version directory (`js/materialx/<version>/`) that happens to be present, against the pins in `scripts/lib/mtlx-versions.mjs` — an entirely absent directory is treated as valid, so a plain clone that never fetched anything still passes. To actually populate a non-default version, run `npm run vendor:versions` explicitly: it downloads that version's release zip from the upstream MaterialX repo, verifies the zip's sha256 against the pin, unzips just the three GenShader files, and writes them to `js/materialx/<version>/`. See the WASM modules entry below for which version is committed to git.
+## CI
 
-**3. `vendor` (`scripts/vendor.mjs`)** — collects the third-party runtime libraries from `node_modules` (versions pinned in `package.json` devDependencies) into the committed `vendor/` folder, along with each package's license file, and records every file's sha256 in `vendor/vendor-manifest.json`. The one direct download is the Tailwind Play build (plus its license), fetched by URL and verified against a pinned sha256. `npm run vendor:offline` (or `--with-materialx`) additionally snapshots MaterialX spec/example/texture content into `vendor/materialx/` — gitignored, produced on demand — via a shallow sparse git clone of the MaterialX repo at the pinned tag (anonymous git, no GitHub API calls, so it can't hit API rate limits in CI); its presence flips the app (and the nodelib build below) into fully offline, zero-network operation. `--check` verifies the manifest's path set and hashes against both the on-disk files and the current `node_modules` sources.
-
-**4. `nodelib` (`scripts/build-nodelib.mjs`)** — pre-parses the entire node-library documentation dataset so the docs view never has to. Under Node it instantiates the MaterialX WASM once, loads the standard libraries, fetches and parses the three specification markdown files (from `vendor/materialx/` when present, otherwise from GitHub at the pinned tag), and walks every nodedef, implementation, and nodegraph to produce two committed files:
-
-- `js/gen/nodelib.json` — per-node spec prose and port tables (descriptions, notes, references, spec permalinks), joined from the parsed specification and the nodedef walk.
-- `js/gen/nodelib-index.json` — per-node signature groups (types, versions, defaults), auto-generated port tables for undocumented nodes, fallback port listings, and the implementation-target matrix (including target inheritance), plus the global target list.
-
-The docs view fetches these two JSONs instead of parsing anything live — browsing the node library is fully WASM-free (the ~3.7 MB engine now loads only if 3D previews are enabled). Generation is deterministic (stable serialization, no timestamps) and finishes with sanity assertions (node counts, schema shape, spot-checks like `standard_surface`'s signatures); `--check` regenerates both files in memory and fails on any byte difference from the committed copies.
-
-**5. `embed` (`scripts/build-embed.mjs`)** — precompiles `js/mtlx-engine.js`, `js/shared/mtlx-ui.jsx`, and `js/viewer-app.jsx` (the exact sources the embeddable `<materialx-viewer>` viewer, `embed/viewer.html`, needs) into classic, pre-transformed scripts under `embed/gen/`. It uses `@babel/standalone` with the same React-only preset the browser applies to these files at request time for the main app — just moved to build time — so the embed page never ships Babel itself (~3 MB, and the single biggest cost of the full app). `--check` re-transforms in memory and fails on any byte difference from the committed `embed/gen/*.js`. It also always verifies (even outside `--check`) that every `vendor/three/**`/`js/vendor/**` `<script>` tag `index.html` loads also appears in `embed/viewer.html`, so a three.js loader added to one page can't silently go missing from the other. See [docs/EMBEDDING.md](EMBEDDING.md) for the consumer-facing embedding guide.
-
-**6. `embeddocs` (`scripts/build-embed-docs.mjs`)**: renders `docs/EMBEDDING.md` into the committed `js/gen/embedding-docs.html`, the fragment the Embed Builder page shows in its Help dialog. It uses `marked` (GitHub-flavored tables and code fences), slugs h2/h3 headings so the document's own internal anchors resolve (the build fails on any dangling anchor), and adds `target="_blank" rel="noopener"` to external links. `--check` re-renders in memory and fails on any byte difference from the committed file.
-
-**7. `tutorials` (`scripts/build-tutorials.mjs`)** — builds the MkDocs-based tutorials subsite from `tutorials-src/` into the committed `/tutorials/` directory. This step activates automatically when `tutorials-src/mkdocs.yml` exists in the checkout and is skipped otherwise (the tutorials currently live on a separate branch; requires a pip-installed `mkdocs-material`, pinned in `tutorials-src/requirements.txt`).
-
-**8. `render` (`scripts/check-render-parity.mjs`)**: the anti-drift guard for `js/shared/render-settings.js`, the settings store every render/quality toggle routes through. Loads the manifest in a Node `vm`, checks its shape (every row declares all 6 surfaces and all 3 levels per profile, keys unique, `ui: true` rows have a label), scans `js/**`/`embed/*.js` (excluding `js/gen`, `embed/gen`, `js/vendor`) to confirm every storage/legacy key literal appears only in `render-settings.js` (except `js/usd-scene-renderer.js`/`js/usd-scene-app.jsx`, still PENDING migration, and a small `ALLOW` list of legitimate non-manifest keys), regenerates the committed `docs/RENDER-FEATURES.md` surface-parity table, and verifies `scripts/build-embed.mjs`'s `TARGETS` match `embed/viewer.html`'s `REMAINING` list, every row's `embed.attr` is in `embed/mtlx-viewer.js`'s `observedAttributes` and mentioned in `docs/EMBEDDING.md`, and the eager embed payload stays under its committed byte budget. `--check` byte-compares `docs/RENDER-FEATURES.md` instead of writing it.
-
-**9. `buildid` (`scripts/lib/build-id.mjs`)**: computes a deterministic build id: a 16-hex-char sha256 fingerprint over `index.html` (with its `window.__MTLX_BUILD` token canonicalized to the literal `dev` first, so stamping the computed id back in doesn't change the next run's input), every `js/**.{js,jsx,css,json}` file except `js/gen/build-id.json` itself and everything under `js/materialx/`, and `vendor/vendor-manifest.json`. `js/materialx/` and `vendor/materialx/` are excluded on purpose: `.github/workflows/release.yml` runs `vendor:offline`/`vendor:versions` before `npm run build`, so those directories exist there but not in a plain `deploy.yml` push run, and excluding them is what makes both compute the same id. Every input is read as UTF-8 with a leading BOM stripped and CRLF normalized to LF before hashing, so the id can't depend on which OS produced the checkout. The id is written to `js/gen/build-id.json` and stamped into the `window.__MTLX_BUILD` literal in `index.html`'s embed-mode bootstrap script. `--check` recomputes the id in memory and fails if either committed artifact disagrees. Must run after `version` and `nodelib` (both write files it hashes) and before `webview` (which splices `index.html`, including this step's stamp). A merge conflict on `js/gen/build-id.json` or the `window.__MTLX_BUILD` line in `index.html` can be resolved by taking either side and re-running `npm run build`: both files are fully regenerated from other inputs, so neither side's exact text needs to be preserved.
-
-**10. `webview` (`scripts/build-webview.mjs`)**: regenerates `vscode_extension/media/webview.html` from `index.html`. The VS Code extension's webview needs the exact same `<head>`/`<body>` skeleton as the real site plus a handful of webview-only insertions (a Content-Security-Policy meta tag, a `<base>` tag, a bootstrap `<script>` tag, and a focus-outline CSS rule VS Code's Chromium needs but a real browser doesn't); this step splices those fragments into a copy of `index.html` at two content-based anchors, so the mirror can never silently drift out of sync with the real site. `--check` fails on any byte difference from the committed file. `embed/` is excluded from the `.vsix` (see `.vscodeignore`), the webview never loads it.
-
-## Verification and deployment
-
-`npm run check` runs every step's `--check` without writing anything. CI (`.github/workflows/deploy.yml`) runs on every push and pull request to `main`: it does a clean `npm ci && npm run build`, requires the rebuilt tree to be **byte-identical to the commit** (a stale committed artifact fails the run with instructions to rebuild), then runs `npm run check` — and only after all of that does a push to `main` deploy to GitHub Pages. A broken or stale build never deploys.
+- `.github/workflows/deploy.yml` runs on every push/PR to `main`: a clean `npm ci && npm run build` must be byte-identical to the commit.
+- Then `npm run check` runs.
+- Only after both pass does a push to `main` deploy to GitHub Pages.
 
 ## When to run what
 
 | You changed... | Run |
 | --- | --- |
-| App code (`js/**.jsx`, CSS, HTML) | nothing — reload the browser |
-| `js/mtlx-engine.js`, `js/viewer-app.jsx`, or `js/shared/mtlx-ui.jsx` (also feeds the embed's precompiled copies) | `npm run build:embed` |
-| A pinned dependency version in `package.json` | `npm install && npm run build:vendor` |
-| The vendored WASM modules (`js/materialx/<version>/JsMaterialX*`) | `npm run build` (re-extracts the version, re-stamps, regenerates the nodelib data) |
-| You want a non-default MaterialX version available locally (e.g. to exercise Compare's multi-version rendering) | `npm run vendor:versions` |
+| App code (`js/**.jsx`, CSS, HTML) | nothing, reload the browser |
+| `js/mtlx-engine.js`, `js/viewer-app.jsx`, or `js/shared/mtlx-ui.jsx` | `npm run build:embed` |
+| A pinned dependency in `package.json`, or an entry in `scripts/vendor-deps.mjs` | `npm install && npm run build` |
+| Vendored WASM modules (`js/materialx/<version>/JsMaterialX*`) | `npm run build` |
+| Want a non-default MaterialX version locally (Compare) | `npm run vendor:versions` |
 | `libraries/` or anything affecting node docs | `npm run build:nodelib` |
 | Tutorial content (`tutorials-src/`) | `npm run build:tutorials` |
-| `js/shared/render-settings.js` (rows, codecs, embed attrs) | `npm run build:render` (or `npm run build`), so `docs/RENDER-FEATURES.md` doesn't go stale |
-| Anything about to be committed under `index.html`, `js/**` (excluding `js/materialx/`), or `vendor/vendor-manifest.json` | `npm run build:buildid` (or `npm run build`), so `js/gen/build-id.json` and index.html's stamp don't go stale |
-| `index.html` structure or webview-only fragments (`scripts/build-webview.mjs`) | `npm run build:webview` |
-| Not sure | `npm run build` then `npm run check` — it's all idempotent |
+| `js/shared/render-settings.js` (rows, codecs, embed attrs) | `npm run build:render` (or `npm run build`), so `docs/RENDER-FEATURES.md` does not go stale |
+| Anything under `index.html`, `js/**` (excluding `js/materialx/`), or `vendor/vendor-manifest.json` | `npm run build:buildid` (or `npm run build`) |
+| `index.html` structure or webview-only fragments | `npm run build:webview` |
+| Not sure | `npm run build` then `npm run check`, it's idempotent |
 
-## The standard library, spec data, and WASM modules
+## Adding a third-party dependency
 
-**`libraries/`** vendors the MaterialX standard library (`stdlib`, `pbrlib`, `bxdf`, `cmlib`, `lights`, `nprlib`, `targets`), which the WASM loads to resolve node definitions, implementations, and target inheritance.
+1. If it's an npm package, pin it first: `npm install -D -E <pkg>` (so CI's `npm ci` vendors the same version).
+2. Add one entry to `VENDOR_DEPS` in `scripts/vendor-deps.mjs`.
+3. Get the sha256 (and, for a zip, the file tree) with `node scripts/vendor.mjs --hash <url>`.
+4. Run `npm run build`.
 
-**`js/materialx/<version>/`** holds the MaterialX WebAssembly modules, obtained from the official MaterialX build and committed manually for the default version (license at `js/materialx/LICENSE.txt`). It predates, and is not managed by, `scripts/vendor.mjs`, but `JsMaterialXGenShader.wasm` is the **single source of truth for the MaterialX version**: the build's `version` step extracts it from the module at build time and every other occurrence in the repo is generated or stamped from that (see the `version` step above).
+Field reference:
 
-Each version directory holds the complete upstream distribution, all seven files from `MaterialX_JavaScript.zip`, pinned by byte size in `scripts/lib/mtlx-versions.mjs`:
+| Field | Meaning |
+| --- | --- |
+| `id` | unique, lowercase, hyphenated |
+| `name` | display name (About dialog) |
+| `version` | required for non-npm sources; forbidden for npm |
+| `dir` | output subdirectory, defaults to `id` |
+| `source.npm` + `source.files` | pull from `node_modules`, pinned via `package.json` |
+| `source.files` (array) | pull single files by URL, each pinned by sha256 |
+| `source.zip` | pull a release zip by URL, pinned by sha256 |
+| `license` | `{ url, file? }` |
+| `fetchOnly` | never committed, fetched every build, added to the generated `.gitignore` block |
+| `vscode: false` | not packaged in the `.vsix`; every other dep gets a `!vendor/<dir>/**` line in the generated `.vscodeignore` allowlist block |
+| `module` | `{ entry, kind }`, enables `await MtlxVendor.load(id)` instead of an eager `<script>` tag |
+| `{version}` | placeholder substituted into URLs and `license.url` |
 
-- **`JsMaterialXGenShader*`** (`.js`/`.wasm`/`.data`, v1.39.5) is the only module anything loads. The `.data` is the packed standard library.
-- **`JsMaterialXCore.{js,wasm}`** is currently unused. `JsMaterialXGenShader` is a strict superset of it (verified: every symbol in Core is present in GenShader), so Core offers no capability the site does not already have, only a smaller binary. Note it ships **no `.data`**, so it carries no standard library and cannot resolve node definitions on its own.
-- **`JsMaterialX{Core,GenShader}-<version>.js`** are byte-identical duplicates of the two unsuffixed `.js` files. They are kept only so each directory mirrors the upstream zip exactly.
+npm-sourced file with a license:
 
-Only that default version is committed to git. Every other entry in `scripts/lib/mtlx-versions.mjs` (currently also 1.39.4) is fetched into its own `js/materialx/<version>/` directory on demand by `npm run vendor:versions` — downloaded from the matching upstream GitHub release asset, verified against a pinned sha256, unzipped, and left gitignored (see the `versions` build step above). These extra versions exist solely for the Material Compare view's per-pane version picker; every other consumer (docs, presets, the header version badge) stays pinned to the default.
+```js
+{
+  id: "example-lib",
+  name: "Example Lib",
+  source: { npm: "example-lib", files: { "dist/example-lib.min.js": "example-lib.min.js", LICENSE: "LICENSE.txt" } },
+  license: { url: "https://github.com/example/example-lib/blob/HEAD/LICENSE", file: "LICENSE.txt" },
+}
+```
 
-**`models/`** ships two GLB exports of the ASWF/USD-WG Standard Shader Ball (see [Asset credits](../README.md#asset-credits) in the README, and `models/LICENSE.txt`), committed in-repo — no download step: `shaderball.glb`, the full scene used by the Node Graph Editor's live preview (backdrop, grid, emissive panels, and an embedded camera), and `shaderball_simple.glb`, a plain ball used by the Material Viewer and docs previews. In both, the generated MaterialX material is applied only to the mesh named `material_surface`; every other mesh keeps its authored glTF material.
+Single file fetched by URL, pinned by sha256:
+
+```js
+{
+  id: "example-font",
+  name: "Example Font",
+  version: "2.1.0",
+  source: { files: [{ url: "https://example.com/fonts/v{version}/example-font.woff2", sha256: "<paste from --hash>", as: "example-font.woff2" }] },
+  license: { url: "https://example.com/fonts/LICENSE" },
+}
+```
+
+Release zip, fetched at build time only, never committed:
+
+```js
+{
+  id: "example-wasm",
+  name: "Example WASM",
+  version: "1.2.0",
+  source: { zip: "https://github.com/<owner>/<repo>/releases/download/v{version}/example_package.zip", sha256: "<paste from --hash>" },
+  license: { url: "https://github.com/<owner>/<repo>/releases/tag/v{version}" },
+  fetchOnly: true,
+  vscode: false,
+  module: { entry: "Example.js", kind: "emscripten-esm" },
+}
+```
+
+A dependency with `module` loads on demand: `await MtlxVendor.load("example-wasm")` (`js/shared/vendor-runtime.js`).
+
+The diff after `npm run build` touches `scripts/vendor-deps.mjs`, `vendor/vendor-manifest.json`, `vendor/<dir>/**` (unless `fetchOnly`), `js/gen/vendor-deps.js`, `.gitignore` (only when `fetchOnly`), `.vscodeignore` (a new allow line unless `vscode: false`), the build-id stamp, `vscode_extension/media/webview.html`, and `package.json`/`package-lock.json` (npm deps only). The extension packaging checks (`scripts/check-vsix-files.mjs` and the vsix checks in `release.yml`/`publish-marketplace.yml`) read the registry too, so they need no edit: every manifest file of a shipped dep is required, and the folder of every `vscode: false` dep is forbidden.
+
+## MaterialX WASM modules
+
+- `js/materialx/<version>/` holds the MaterialX WebAssembly modules. Only the default version is committed; others are fetched on demand via `npm run vendor:versions`, for Material Compare's per-pane version picker only.
+- `JsMaterialXGenShader*` (`.js`/`.wasm`/`.data`, v1.39.5) is the only module anything loads. The `.data` is the packed standard library.
+- `JsMaterialXCore.{js,wasm}` is unused (GenShader is a strict superset), and ships no `.data`.
+- `JsMaterialX{Core,GenShader}-<version>.js` are byte-identical duplicates kept only to mirror the upstream zip.
+- `libraries/` vendors the MaterialX standard library (stdlib, pbrlib, bxdf, cmlib, lights, nprlib, targets) the WASM resolves node definitions against.
+- `models/` ships `shaderball.glb` and `shaderball_simple.glb` (committed, no download step); the generated material applies only to the mesh named `material_surface`.
+
+**`vendor/materialx/`** is the full offline snapshot from `npm run vendor:offline` (spec docs, example `.mtlx` files, reference images; see the `vendor` build step above), gitignored and produced on demand. Only a small, explicit set of those files are actually reachable from the VS Code extension (the webview's viewer, graph editor, and docs views, the extension host's spec parser, and the curated upstream examples the "New Material from Example" command offers via `vscode_extension/src/exampleCatalog.js`), so `.vscodeignore` lists just those explicit `vendor/materialx/...` paths instead of allowlisting the whole folder; `scripts/check-vsix-files.mjs`'s `MATERIALX_KEEP_LIST` requires exactly that same set and forbids every other `vendor/materialx/` path (in particular `resources/Images/`) from leaking into the `.vsix`. The two lists (`.vscodeignore`'s allowlist and `MATERIALX_KEEP_LIST`) must stay in sync by hand; `check-vsix-files.mjs` is what actually enforces that they match. Adding another curated example needs a coordinated edit to `exampleCatalog.js`, `MATERIALX_KEEP_LIST`, and `.vscodeignore`. The website's separate offline release zip (`.github/workflows/release.yml`) still ships the complete snapshot, since the web app itself can reach all of it.
 
 ## Adding or promoting a MaterialX version
 
-`scripts/lib/mtlx-versions.mjs` is hand-maintained (see its header comment). Every entry needs three coordinated manual edits, and missing either ignore line fails silently rather than loudly: it either commits several MB of WASM straight into git, or bloats the packaged `.vsix` with a version the extension never loads.
+`scripts/lib/mtlx-versions.mjs` is hand-maintained. `.vscodeignore` is an allowlist (everything is excluded unless a `!` line names it), so only the `.gitignore` line can be forgotten: missing it commits several MB of WASM into git.
 
 ### Adding a non-default version
 
-1. **Get the numbers — don't guess them.** Download the release zip for the new tag and inspect it:
-
-   ```powershell
-   $tag = "v1.39.6"
-   Invoke-WebRequest -Uri "https://github.com/AcademySoftwareFoundation/MaterialX/releases/download/$tag/MaterialX_JavaScript.zip" -OutFile mtlx.zip
-   (Get-FileHash mtlx.zip -Algorithm SHA256).Hash.ToLower()   # -> zipSha256
-   (Get-Item mtlx.zip).Length                                  # -> zipBytes
-   Expand-Archive mtlx.zip -DestinationPath mtlx-extracted
-   Get-ChildItem -Recurse mtlx-extracted -Filter JsMaterialXGenShader.* | Select-Object Name, Length
-   ```
-
-   (`sha256sum mtlx.zip` and `unzip -l mtlx.zip` do the same job on macOS/Linux.) The three `Select-Object` rows are the `files` byte sizes for the GenShader `.js`/`.wasm`/`.data` trio.
-2. **Add the entry** to `MTLX_VERSIONS` in `scripts/lib/mtlx-versions.mjs`: `version`, `tag`, `zipSha256`, `zipBytes`, `files`.
-3. **Add a line to `.gitignore`**: `js/materialx/<version>/`. Skip this and the fetched build looks like an ordinary new directory to git — a broad `git add` silently stages several MB of WASM.
-4. **Add a line to `.vscodeignore`**: `js/materialx/<version>/**`. Skip this and the version ships inside the packaged `.vsix` even though the webview's nav has no Compare view to use it — a silent multi-MB size regression on every release.
-5. Run `npm run vendor:versions` to fetch it locally, then `npm run build && npm run check` to confirm everything — including `js/gen/mtlx-versions.json`, the browser-facing mirror of the registry — is clean.
+1. Get the numbers: `node scripts/vendor.mjs --hash https://github.com/AcademySoftwareFoundation/MaterialX/releases/download/<tag>/MaterialX_JavaScript.zip` prints the zip's sha256 (`zipSha256`), byte size (`zipBytes`), and every file's size (`files`).
+2. Add the entry to `MTLX_VERSIONS` in `scripts/lib/mtlx-versions.mjs`: `version`, `tag`, `zipSha256`, `zipBytes`, `files`.
+3. Add `js/materialx/<version>/` to `.gitignore`, otherwise a broad `git add` stages the WASM.
+4. No `.vscodeignore` edit: its allowlist names only the default version's three files, so other versions never ship in the `.vsix`.
+5. Run `npm run vendor:versions`, then `npm run build && npm run check`.
 
 ### Promoting a new default
 
-`DEFAULT_MTLX_VERSION` (also in `scripts/lib/mtlx-versions.mjs`) is **computed** as the numeric max across `MTLX_VERSIONS`, never hand-picked. The moment a newer entry is added, it becomes the default, and the `version` build step (`scripts/lib/version.mjs`) immediately tries to load that version's WASM from `js/materialx/<newVersion>/` — so that directory has to actually contain the build in the *same* change, or the build breaks (see the pre-check in Item 2b below for the friendlier error this now gives when it doesn't).
+`DEFAULT_MTLX_VERSION` is computed as the numeric max of `MTLX_VERSIONS`, never hand-picked. Adding a newer entry makes it the default immediately, so its WASM must be committed in the same change.
 
-1. Follow steps 1-2 above to add the new version's registry entry (this alone makes it the default).
-2. Commit the new default's actual GenShader `.js`/`.wasm`/`.data` files under `js/materialx/<newVersion>/` — fetch them the same way as step 1, or via `npm run vendor:versions` before it becomes the default — then `git add` the directory. If it already had `.gitignore`/`.vscodeignore` lines from being a non-default version, remove those lines now; the new default must be committed.
-3. The version that was previously default is no longer committed — add its `js/materialx/<oldVersion>/` line to both `.gitignore` and `.vscodeignore` (step 3/4 above), then untrack the directory that's still sitting in the working tree: `git rm -r --cached js/materialx/<oldVersion>/`.
-4. Run `npm run build` — this re-extracts the version from the new default's WASM and re-stamps every literal copy (the header badge, `js/mtlx-assets.js`, `js/site-header.js`, `js/mtlx-engine.js`, and the WASM modules note above) — then `npm run check` to confirm the tree is clean.
+1. Add the new version's registry entry (steps 1-2 above).
+2. Commit the new default's GenShader `.js`/`.wasm`/`.data` under `js/materialx/<newVersion>/`, removing its `.gitignore` line, and point the three `!js/materialx/<version>/JsMaterialXGenShader.*` lines in `.vscodeignore` (and `scripts/check-vsix-files.mjs`) at the new version.
+3. Untrack the old default: add its `js/materialx/<oldVersion>/` line to `.gitignore`, then `git rm -r --cached js/materialx/<oldVersion>/`.
+4. Run `npm run build` then `npm run check`.
+
+## Preset picker thumbnails in the .vsix
+
+`gallery/` is otherwise forbidden from the extension (too large: 50+ full-res renders). `release.yml`'s `package` job runs `scripts/gallery-shots.mjs --prune-ids-auto` after staging the offline zip but before `vsce package`, trimming the already-populated `gallery/manifest.json` and `gallery/thumbs/` down to the Material Viewer presets (`MTLX_PRESETS`) plus the `vscode_extension/src/exampleCatalog.js` entries, at their original resolution. `.vscodeignore` allows only `gallery/manifest.json` and `gallery/thumbs/*.jpg`; `scripts/check-vsix-files.mjs`'s `isForbiddenGalleryPath` rejects anything else under `gallery/`. Both files are optional: a plain checkout with no gallery data ships the extension with letter-placeholder icons. The desktop app is unaffected: `electron/scripts/lib/ensure-gallery.mjs` already ships the full gallery for its own Material Gallery view.
+
+Fingerprints in `gallery/manifest.json` (`scripts/build-gallery.mjs`) normalize CRLF to LF before hashing, so a Windows checkout (`core.autocrlf`) reuses the same published thumbnail as a Linux CI checkout instead of re-rendering under a different hash. `scripts/gallery-shots.mjs` renders with plain headless Chromium (SwiftShader) by default; set `MTLX_GALLERY_GPU=1` to render with new-headless plus real GPU flags instead, for local renders that need to look like an actual browser.
+
+## Pre-release .vsix builds from a branch
+
+`.github/workflows/package-prerelease.yml` is a manual `workflow_dispatch` (**"Use workflow from"** set to any branch) that packages a pre-release `.vsix` from that branch's tip and uploads it as a downloadable workflow artifact (14-day retention). It reproduces `release.yml`'s `package` job (build, the stale-artifact gate, `npm run check`, the gallery reuse-from-the-live-site path, `--prune-ids-auto`, the locked `vsce`, the `.vsix` content sanity checks) plus `scripts/check-vsix-files.mjs`, always passing `--pre-release`, then optionally runs the real VS Code smoke test (`tests/vscode-host/smoke.mjs`) against the packaged `.vsix`, same as `vscode-extension-tests.yml`'s `smoke` job. Nothing is published: no release, tag, Marketplace, or Open VSX upload.
+
+PR CI runs `--suite core` (about a dozen extension-logic scenarios plus one render check, defined as `CORE_SCENARIOS` in `smoke-suite.js`); the pre-release and release workflows and local runs default to `--suite full`.
+
+The smoke runs pass `--software-gl` (Chromium SwiftShader switches; GPU-less runners otherwise blocklist WebGL2) and print a START/END line per scenario; each scenario has its own timeout and the suite stops at `MTLX_SMOKE_DEADLINE_S` (default 900) with a pass/fail table.
+
+Version: `YYYY.M.patch` like a real release, but with `patch` offset by `900000 + <run number>` so it can never collide with or sort below a real release cut in the same month. The artifact is named `materialx-playground-<version>-pre-<branch>-<sha7>.vsix`. Because `release.yml`'s packaging commands are duplicated here rather than shared (extracting a composite action into the production release pipeline was judged too risky to do without a way to exercise it locally), `scripts/package-vsix.mjs` checks on every run that the two workflows' packaging commands haven't drifted apart; a failure there means one of the two workflows was edited without the other.
+
+## Publishing to the VS Code Marketplace
+
+`.github/workflows/publish-marketplace.yml` is a manual `workflow_dispatch` that publishes the exact `.vsix` GitHub already attached to a release. It never rebuilds anything. Run it with **"Use workflow from"** set to the release's tag (not a branch), and only after `release.yml`'s `upload` job has attached that tag's `.vsix` to the release. The same `verify` job feeds two independent publish jobs, `publish` (Marketplace) and `publish-openvsx` (Open VSX); either can succeed while the other fails, and both can be re-run separately.
+
+**One-time setup for the Marketplace** (done once for the whole repo, outside this codebase, in Entra ID and the Marketplace publisher portal):
+
+- Create a federated credential on an Entra ID app registration with issuer `https://token.actions.githubusercontent.com`, subject `repo:joaovbs96/MaterialXPlayground:environment:github-marketplace`, and audience `api://AzureADTokenExchange`. This is what lets the `publish` job log in without a stored secret.
+- Add `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` as **environment secrets** of the `github-marketplace` environment, not repository secrets. The environment's tag policy is what keeps this identity scoped to a real release.
+- Add that app registration's identity as a **Contributor member of the MaterialXPlayground publisher** in the Marketplace publisher management page, and confirm `az account set -s <subscription>` actually resolves for it. The identity also needs a role on the subscription itself, not just publisher membership.
+- Consider a **required reviewer** on the `github-marketplace` environment so the run pauses after `verify` and before the Azure login, giving a human a chance to read the verify job's step summary first.
+
+**One-time setup for Open VSX** (done once for the whole repo, outside this codebase, on open-vsx.org):
+
+- Create an Eclipse account at `accounts.eclipse.org` with the same GitHub username used to log into open-vsx.org, then log into open-vsx.org via GitHub and sign the Publisher Agreement from the profile settings page.
+- Create the namespace once, from any machine with the token below: `npx ovsx create-namespace MaterialXPlayground -p <token>`. The namespace name must equal `publisher` in `package.json` (`MaterialXPlayground`); Open VSX has no separate publisher identity to match.
+- Generate a personal access token at `https://open-vsx.org/user-settings/tokens` and add it as the **environment secret** `OVSX_PAT` of a new `open-vsx` environment, not a repository secret. Give `open-vsx` the same tag-only deployment policy as `github-marketplace` so the token is only reachable from a real release tag.
+- Open VSX also offers OIDC "trusted publishing" (registered at `https://open-vsx.org/user-settings/trusted-publishers`), which would drop the `OVSX_PAT` secret entirely. `publish-openvsx` does not use it: it needs `id-token: write`, which conflicts with this job's sparse-checkout-only `contents: read` permission, and the feature is very new (introduced in `ovsx` 1.1.0). Revisit if that changes.
+- The `open-vsx` environment needs no Contributor-style role grant: the PAT alone is enough to publish to a namespace once the account is a namespace owner.
+
+**Channel rules**: the Marketplace channel (release vs. pre-release) is fixed at packaging time by the GitHub release's pre-release checkbox. `release.yml` reads `github.event.release.prerelease` when it packages the `.vsix`, and `publish-marketplace.yml` re-derives the same flag from the packaged `.vsix` itself rather than re-reading the release. A given version string can be published to only one channel; publishing it to the other channel later is a Marketplace-side conflict, not something either workflow resolves. Never re-run `release.yml`'s `upload` job for a version already on the Marketplace. The attached `.vsix` is exactly what a later publish run ships, so replacing it after the fact would silently change what that version means. `publish-openvsx` passes the same pre-release flag it reads from `verify`'s output to `ovsx publish --pre-release`.
+
+**Failure modes**:
+
+- Missing or draft release, or its `.vsix` asset not uploaded yet: the `verify` job's "Check the GitHub release" step fails before touching Azure or Open VSX.
+- The tag isn't `v<major>.<minor>.<patch>`, or the workflow was dispatched from a branch instead of a tag: fails immediately in "Check the ref is a release tag".
+- The `.vsix` publisher is still `local`, or its build id or extension sources differ from the tag's commit: the `inspect` step fails, usually because the tag was cut before the publisher change landed, or the release was built from a different commit than the tag points at.
+- Empty `AZURE_*` secrets: the `publish` job's Azure login step fails with a named error instead of a generic Azure CLI stack trace.
+- `az account set` fails: the identity has the federated credential but no role assignment on the subscription. Grant it one and re-dispatch.
+- `vsce publish` itself fails (for example the version is already published): read the Marketplace error directly. This workflow does not retry or pass `--skip-duplicate`.
+- Empty `OVSX_PAT`: `publish-openvsx` posts an `::warning::` with the one-time setup steps above and skips its install and publish steps without failing the run, so a run started before Open VSX is set up still leaves the Marketplace publish untouched.
+- `ovsx publish` itself fails (for example the version is already published): read the Open VSX error directly; this job does not retry either.
+- To re-run just one side after a fix, use **Actions -> this run -> Re-run jobs -> Re-run failed jobs**, or re-dispatch the whole workflow from the same tag; `verify` is cheap and idempotent.

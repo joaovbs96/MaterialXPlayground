@@ -164,6 +164,22 @@
             // geometry/pause controls overlay stays usable; the canvas is
             // h-full and the engine's ResizeObserver handles the buffer.
             const viewportRef = React.useRef(null);
+            // Preview/params row: layout by the ROW's own width, not the
+            // window's, so a narrow VS Code panel stacks instead of
+            // squeezing. 720px clears the fixed 24rem viewport plus a
+            // usable params column; picked empirically, not a Tailwind bp.
+            const previewRowRef = React.useRef(null);
+            const [rowWide, setRowWide] = React.useState(true);
+            React.useEffect(() => {
+                const el = previewRowRef.current;
+                if (!el || typeof ResizeObserver === 'undefined') return undefined;
+                const ro = new ResizeObserver((entries) => {
+                    const w = entries[0] && entries[0].contentRect ? entries[0].contentRect.width : el.clientWidth;
+                    setRowWide(w >= 720);
+                });
+                ro.observe(el);
+                return () => ro.disconnect();
+            }, []);
             // ONE global geometry choice for every docs node preview (the
             // preview dropdown and the Settings popup expose the same
             // state). 'default' resolves per node type (experimental);
@@ -1641,7 +1657,7 @@
                         <div className="space-y-1">
                             <FilePickerField
                                 value={cur}
-                                accept=".png,.jpg,.jpeg,.webp,.gif,.bmp,.tga,.exr,.hdr,.tif,.tiff"
+                                accept={window.textureAccept()}
                                 icon="file"
                                 mono
                                 disabled={loading}
@@ -1995,17 +2011,18 @@
                         {error}
                     </div>
                 )}
-                <div className={(embed ? 'flex flex-col md:flex-row gap-4' : 'flex flex-col lg:flex-row gap-4') + (suppressed ? ' hidden' : '')}>
+                <div ref={previewRowRef} className={(rowWide ? 'flex flex-row' : 'flex flex-col') + ' gap-4' + (suppressed ? ' hidden' : '')}>
                     <div
                         ref={viewportRef}
                         // With params, the viewport is a fixed 24rem square
                         // and the params card takes the remaining width;
                         // without params (nothing to give the space to) it
-                        // keeps the old full-width flex-1 sizing. Stacked
-                        // (below md/lg) layouts are unchanged either way.
+                        // keeps the old full-width flex-1 sizing. Layout is
+                        // driven by the ROW's own width (rowWide), not the
+                        // window's, so it also stacks in a narrow panel.
                         className={params.length > 0
-                            ? (embed ? "relative w-full md:w-96 md:flex-none h-64 sm:h-80 md:h-96 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden" : "relative w-full lg:w-96 lg:flex-none h-64 sm:h-80 lg:h-96 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden")
-                            : (embed ? "relative w-full md:flex-1 md:min-w-0 h-64 sm:h-80 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden" : "relative w-full lg:flex-1 lg:min-w-0 h-64 sm:h-80 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden")}
+                            ? (rowWide ? "relative w-96 flex-none h-96 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden" : "relative w-full h-64 sm:h-80 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden")
+                            : "relative w-full flex-1 min-w-0 h-64 sm:h-80 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden"}
                         // width too: the md/lg:w-96 author style would
                         // otherwise pin native fullscreen at 24rem wide
                         // (the CSS-maximize fallback inlines its own).
@@ -2100,7 +2117,7 @@
                         ))}
                     </div>
                     {params.length > 0 && !isFullscreen && (
-                        <div className={embed ? "w-full md:flex-1 md:min-w-0 bg-gray-900 border border-gray-700 rounded-lg flex flex-col max-h-80 md:h-96 md:max-h-none" : "w-full lg:flex-1 lg:min-w-0 bg-gray-900 border border-gray-700 rounded-lg flex flex-col max-h-80 lg:h-96 lg:max-h-none"}>
+                        <div className={rowWide ? "flex-1 min-w-0 bg-gray-900 border border-gray-700 rounded-lg flex flex-col h-96" : "w-full bg-gray-900 border border-gray-700 rounded-lg flex flex-col max-h-80"}>
                             {renderParamsHeader(null)}
                             {renderParamsBody(true)}
                         </div>

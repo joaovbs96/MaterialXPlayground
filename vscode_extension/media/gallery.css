@@ -1,0 +1,24 @@
+/* gallery.css: "New Material from Example" webview panel layout. Card,
+   toolbar and chip styles are shared with the Examples sidebar view via
+   gallery-cards.css. VS Code theme variables only. */
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    padding: 16px 20px 32px;
+    font-family: var(--vscode-font-family);
+    font-size: var(--vscode-font-size, 13px);
+    color: var(--vscode-foreground);
+    background: var(--vscode-editor-background);
+}
+
+#mtlx-gallery-toolbar-host {
+    max-width: 640px;
+    margin: 0 0 20px;
+}
+
+.mtlx-gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 14px;
+}

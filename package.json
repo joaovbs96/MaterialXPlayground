@@ -1,20 +1,38 @@
 {
   "name": "materialx-playground",
   "displayName": "MaterialX Playground",
-  "description": "View .mtlx files in the MaterialX Playground web app: view MaterialX documents in a 3D viewer, or edit node graphs in a graph editor.",
+  "description": "Build and preview MaterialX materials in VS Code: a live node graph editor and 3D preview beside your .mtlx text, smart completion and validation, and a Scene Viewer for USD, glTF and OBJ.",
   "version": "2026.8.11",
-  "publisher": "local",
+  "publisher": "MaterialXPlayground",
+  "preview": true,
   "license": "Apache-2.0",
   "private": true,
   "icon": "images/icon.png",
+  "homepage": "https://joaovbs96.github.io/MaterialXPlayground/#!vscode",
+  "bugs": {
+    "url": "https://github.com/joaovbs96/MaterialXPlayground/issues"
+  },
   "engines": {
-    "vscode": "^1.85.0",
-    "node": ">=22.12"
+    "vscode": "^1.100.0",
+    "node": ">=24.8"
   },
   "main": "vscode_extension/src/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/joaovbs96/MaterialXPlayground"
+  },
+  "galleryBanner": {
+    "color": "#111827",
+    "theme": "dark"
+  },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "In Restricted Mode the playground does not open automatically; open it with the MaterialX Playground: Open in Graph Editor, Open in Material Viewer or Open in Scene Viewer commands; validation, hovers and the node library work normally."
+    }
   },
   "scripts": {
     "setup:ktx": "node scripts/setup-ktx.mjs",
@@ -39,7 +57,9 @@
     "gallery:thumbs": "node scripts/gallery-shots.mjs",
     "gallery:data": "npm run gallery:manifest && npm run gallery:thumbs",
     "electron:dev": "node electron/scripts/dev.mjs",
-    "electron:pack": "node electron/scripts/pack.mjs"
+    "electron:pack": "node electron/scripts/pack.mjs",
+    "test:vscode-host": "node tests/vscode-host/run.mjs",
+    "test:vscode-smoke": "node tests/vscode-host/smoke.mjs"
   },
   "devDependencies": {
     "@babel/standalone": "7.26.10",
@@ -54,32 +74,37 @@
     "reactflow": "11.11.4",
     "three": "0.128.0",
     "three-147": "npm:three@0.147.0",
-    "utif": "3.1.0"
+    "utif": "3.1.0",
+    "xml-formatter": "3.7.0",
+    "xml-parser-xo": "4.1.6"
   },
   "categories": [
-    "Visualization"
+    "Visualization",
+    "Programming Languages",
+    "Linters"
   ],
   "keywords": [
     "materialx",
-    "usd",
-    "usdmtlx",
-    "pixar",
-    "openusd",
-    "vfx",
-    "3d",
-    "graphics",
+    "mtlx",
     "node graph",
     "shader",
-    "shader graph",
+    "usd",
+    "openpbr",
+    "standard surface",
+    "gltf",
+    "openusd",
     "material",
     "material graph",
+    "shader graph",
+    "usdmtlx",
+    "obj",
+    "3d",
+    "vfx",
+    "graphics",
+    "pixar",
     "materialx playground",
     "materialx viewer",
     "materialx editor"
-  ],
-  "activationEvents": [
-    "onCustomEditor:materialxPlayground.editor",
-    "onLanguage:mtlx"
   ],
   "contributes": {
     "languages": [
@@ -92,7 +117,11 @@
           "MaterialX",
           "mtlx"
         ],
-        "configuration": "./vscode_extension/language/mtlx.language-configuration.json"
+        "configuration": "./vscode_extension/language/mtlx.language-configuration.json",
+        "icon": {
+          "light": "./vscode_extension/media/mtlx-file-light.svg",
+          "dark": "./vscode_extension/media/mtlx-file-dark.svg"
+        }
       }
     ],
     "grammars": [
@@ -100,6 +129,12 @@
         "language": "mtlx",
         "scopeName": "text.mtlx",
         "path": "./vscode_extension/language/mtlx.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "mtlx",
+        "path": "./vscode_extension/language/mtlx.snippets.json"
       }
     ],
     "customEditors": [
@@ -112,29 +147,163 @@
           }
         ],
         "priority": "option"
+      },
+      {
+        "viewType": "materialxPlayground.sceneViewer",
+        "displayName": "MaterialX Playground: Scene Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.usd"
+          },
+          {
+            "filenamePattern": "*.usda"
+          },
+          {
+            "filenamePattern": "*.usdc"
+          },
+          {
+            "filenamePattern": "*.usdz"
+          },
+          {
+            "filenamePattern": "*.gltf"
+          },
+          {
+            "filenamePattern": "*.glb"
+          },
+          {
+            "filenamePattern": "*.obj"
+          }
+        ],
+        "priority": "option"
       }
     ],
     "commands": [
       {
+        "command": "materialxPlayground.openScene",
+        "title": "Open in Scene Viewer",
+        "category": "MaterialX Playground",
+        "icon": {
+          "light": "./vscode_extension/media/playground-light.svg",
+          "dark": "./vscode_extension/media/playground-dark.svg"
+        },
+        "enablement": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i"
+      },
+      {
         "command": "materialxPlayground.open",
-        "title": "MaterialX Playground: Open MaterialX Document",
+        "title": "Open on MaterialX Playground",
+        "category": "MaterialX Playground",
+        "icon": {
+          "light": "./vscode_extension/media/playground-light.svg",
+          "dark": "./vscode_extension/media/playground-dark.svg"
+        },
+        "enablement": "resourceExtname == .mtlx"
+      },
+      {
+        "command": "materialxPlayground.openInGraphEditor",
+        "title": "Open in Graph Editor",
+        "category": "MaterialX Playground",
+        "icon": {
+          "light": "./vscode_extension/media/playground-light.svg",
+          "dark": "./vscode_extension/media/playground-dark.svg"
+        },
+        "enablement": "resourceExtname == .mtlx"
+      },
+      {
+        "command": "materialxPlayground.openInMaterialViewer",
+        "title": "Open in Material Viewer",
+        "category": "MaterialX Playground",
+        "icon": {
+          "light": "./vscode_extension/media/playground-light.svg",
+          "dark": "./vscode_extension/media/playground-dark.svg"
+        },
         "enablement": "resourceExtname == .mtlx"
       },
       {
         "command": "materialxPlayground.openDocs",
-        "title": "MaterialX Playground: Open Node Library Documentation"
+        "title": "Open Node Library Documentation",
+        "category": "MaterialX Playground",
+        "icon": {
+          "light": "./vscode_extension/media/playground-light.svg",
+          "dark": "./vscode_extension/media/playground-dark.svg"
+        }
+      },
+      {
+        "command": "materialxPlayground.filterDocsByFile",
+        "title": "Filter Node Docs by Current File",
+        "category": "MaterialX Playground"
       },
       {
         "command": "materialxPlayground.saveGraph",
-        "title": "MaterialX Playground: Save Node Graph to File"
+        "title": "Save Node Graph to File",
+        "category": "MaterialX Playground"
       },
       {
         "command": "materialxPlayground.undoGraph",
-        "title": "MaterialX Playground: Undo Node Graph Edit"
+        "title": "Undo Node Graph Edit",
+        "category": "MaterialX Playground"
       },
       {
         "command": "materialxPlayground.redoGraph",
-        "title": "MaterialX Playground: Redo Node Graph Edit"
+        "title": "Redo Node Graph Edit",
+        "category": "MaterialX Playground"
+      },
+      {
+        "command": "materialxPlayground.newFromExample",
+        "title": "New Material from Example",
+        "category": "MaterialX Playground",
+        "icon": {
+          "light": "./vscode_extension/media/playground-light.svg",
+          "dark": "./vscode_extension/media/playground-dark.svg"
+        }
+      },
+      {
+        "command": "materialxPlayground.newDocument",
+        "title": "New MaterialX Document",
+        "category": "MaterialX Playground"
+      },
+      {
+        "command": "materialxPlayground.pickFile",
+        "title": "Browse for File",
+        "category": "MaterialX Playground"
+      },
+      {
+        "command": "materialxPlayground.openSettings",
+        "title": "Open Settings",
+        "category": "MaterialX Playground",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "materialxPlayground.openFileRef",
+        "title": "Open Reference",
+        "category": "MaterialX Playground"
+      },
+      {
+        "command": "materialxPlayground.replaceFileRef",
+        "title": "Replace...",
+        "category": "MaterialX Playground",
+        "icon": "$(replace)"
+      },
+      {
+        "command": "materialxPlayground.revealFileRefInExplorer",
+        "title": "Reveal in Explorer",
+        "category": "MaterialX Playground",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "materialxPlayground.openInTextEditor",
+        "title": "Open in Text Editor",
+        "category": "MaterialX Playground"
+      },
+      {
+        "command": "materialxPlayground.insertNodeFromEditor",
+        "title": "Insert Node",
+        "category": "MaterialX Playground"
+      },
+      {
+        "command": "materialxPlayground.contextHeader",
+        "title": "MaterialX Playground",
+        "category": "MaterialX Playground",
+        "enablement": "false"
       }
     ],
     "keybindings": [
@@ -163,53 +332,280 @@
       }
     ],
     "menus": {
+      "editor/title": [
+        {
+          "command": "materialxPlayground.open",
+          "when": "resourceExtname == .mtlx && activeCustomEditorId != 'materialxPlayground.editor'",
+          "group": "navigation"
+        },
+        {
+          "command": "materialxPlayground.openScene",
+          "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i && activeCustomEditorId != 'materialxPlayground.sceneViewer'",
+          "group": "navigation"
+        }
+      ],
       "commandPalette": [
         {
           "command": "materialxPlayground.open",
+          "when": "false"
+        },
+        {
+          "command": "materialxPlayground.openInGraphEditor",
           "when": "resourceExtname == .mtlx"
         },
         {
+          "command": "materialxPlayground.openInMaterialViewer",
+          "when": "resourceExtname == .mtlx"
+        },
+        {
+          "command": "materialxPlayground.openScene",
+          "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i"
+        },
+        {
           "command": "materialxPlayground.openDocs"
+        },
+        {
+          "command": "materialxPlayground.filterDocsByFile",
+          "when": "resourceExtname == .mtlx || activeCustomEditorId == 'materialxPlayground.editor'"
+        },
+        {
+          "command": "materialxPlayground.newFromExample"
+        },
+        {
+          "command": "materialxPlayground.newDocument"
+        },
+        {
+          "command": "materialxPlayground.saveGraph",
+          "when": "false"
+        },
+        {
+          "command": "materialxPlayground.undoGraph",
+          "when": "false"
+        },
+        {
+          "command": "materialxPlayground.redoGraph",
+          "when": "false"
+        },
+        {
+          "command": "materialxPlayground.pickFile",
+          "when": "false"
+        },
+        {
+          "command": "materialxPlayground.openSettings",
+          "when": "false"
+        },
+        {
+          "command": "materialxPlayground.openFileRef",
+          "when": "false"
+        },
+        {
+          "command": "materialxPlayground.replaceFileRef",
+          "when": "false"
+        },
+        {
+          "command": "materialxPlayground.revealFileRefInExplorer",
+          "when": "false"
+        },
+        {
+          "command": "materialxPlayground.openInTextEditor",
+          "when": "activeCustomEditorId == 'materialxPlayground.editor'"
+        },
+        {
+          "command": "materialxPlayground.insertNodeFromEditor",
+          "when": "editorLangId == mtlx"
+        },
+        {
+          "command": "materialxPlayground.contextHeader",
+          "when": "false"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "materialxPlayground.contextHeader",
+          "when": "editorLangId == mtlx",
+          "group": "1_materialxPlayground@0"
+        },
+        {
+          "command": "materialxPlayground.openInGraphEditor",
+          "when": "editorLangId == mtlx",
+          "group": "1_materialxPlayground@1"
+        },
+        {
+          "command": "materialxPlayground.openInMaterialViewer",
+          "when": "editorLangId == mtlx",
+          "group": "1_materialxPlayground@2"
+        },
+        {
+          "command": "materialxPlayground.openDocs",
+          "when": "editorLangId == mtlx",
+          "group": "1_materialxPlayground@3"
+        },
+        {
+          "command": "materialxPlayground.insertNodeFromEditor",
+          "when": "editorLangId == mtlx",
+          "group": "1_materialxPlayground@4"
         }
       ],
       "explorer/context": [
         {
-          "command": "materialxPlayground.open",
+          "command": "materialxPlayground.contextHeader",
+          "when": "resourceExtname == .mtlx || explorerResourceIsFolder || resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i",
+          "group": "1_materialxPlayground@0"
+        },
+        {
+          "command": "materialxPlayground.openInGraphEditor",
           "when": "resourceExtname == .mtlx",
-          "group": "materialxPlayground"
+          "group": "1_materialxPlayground@1"
+        },
+        {
+          "command": "materialxPlayground.openInMaterialViewer",
+          "when": "resourceExtname == .mtlx",
+          "group": "1_materialxPlayground@2"
         },
         {
           "command": "materialxPlayground.openDocs",
           "when": "resourceExtname == .mtlx",
-          "group": "materialxPlayground"
+          "group": "1_materialxPlayground@3"
+        },
+        {
+          "command": "materialxPlayground.newFromExample",
+          "when": "explorerResourceIsFolder",
+          "group": "1_materialxPlayground@4"
+        },
+        {
+          "command": "materialxPlayground.openScene",
+          "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i",
+          "group": "1_materialxPlayground@5"
+        }
+      ],
+      "file/newFile": [
+        {
+          "command": "materialxPlayground.newDocument"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "materialxPlayground.openSettings",
+          "when": "view == materialxPlayground.actions",
+          "group": "navigation"
+        },
+        {
+          "command": "materialxPlayground.openSettings",
+          "when": "view == materialxPlayground.outline",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "materialxPlayground.replaceFileRef",
+          "when": "view == materialxPlayground.files",
+          "group": "inline@1"
+        },
+        {
+          "command": "materialxPlayground.replaceFileRef",
+          "when": "view == materialxPlayground.files",
+          "group": "1_modify@1"
+        },
+        {
+          "command": "materialxPlayground.revealFileRefInExplorer",
+          "when": "view == materialxPlayground.files && viewItem == mtlxFileRefFound",
+          "group": "inline@2"
+        },
+        {
+          "command": "materialxPlayground.revealFileRefInExplorer",
+          "when": "view == materialxPlayground.files && viewItem == mtlxFileRefFound",
+          "group": "1_modify@2"
         }
       ],
       "editor/title/context": [
         {
-          "command": "materialxPlayground.open",
+          "command": "materialxPlayground.contextHeader",
+          "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i || resourceExtname == .mtlx",
+          "group": "1_materialxPlayground@0"
+        },
+        {
+          "command": "materialxPlayground.openScene",
+          "when": "resourceExtname =~ /^\\.(usd|usda|usdc|usdz|gltf|glb|obj)$/i",
+          "group": "1_materialxPlayground@1"
+        },
+        {
+          "command": "materialxPlayground.openInGraphEditor",
           "when": "resourceExtname == .mtlx",
-          "group": "materialxPlayground"
+          "group": "1_materialxPlayground@2"
+        },
+        {
+          "command": "materialxPlayground.openInMaterialViewer",
+          "when": "resourceExtname == .mtlx",
+          "group": "1_materialxPlayground@3"
         },
         {
           "command": "materialxPlayground.openDocs",
           "when": "resourceExtname == .mtlx",
-          "group": "materialxPlayground"
+          "group": "1_materialxPlayground@4"
+        },
+        {
+          "command": "materialxPlayground.openInTextEditor",
+          "when": "activeCustomEditorId == 'materialxPlayground.editor'",
+          "group": "1_materialxPlayground@5"
         }
       ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "materialxPlayground",
+          "title": "MaterialX Playground",
+          "icon": "./vscode_extension/media/mtlx-activitybar.svg"
+        }
+      ]
+    },
+    "views": {
+      "materialxPlayground": [
+        {
+          "id": "materialxPlayground.actions",
+          "name": "Actions",
+          "type": "webview",
+          "when": "true"
+        },
+        {
+          "id": "materialxPlayground.files",
+          "name": "Textures & Files in Document",
+          "when": "materialxPlayground.filesVisible"
+        },
+        {
+          "id": "materialxPlayground.outline",
+          "name": "Outline",
+          "when": "materialxPlayground.outlineVisible"
+        }
+      ]
+    },
+    "configurationDefaults": {
+      "[mtlx]": {
+        "editor.quickSuggestions": {
+          "other": "on",
+          "comments": "off",
+          "strings": "on"
+        },
+        "editor.defaultFormatter": "MaterialXPlayground.materialx-playground"
+      }
     },
     "configuration": {
       "title": "MaterialX Playground",
       "properties": {
-        "materialx.defaultView": {
+        "materialxPlayground.defaultView": {
           "type": "string",
           "enum": [
             "viewer",
             "graph"
           ],
           "default": "graph",
-          "description": "Which MaterialX Playground view (the Material Viewer or the Node Graph Editor) is shown first when a .mtlx file is opened with the MaterialX Playground custom editor. The document is loaded into both views either way; this setting only picks which one is initially visible — use the header nav to switch to the other."
+          "enumDescriptions": [
+            "Show the Material Viewer first.",
+            "Show the Node Graph Editor first."
+          ],
+          "markdownDescription": "Which MaterialX Playground view (the Material Viewer or the Node Graph Editor) is shown first when a `.mtlx` file is opened with the MaterialX Playground custom editor. The document is loaded into both views either way; this setting only picks which one is initially visible. Use the header nav to switch to the other."
         },
-        "materialx.openBehavior": {
+        "materialxPlayground.openBehavior": {
           "type": "string",
           "enum": [
             "splitRight",
@@ -218,14 +614,58 @@
           "default": "splitRight",
           "enumDescriptions": [
             "Open the playground beside the text editor for the same file, reusing an existing right-hand editor group on repeat opens instead of splitting again every time.",
-            "Open the playground in the active editor group (the previous behavior)."
+            "Open the playground in the active editor group, replacing (or reusing) whatever tab is already there."
           ],
-          "description": "Where the MaterialX Playground opens when a text editor for the same .mtlx file is visible: \"splitRight\" opens it beside that editor, reusing an existing right-hand group rather than creating a new split each time; \"sameGroup\" opens it in the active editor group, replacing (or reusing) whatever tab is already there — the previous behavior."
+          "markdownDescription": "Where the MaterialX Playground opens when a text editor for the same `.mtlx` file is visible: `splitRight` opens it beside that editor, reusing an existing right-hand group rather than creating a new split each time; `sameGroup` opens it in the active editor group, replacing (or reusing) whatever tab is already there."
+        },
+        "materialxPlayground.pickFileOnFilenameInput": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "When a filename input is added from auto-complete, open a file picker right away to choose the file."
+        },
+        "materialxPlayground.autoOpenPlayground": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Automatically open the MaterialX Playground beside the text editor whenever a `.mtlx` file is opened. Triggers once per file open; closing the playground won't re-trigger it until the file itself is closed and reopened."
+        },
+        "materialxPlayground.syncSelection": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Keep the text cursor, the MaterialX Outline and the Graph Editor selection in sync."
+        },
+        "materialxPlayground.autoOpenSceneViewer": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Automatically open the Scene Viewer for a USD, glTF, GLB or OBJ scene file (`.usd`, `.usda`, `.usdc`, `.usdz`, `.gltf`, `.glb`, `.obj`). A text-editable file (`.usda`, `.gltf`, `.obj`, or `.usd` that opens as text) opens the viewer beside the text editor; a binary file (`.usdc`, `.usdz`, `.glb`, or `.usd` that VS Code cannot show as text) has its editor tab replaced by the viewer. Triggers once per file open; closing the viewer won't re-trigger it until the file itself is closed and reopened."
+        },
+        "materialx.defaultView": {
+          "type": "string",
+          "enum": [
+            "viewer",
+            "graph"
+          ],
+          "default": "graph",
+          "markdownDescription": "Deprecated: renamed to `materialxPlayground.defaultView`.",
+          "deprecationMessage": "Renamed to materialxPlayground.defaultView. This setting still works, but will be removed in a future release.",
+          "markdownDeprecationMessage": "Renamed to `materialxPlayground.defaultView`. This setting still works, but will be removed in a future release."
+        },
+        "materialx.openBehavior": {
+          "type": "string",
+          "enum": [
+            "splitRight",
+            "sameGroup"
+          ],
+          "default": "splitRight",
+          "markdownDescription": "Deprecated: renamed to `materialxPlayground.openBehavior`.",
+          "deprecationMessage": "Renamed to materialxPlayground.openBehavior. This setting still works, but will be removed in a future release.",
+          "markdownDeprecationMessage": "Renamed to `materialxPlayground.openBehavior`. This setting still works, but will be removed in a future release."
         },
         "materialx.autoOpenPlayground": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically open the MaterialX Playground beside the text editor whenever a .mtlx file is opened. Triggers once per file open — closing the playground won't re-trigger it until the file itself is closed and reopened."
+          "markdownDescription": "Deprecated: renamed to `materialxPlayground.autoOpenPlayground`.",
+          "deprecationMessage": "Renamed to materialxPlayground.autoOpenPlayground. This setting still works, but will be removed in a future release.",
+          "markdownDeprecationMessage": "Renamed to `materialxPlayground.autoOpenPlayground`. This setting still works, but will be removed in a future release."
         }
       }
     }

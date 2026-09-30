@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MaterialX Playground — Node Library, Viewer & Graph Editor</title>
+    <title>MaterialX Playground — Node Library, Material Viewer & Graph Editor</title>
     <link rel="icon" type="image/x-icon" href="favicon.ico">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
     <meta name="theme-color" content="#111827">
@@ -36,7 +36,7 @@
             }
         })();
     </script>
-    <script>window.__MTLX_BUILD = '4e5ac6090755f7af';</script>
+    <script>window.__MTLX_BUILD = '79dd08c40060514e';</script>
     <!-- Build-id probe. Lives here, beside the stamp, deliberately: every
          other script (shell.jsx, mtlx-assets.js) is separately cached and
          may itself be the stale file this is meant to detect. -->
@@ -103,7 +103,7 @@
     <style>
         /* Embed mode (the graph editor's docs dialog iframe): hide the
            shared chrome — the iframe shows only the focused docs view. */
-        .embed-mode #site-header { display: none; }
+        .embed-mode #site-header, .embed-mode #site-footer { display: none; }
     </style>
 
     <!-- Shared header/footer styling: plain CSS, no Tailwind — shared
@@ -204,6 +204,9 @@
         </div>
     </noscript>
 
+    <!-- Shared footer: filled by js/site-header.js at DOMContentLoaded. -->
+    <div id="site-footer" class="shrink-0"></div>
+
     <!-- Shared engine + shell (must load after #root exists). The per-view
          CDN/local dependencies (KaTeX, JSZip, React Flow, dagre, doc-ui.jsx,
          node-preview.jsx, docs-app.jsx/viewer-app.jsx/graph-app.jsx) are
@@ -225,8 +228,15 @@
          import(), to CommonJS require(), which doesn't exist in the
          browser and throws "require is not defined" the first time
          getMxEnv() runs. -->
+    <!-- Vendor dependency metadata (generated from scripts/vendor-deps.mjs)
+         and MtlxVendor.url/load, used by the About dialog and on-demand vendor loads. -->
+    <script src="js/gen/vendor-deps.js"></script>
+    <script src="js/shared/vendor-runtime.js"></script>
     <!-- Shared UI commons (icon registry) — must precede the engine and every view script. -->
     <script src="js/shared/ui-commons.js"></script>
+    <!-- Single source of truth for decodable texture extensions; must
+         precede every view script that builds a file-picker accept list. -->
+    <script src="js/shared/texture-formats.js"></script>
     <script src="js/shared/mesh-subdivision.js"></script>
     <script src="js/shared/mesh-displacement.js"></script>
     <script src="js/shared/mesh-udim.js"></script>
@@ -249,6 +259,7 @@
     <!-- Renderer core: plain JS, no transform needed. Loaded after the
          engine calls MtlxRender.bindEngine() on its own last line. -->
     <script src="js/shared/render-session.js"></script>
+    <script type="text/mtlx-babel" src="js/mxslc-engine.js"></script>
     <script type="text/mtlx-babel" src="js/shell.jsx"></script>
     <script type="text/mtlx-babel">
         const root = ReactDOM.createRoot(document.getElementById('root'));

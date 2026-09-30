@@ -1242,7 +1242,7 @@ function runtimeIconPath() {
 
 const JUMP_LIST_TASKS = [
     { route: 'docs', title: 'Node Specs', description: 'Open the Node Specs reference', icon: 'docs.ico' },
-    { route: 'viewer', title: 'Viewer', description: 'Open the Viewer', icon: 'viewer.ico' },
+    { route: 'viewer', title: 'Material Viewer', description: 'Open the Material Viewer', icon: 'viewer.ico' },
     { route: 'compare', title: 'Compare', description: 'Open the Compare tool', icon: 'compare.ico' },
     { route: 'graph', title: 'Graph Editor', description: 'Open the Graph Editor', icon: 'graph.ico' },
 ];
