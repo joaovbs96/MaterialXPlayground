@@ -449,10 +449,10 @@ class ViewErrorBoundary extends React.Component {
         if (this.state.error) {
             const { error, info } = this.state;
             return (
-                <div className="flex flex-col items-center justify-center h-40 gap-3 text-red-400 text-sm text-center px-4">
+                <div className="flex flex-col items-center justify-center h-40 gap-3 text-error text-sm text-center px-4">
                     <span>This view crashed: {String((error && error.message) || error)}</span>
                     {info && info.componentStack && (
-                        <pre className="max-w-full max-h-24 overflow-auto text-left text-[10px] leading-snug text-gray-500 bg-gray-950/50 border border-gray-800 rounded p-2 whitespace-pre-wrap">
+                        <pre className="max-w-full max-h-24 overflow-auto text-left text-[10px] leading-snug text-fg-subtle bg-surface-deep/50 border border-line-subtle rounded p-2 whitespace-pre-wrap">
                             {info.componentStack.trim()}
                         </pre>
                     )}
@@ -460,14 +460,14 @@ class ViewErrorBoundary extends React.Component {
                         <button
                             type="button"
                             onClick={this.handleReload}
-                            className="text-xs px-3 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 transition-colors"
+                            className="text-xs px-3 py-1.5 rounded-lg border bg-control border-line-strong text-fg-soft hover:bg-hover transition-colors"
                         >
                             Reload page
                         </button>
                         <button
                             type="button"
                             onClick={this.handleCopy}
-                            className="text-xs px-3 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 transition-colors"
+                            className="text-xs px-3 py-1.5 rounded-lg border bg-control border-line-strong text-fg-soft hover:bg-hover transition-colors"
                         >
                             {this.state.copied ? 'Copied!' : 'Copy diagnostics'}
                         </button>
@@ -535,30 +535,30 @@ function DesktopCloseConfirmDialog() {
         // is closing here, so the usual below-header scrim convention
         // does not apply.
         <div
-            className="fixed inset-0 z-[70] flex items-center justify-center bg-gray-950/70"
+            className="fixed inset-0 z-[70] flex items-center justify-center bg-scrim/70"
             onMouseDown={() => respond('cancel')}
         >
             <div
-                className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
+                className="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
                 onMouseDown={(e) => e.stopPropagation()}
             >
-                <div className="text-sm font-semibold text-gray-100 mb-1">This document has unsaved changes.</div>
-                <div className="text-[12px] text-gray-400 mb-4">
+                <div className="text-sm font-semibold text-fg mb-1">This document has unsaved changes.</div>
+                <div className="text-[12px] text-fg-muted mb-4">
                     Do you want to save the changes before closing?
                 </div>
                 <div className="flex flex-wrap justify-end gap-2">
                     <button
                         onClick={() => respond('cancel')}
-                        className="h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                        className="h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors"
                     >Cancel</button>
                     <button
                         onClick={() => respond('discard')}
-                        className="h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                        className="h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors"
                     >Discard</button>
                     <button
                         autoFocus
                         onClick={() => respond('save')}
-                        className="h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors"
+                        className="h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-accent-fill/70 border-accent-base text-on-accent hover:bg-accent-fill-hover/70 transition-colors"
                     >Save and Close</button>
                 </div>
             </div>
@@ -599,14 +599,14 @@ function DesktopNoticeBar() {
                     id={'mtlx-desktop-notice-' + n.kind}
                     className={'pointer-events-auto flex items-start gap-2 rounded-lg border backdrop-blur px-3 py-2 text-[12px] shadow-lg '
                         + (n.level === 'warn'
-                            ? 'border-amber-600/50 bg-amber-900/30 text-amber-200'
-                            : 'border-slate-600/50 bg-slate-800/30 text-slate-200')}
+                            ? 'border-warning-border-alt/50 bg-warning-bg/30 text-warning-text'
+                            : 'border-notice-line/50 bg-notice-bg/30 text-notice-text')}
                 >
                     <span className="flex-1">{n.text}</span>
                     <button
                         type="button"
                         onClick={() => dismiss(n.kind)}
-                        className={(n.level === 'warn' ? 'text-amber-200/80 hover:text-amber-100' : 'text-slate-200/80 hover:text-slate-100')
+                        className={(n.level === 'warn' ? 'text-warning-text/80 hover:text-warning-text-strong' : 'text-notice-text/80 hover:text-notice-text-strong')
                             + ' leading-none'}
                         aria-label="Dismiss"
                     >
@@ -739,15 +739,15 @@ function DesktopSettingsDialog() {
         // top: header height (not inset-0/z-[70]): a normal popup, not the
         // window-closing dialog above, so it stops below the header.
         <div
-            className="fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-gray-950/70"
+            className="fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-scrim/70"
             style={{ top: 'var(--mtlx-header-h, 0px)' }}
         >
             <div
                 ref={panelRef}
-                className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
+                className="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
             >
                 <div className="flex items-center justify-between mb-3">
-                    <div className="text-sm font-semibold text-gray-100">Settings</div>
+                    <div className="text-sm font-semibold text-fg">Settings</div>
                     <button
                         type="button"
                         onClick={() => setOpen(false)}
@@ -759,7 +759,7 @@ function DesktopSettingsDialog() {
                     </button>
                 </div>
                 {!mtlxUiReady ? (
-                    <div className="text-[11px] text-gray-500">Loading settings&hellip;</div>
+                    <div className="text-[11px] text-fg-subtle">Loading settings&hellip;</div>
                 ) : (
                     <React.Fragment>
                         <label className="flex items-start gap-2 cursor-pointer">
@@ -770,16 +770,16 @@ function DesktopSettingsDialog() {
                                 onChange={(e) => toggleOpenInNewWindow(e.target.checked)}
                             />
                             <span>
-                                <span className="block text-[12px] text-gray-200">Open Files in New Window</span>
-                                <span className="block text-[11px] text-gray-400">
+                                <span className="block text-[12px] text-fg-soft">Open Files in New Window</span>
+                                <span className="block text-[11px] text-fg-muted">
                                     Open documents from the OS in a new window instead of the current one.
                                 </span>
                             </span>
                         </label>
                         <div className="flex items-start justify-between gap-2 mt-3">
                             <span>
-                                <span className="block text-[12px] text-gray-200">Open Documents Into</span>
-                                <span className="block text-[11px] text-gray-400">
+                                <span className="block text-[12px] text-fg-soft">Open Documents Into</span>
+                                <span className="block text-[11px] text-fg-muted">
                                     Which view a document lands in when opened without a specific view requested.
                                 </span>
                             </span>
@@ -803,15 +803,15 @@ function DesktopSettingsDialog() {
                                     onChange={(e) => toggleShowRecentInSystem(e.target.checked)}
                                 />
                                 <span>
-                                    <span className="block text-[12px] text-gray-200">Show Recent Files in System</span>
-                                    <span className="block text-[11px] text-gray-400">
+                                    <span className="block text-[12px] text-fg-soft">Show Recent Files in System</span>
+                                    <span className="block text-[11px] text-fg-muted">
                                         Publish recently opened files to the {platform === 'darwin' ? 'Dock' : 'taskbar jump list'}.
                                     </span>
                                 </span>
                             </label>
                         ) : null}
                         {showRecentInSystem && platform === 'win32' && jumpListStatus === 'blocked' ? (
-                            <div className="flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200 mt-2">
+                            <div className="flex items-start gap-1.5 rounded border border-warning-hue/40 bg-warning-hue/10 px-2 py-1.5 text-[11px] text-warning-text mt-2">
                                 Windows is blocking recent files from appearing in the jump list. Turn on
                                 "Show recommended files in Start, recent files in File Explorer, and items in Jump Lists"
                                 in Settings &gt; Personalization &gt; Start to fix this.
@@ -825,8 +825,8 @@ function DesktopSettingsDialog() {
                                 onChange={(e) => toggleSafeMode(e.target.checked)}
                             />
                             <span>
-                                <span className="block text-[12px] text-gray-200">Safe mode (software rendering)</span>
-                                <span className="block text-[11px] text-gray-400">
+                                <span className="block text-[12px] text-fg-soft">Safe mode (software rendering)</span>
+                                <span className="block text-[11px] text-fg-muted">
                                     Turns off hardware acceleration on the next launch. Use it if views stay blank or the app crashes on this machine.
                                 </span>
                             </span>
@@ -835,7 +835,7 @@ function DesktopSettingsDialog() {
                             <button
                                 type="button"
                                 onClick={() => { if (typeof window.__mtlxRelaunch === 'function') window.__mtlxRelaunch(); }}
-                                className="mt-2 h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors"
+                                className="mt-2 h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-accent-fill/70 border-accent-base text-on-accent hover:bg-accent-fill-hover/70 transition-colors"
                             >
                                 Relaunch now
                             </button>
@@ -988,12 +988,12 @@ function AboutDialog() {
 
     return (
         <div
-            className="fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-gray-950/70"
+            className="fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-scrim/70"
             style={{ top: 'var(--mtlx-header-h, 0px)' }}
         >
             <div
                 ref={panelRef}
-                className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[32rem] max-w-[92%] max-h-[85%] p-4 flex flex-col"
+                className="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[32rem] max-w-[92%] max-h-[85%] p-4 flex flex-col"
             >
                 <div className="flex items-center justify-between gap-3 mb-3">
                     <div className="flex items-center gap-3 mtlx-dialog-brand">
@@ -1012,7 +1012,7 @@ function AboutDialog() {
                     </button>
                 </div>
 
-                <div className="text-[12px] text-gray-300 leading-relaxed mb-3">
+                <div className="text-[12px] text-fg-secondary leading-relaxed mb-3">
                     {isElectron ? (
                         about ? (
                             <div>
@@ -1020,7 +1020,7 @@ function AboutDialog() {
                                 <div>Electron {about.electron} &middot; Chromium {about.chrome} &middot; Node {about.node}</div>
                             </div>
                         ) : (
-                            <div className="text-gray-500">Loading version info&hellip;</div>
+                            <div className="text-fg-subtle">Loading version info&hellip;</div>
                         )
                     ) : isVSCode ? (
                         <div>
@@ -1034,7 +1034,7 @@ function AboutDialog() {
                         <div>
                             MaterialX{' '}
                             <a href={mtlxReleaseUrl} target="_blank" rel="noopener noreferrer"
-                                className="hover:text-blue-300 hover:underline">{mtlxVersion}</a>
+                                className="hover:text-accent-fg-strong hover:underline">{mtlxVersion}</a>
                         </div>
                     ) : null}
                     {libVersions && libVersions.three ? <div>three.js {libVersions.three}</div> : null}
@@ -1045,15 +1045,15 @@ function AboutDialog() {
                 <div className="flex flex-wrap gap-3 text-[12px] mb-3">
                     {links.site && !isWeb ? (
                         <a href={links.site} target="_blank" rel="noopener noreferrer"
-                            className="text-blue-400 hover:text-blue-300 underline">Website</a>
+                            className="text-accent-fg hover:text-accent-fg-strong underline">Website</a>
                     ) : null}
                     {links.repo ? (
                         <a href={links.repo} target="_blank" rel="noopener noreferrer"
-                            className="text-blue-400 hover:text-blue-300 underline">GitHub Repository</a>
+                            className="text-accent-fg hover:text-accent-fg-strong underline">GitHub Repository</a>
                     ) : null}
                     {links.issues ? (
                         <a href={links.issues} target="_blank" rel="noopener noreferrer"
-                            className="text-blue-400 hover:text-blue-300 underline">Issues</a>
+                            className="text-accent-fg hover:text-accent-fg-strong underline">Issues</a>
                     ) : null}
                 </div>
 
@@ -1062,7 +1062,7 @@ function AboutDialog() {
                     neutralizes .mtlx-about-experimental's own amber styling. */}
                 {disclaimerParts.experimental ? (
                     <div
-                        className="mtlx-about-disclaimer flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200 mt-1 mb-3"
+                        className="mtlx-about-disclaimer flex items-start gap-1.5 rounded border border-experimental-hue/40 bg-experimental-hue/10 px-2 py-1.5 text-[11px] text-warning-text mt-1 mb-3"
                         dangerouslySetInnerHTML={{ __html: disclaimerParts.experimental }}
                     />
                 ) : null}
@@ -1075,45 +1075,45 @@ function AboutDialog() {
                 ) : null}
 
                 {vendorEntries && vendorEntries.length ? (
-                    <div className="text-[11px] text-gray-400 mb-1">
-                        <span className="text-gray-300">Third-party libraries: </span>
+                    <div className="text-[11px] text-fg-muted mb-1">
+                        <span className="text-fg-secondary">Third-party libraries: </span>
                         {vendorEntries.map((lib, i) => (
                             <React.Fragment key={lib.name}>
                                 {i > 0 ? ', ' : ''}
                                 {lib.licenseUrl ? (
                                     <a href={lib.licenseUrl} target="_blank" rel="noopener noreferrer"
-                                        className="text-blue-400 hover:text-blue-300 underline">{lib.name}</a>
+                                        className="text-accent-fg hover:text-accent-fg-strong underline">{lib.name}</a>
                                 ) : lib.name}
                             </React.Fragment>
                         ))}
                     </div>
                 ) : null}
-                <div className="text-[11px] text-gray-400 mb-1">
-                    <span className="text-gray-300">Assets: </span>
+                <div className="text-[11px] text-fg-muted mb-1">
+                    <span className="text-fg-secondary">Assets: </span>
                     Shader Ball and Cloth mesh (CC BY 4.0), MaterialX Shader Ball (Apache-2.0), HDRIs (CC BY 4.0 / CC0), UV checker texture and Motley Patchwork Rug (MIT). See the{' '}
                     {links.repo ? (
                         <a href={links.repo + '#asset-credits'} target="_blank" rel="noopener noreferrer"
-                            className="text-blue-400 hover:text-blue-300 underline">README</a>
+                            className="text-accent-fg hover:text-accent-fg-strong underline">README</a>
                     ) : 'README'}{' '}for full attribution.
                 </div>
                 {vendorEntries && vendorEntries.length ? (
-                    <div className="text-[11px] text-gray-500 mb-3">
+                    <div className="text-[11px] text-fg-subtle mb-3">
                         We believe this list to be complete. If we are missing anything,{' '}
                         {links.issues ? (
                             <a href={links.issues} target="_blank" rel="noopener noreferrer"
-                                className="text-gray-400 hover:text-gray-300 underline">let us know</a>
+                                className="text-fg-muted hover:text-fg-secondary underline">let us know</a>
                         ) : 'let us know'}.
                     </div>
                 ) : null}
 
-                <div className="text-[11px] text-gray-400 mb-1">License</div>
-                <div className="custom-scrollbar flex-1 min-h-0 overflow-y-auto bg-gray-900/60 border border-gray-700 rounded-md p-2">
+                <div className="text-[11px] text-fg-muted mb-1">License</div>
+                <div className="custom-scrollbar flex-1 min-h-0 overflow-y-auto bg-surface-sunken/60 border border-line rounded-md p-2">
                     {license ? (
-                        <pre className="text-[10.5px] text-gray-300 whitespace-pre-wrap font-mono">{license}</pre>
+                        <pre className="text-[10.5px] text-fg-secondary whitespace-pre-wrap font-mono">{license}</pre>
                     ) : licenseError ? (
-                        <div className="text-[11px] text-gray-500">License text could not be loaded.</div>
+                        <div className="text-[11px] text-fg-subtle">License text could not be loaded.</div>
                     ) : (
-                        <div className="text-[11px] text-gray-500">Loading license&hellip;</div>
+                        <div className="text-[11px] text-fg-subtle">Loading license&hellip;</div>
                     )}
                 </div>
             </div>
@@ -1298,18 +1298,18 @@ function Shell() {
         let content = null;
         if (st.status === 'loading') {
             content = (
-                <div className="flex items-center justify-center h-40 text-gray-400 text-sm animate-pulse">
+                <div className="flex items-center justify-center h-40 text-fg-muted text-sm animate-pulse">
                     Loading…
                 </div>
             );
         } else if (st.status === 'error') {
             content = (
-                <div className="flex flex-col items-center justify-center h-40 gap-3 text-red-400 text-sm text-center px-4">
+                <div className="flex flex-col items-center justify-center h-40 gap-3 text-error text-sm text-center px-4">
                     <span>Failed to load this view: {String((st.error && st.error.message) || st.error)}</span>
                     <button
                         type="button"
                         onClick={() => setViewState((prev) => ({ ...prev, [view]: { mounted: true, status: 'loading' } }))}
-                        className="text-xs px-3 py-1.5 rounded-lg border bg-gray-800 border-gray-600 text-gray-200 hover:bg-gray-700 transition-colors"
+                        className="text-xs px-3 py-1.5 rounded-lg border bg-control border-line-strong text-fg-soft hover:bg-hover transition-colors"
                     >
                         Retry
                     </button>
@@ -1320,7 +1320,7 @@ function Shell() {
             // without WebGL2, so there's no degraded mode to fall back to
             // (unlike docs, see the banner below).
             content = (
-                <div className="flex items-center justify-center h-40 text-center text-gray-300 text-sm px-4">
+                <div className="flex items-center justify-center h-40 text-center text-fg-secondary text-sm px-4">
                     {'WebGL2 is not available. The '
                         + (view === 'viewer' ? 'Material Viewer' : view === 'compare' ? 'Material Compare' : view === 'scene' ? 'USD Scene Viewer' : 'Node Graph Editor')
                         + ' needs a WebGL2-capable browser. Try a current Chrome, Firefox, Edge, or Safari, and make sure hardware acceleration is enabled.'}
@@ -1345,12 +1345,12 @@ function Shell() {
                 // own `md:h-full` resolves. Docs works without WebGL2
                 // (only 3D previews are affected) — warn, don't block.
                 const webglBanner = !hasWebGL2() && !docsWebglBannerDismissed ? (
-                    <div className="mb-2 flex-shrink-0 flex items-center justify-between gap-3 rounded-lg border border-amber-600/50 bg-amber-900/30 text-amber-200 text-xs px-3 py-2">
+                    <div className="mb-2 flex-shrink-0 flex items-center justify-between gap-3 rounded-lg border border-warning-border-alt/50 bg-warning-bg/30 text-warning-text text-xs px-3 py-2">
                         <span>WebGL2 is unavailable in this browser — node documentation works, but 3D previews won't render.</span>
                         <button
                             type="button"
                             onClick={() => setDocsWebglBannerDismissed(true)}
-                            className="text-amber-200/80 hover:text-amber-100 leading-none"
+                            className="text-warning-text/80 hover:text-warning-text-strong leading-none"
                             aria-label="Dismiss"
                         >
                             ×

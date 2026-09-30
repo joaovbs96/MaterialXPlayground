@@ -62,17 +62,17 @@ const TRANSPARENT_PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAA
 // Shared badge tone: 'Experimental' gets the amber treatment, anything
 // else (e.g. 'In progress') gets a neutral gray one.
 const badgeClassFor = (badge) => (badge === 'Experimental'
-    ? 'text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border border-amber-500/40 bg-amber-500/10 text-amber-300'
-    : 'text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border border-gray-600/60 bg-gray-700/40 text-gray-400');
+    ? 'text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border border-experimental-hue/40 bg-experimental-hue/10 text-experimental'
+    : 'text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border border-line-strong/60 bg-chip/40 text-fg-muted');
 
 // Diagonal-stripe placeholder for a card with no screenshot yet.
 function ComingSoonMedia() {
     return (
         <div
-            className="w-full aspect-video border-b border-gray-700 flex items-center justify-center"
-            style={{ backgroundImage: 'repeating-linear-gradient(135deg, rgba(75,85,99,0.18) 0 10px, transparent 10px 20px)' }}
+            className="w-full aspect-video border-b border-line flex items-center justify-center"
+            style={{ backgroundImage: 'repeating-linear-gradient(135deg, rgb(var(--mtlx-line-strong) / calc(46 / 255)) 0 10px, transparent 10px 20px)' }}
         >
-            <span className="text-xs text-gray-500">Coming soon</span>
+            <span className="text-xs text-fg-subtle">Coming soon</span>
         </div>
     );
 }
@@ -92,31 +92,31 @@ const maskIconStyle = (url) => ({
 function HomeCard({ card }) {
     const isLink = !!card.href;
     const media = card.img ? (
-        <img src={card.img} alt="" loading="lazy" className="w-full aspect-video object-cover border-b border-gray-700" />
+        <img src={card.img} alt="" loading="lazy" className="w-full aspect-video object-cover border-b border-line" />
     ) : (
         <ComingSoonMedia />
     );
     const body = (
         <div className="flex flex-col flex-1 p-5">
             {card.iconImg
-                ? <span aria-hidden="true" className="w-8 h-8 self-start bg-current text-blue-400"
+                ? <span aria-hidden="true" className="w-8 h-8 self-start bg-current text-accent-fg"
                     style={maskIconStyle(card.iconImg)} />
-                : <MtlxIcon name={card.icon} className="w-8 h-8 text-blue-400" />}
+                : <MtlxIcon name={card.icon} className="w-8 h-8 text-accent-fg" />}
             <div className="mt-3 flex items-center flex-wrap gap-2">
-                <span className="text-lg font-semibold text-gray-100">{card.title}</span>
+                <span className="text-lg font-semibold text-fg">{card.title}</span>
                 {card.badge && <span className={badgeClassFor(card.badge)}>{card.badge}</span>}
             </div>
-            <p className="mt-1.5 text-sm text-gray-400 flex-1">{card.desc}</p>
+            <p className="mt-1.5 text-sm text-fg-muted flex-1">{card.desc}</p>
             {isLink ? (
-                <div className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-blue-400 group-hover:text-blue-300 transition-colors">
+                <div className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-accent-fg group-hover:text-accent-fg-strong transition-colors">
                     {card.cta} <MtlxIcon name={card.external ? 'external-link' : 'arrow-right'} className="w-3.5 h-3.5" />
                 </div>
             ) : (
-                <div className="mt-4 text-sm font-medium text-gray-500">{card.cta}</div>
+                <div className="mt-4 text-sm font-medium text-fg-subtle">{card.cta}</div>
             )}
         </div>
     );
-    const linkClass = 'group flex flex-col bg-gray-800 border border-gray-800 rounded-xl overflow-hidden transition-colors hover:border-blue-500/50 hover:bg-gray-800/80';
+    const linkClass = 'group flex flex-col bg-surface-raised border border-line-subtle rounded-xl overflow-hidden transition-colors hover:border-accent-base/50 hover:bg-surface-raised/80';
 
     if (isLink && card.external) {
         return (
@@ -135,7 +135,7 @@ function HomeCard({ card }) {
         );
     }
     return (
-        <div className="flex flex-col bg-gray-800 border border-gray-800 rounded-xl overflow-hidden">
+        <div className="flex flex-col bg-surface-raised border border-line-subtle rounded-xl overflow-hidden">
             {media}
             {body}
         </div>
@@ -188,22 +188,22 @@ function FeaturedGallery({ items, active, fadeRef }) {
             <style>{FEATURED_STYLE}</style>
             <a
                 href={card.href}
-                className="relative block overflow-hidden rounded-2xl border border-blue-500/35 bg-gray-800 ring-4 ring-blue-500/[0.06] p-6 sm:p-8 hover:border-blue-500/60 transition-colors"
+                className="relative block overflow-hidden rounded-2xl border border-accent-wash/35 bg-surface-raised ring-4 ring-accent-wash/[0.06] p-6 sm:p-8 hover:border-accent-base/60 transition-colors"
             >
                 <div key={card.id} className="mtlx-feature-in flex flex-col lg:flex-row lg:items-center gap-6 lg:gap-8">
                     <div className="flex-1 min-w-0 space-y-2.5">
-                        <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-blue-300">
+                        <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-accent-fg-strong">
                             <MtlxIcon name="sparkles" className="w-3.5 h-3.5" />
                             Featured
-                            <span className="text-gray-600">/</span>
-                            <span className="text-gray-400">{entry.kicker}</span>
+                            <span className="text-fg-faint">/</span>
+                            <span className="text-fg-muted">{entry.kicker}</span>
                         </div>
                         <div className="flex items-center flex-wrap gap-2.5">
-                            <span className="text-2xl font-bold text-gray-100">{card.title}</span>
+                            <span className="text-2xl font-bold text-fg">{card.title}</span>
                             {card.badge && <span className={badgeClassFor(card.badge)}>{card.badge}</span>}
                         </div>
-                        <p className="text-[15px] leading-[22px] text-gray-400 max-w-[520px]">{card.desc}</p>
-                        <span className="inline-flex items-center gap-2 h-10 px-[18px] rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium mt-1.5">
+                        <p className="text-[15px] leading-[22px] text-fg-muted max-w-[520px]">{card.desc}</p>
+                        <span className="inline-flex items-center gap-2 h-10 px-[18px] rounded-lg bg-accent-fill hover:bg-accent-fill-hover text-on-accent text-sm font-medium mt-1.5">
                             {card.cta} <MtlxIcon name="arrow-right" className="w-4 h-4" />
                         </span>
                     </div>
@@ -211,10 +211,10 @@ function FeaturedGallery({ items, active, fadeRef }) {
                         <img
                             src={card.img}
                             alt=""
-                            className="w-full lg:w-[440px] shrink-0 aspect-video object-cover rounded-[10px] border border-gray-700"
+                            className="w-full lg:w-[440px] shrink-0 aspect-video object-cover rounded-[10px] border border-line"
                         />
                     ) : (
-                        <div className="w-full lg:w-[440px] shrink-0 rounded-[10px] overflow-hidden border border-gray-700">
+                        <div className="w-full lg:w-[440px] shrink-0 rounded-[10px] overflow-hidden border border-line">
                             <ComingSoonMedia />
                         </div>
                     )}
@@ -223,10 +223,10 @@ function FeaturedGallery({ items, active, fadeRef }) {
                     bottom edge. Keyed on the run state too: the advance timer
                     re-arms from zero after a hold, so the bar restarts with it. */}
                 {count > 1 && !reduce && (
-                    <div className="absolute inset-x-0 bottom-0 h-0.5 bg-gray-700/40">
+                    <div className="absolute inset-x-0 bottom-0 h-0.5 bg-chip/40">
                         <div
                             key={at + ((active && !held) ? '-run' : '-hold')}
-                            className="h-full bg-blue-500 mtlx-feature-progress"
+                            className="h-full bg-accent-base mtlx-feature-progress"
                             style={{ animationPlayState: (active && !held) ? 'running' : 'paused' }}
                         />
                     </div>
@@ -244,11 +244,11 @@ function FeaturedGallery({ items, active, fadeRef }) {
                                 aria-label={'Show ' + (c ? c.title : it.card)}
                                 aria-current={on ? 'true' : undefined}
                                 onClick={() => setIdx(i)}
-                                className={'p-2 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 '
-                                    + (on ? '' : '[&:hover>span]:bg-gray-400')}
+                                className={'p-2 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/60 '
+                                    + (on ? '' : '[&:hover>span]:bg-fg-muted')}
                             >
                                 <span className={'block h-1.5 rounded-full transition-all duration-200 '
-                                    + (on ? 'w-6 bg-blue-500' : 'w-1.5 bg-gray-600')} />
+                                    + (on ? 'w-6 bg-accent-base' : 'w-1.5 bg-fg-faint')} />
                             </button>
                         );
                     })}
@@ -329,40 +329,40 @@ function HeroStage({ active, busy, onOpen }) {
         <div className="relative group h-[320px] lg:h-[400px] w-full">
             <div
                 className="absolute inset-0 rounded-3xl pointer-events-none"
-                style={{ backgroundImage: 'radial-gradient(ellipse at center, rgba(59,130,246,0.16), transparent 66%)' }}
+                style={{ backgroundImage: 'radial-gradient(ellipse at center, rgb(var(--mtlx-accent-wash) / calc(41 / 255)), transparent 66%)' }}
             />
-            <div className="absolute left-1/2 -translate-x-1/2 bottom-10 w-56 h-6 rounded-[100%] bg-black/50 blur-xl pointer-events-none" />
+            <div className="absolute left-1/2 -translate-x-1/2 bottom-10 w-56 h-6 rounded-[100%] bg-shadow/50 blur-xl pointer-events-none" />
             {failed ? (
                 <img
                     src="images/preview-material.jpg"
                     alt=""
-                    className="absolute inset-0 w-full h-full object-cover rounded-2xl border border-gray-700"
+                    className="absolute inset-0 w-full h-full object-cover rounded-2xl border border-line"
                 />
             ) : (
                 <>
                     <div ref={mountRef} className="absolute inset-0" />
                     {!loaded && (
                         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                            <span className="text-xs text-gray-500">Loading material</span>
+                            <span className="text-xs text-fg-subtle">Loading material</span>
                         </div>
                     )}
                 </>
             )}
             {!failed && (
                 <div className="absolute top-3 left-3 flex items-center gap-2 text-[11px] leading-[14px] pointer-events-none">
-                    <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-                    <span className="text-gray-400">{HERO_PRESET.label}</span>
-                    <span className="text-gray-600">/</span>
-                    <span className="font-mono text-gray-500">{basename}</span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-accent-base" />
+                    <span className="text-fg-muted">{HERO_PRESET.label}</span>
+                    <span className="text-fg-faint">/</span>
+                    <span className="font-mono text-fg-subtle">{basename}</span>
                 </div>
             )}
             <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-2 transition-all duration-150 opacity-0 translate-y-1 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto focus-within:opacity-100 focus-within:translate-y-0 focus-within:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:translate-y-0 [@media(hover:none)]:pointer-events-auto">
-                <button type="button" disabled={!!busy} onClick={() => onOpen('viewer')} className={PILL_ACTION}>
-                    <MtlxIcon name="camera" className="w-3.5 h-3.5 text-gray-500 transition-colors" />
+                <button type="button" disabled={!!busy} onClick={() => onOpen('viewer')} className={PILL_PAGE}>
+                    <MtlxIcon name="camera" className="w-3.5 h-3.5 text-fg-subtle transition-colors" />
                     {busy === 'viewer' ? 'Loading' : 'Open in Material Viewer'}
                 </button>
-                <button type="button" disabled={!!busy} onClick={() => onOpen('graph')} className={PILL_ACTION}>
-                    <MtlxIcon name="share" className="w-3.5 h-3.5 text-gray-500 transition-colors" />
+                <button type="button" disabled={!!busy} onClick={() => onOpen('graph')} className={PILL_PAGE}>
+                    <MtlxIcon name="share" className="w-3.5 h-3.5 text-fg-subtle transition-colors" />
                     {busy === 'graph' ? 'Loading' : 'Open in Graph Editor'}
                 </button>
             </div>
@@ -420,36 +420,36 @@ function HomeApp({ active } = {}) {
                     <div className="flex items-center gap-3">
                         <svg
                             xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"
-                            className="icon icon-tabler icons-tabler-filled icon-tabler-inner-shadow-bottom-right w-10 h-10 text-blue-400"
+                            className="icon icon-tabler icons-tabler-filled icon-tabler-inner-shadow-bottom-right w-10 h-10 text-accent-fg"
                             dangerouslySetInnerHTML={{ __html: window.SITE_LOGO_PATHS }}
                         />
-                        <h1 className="text-3xl sm:text-4xl font-bold text-gray-100">{title}</h1>
+                        <h1 className="text-3xl sm:text-4xl font-bold text-fg">{title}</h1>
                     </div>
-                    <p className="text-gray-400 text-sm sm:text-base max-w-xl">
+                    <p className="text-fg-muted text-sm sm:text-base max-w-xl">
                         An interactive, open-source, in-browser playground to browse the standard
                         MaterialX node library, preview materials in real-time 3D, and
                         build node graphs visually.
                     </p>
                     <div className="flex flex-wrap gap-3 pt-1">
-                        <a href="#!viewer" className="inline-flex items-center gap-2 h-10 px-4 rounded-lg border border-gray-600 bg-gray-800 hover:bg-gray-700 text-sm font-medium text-gray-100 transition-colors">
-                            <MtlxIcon name="camera" className="w-[18px] h-[18px] text-blue-400" />
+                        <a href="#!viewer" className="inline-flex items-center gap-2 h-10 px-4 rounded-lg border border-line-strong bg-control hover:bg-hover text-sm font-medium text-fg transition-colors">
+                            <MtlxIcon name="camera" className="w-[18px] h-[18px] text-accent-fg" />
                             Open Material Viewer
                         </a>
-                        <a href="#!graph" className="inline-flex items-center gap-2 h-10 px-4 rounded-lg border border-gray-600 bg-gray-800 hover:bg-gray-700 text-sm font-medium text-gray-100 transition-colors">
-                            <MtlxIcon name="share" className="w-[18px] h-[18px] text-blue-400" />
+                        <a href="#!graph" className="inline-flex items-center gap-2 h-10 px-4 rounded-lg border border-line-strong bg-control hover:bg-hover text-sm font-medium text-fg transition-colors">
+                            <MtlxIcon name="share" className="w-[18px] h-[18px] text-accent-fg" />
                             Open Graph Editor
                         </a>
-                        <a href="#!docs" className="inline-flex items-center gap-2 h-10 px-4 rounded-lg border border-gray-600 bg-gray-800 hover:bg-gray-700 text-sm font-medium text-gray-100 transition-colors">
-                            <MtlxIcon name="file-code" className="w-[18px] h-[18px] text-blue-400" />
+                        <a href="#!docs" className="inline-flex items-center gap-2 h-10 px-4 rounded-lg border border-line-strong bg-control hover:bg-hover text-sm font-medium text-fg transition-colors">
+                            <MtlxIcon name="file-code" className="w-[18px] h-[18px] text-accent-fg" />
                             Browse Node Specs
                         </a>
                     </div>
-                    <p className="text-gray-500 text-xs">
+                    <p className="text-fg-subtle text-xs">
                         <a
                             href={links.repo}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-blue-400 hover:text-blue-300 underline decoration-blue-500/40"
+                            className="text-accent-fg hover:text-accent-fg-strong underline decoration-accent-wash/40"
                         >View the source on GitHub</a>.
                     </p>
                 </div>
@@ -473,8 +473,8 @@ function HomeApp({ active } = {}) {
                             onClick={() => setFilter(g.id)}
                             className={'h-8 px-3.5 rounded-full border text-[13px] font-medium transition-colors '
                                 + (isActive
-                                    ? 'border-blue-500 bg-blue-500/[0.12] text-blue-300'
-                                    : 'border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100')}
+                                    ? 'border-accent-base bg-accent-wash/[0.12] text-accent-fg-strong'
+                                    : 'border-line-strong bg-control text-fg-secondary hover:bg-hover hover:text-fg')}
                         >
                             {g.label}
                         </button>
@@ -486,8 +486,8 @@ function HomeApp({ active } = {}) {
             {HOME_GROUPS.filter((g) => filter === 'all' || g.id === filter).map((group) => (
                 <section key={group.id} className="space-y-4">
                     <div className="space-y-0.5">
-                        <h2 className="text-xl font-semibold text-gray-100">{group.label}</h2>
-                        <p className="text-sm text-gray-500">{group.blurb}</p>
+                        <h2 className="text-xl font-semibold text-fg">{group.label}</h2>
+                        <p className="text-sm text-fg-subtle">{group.blurb}</p>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-6">
                         {HOME_CARDS.filter((c) => c.group === group.id).map((c) => (

@@ -18,7 +18,7 @@ const SLOT_COLORS = { A: '#60a5fa', B: '#fbbf24' };
 // Mirrors mtlx-ui.jsx's private SectionCard-only CARD_SURFACE (not
 // exported to window) so the pinned Statistics panel matches the same
 // card background family without editing that shared file.
-const STATS_PANEL_SURFACE = 'color-mix(in srgb, var(--site-gray-800, #1f2937) 35%, var(--site-gray-900, #111827))';
+const STATS_PANEL_SURFACE = 'color-mix(in srgb, rgb(var(--mtlx-surface-raised)) 35%, rgb(var(--mtlx-surface-base)))';
 
 // Example pair: the Standard Surface carpaint preset vs a repo-local doc
 // that feeds the same values through the stdlib translation graph into
@@ -29,7 +29,7 @@ const EXAMPLE_PAIR_B_URL = 'materials/standard_surface_carpaint_to_openpbr.mtlx'
 // Empty-stage grid backdrop: same 40px/gray-500 tokens as the builder's
 // HeroGrid, but masked with a radial fade (the pane is a bounded box, not
 // a page edge) so it dissolves before the pane borders instead of cutting off.
-const EMPTY_STAGE_GRID_IMAGE = 'linear-gradient(to right, rgba(107,114,128,0.16) 1px, transparent 1px), linear-gradient(to bottom, rgba(107,114,128,0.16) 1px, transparent 1px)';
+const EMPTY_STAGE_GRID_IMAGE = 'linear-gradient(to right, rgb(var(--mtlx-line-heavy) / calc(41 / 255)) 1px, transparent 1px), linear-gradient(to bottom, rgb(var(--mtlx-line-heavy) / calc(41 / 255)) 1px, transparent 1px)';
 const EMPTY_STAGE_GRID_MASK = 'radial-gradient(ellipse at center, rgba(0,0,0,1) 0%, rgba(0,0,0,0.9) 30%, rgba(0,0,0,0) 70%)';
 const SlotDot = ({ color, className }) => (
     <span className={'inline-block w-1.5 h-1.5 rounded-full shrink-0 ' + (className || '')} style={{ background: color }} />
@@ -1253,12 +1253,12 @@ function MaterialCompareApp({ active = true } = {}) {
             <LoadingOverlay
                 show={slot.busy}
                 label={slot.status}
-                className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70"
-                labelClassName="text-sm text-gray-300 animate-pulse"
+                className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-veil/70"
+                labelClassName="text-sm text-fg-secondary animate-pulse"
                 barWidthClass="w-40"
             />
             {slot.error && (
-                <div className="absolute top-2 left-2 right-2 z-20 bg-red-950/90 border border-red-800/60 text-red-200 text-xs rounded-lg px-3 py-2 break-words shadow-lg">
+                <div className="absolute top-2 left-2 right-2 z-20 bg-error-bg/90 border border-error-border/60 text-error-text-strong text-xs rounded-lg px-3 py-2 break-words shadow-lg">
                     {slot.error}
                 </div>
             )}
@@ -1266,7 +1266,7 @@ function MaterialCompareApp({ active = true } = {}) {
                 shared HUD (top-right/bottom-left of the whole stage) and
                 the doc-name chip (top-12, centered). */}
             {slot.texturesLoading && !slot.busy && !slot.error && (
-                <div className="absolute top-2 left-2 z-20 text-[11px] px-1.5 py-0.5 rounded bg-gray-900/80 text-gray-300 pointer-events-none">
+                <div className="absolute top-2 left-2 z-20 text-[11px] px-1.5 py-0.5 rounded bg-hud/80 text-hud-fg pointer-events-none">
                     {'Loading textures\u2026'}
                 </div>
             )}
@@ -1282,7 +1282,7 @@ function MaterialCompareApp({ active = true } = {}) {
                             WebkitMaskImage: EMPTY_STAGE_GRID_MASK,
                         }}
                     />
-                    <div className="absolute inset-0 flex items-center justify-center text-center text-gray-500 text-sm px-6 pointer-events-none">
+                    <div className="absolute inset-0 flex items-center justify-center text-center text-fg-subtle text-sm px-6 pointer-events-none">
                         {'Drop a .mtlx / .zip here or use the sidebar'}
                     </div>
                 </React.Fragment>
@@ -1302,7 +1302,7 @@ function MaterialCompareApp({ active = true } = {}) {
             >
                 <div>
                     <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-medium text-gray-400">MaterialX version</span>
+                        <span className="text-xs font-medium text-fg-muted">MaterialX version</span>
                         <MtlxSelect
                             value={slot.version}
                             options={mtlxVersions}
@@ -1336,13 +1336,13 @@ function MaterialCompareApp({ active = true } = {}) {
                     </div>
                     <label
                         title="Choose a folder"
-                        className="h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-gray-700 rounded-md bg-gray-800 hover:bg-gray-700 text-gray-300 cursor-pointer"
+                        className="h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-line rounded-md bg-control hover:bg-hover text-fg-secondary cursor-pointer"
                     >
                         <MtlxIcon name="folder" className="w-3.5 h-3.5" />
                         <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={(e) => { setPresetPick((s) => ({ ...s, [slotKey]: '' })); slot.onPickFiles(e); }} />
                     </label>
                 </div>
-                <div className="text-xs text-gray-500">{dropHint}</div>
+                <div className="text-xs text-fg-subtle">{dropHint}</div>
                 {slot.mtlxPaths.length > 1 && (
                     <MtlxSelect
                         value={slot.chosenMtlx || ''}
@@ -1381,11 +1381,11 @@ function MaterialCompareApp({ active = true } = {}) {
                 {slot.texReport && slot.texReport.missing.length > 0 && (
                     <div className="space-y-2">
                         {slot.texReport.missing.map((m, i) => (
-                            <div key={'m' + i} className="flex items-start gap-1 text-amber-300/90 font-mono text-xs break-all" title="Referenced by the document but not found among the dropped files, so the image node's default color is shown instead.">
+                            <div key={'m' + i} className="flex items-start gap-1 text-warning/90 font-mono text-xs break-all" title="Referenced by the document but not found among the dropped files, so the image node's default color is shown instead.">
                                 <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-0.5" /><span>{m}</span>
                             </div>
                         ))}
-                        <div className="text-xs text-gray-500">Only textures that failed to resolve are listed. This card disappears when everything loads.</div>
+                        <div className="text-xs text-fg-subtle">Only textures that failed to resolve are listed. This card disappears when everything loads.</div>
                     </div>
                 )}
             </SectionCard>
@@ -1393,7 +1393,7 @@ function MaterialCompareApp({ active = true } = {}) {
     };
 
     return (
-        <div ref={stageRef} className="absolute inset-0 bg-gray-900 overflow-hidden">
+        <div ref={stageRef} className="absolute inset-0 bg-stage overflow-hidden">
             {/* Stage content only, inset from the sidebar's footprint when
                 open so nothing renders underneath it. Percentage insets
                 below (styleFor, diffCanvasStyle, dividers) resolve against
@@ -1407,7 +1407,7 @@ function MaterialCompareApp({ active = true } = {}) {
                 {dragOver && (
                     <div className="absolute inset-0 z-40 p-2 sm:p-4 flex gap-2">
                         <div
-                            className="flex-1 rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center"
+                            className="flex-1 rounded-xl border-4 border-dashed border-accent-base/70 bg-drop-target/40 flex items-center justify-center"
                             onDragOver={(e) => e.preventDefault()}
                             onDrop={(e) => {
                                 e.preventDefault();
@@ -1416,12 +1416,12 @@ function MaterialCompareApp({ active = true } = {}) {
                                 setDragOver(false);
                             }}
                         >
-                            <div className="flex items-center gap-2 text-blue-200 text-base sm:text-lg font-semibold bg-gray-900/80 rounded-lg px-4 py-3 text-center">
+                            <div className="flex items-center gap-2 text-accent-fg-bright text-base sm:text-lg font-semibold bg-hud/80 rounded-lg px-4 py-3 text-center">
                                 <MtlxIcon name="file-upload" className="w-6 h-6 shrink-0" /> {'Drop → Document A'}
                             </div>
                         </div>
                         <div
-                            className="flex-1 rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center"
+                            className="flex-1 rounded-xl border-4 border-dashed border-accent-base/70 bg-drop-target/40 flex items-center justify-center"
                             onDragOver={(e) => e.preventDefault()}
                             onDrop={(e) => {
                                 e.preventDefault();
@@ -1430,7 +1430,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                 setDragOver(false);
                             }}
                         >
-                            <div className="flex items-center gap-2 text-blue-200 text-base sm:text-lg font-semibold bg-gray-900/80 rounded-lg px-4 py-3 text-center">
+                            <div className="flex items-center gap-2 text-accent-fg-bright text-base sm:text-lg font-semibold bg-hud/80 rounded-lg px-4 py-3 text-center">
                                 <MtlxIcon name="file-upload" className="w-6 h-6 shrink-0" /> {'Drop → Document B'}
                             </div>
                         </div>
@@ -1439,7 +1439,7 @@ function MaterialCompareApp({ active = true } = {}) {
 
                 {/* Stage: three always-mounted layers, never unmounted across mode
                     switches (inline styles only — see styleFor above). */}
-                <div style={styleFor('A')} className="overflow-hidden bg-gray-900">
+                <div style={styleFor('A')} className="overflow-hidden bg-stage">
                     <canvas ref={slotA.canvasRef} className="w-full h-full block cursor-grab active:cursor-grabbing" tabIndex={-1} />
                     {renderSlotOverlays(slotA)}
                     {/* top-12 clears the ViewportControls pills (top-2,
@@ -1455,7 +1455,7 @@ function MaterialCompareApp({ active = true } = {}) {
                         </div>
                     )}
                 </div>
-                <div style={styleFor('B')} className="overflow-hidden bg-gray-900">
+                <div style={styleFor('B')} className="overflow-hidden bg-stage">
                     <canvas ref={slotB.canvasRef} className="w-full h-full block cursor-grab active:cursor-grabbing" tabIndex={-1} />
                     {renderSlotOverlays(slotB)}
                     {/* Same top-12 clearance as slot A's chip above. */}
@@ -1562,16 +1562,16 @@ function MaterialCompareApp({ active = true } = {}) {
 
                 <canvas
                     ref={gpuDiffCanvasRef}
-                    className="pointer-events-none bg-gray-950"
+                    className="pointer-events-none bg-surface-deep"
                     style={diffCanvasStyle()}
                 />
                 <canvas
                     ref={heatmapCanvasRef}
-                    className="absolute inset-0 w-full h-full object-contain bg-gray-950 pointer-events-none"
+                    className="absolute inset-0 w-full h-full object-contain bg-surface-deep pointer-events-none"
                     style={{ display: displayMode === 'diff' && gpuDiffOk === false ? 'block' : 'none' }}
                 />
                 {displayMode === 'diff' && !bothLive && (
-                    <div className="absolute inset-0 flex items-center justify-center text-center text-gray-500 text-sm px-6 pointer-events-none">
+                    <div className="absolute inset-0 flex items-center justify-center text-center text-fg-subtle text-sm px-6 pointer-events-none">
                         {'Load both documents to see the difference'}
                     </div>
                 )}
@@ -1599,13 +1599,13 @@ function MaterialCompareApp({ active = true } = {}) {
 
             {/* Floating left sidebar, mirroring viewer-app.jsx's Files panel. */}
             {sidebarOpen ? (
-                <div className="absolute inset-y-0 left-0 z-30 w-80 max-w-[90%] flex flex-col bg-gray-900 border-r border-gray-700 overflow-hidden">
-                    <div className="flex-none flex items-center px-3 py-2 border-b border-gray-700">
-                        <span className="text-[13px] font-semibold text-gray-200">Compare</span>
+                <div className="absolute inset-y-0 left-0 z-30 w-80 max-w-[90%] flex flex-col bg-surface-base border-r border-line overflow-hidden">
+                    <div className="flex-none flex items-center px-3 py-2 border-b border-line">
+                        <span className="text-[13px] font-semibold text-fg-soft">Compare</span>
                         <button
                             onClick={() => setSidebarOpen(false)}
                             title="Collapse the panel"
-                            className="flex-none ml-auto text-gray-400 hover:text-gray-200 px-1 leading-none text-sm"
+                            className="flex-none ml-auto text-fg-muted hover:text-fg-soft px-1 leading-none text-sm"
                         ><MtlxIcon name="chevrons-left" className="w-4 h-4" /></button>
                     </div>
                     <div className="flex-1 overflow-y-auto custom-scrollbar p-3.5 space-y-4">
@@ -1613,14 +1613,14 @@ function MaterialCompareApp({ active = true } = {}) {
                         {renderSlotSection(slotB, 'B', 'Document B', 'or drag-and-drop on the right half')}
 
                         <SectionCard icon="layout-columns" title="Display" summary={modeLabel} defaultOpen>
-                            <div className="flex rounded-lg border border-gray-700 overflow-hidden text-[11px]">
+                            <div className="flex rounded-lg border border-line overflow-hidden text-[11px]">
                                 {[['side', 'Side by side'], ['slider', 'Swipe'], ['diff', 'Difference']].map(([id, label]) => (
                                     <button
                                         key={id}
                                         onClick={() => setDisplayMode(id)}
                                         className={'flex-1 px-2 py-1.5 transition-colors ' + (displayMode === id
-                                            ? 'bg-blue-500/[0.12] text-blue-300'
-                                            : 'bg-gray-800/80 text-gray-300 hover:bg-gray-700/80')}
+                                            ? 'bg-accent-wash/[0.12] text-accent-fg-strong'
+                                            : 'bg-control/80 text-fg-secondary hover:bg-hover/80')}
                                     >
                                         {label}
                                     </button>
@@ -1628,7 +1628,7 @@ function MaterialCompareApp({ active = true } = {}) {
                             </div>
                             <div className="flex items-center gap-2">
                                 <label
-                                    className={'flex items-center gap-2 text-[11px] ' + (displayMode === 'diff' || gpuDiffOk === false ? 'text-gray-500' : 'text-gray-300 cursor-pointer')}
+                                    className={'flex items-center gap-2 text-[11px] ' + (displayMode === 'diff' || gpuDiffOk === false ? 'text-fg-subtle' : 'text-fg-secondary cursor-pointer')}
                                     title={gpuDiffOk === false ? 'Difference rendering unavailable (WebGL)' : undefined}
                                 >
                                     <Toggle
@@ -1646,7 +1646,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                     disabled={switchViewsDisabled}
                                     title={switchViewsDisabled ? undefined : switchViewsTitle}
                                     className={'flex-none inline-flex items-center gap-1 ' + (switchViewsDisabled
-                                        ? 'h-7 px-2.5 rounded-md border text-[11px] transition-colors bg-gray-800/50 border-gray-700 text-gray-600 cursor-not-allowed pointer-events-none'
+                                        ? 'h-7 px-2.5 rounded-md border text-[11px] transition-colors bg-control/50 border-line text-fg-disabled cursor-not-allowed pointer-events-none'
                                         : BTN_SECONDARY + ' cursor-pointer')}
                                 >
                                     <MtlxIcon name="switch-horizontal" className="w-3.5 h-3.5" />
@@ -1684,7 +1684,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                     onClear={clearModel}
                                 />
                             </div>
-                            {modelImportError && <div className="text-xs text-red-400">{modelImportError}</div>}
+                            {modelImportError && <div className="text-xs text-error">{modelImportError}</div>}
                         </SectionCard>
 
                         <SectionCard icon="sun" title="Environment" summary={envSummary} defaultOpen dense>
@@ -1699,7 +1699,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                 }}
                                 onClear={clearEnvOverride}
                             />
-                            {envImportError && <div className="text-xs text-red-400">{envImportError}</div>}
+                            {envImportError && <div className="text-xs text-error">{envImportError}</div>}
                             {/* Rotation/exposure/backdrop stay caller-driven
                                 (real state shared by both panes, applied to
                                 both live views directly) but pull their
@@ -1722,7 +1722,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                 onNumber={(v) => setEnvExposureVal(evToLinear(v))}
                             />
                             <div className="flex items-center justify-between gap-2">
-                                <span className="text-xs font-medium text-gray-400">{(rowMeta('backdrop', 'compare') || {}).label || 'Backdrop'}</span>
+                                <span className="text-xs font-medium text-fg-muted">{(rowMeta('backdrop', 'compare') || {}).label || 'Backdrop'}</span>
                                 <MtlxSelect
                                     value={envUI.backdrop}
                                     options={rowMeta('backdrop', 'compare').options}
@@ -1738,7 +1738,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                 surface="compare"
                                 keys={['keyLight', 'diffuseEnv']}
                                 variant="sidebar"
-                                labelClassName="text-xs font-medium text-gray-400"
+                                labelClassName="text-xs font-medium text-fg-muted"
                             />
                             <button
                                 onClick={resetEnv}
@@ -1754,7 +1754,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                 surface="compare"
                                 keys={['displayTransform', 'displayExposure', 'transparency', 'displacement', 'previewSubdivision']}
                                 variant="sidebar"
-                                labelClassName="text-xs font-medium text-gray-400"
+                                labelClassName="text-xs font-medium text-fg-muted"
                             />
                         </SectionCard>
                     </div>
@@ -1762,14 +1762,14 @@ function MaterialCompareApp({ active = true } = {}) {
                     {/* Pinned Statistics panel: always expanded and non-scrolling,
                         a sibling BELOW the scrollable cards column above (not one
                         more card inside it). */}
-                    <div className="shrink-0 border-t border-gray-700 px-3.5 py-3.5 space-y-2.5" style={{ background: STATS_PANEL_SURFACE }}>
+                    <div className="shrink-0 border-t border-line px-3.5 py-3.5 space-y-2.5" style={{ background: STATS_PANEL_SURFACE }}>
                         <div className="flex items-center gap-2">
-                            <MtlxIcon name="compare" className="w-4 h-4 text-gray-400 shrink-0" />
-                            <span className="text-[13px] font-semibold text-gray-200 shrink-0">Statistics</span>
-                            {bothLive && <span className="shrink-0 text-[10px] text-gray-600">·</span>}
-                            {bothLive && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">live</span>}
-                            {bothLive && stats && <span className="shrink-0 text-[10px] text-gray-600">·</span>}
-                            {stats && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">{'computed at ' + stats.size[0] + '×' + stats.size[1]}</span>}
+                            <MtlxIcon name="compare" className="w-4 h-4 text-fg-muted shrink-0" />
+                            <span className="text-[13px] font-semibold text-fg-soft shrink-0">Statistics</span>
+                            {bothLive && <span className="shrink-0 text-[10px] text-fg-faint">·</span>}
+                            {bothLive && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">live</span>}
+                            {bothLive && stats && <span className="shrink-0 text-[10px] text-fg-faint">·</span>}
+                            {stats && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">{'computed at ' + stats.size[0] + '×' + stats.size[1]}</span>}
                             <div className="flex-1" />
                             <div className="relative shrink-0">
                                 <button
@@ -1777,7 +1777,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                     type="button"
                                     onClick={() => setStatsHelpOpen((o) => !o)}
                                     title="About these statistics"
-                                    className="w-5 h-5 inline-flex items-center justify-center text-gray-500 hover:text-gray-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-full"
+                                    className="w-5 h-5 inline-flex items-center justify-center text-fg-subtle hover:text-fg-secondary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus rounded-full"
                                 >
                                     <MtlxIcon name="help" className="w-3.5 h-3.5" />
                                 </button>
@@ -1785,7 +1785,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                     <div
                                         ref={statsHelpPopRef}
                                         onPointerDown={(e) => e.stopPropagation()}
-                                        className="absolute bottom-full right-0 mb-2 w-64 bg-gray-900 border border-gray-700 rounded-lg shadow-lg p-3 space-y-1.5 text-[11px] text-gray-300 z-10"
+                                        className="absolute bottom-full right-0 mb-2 w-64 bg-surface-base border border-line rounded-lg shadow-lg p-3 space-y-1.5 text-[11px] text-fg-secondary z-10"
                                     >
                                         <div>
                                             The difference heatmap shows the per-pixel absolute color difference of the
@@ -1800,7 +1800,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                 )}
                             </div>
                         </div>
-                        <div className="space-y-1 text-[11px] text-gray-300">
+                        <div className="space-y-1 text-[11px] text-fg-secondary">
                             <div className="flex justify-between"><span>SSIM</span><span className="font-mono tabular-nums">{stats ? stats.metrics.ssim.toFixed(3) : '—'}</span></div>
                             <div className="flex justify-between"><span>RMSE</span><span className="font-mono tabular-nums">{stats ? stats.metrics.rmse.toFixed(2) : '—'}</span></div>
                             <div className="flex justify-between">
@@ -1811,7 +1811,7 @@ function MaterialCompareApp({ active = true } = {}) {
                         </div>
                     </div>
 
-                    <div className="flex-none border-t border-gray-700 px-3 py-2 text-[11px] text-gray-500">
+                    <div className="flex-none border-t border-line px-3 py-2 text-[11px] text-fg-subtle">
                         Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to the image node's default color.
                     </div>
                 </div>
@@ -1832,7 +1832,7 @@ function MaterialCompareApp({ active = true } = {}) {
                 onClose={() => setPresetPickerSlot(null)}
                 onSelect={loadPickedIntoSlot}
                 title={presetPickerSlot === 'B' ? 'Load into Document B' : 'Load into Document A'}
-                overlayClassName="fixed left-0 right-0 bottom-0 top-[var(--mtlx-header-h,0px)] z-50 flex items-center justify-center bg-gray-950/70"
+                overlayClassName="fixed left-0 right-0 bottom-0 top-[var(--mtlx-header-h,0px)] z-50 flex items-center justify-center bg-scrim/70"
             />
         </div>
     );

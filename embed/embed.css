@@ -39,19 +39,11 @@
 /* ---- Borders / radius ------------------------------------------------ */
 .border { border-width: 1px; border-style: solid; }
 .rounded-lg { border-radius: .5rem; }
-.border-gray-600 { border-color: #4b5563; }
-.border-red-800\/60 { border-color: rgba(153, 27, 27, .6); }
 
 /* ---- Backgrounds ----------------------------------------------------- */
-.bg-gray-900 { background-color: #111827; }
 .bg-transparent { background-color: transparent; }
-.bg-gray-900\/70 { background-color: rgba(17, 24, 39, .7); }
-.bg-gray-800\/90 { background-color: rgba(31, 41, 55, .9); }
-.bg-red-950\/90 { background-color: rgba(69, 10, 10, .9); }
 
 /* ---- Text color -------------------------------------------------- */
-.text-gray-300 { color: #d1d5db; }
-.text-red-200 { color: #fecaca; }
 
 /* ---- Typography ---------------------------------------------------- */
 .text-sm { font-size: .875rem; line-height: 1.25rem; }

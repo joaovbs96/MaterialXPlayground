@@ -18,15 +18,15 @@ const GALLERY_FAMILY_ORDER = [
 // way MTLX_PRESETS paths are (relative to resources/Materials/Examples/).
 const GALLERY_EXAMPLES_PREFIX = 'resources/Materials/Examples/';
 // Gray "micro pill" tag idiom, copied from vscode-app.jsx's TAG_PILL_CLASS.
-const GALLERY_TAG_CLASS = 'text-[10px] font-medium uppercase tracking-wide px-[7px] py-px rounded-full border border-gray-600 text-gray-400';
+const GALLERY_TAG_CLASS = 'text-[10px] font-medium uppercase tracking-wide px-[7px] py-px rounded-full border border-line-strong text-fg-muted';
 // Same idiom, but clickable: the overlay's family/Textured/Procedural
 // pills, which apply a filter and need an obvious hover affordance.
-const GALLERY_TAG_CLASS_LINK = GALLERY_TAG_CLASS + ' cursor-pointer transition-colors hover:border-blue-500/60 hover:text-gray-100';
-const GALLERY_CODE_CLASS = 'font-mono text-[0.9em] text-gray-200 bg-gray-700/50 border border-gray-700 rounded px-1 py-px';
+const GALLERY_TAG_CLASS_LINK = GALLERY_TAG_CLASS + ' cursor-pointer transition-colors hover:border-accent-base/60 hover:text-fg';
+const GALLERY_CODE_CLASS = 'font-mono text-[0.9em] text-fg-soft bg-code-inline-bg/50 border border-line rounded px-1 py-px';
 // Filter-chip idiom, shared by the family chips, the tag chips and the
 // numbered page pills.
-const GALLERY_CHIP_ACTIVE = 'border-blue-500 bg-blue-500/[0.12] text-blue-300';
-const GALLERY_CHIP_IDLE = 'border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100';
+const GALLERY_CHIP_ACTIVE = 'border-accent-base bg-accent-wash/[0.12] text-accent-fg-strong';
+const GALLERY_CHIP_IDLE = 'border-line-strong bg-control text-fg-secondary hover:bg-hover hover:text-fg';
 // Multi-select AND tag chips shown next to the single-select family chips;
 // the manifest's other tags (familyLabel, shader) aren't chip-worthy.
 const GALLERY_TAG_FILTERS = [
@@ -195,10 +195,10 @@ function galleryHumanBytes(n) {
 // VS Code checkout that never ran the generator, not an error to alarm over.
 function GalleryEmptyState() {
     return (
-        <div className="flex flex-col items-center justify-center gap-3 text-center py-20 px-4 bg-gray-800 border border-gray-800 rounded-xl">
-            <MtlxIcon name="alert-triangle" className="w-8 h-8 text-amber-300" />
-            <h2 className="text-lg font-semibold text-gray-100">Gallery data not generated</h2>
-            <p className="text-sm text-gray-400 max-w-md">
+        <div className="flex flex-col items-center justify-center gap-3 text-center py-20 px-4 bg-surface-raised border border-line-subtle rounded-xl">
+            <MtlxIcon name="alert-triangle" className="w-8 h-8 text-warning" />
+            <h2 className="text-lg font-semibold text-fg">Gallery data not generated</h2>
+            <p className="text-sm text-fg-muted max-w-md">
                 The manifest and thumbnails behind this gallery are produced at deploy time, and locally
                 by running <code className={GALLERY_CODE_CLASS}>npm run gallery:data</code>. Run that,
                 then reload this page.
@@ -212,8 +212,8 @@ function GalleryEmptyState() {
 function GalleryMetaField({ label, value }) {
     return (
         <div className="min-w-0 flex flex-col gap-0.5">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">{label}</span>
-            <span className="text-sm text-gray-200 break-words">{value}</span>
+            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">{label}</span>
+            <span className="text-sm text-fg-soft break-words">{value}</span>
         </div>
     );
 }
@@ -229,12 +229,12 @@ function GalleryCard({ m, onOpen }) {
             type="button"
             onClick={() => onOpen(m.id)}
             title={m.name}
-            className="group flex flex-col text-left bg-gray-800 border border-gray-800 rounded-xl overflow-hidden transition-colors hover:border-blue-500/50 hover:bg-gray-800/80"
+            className="group flex flex-col text-left bg-surface-raised border border-line-subtle rounded-xl overflow-hidden transition-colors hover:border-accent-base/50 hover:bg-surface-raised/80"
         >
             {showPlaceholder ? (
                 <div
-                    className="w-full aspect-square border-b border-gray-700 flex items-center justify-center text-2xl font-semibold text-blue-300/70"
-                    style={{ backgroundImage: 'linear-gradient(135deg, rgba(59,130,246,0.18), rgba(59,130,246,0.04))' }}
+                    className="w-full aspect-square border-b border-line flex items-center justify-center text-2xl font-semibold text-accent-fg-strong/70"
+                    style={{ backgroundImage: 'linear-gradient(135deg, rgb(var(--mtlx-accent-wash) / calc(46 / 255)), rgb(var(--mtlx-accent-wash) / calc(10 / 255)))' }}
                 >
                     {(m.name || '?').charAt(0).toUpperCase()}
                 </div>
@@ -246,11 +246,11 @@ function GalleryCard({ m, onOpen }) {
                     width={512}
                     height={512}
                     onError={() => setImgFailed(true)}
-                    className="w-full aspect-square object-cover border-b border-gray-700"
+                    className="w-full aspect-square object-cover border-b border-line"
                 />
             )}
             <div className="flex flex-col gap-1.5 p-3">
-                <span className="text-sm font-medium text-gray-100 truncate">{m.name}</span>
+                <span className="text-sm font-medium text-fg truncate">{m.name}</span>
                 <div className="flex flex-wrap gap-1.5">
                     <span className={GALLERY_TAG_CLASS}>{m.familyLabel}</span>
                     <span className={GALLERY_TAG_CLASS}>{m.textured ? 'Textured' : 'Procedural'}</span>
@@ -289,7 +289,7 @@ function GalleryPagination({ page, pageCount, onChange }) {
                     {p}
                 </button>
             ) : (
-                <span key={p} className="px-1 text-gray-600 select-none">…</span>
+                <span key={p} className="px-1 text-fg-faint select-none">…</span>
             ))}
             <button
                 type="button"
@@ -323,36 +323,36 @@ function GalleryLicenseDialog({ material, onClose }) {
     const label = (material.license && material.license.label) || 'License';
     return (
         <div
-            className="fixed left-0 right-0 bottom-0 z-[55] flex items-center justify-center bg-gray-950/70 p-4"
+            className="fixed left-0 right-0 bottom-0 z-[55] flex items-center justify-center bg-scrim/70 p-4"
             style={{ top: 'var(--mtlx-header-h, 0px)' }}
             onMouseDown={onClose}
         >
             <div
                 onMouseDown={(e) => e.stopPropagation()}
-                className="w-full max-w-[48rem] max-h-[calc(100vh-var(--mtlx-header-h,0px)-2rem)] bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden flex flex-col"
+                className="w-full max-w-[48rem] max-h-[calc(100vh-var(--mtlx-header-h,0px)-2rem)] bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden flex flex-col"
             >
-                <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
+                <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-2.5 border-b border-line bg-chrome/70">
                     <div className="min-w-0">
-                        <span className="block text-sm font-semibold text-gray-100 truncate">{label}</span>
-                        <span className="block text-[11px] text-gray-500 truncate">{material.name}</span>
+                        <span className="block text-sm font-semibold text-fg truncate">{label}</span>
+                        <span className="block text-[11px] text-fg-subtle truncate">{material.name}</span>
                     </div>
-                    <button type="button" onClick={onClose} className={PILL_ACTION}>
+                    <button type="button" onClick={onClose} className={PILL_PAGE}>
                         <MtlxIcon name="x" className="w-3.5 h-3.5" />
                         Close
                     </button>
                 </div>
                 <div className="overflow-y-auto custom-scrollbar p-4">
                     {state.status === 'loading' && (
-                        <div className="h-[200px] flex items-center justify-center text-gray-400 text-sm animate-pulse">
+                        <div className="h-[200px] flex items-center justify-center text-fg-muted text-sm animate-pulse">
                             Loading license...
                         </div>
                     )}
                     {state.status === 'error' && (
                         <div className="h-[160px] flex flex-col items-center justify-center gap-2 text-center px-4">
-                            <MtlxIcon name="alert-triangle" className="w-6 h-6 text-amber-300" />
-                            <p className="text-sm text-gray-300">This license could not be loaded.</p>
+                            <MtlxIcon name="alert-triangle" className="w-6 h-6 text-warning" />
+                            <p className="text-sm text-fg-secondary">This license could not be loaded.</p>
                             {href && (
-                                <a href={href} target="_blank" rel="noopener noreferrer" className={PILL_ACTION}>
+                                <a href={href} target="_blank" rel="noopener noreferrer" className={PILL_PAGE}>
                                     <MtlxIcon name="external-link" className="w-3.5 h-3.5" />
                                     Open the file directly
                                 </a>
@@ -360,7 +360,7 @@ function GalleryLicenseDialog({ material, onClose }) {
                         </div>
                     )}
                     {state.status === 'ready' && (
-                        <pre className="text-[11px] leading-relaxed text-gray-300 whitespace-pre-wrap break-words font-mono">{state.text}</pre>
+                        <pre className="text-[11px] leading-relaxed text-fg-secondary whitespace-pre-wrap break-words font-mono">{state.text}</pre>
                     )}
                 </div>
             </div>
@@ -395,18 +395,18 @@ function GalleryDetailOverlay({
         // instead of covering it; .mtlx-header's raised z-index (60) keeps
         // it and its dropdowns usable/visible while this popup is open.
         <div
-            className={'fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-gray-950/70 p-4' + (isOpen ? '' : ' hidden')}
+            className={'fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-scrim/70 p-4' + (isOpen ? '' : ' hidden')}
             style={{ top: 'var(--mtlx-header-h, 0px)' }}
             onMouseDown={isOpen ? onClose : undefined}
             aria-hidden={!isOpen}
         >
             <div
                 onMouseDown={(e) => e.stopPropagation()}
-                className="w-full max-w-[64rem] max-h-[calc(100vh-var(--mtlx-header-h,0px)-2rem)] bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden flex flex-col"
+                className="w-full max-w-[64rem] max-h-[calc(100vh-var(--mtlx-header-h,0px)-2rem)] bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden flex flex-col"
             >
-                <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-2.5 border-b border-gray-700 bg-gray-900/70">
+                <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-2.5 border-b border-line bg-chrome/70">
                     <div className="min-w-0">
-                        <span className="block text-sm font-semibold text-gray-100 truncate">{shown.name}</span>
+                        <span className="block text-sm font-semibold text-fg truncate">{shown.name}</span>
                         <div className="flex flex-wrap gap-1.5 mt-1">
                             <button
                                 type="button"
@@ -426,22 +426,22 @@ function GalleryDetailOverlay({
                             </button>
                         </div>
                     </div>
-                    <button type="button" onClick={onClose} className={PILL_ACTION}>
+                    <button type="button" onClick={onClose} className={PILL_PAGE}>
                         <MtlxIcon name="x" className="w-3.5 h-3.5" />
                         Close
                     </button>
                 </div>
                 <div className="overflow-y-auto custom-scrollbar p-4 flex flex-col gap-4">
                     {!doc && docStatus === 'loading' && (
-                        <div className="h-[400px] flex items-center justify-center text-gray-400 text-sm animate-pulse">
+                        <div className="h-[400px] flex items-center justify-center text-fg-muted text-sm animate-pulse">
                             Loading material…
                         </div>
                     )}
                     {!doc && docStatus === 'error' && (
                         <div className="h-[200px] flex flex-col items-center justify-center gap-2 text-center px-4">
-                            <MtlxIcon name="alert-triangle" className="w-6 h-6 text-amber-300" />
-                            <span className="text-sm text-gray-300">Could not load this material.</span>
-                            <span className="text-xs text-gray-500">{docError}</span>
+                            <MtlxIcon name="alert-triangle" className="w-6 h-6 text-warning" />
+                            <span className="text-sm text-fg-secondary">Could not load this material.</span>
+                            <span className="text-xs text-fg-subtle">{docError}</span>
                         </div>
                     )}
                     {doc && (
@@ -464,21 +464,21 @@ function GalleryDetailOverlay({
                                 preview above instead of replacing it, so the
                                 mounted preview/viewer never unmounts. */}
                             {!ready && docStatus === 'loading' && (
-                                <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-900/70 text-gray-300 text-sm rounded-lg">
+                                <div className="absolute inset-0 z-10 flex items-center justify-center bg-veil/70 text-fg-secondary text-sm rounded-lg">
                                     Loading material…
                                 </div>
                             )}
                             {docStatus === 'error' && (
-                                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-gray-900/85 text-center px-4 rounded-lg">
-                                    <MtlxIcon name="alert-triangle" className="w-6 h-6 text-amber-300" />
-                                    <span className="text-sm text-gray-300">Could not load this material.</span>
-                                    <span className="text-xs text-gray-500">{docError}</span>
+                                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-veil/85 text-center px-4 rounded-lg">
+                                    <MtlxIcon name="alert-triangle" className="w-6 h-6 text-warning" />
+                                    <span className="text-sm text-fg-secondary">Could not load this material.</span>
+                                    <span className="text-xs text-fg-subtle">{docError}</span>
                                 </div>
                             )}
                         </div>
                     )}
 
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-3 border-t border-gray-800 pt-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-3 border-t border-line-subtle pt-3">
                         <GalleryMetaField label="Family" value={shown.familyLabel} />
                         <GalleryMetaField label="Shader" value={shown.shader} />
                         <GalleryMetaField
@@ -496,15 +496,15 @@ function GalleryDetailOverlay({
                     </div>
 
                     {shown.note && (
-                        <p className="text-xs text-gray-500 border-t border-gray-800 pt-3">{shown.note}</p>
+                        <p className="text-xs text-fg-subtle border-t border-line-subtle pt-3">{shown.note}</p>
                     )}
 
-                    <div className="flex flex-wrap gap-2 border-t border-gray-800 pt-3">
+                    <div className="flex flex-wrap gap-2 border-t border-line-subtle pt-3">
                         <button
                             type="button"
                             disabled={!ready || !!actionBusy}
                             onClick={() => onOpenIn('viewer')}
-                            className={PILL_ACTION}
+                            className={PILL_PAGE}
                         >
                             <MtlxIcon name="camera" className="w-3.5 h-3.5" />
                             {actionBusy === 'viewer' ? 'Loading' : 'Open in Material Viewer'}
@@ -513,7 +513,7 @@ function GalleryDetailOverlay({
                             type="button"
                             disabled={!ready || !!actionBusy}
                             onClick={() => onOpenIn('graph')}
-                            className={PILL_ACTION}
+                            className={PILL_PAGE}
                         >
                             <MtlxIcon name="share" className="w-3.5 h-3.5" />
                             {actionBusy === 'graph' ? 'Loading' : 'Open in Graph Editor'}
@@ -522,12 +522,12 @@ function GalleryDetailOverlay({
                             type="button"
                             disabled={!ready || !!actionBusy}
                             onClick={onDownload}
-                            className={PILL_ACTION}
+                            className={PILL_PAGE}
                         >
                             <MtlxIcon name="download" className="w-3.5 h-3.5" />
                             {actionBusy === 'download' ? 'Downloading' : (hasCompanions ? 'Download .zip' : 'Download .mtlx')}
                         </button>
-                        <button type="button" onClick={onCopyLink} className={PILL_ACTION}>
+                        <button type="button" onClick={onCopyLink} className={PILL_PAGE}>
                             <MtlxIcon name={linkCopied ? 'copy-check' : 'copy'} className="w-3.5 h-3.5" />
                             {linkCopied ? 'Copied' : 'Copy Link'}
                         </button>
@@ -535,13 +535,13 @@ function GalleryDetailOverlay({
                             href={gallerySourceHref(shown, tag)}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className={PILL_ACTION}
+                            className={PILL_PAGE}
                         >
                             <MtlxIcon name="external-link" className="w-3.5 h-3.5" />
                             View Source
                         </a>
                         {shown.license && (
-                            <button type="button" onClick={() => setLicenseOpen(true)} className={PILL_ACTION}>
+                            <button type="button" onClick={() => setLicenseOpen(true)} className={PILL_PAGE}>
                                 <MtlxIcon name="file-text" className="w-3.5 h-3.5" />
                                 License
                             </button>
@@ -804,19 +804,19 @@ function MtlxGalleryApp({ active } = {}) {
             <div ref={fadeRef} aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-0 h-[528px]" />
             <div className="relative max-w-7xl mx-auto px-2 sm:px-0 py-8 sm:py-14 space-y-6">
                 {/* Breadcrumb */}
-                <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs text-gray-500">
-                    <a href="#!home" className="hover:text-gray-300 transition-colors">Home</a>
+                <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs text-fg-subtle">
+                    <a href="#!home" className="hover:text-fg-secondary transition-colors">Home</a>
                     <MtlxIcon name="chevron-right" className="w-3 h-3" />
                     <span>Learn</span>
                     <MtlxIcon name="chevron-right" className="w-3 h-3" />
-                    <span className="text-gray-400">Material Gallery</span>
+                    <span className="text-fg-muted">Material Gallery</span>
                 </nav>
 
                 <div className="space-y-2">
-                    <h1 className="text-[28px] sm:text-[34px] leading-[1.15] font-bold tracking-[-0.01em] text-gray-100 text-balance">
+                    <h1 className="text-[28px] sm:text-[34px] leading-[1.15] font-bold tracking-[-0.01em] text-fg text-balance">
                         Material Gallery
                     </h1>
-                    <p className="text-gray-400 text-sm sm:text-base max-w-[60em]">
+                    <p className="text-fg-muted text-sm sm:text-base max-w-[60em]">
                         Every example material shipped in the MaterialX project repo ({tag}), plus a few playground
                         materials of our own, ready to search, preview and reopen in the Material Viewer or Graph Editor.
                     </p>
@@ -824,7 +824,7 @@ function MtlxGalleryApp({ active } = {}) {
 
                 {manifest === 'error' && <GalleryEmptyState />}
                 {manifest === null && (
-                    <div className="flex items-center justify-center h-40 text-gray-400 text-sm animate-pulse">Loading gallery…</div>
+                    <div className="flex items-center justify-center h-40 text-fg-muted text-sm animate-pulse">Loading gallery…</div>
                 )}
 
                 {materials && (
@@ -836,7 +836,7 @@ function MtlxGalleryApp({ active } = {}) {
                                 onChange={(e) => changeQuery(e.target.value)}
                                 placeholder="Search materials…"
                                 aria-label="Search materials"
-                                className="w-full sm:max-w-xs h-9 px-3 rounded-lg border border-gray-700 bg-gray-900 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                                className="w-full sm:max-w-xs h-9 px-3 rounded-lg border border-line bg-surface-sunken text-sm text-fg-soft placeholder-fg-subtle focus:outline-none focus:border-focus"
                             />
                             <div className="flex flex-wrap items-center gap-2">
                                 {chips.map((c) => {
@@ -856,7 +856,7 @@ function MtlxGalleryApp({ active } = {}) {
                                 })}
                                 {/* Subtle divider: reads as a related but distinct
                                     filter group from the single-select family chips. */}
-                                <span className="w-px h-5 bg-gray-700" aria-hidden="true" />
+                                <span className="w-px h-5 bg-line" aria-hidden="true" />
                                 {GALLERY_TAG_FILTERS.map((t) => {
                                     const isActive = tags.indexOf(t.id) !== -1;
                                     return (
@@ -876,19 +876,19 @@ function MtlxGalleryApp({ active } = {}) {
                         </div>
 
                         <div className="flex items-center justify-between gap-3">
-                            <div className="flex items-center gap-2 text-xs text-gray-500">
+                            <div className="flex items-center gap-2 text-xs text-fg-subtle">
                                 <span>{countLabel}</span>
                                 {isFiltered && (
                                     <button
                                         type="button"
                                         onClick={clearFilters}
-                                        className="text-blue-400 hover:text-blue-300 transition-colors"
+                                        className="text-accent-fg hover:text-accent-fg-strong transition-colors"
                                     >
                                         Clear filters
                                     </button>
                                 )}
                             </div>
-                            <div className="flex items-center gap-1.5 text-xs text-gray-500 shrink-0">
+                            <div className="flex items-center gap-1.5 text-xs text-fg-subtle shrink-0">
                                 <span>Per page</span>
                                 <MtlxSelect
                                     value={pageSize}
@@ -903,7 +903,7 @@ function MtlxGalleryApp({ active } = {}) {
                         </div>
 
                         {filtered.length === 0 ? (
-                            <div className="flex items-center justify-center py-16 text-sm text-gray-500 text-center">
+                            <div className="flex items-center justify-center py-16 text-sm text-fg-subtle text-center">
                                 No materials match these filters.
                             </div>
                         ) : (

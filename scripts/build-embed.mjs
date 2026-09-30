@@ -220,8 +220,15 @@ async function buildOne(target) {
 const THEME_CSS_OUT = "embed/gen/theme-utilities.css";
 const EMBED_MIRRORED_TOKEN_CLASSES = [
   "bg-chrome/70", // was bg-gray-900/70
+  "bg-error-bg/90", // was bg-red-950/90
+  "bg-hud-raised/90", // was bg-gray-800/90
   "bg-hud/70", // was bg-gray-900/70
+  "bg-stage", // was bg-gray-900
+  "bg-surface-base", // was bg-gray-900
   "bg-surface-sunken", // was bg-gray-900
+  "bg-veil/70", // was bg-gray-900/70
+  "border-error-border/60", // was border-red-800/60
+  "border-hud-line", // was border-gray-600
   "border-line-strong", // was border-gray-600
   "text-error-text-strong", // was text-red-200
   "text-fg-secondary", // was text-gray-300

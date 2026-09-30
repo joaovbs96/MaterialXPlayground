@@ -57,6 +57,94 @@ function trackedFiles() {
     .filter((f) => !/^embed\/gen\//.test(f));
 }
 
+const blankText = (t) => t.replace(/[^\n]/g, " ");
+
+function stripCssComments(src) {
+  return src.replace(/\/\*[\s\S]*?(?:\*\/|$)/g, blankText);
+}
+
+// Blanks comments, keeping newlines. Tracks strings, templates and regex literals; HTML comments first.
+function stripJsComments(src) {
+  const chars = src.replace(/<!--[\s\S]*?(?:-->|$)/g, blankText).split("");
+  const n = chars.length;
+  const blank = (a, b) => {
+    for (let k = a; k < b; k++) if (chars[k] !== "\n") chars[k] = " ";
+  };
+  const stack = [];
+  let i = 0;
+  let prev = "";
+  while (i < n) {
+    const c = chars[i];
+    const d = chars[i + 1];
+    if (c === "/" && d === "/" && chars[i - 1] !== ":") {
+      let j = i;
+      while (j < n && chars[j] !== "\n") j++;
+      blank(i, j);
+      i = j;
+      continue;
+    }
+    if (c === "/" && d === "*") {
+      let j = i + 2;
+      while (j < n && !(chars[j] === "*" && chars[j + 1] === "/")) j++;
+      j = Math.min(n, j + 2);
+      blank(i, j);
+      i = j;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      let j = i + 1;
+      while (j < n && chars[j] !== c && chars[j] !== "\n") j += chars[j] === "\\" ? 2 : 1;
+      i = j + 1;
+      prev = c;
+      continue;
+    }
+    if (c === "`" || (c === "}" && stack.length && stack[stack.length - 1] === 0)) {
+      if (c === "}") stack.pop();
+      let j = i + 1;
+      let opened = false;
+      while (j < n) {
+        if (chars[j] === "\\") { j += 2; continue; }
+        if (chars[j] === "`") break;
+        if (chars[j] === "$" && chars[j + 1] === "{") { stack.push(0); opened = true; j += 2; break; }
+        j++;
+      }
+      i = j + (opened ? 0 : 1);
+      prev = "`";
+      continue;
+    }
+    if (stack.length) {
+      if (c === "{") stack[stack.length - 1]++;
+      else if (c === "}") stack[stack.length - 1]--;
+    }
+    if (c === "/" && (prev === "" || "(,=:[!&|?{};".includes(prev))) {
+      let j = i + 1;
+      let cls = false;
+      while (j < n && chars[j] !== "\n") {
+        if (chars[j] === "\\") { j += 2; continue; }
+        if (chars[j] === "[") cls = true;
+        else if (chars[j] === "]") cls = false;
+        else if (chars[j] === "/" && !cls) break;
+        j++;
+      }
+      i = j + 1;
+      prev = "/";
+      continue;
+    }
+    if (!/\s/.test(c)) prev = c;
+    i++;
+  }
+  return chars.join("");
+}
+
+// A hex-looking token that is really an anchor, url(#id), selector or id lookup.
+function hexIsNotColor(line, m) {
+  const before = line.slice(0, m.index);
+  const after = line.slice(m.index + m[0].length);
+  if (/(?:href|src|id|for|name|xlink:href)\s*=\s*["']?$/i.test(before) || /url\(\s*["']?$/.test(before)) return true;
+  if (/(?:querySelector(?:All)?|getElementById|closest|matches)\(\s*["'`][^"'`]*$/.test(before)) return true;
+  return /^\s*(?:\{|[>+~.:[]|,\s*[.#\w[:>][^;{}]*\{)/.test(after);
+}
+
 const allow = loadAllowlist();
 // Always fatal: legacy rgba() quantized alpha to 8 bits, raw floats shift pixels.
 const ALPHA_RE = /rgb\(var\(--mtlx-[\w-]+\)\s*\/\s*(\d*\.?\d+)\s*\)/g;
@@ -74,7 +162,10 @@ for (const file of trackedFiles()) {
   } catch {
     continue;
   }
+  src = /\.css$/.test(file) ? stripCssComments(src) : stripJsComments(src);
+  let ln = 0;
   for (const line of src.split(/\r?\n/)) {
+    ln++;
     for (const m of line.matchAll(ALPHA_RE)) {
       const a = Number(m[1]);
       if (Math.abs(Math.round(a * 255) / 255 - a) < 1e-9) continue;
@@ -84,7 +175,7 @@ for (const file of trackedFiles()) {
     for (const [kind, re] of RULES) {
       re.lastIndex = 0;
       for (const m of line.matchAll(re)) {
-        if (kind === "hex" && /^#\d+$/.test(m[0])) continue;
+        if (kind === "hex" && hexIsNotColor(line, m)) continue;
         const ok = allow.some((a) => a.file === file && (a.test ? a.test.test(m[0]) : m[0].includes(a.text)));
         if (ok) {
           allowed++;
@@ -95,7 +186,7 @@ for (const file of trackedFiles()) {
         const a = area(file);
         perArea.set(a, (perArea.get(a) || 0) + 1);
         kinds.set(kind, (kinds.get(kind) || 0) + 1);
-        if (VERBOSE) console.log(`${file}: ${kind}: ${m[0]}`);
+        if (VERBOSE) console.log(`${file}:${ln}: ${kind}: ${m[0]}`);
       }
     }
   }

@@ -12790,7 +12790,7 @@ const enterCssMaximize = (el) => {
             el.style.maxHeight = 'none';
             el.style.margin = '0';
             el.style.zIndex = '9990';
-            el.style.backgroundColor = '#111827';
+            el.style.backgroundColor = MtlxTheme.var('stage');
         } catch (e) {
             // Couldn't style el at all, nothing was actually maximized,
             // so undo the ancestor neutralization and bail rather than
@@ -12869,9 +12869,9 @@ const watchFullscreen = (cb) => {
     const st = document.createElement('style');
     st.id = 'mtlx-shared-css';
     st.textContent = [
-        '.mtlx-loading-bar{position:relative;overflow:hidden;height:6px;border-radius:9999px;background:rgba(75,85,99,.45);}',
+        '.mtlx-loading-bar{position:relative;overflow:hidden;height:6px;border-radius:9999px;background:rgb(var(--mtlx-line-strong) / calc(115 / 255));}',
         '.mtlx-loading-bar::after{content:"";position:absolute;top:0;bottom:0;left:0;width:40%;border-radius:9999px;',
-        'background:linear-gradient(90deg,transparent,#60a5fa,transparent);animation:mtlx-loading-slide 1.1s ease-in-out infinite;}',
+        'background:linear-gradient(90deg,transparent,rgb(var(--mtlx-progress)),transparent);animation:mtlx-loading-slide 1.1s ease-in-out infinite;}',
         '@keyframes mtlx-loading-slide{from{transform:translateX(-100%);}to{transform:translateX(350%);}}',
     ].join('');
     document.head.appendChild(st);
@@ -12885,12 +12885,12 @@ const watchFullscreen = (cb) => {
     const st = document.createElement('style');
     st.id = 'mtlx-hljs-theme';
     st.textContent = [
-        '.hljs{color:#d1d5db;background:transparent;}',
-        '.hljs-tag,.hljs-punctuation{color:#6b7280;}',
-        '.hljs-name{color:#60a5fa;}',
-        '.hljs-attr{color:#9ca3af;}',
-        '.hljs-string{color:#4ade80;}',
-        '.hljs-comment{color:#6b7280;font-style:italic;}',
+        '.hljs{color:rgb(var(--mtlx-code-fg));background:transparent;}',
+        '.hljs-tag,.hljs-punctuation{color:rgb(var(--mtlx-code-muted));}',
+        '.hljs-name{color:rgb(var(--mtlx-code-name));}',
+        '.hljs-attr{color:rgb(var(--mtlx-code-attr));}',
+        '.hljs-string{color:rgb(var(--mtlx-code-string));}',
+        '.hljs-comment{color:rgb(var(--mtlx-code-muted));font-style:italic;}',
     ].join('');
     document.head.appendChild(st);
 })();

@@ -71,8 +71,8 @@
        so the header + its dropdown menus stay usable while one is open;
        those two overlays stop short of the header instead of dimming it. */
     z-index: 60;
-    border-bottom: 1px solid var(--site-gray-800);
-    background-color: rgba(17, 24, 39, 0.95); /* gray-900/95 */
+    border-bottom: 1px solid rgb(var(--mtlx-line-subtle));
+    background-color: rgb(var(--mtlx-chrome) / calc(242 / 255)); /* gray-900/95 */
     -webkit-backdrop-filter: blur(8px);
     backdrop-filter: blur(8px);
 }
@@ -163,10 +163,10 @@
     align-items: center;
     gap: 8px;
     flex-shrink: 0;
-    color: var(--site-blue-400);
+    color: rgb(var(--mtlx-brand-accent));
 }
 .mtlx-brand:hover {
-    color: var(--site-blue-300);
+    color: rgb(var(--mtlx-accent-fg-strong));
 }
 .mtlx-brand-icon {
     width: 24px;
@@ -182,7 +182,7 @@
 /* Same brand blue as .mtlx-brand above, for the desktop About dialog's
    logo/title. No hover rule: this is a static header, not a link. */
 .mtlx-dialog-brand {
-    color: var(--site-blue-400);
+    color: rgb(var(--mtlx-brand-accent));
 }
 
 /* Desktop page tabs + right-side links: hidden below 768px (the
@@ -214,7 +214,7 @@
     line-height: 20px;
     font-weight: 500;
     white-space: nowrap;
-    color: var(--site-gray-400);
+    color: rgb(var(--mtlx-fg-muted));
 }
 @media (min-width: 640px) {
     .mtlx-tab {
@@ -223,19 +223,19 @@
     }
 }
 .mtlx-tab:hover {
-    color: var(--site-gray-200);
-    border-bottom-color: var(--site-gray-600);
+    color: rgb(var(--mtlx-fg-soft));
+    border-bottom-color: rgb(var(--mtlx-line-strong));
 }
 .mtlx-tab.is-disabled,
 .mtlx-tab.is-disabled:hover {
     opacity: 0.4;
     cursor: not-allowed;
-    color: var(--site-gray-400);
+    color: rgb(var(--mtlx-fg-muted));
     border-bottom-color: transparent;
 }
 .mtlx-tab.is-active {
-    border-bottom-color: var(--site-blue-500);
-    color: var(--site-blue-300);
+    border-bottom-color: rgb(var(--mtlx-accent-base));
+    color: rgb(var(--mtlx-accent-fg-strong));
 }
 /* A top-level tab's own Experimental/Coming-soon pill (e.g. Scene Viewer),
    distinct from the group-menu items which get their spacing from flex gap. */
@@ -255,8 +255,8 @@
     gap: 4px;
 }
 .mtlx-tab-trigger[aria-expanded="true"] {
-    color: var(--site-gray-200);
-    border-bottom-color: var(--site-gray-600);
+    color: rgb(var(--mtlx-fg-soft));
+    border-bottom-color: rgb(var(--mtlx-line-strong));
 }
 .mtlx-tab-chevron {
     width: 14px;
@@ -279,9 +279,9 @@
     min-width: 240px;
     padding: 6px;
     border-radius: 10px;
-    border: 1px solid var(--site-gray-700);
-    background-color: var(--site-gray-800);
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    border: 1px solid rgb(var(--mtlx-line));
+    background-color: rgb(var(--mtlx-surface-raised));
+    box-shadow: 0 12px 32px rgb(var(--mtlx-shadow) / calc(115 / 255));
 }
 .mtlx-menu.is-open {
     display: block;
@@ -295,19 +295,19 @@
     font-size: 14px;
     line-height: 20px;
     font-weight: 500;
-    color: var(--site-gray-200);
+    color: rgb(var(--mtlx-fg-soft));
     white-space: nowrap;
 }
 .mtlx-menu-item:hover,
 .mtlx-menu-item:focus-visible {
-    background-color: var(--site-gray-700);
+    background-color: rgb(var(--mtlx-hover));
     outline: none;
 }
 .mtlx-menu-item.is-active {
-    color: var(--site-blue-300);
+    color: rgb(var(--mtlx-accent-fg-strong));
 }
 .mtlx-menu-item.is-disabled {
-    color: var(--site-gray-500);
+    color: rgb(var(--mtlx-fg-subtle));
     cursor: default;
 }
 .mtlx-menu-item.is-disabled:hover {
@@ -333,9 +333,9 @@
     letter-spacing: 0.025em;
     padding: 1px 8px;
     border-radius: 9999px;
-    border: 1px solid rgba(245, 158, 11, 0.4);
-    background-color: rgba(245, 158, 11, 0.1);
-    color: var(--site-amber-300);
+    border: 1px solid rgb(var(--mtlx-experimental-hue) / calc(102 / 255));
+    background-color: rgb(var(--mtlx-experimental-hue) / calc(26 / 255));
+    color: rgb(var(--mtlx-experimental));
     white-space: nowrap;
 }
 .mtlx-menu-soon {
@@ -348,16 +348,16 @@
     letter-spacing: 0.025em;
     padding: 1px 8px;
     border-radius: 9999px;
-    border: 1px solid rgba(75, 85, 99, 0.5);
-    background-color: rgba(55, 65, 81, 0.4);
-    color: var(--site-gray-500);
+    border: 1px solid rgb(var(--mtlx-line-strong) / calc(128 / 255));
+    background-color: rgb(var(--mtlx-chip) / calc(102 / 255));
+    color: rgb(var(--mtlx-fg-subtle));
     white-space: nowrap;
 }
 .mtlx-menu-ext {
     width: 14px;
     height: 14px;
     flex-shrink: 0;
-    color: var(--site-gray-500);
+    color: rgb(var(--mtlx-fg-subtle));
 }
 .mtlx-menu-item .mtlx-menu-ext {
     width: 14px;
@@ -438,18 +438,18 @@
    radius, below) so the flat-at-rest widget picks up the same "pressable"
    affordance as the About button beside it. */
 .mtlx-source:hover {
-    background-color: var(--site-gray-700);
-    border-color: var(--site-gray-600);
+    background-color: rgb(var(--mtlx-hover));
+    border-color: rgb(var(--mtlx-line-strong));
 }
 .mtlx-source:hover .mtlx-source-icon,
 .mtlx-source:hover .mtlx-source-repo {
-    color: var(--site-gray-100);
+    color: rgb(var(--mtlx-fg));
 }
 .mtlx-source-icon {
     width: 20px;
     height: 20px;
     flex-shrink: 0;
-    color: var(--site-gray-200);
+    color: rgb(var(--mtlx-fg-soft));
     transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .mtlx-source-meta {
@@ -461,7 +461,7 @@
     font-size: 12px;
     line-height: 16px;
     font-weight: 500;
-    color: var(--site-gray-200);
+    color: rgb(var(--mtlx-fg-soft));
     white-space: nowrap;
     transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -470,7 +470,7 @@
     gap: 8px;
     font-size: 11px;
     line-height: 14px;
-    color: var(--site-gray-400);
+    color: rgb(var(--mtlx-fg-muted));
     white-space: nowrap;
 }
 .mtlx-source-facts:empty {
@@ -508,14 +508,14 @@
        space so hover doesn't shift/resize the button (BTN_MENUBAR). */
     border: 1px solid transparent;
     background-color: transparent;
-    color: var(--site-gray-200);
+    color: rgb(var(--mtlx-fg-soft));
     cursor: pointer;
     transition: background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
         border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .mtlx-icon-btn:hover {
-    background-color: var(--site-gray-700);
-    border-color: var(--site-gray-600);
+    background-color: rgb(var(--mtlx-hover));
+    border-color: rgb(var(--mtlx-line-strong));
 }
 .mtlx-icon-btn svg {
     width: 20px;
@@ -546,15 +546,15 @@
     height: 36px;
     align-self: center;
     border-radius: 8px;
-    border: 1px solid var(--site-gray-600);
-    background-color: var(--site-gray-800);
-    color: var(--site-gray-200);
+    border: 1px solid rgb(var(--mtlx-line-strong));
+    background-color: rgb(var(--mtlx-control));
+    color: rgb(var(--mtlx-fg-soft));
     transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
         background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
         border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .mtlx-nav-toggle:hover {
-    background-color: var(--site-gray-700);
+    background-color: rgb(var(--mtlx-hover));
 }
 .mtlx-nav-toggle svg {
     width: 24px;
@@ -574,8 +574,8 @@
    working: inline style always wins over both rules below. */
 .mtlx-mobile-menu {
     display: none;
-    border-top: 1px solid var(--site-gray-800);
-    background-color: rgba(17, 24, 39, 0.95); /* gray-900/95 */
+    border-top: 1px solid rgb(var(--mtlx-line-subtle));
+    background-color: rgb(var(--mtlx-chrome) / calc(242 / 255)); /* gray-900/95 */
     -webkit-backdrop-filter: blur(8px);
     backdrop-filter: blur(8px);
 }
@@ -607,7 +607,7 @@
     font-size: 14px;
     line-height: 20px;
     font-weight: 500;
-    color: var(--site-gray-400);
+    color: rgb(var(--mtlx-fg-muted));
 }
 /* Nav icon: sized like .mtlx-source-fact's icons below (descendant
    selector, no class on the <svg> itself — the icon markup is shared
@@ -623,13 +623,13 @@
     flex-shrink: 0;
 }
 .mtlx-tab-mobile:hover {
-    color: var(--site-gray-200);
-    background-color: rgba(31, 41, 55, 0.4); /* gray-800/40 */
+    color: rgb(var(--mtlx-fg-soft));
+    background-color: rgb(var(--mtlx-hover-subtle) / calc(102 / 255)); /* gray-800/40 */
 }
 .mtlx-tab-mobile.is-active {
-    border-left-color: var(--site-blue-500);
-    color: var(--site-blue-300);
-    background-color: rgba(31, 41, 55, 0.6); /* gray-800/60 */
+    border-left-color: rgb(var(--mtlx-accent-base));
+    color: rgb(var(--mtlx-accent-fg-strong));
+    background-color: rgb(var(--mtlx-hover-subtle) / calc(153 / 255)); /* gray-800/60 */
 }
 
 /* Group label row (Learn/Integrate), mobile-panel-only: desktop groups
@@ -645,18 +645,18 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: var(--site-gray-500);
+    color: rgb(var(--mtlx-fg-subtle));
 }
 .mtlx-mobile-group-label svg {
     width: 14px;
     height: 14px;
 }
 .mtlx-tab-mobile.is-disabled {
-    color: var(--site-gray-500);
+    color: rgb(var(--mtlx-fg-subtle));
     cursor: default;
 }
 .mtlx-tab-mobile.is-disabled:hover {
-    color: var(--site-gray-500);
+    color: rgb(var(--mtlx-fg-subtle));
     background-color: transparent;
 }
 /* Two classes beat .mtlx-tab-mobile svg's one-class-plus-type above, so
@@ -678,7 +678,7 @@
 .mtlx-mobile-links {
     display: flex;
     flex-direction: column;
-    border-top: 1px solid var(--site-gray-800);
+    border-top: 1px solid rgb(var(--mtlx-line-subtle));
     padding-top: 4px;
     padding-bottom: 4px;
 }
@@ -688,13 +688,13 @@
     padding: 12px 16px;
     font-size: 14px;
     line-height: 20px;
-    color: var(--site-gray-200);
+    color: rgb(var(--mtlx-fg-soft));
     transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
         background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
         border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .mtlx-mobile-link:hover {
-    background-color: rgba(31, 41, 55, 0.4); /* gray-800/40 */
+    background-color: rgb(var(--mtlx-hover-subtle) / calc(102 / 255)); /* gray-800/40 */
 }
 /* Turns the About row from a plain block button into an icon+text row,
    aligned the same way as .mtlx-source-mobile below (left-aligned icon
@@ -728,8 +728,8 @@
    hardcode rgba() here, following .mtlx-header's own rgba() precedent. */
 .mtlx-build-banner {
     display: none;
-    border-top: 1px solid rgba(217, 119, 6, 0.5); /* amber-600/50 */
-    background-color: rgba(120, 53, 15, 0.3); /* amber-900/30 */
+    border-top: 1px solid rgb(var(--mtlx-warning-border-alt) / calc(128 / 255)); /* amber-600/50 */
+    background-color: rgb(var(--mtlx-warning-bg) / calc(77 / 255)); /* amber-900/30 */
 }
 .mtlx-build-banner.is-visible {
     display: block;
@@ -745,7 +745,7 @@
     gap: 6px 12px;
     font-size: 13px;
     line-height: 18px;
-    color: var(--site-amber-200);
+    color: rgb(var(--mtlx-warning-text));
 }
 @media (min-width: 640px) {
     .mtlx-build-banner-inner {
@@ -776,9 +776,9 @@
     flex-shrink: 0;
     padding: 4px 10px;
     border-radius: 8px;
-    border: 1px solid var(--site-gray-600);
-    background-color: var(--site-gray-800);
-    color: var(--site-gray-200);
+    border: 1px solid rgb(var(--mtlx-line-strong));
+    background-color: rgb(var(--mtlx-control));
+    color: rgb(var(--mtlx-fg-soft));
     font-size: 12px;
     font-weight: 500;
     white-space: nowrap;
@@ -787,7 +787,7 @@
         border-color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .mtlx-build-banner-action:hover {
-    background-color: var(--site-gray-700);
+    background-color: rgb(var(--mtlx-hover));
 }
 .mtlx-build-banner-dismiss {
     display: inline-flex;
@@ -798,12 +798,12 @@
     height: 20px;
     font-size: 16px;
     line-height: 1;
-    color: var(--site-amber-200);
+    color: rgb(var(--mtlx-warning-text));
     opacity: 0.8;
     transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .mtlx-build-banner-dismiss:hover {
-    color: var(--site-amber-100);
+    color: rgb(var(--mtlx-warning-text-strong));
     opacity: 1;
 }
 
@@ -816,8 +816,8 @@
 .mtlx-footer {
     position: relative;
     flex-shrink: 0;
-    border-top: 1px solid var(--site-gray-800);
-    background-color: var(--site-gray-900);
+    border-top: 1px solid rgb(var(--mtlx-line-subtle));
+    background-color: rgb(var(--mtlx-chrome));
 }
 
 /* Expanded body: an overlay above the strip. The in-flow footer is
@@ -829,9 +829,9 @@
     left: 0;
     right: 0;
     z-index: 40; /* above in-page HUDs, below modal dialogs (z-50) */
-    background-color: var(--site-gray-900);
-    border-top: 1px solid var(--site-gray-800);
-    box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.45);
+    background-color: rgb(var(--mtlx-chrome));
+    border-top: 1px solid rgb(var(--mtlx-line-subtle));
+    box-shadow: 0 -12px 32px rgb(var(--mtlx-shadow) / calc(115 / 255));
 }
 
 /* Slim toggle strip: a full-width native <button> (the :where() reset at
@@ -854,11 +854,11 @@
     font-size: 12px;
     line-height: 20px;
     font-weight: 500;
-    color: var(--site-gray-400);
+    color: rgb(var(--mtlx-fg-muted));
     transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .mtlx-footer-toggle:hover .mtlx-footer-toggle-inner {
-    color: var(--site-gray-200);
+    color: rgb(var(--mtlx-fg-soft));
 }
 @media (min-width: 640px) {
     .mtlx-footer-toggle-inner {
@@ -888,7 +888,7 @@
     padding: 10px 12px 12px;
     font-size: 13px;
     line-height: 18px;
-    color: var(--site-gray-400);
+    color: rgb(var(--mtlx-fg-muted));
 }
 @media (min-width: 640px) {
     .mtlx-footer-inner {
@@ -907,11 +907,11 @@
 
 .mtlx-footer-link {
     text-decoration: underline;
-    color: var(--site-gray-200);
+    color: rgb(var(--mtlx-fg-soft));
     transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .mtlx-footer-link:hover {
-    color: var(--site-gray-100);
+    color: rgb(var(--mtlx-fg));
 }
 
 /* Experimental Preview paragraph, moved here from the docs page's own
@@ -919,7 +919,7 @@
    footerHtml). Amber accent + alert-triangle icon kept from the original
    banner; text sized down to match the rest of the footer body. */
 .mtlx-footer-experimental {
-    color: var(--site-amber-300);
+    color: rgb(var(--mtlx-experimental));
     opacity: 0.9;
 }
 .mtlx-footer-experimental strong {
@@ -937,11 +937,11 @@
 }
 .mtlx-footer-link-amber {
     text-decoration: underline;
-    color: var(--site-amber-200);
+    color: rgb(var(--mtlx-warning-text));
     transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .mtlx-footer-link-amber:hover {
-    color: var(--site-amber-100);
+    color: rgb(var(--mtlx-warning-text-strong));
 }
 
 /* ---- About dialog disclaimer paragraphs ------------------------------ */
@@ -952,7 +952,7 @@
 .mtlx-about-inner {
     font-size: 13px;
     line-height: 18px;
-    color: var(--site-gray-400);
+    color: rgb(var(--mtlx-fg-muted));
 }
 /* The :where() reset only scopes the header and footer mounts, and this
    paragraph pair lives outside both, so zero <p> margins by hand here too. */
@@ -965,16 +965,16 @@
 
 .mtlx-about-link {
     text-decoration: underline;
-    color: var(--site-gray-200);
+    color: rgb(var(--mtlx-fg-soft));
     transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .mtlx-about-link:hover {
-    color: var(--site-gray-100);
+    color: rgb(var(--mtlx-fg));
 }
 
 /* Experimental Preview paragraph. Amber accent + alert-triangle icon. */
 .mtlx-about-experimental {
-    color: var(--site-amber-300);
+    color: rgb(var(--mtlx-experimental));
     opacity: 0.9;
 }
 .mtlx-about-experimental strong {
@@ -990,11 +990,11 @@
 }
 .mtlx-about-link-amber {
     text-decoration: underline;
-    color: var(--site-amber-200);
+    color: rgb(var(--mtlx-warning-text));
     transition: color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .mtlx-about-link-amber:hover {
-    color: var(--site-amber-100);
+    color: rgb(var(--mtlx-warning-text-strong));
 }
 
 /* AboutDialog wraps this in the site's amber warning box idiom; neutralize
