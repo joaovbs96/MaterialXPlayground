@@ -1565,7 +1565,7 @@
             </div>
         );
     };
-    // Hierarchy type filter, same segmented look as the panel quality control.
+    // Hierarchy type filter: the bottom row of the search box, no chrome of its own.
     const SCENE_TREE_GROUP_OPTIONS = [
         ['all', 'All', 'Show everything'],
         ['scene', 'Scene', 'Show only scene objects'],
@@ -1574,9 +1574,8 @@
         ['lights', 'Lights', 'Show only lights'],
     ];
     const SceneTreeGroupSegments = ({ value, onChange }) => {
-        const cls = QUALITY_SEGMENT_TONES.panel;
         return (
-            <div role="group" aria-label="Show in hierarchy" data-testid="usd-scene-tree-group" className={cls.wrap.replace('flex-1', 'flex-none w-full')}>
+            <div role="group" aria-label="Show in hierarchy" data-testid="usd-scene-tree-group" className="flex w-full border-t border-gray-700">
                 {SCENE_TREE_GROUP_OPTIONS.map(([id, label, title], i) => {
                     const active = value === id;
                     return (
@@ -1588,10 +1587,9 @@
                             aria-pressed={active}
                             title={title}
                             onClick={() => onChange(id)}
-                            className={'h-[26px] min-w-0 flex-1 px-1 flex items-center justify-center text-[11px] font-medium transition-colors '
-                                + (i === 0 ? 'rounded-l-[7px] ' : 'border-l border-gray-600/50 ')
-                                + (i === SCENE_TREE_GROUP_OPTIONS.length - 1 ? 'rounded-r-[7px] ' : '')
-                                + (active ? cls.active : cls.idle)}
+                            className={'h-6 min-w-0 flex-1 px-1 flex items-center justify-center text-[11px] font-medium transition-colors '
+                                + (i > 0 ? 'border-l border-gray-700 ' : '')
+                                + (active ? 'bg-blue-500/[0.12] text-blue-300' : 'bg-transparent text-gray-400 hover:bg-gray-800 hover:text-gray-200')}
                         >
                             <span className="truncate">{label}</span>
                         </button>
@@ -4139,7 +4137,8 @@
                 {sceneTree && (
                     <section data-testid="usd-scene-section-hierarchy" className="flex-1 flex flex-col gap-2 px-3.5 py-3 border-t border-gray-700">
                         <SidebarSectionHeader icon="list-details" title="Hierarchy" summary={objectCount.toLocaleString() + ' object' + (objectCount === 1 ? '' : 's')} testId="usd-scene-section-header" />
-                        <div className="relative flex-none h-[26px]">
+                        <div className="flex-none rounded-md border border-gray-700 bg-gray-900 overflow-hidden focus-within:border-blue-500">
+                        <div className="relative h-[26px]">
                             <MtlxIcon name="search" className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500 pointer-events-none" />
                             <input
                                 type="text"
@@ -4158,10 +4157,11 @@
                                 aria-label="Filter objects"
                                 data-testid="usd-scene-tree-filter"
                                 spellCheck={false}
-                                className="w-full h-full bg-gray-900 border border-gray-700 rounded-md pl-7 pr-2 text-[11px] text-gray-300 placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                                className="w-full h-full bg-transparent border-0 pl-7 pr-2 text-[11px] text-gray-300 placeholder-gray-500 focus:outline-none"
                             />
                         </div>
                         <SceneTreeGroupSegments value={treeGroup} onChange={setTreeGroup} />
+                        </div>
                         {treeRows.length ? (
                             <SceneTree
                                 rows={treeRows}
