@@ -163,9 +163,9 @@
     // there before, default or previously-applied) if it fails validation.
     function applyTheme(name, value) {
         if (name === 'theme') {
-            // Invalid or cleared values behave as auto (follow the OS).
+            // Invalid or cleared values behave as dark, the default; auto follows the OS.
             var t = String(value == null ? '' : value).trim().toLowerCase();
-            var pref = (t === 'light' || t === 'dark') ? t : 'system';
+            var pref = t === 'light' ? 'light' : (t === 'auto' ? 'system' : 'dark');
             if (window.MtlxTheme && window.MtlxTheme.setPreference) window.MtlxTheme.setPreference(pref, { persist: false });
             return;
         }

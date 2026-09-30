@@ -283,6 +283,8 @@ function HeroStage({ active, busy, onOpen }) {
                 return;
             }
             const el = document.createElement('materialx-viewer');
+            // Follows the site's Light/Dark/System preference live.
+            if (window.MtlxTheme && window.MtlxTheme.bindEmbed) window.MtlxTheme.bindEmbed(el);
             el.eager = true;
             el.transparent = true;
             el.autorotate = true;

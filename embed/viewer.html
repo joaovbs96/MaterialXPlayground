@@ -71,9 +71,10 @@
             if (['1', 'true', 'yes', 'on'].indexOf(v) !== -1) {
                 document.documentElement.style.setProperty('--mtlx-page-bg', 'transparent');
             }
-            // `theme` (light | dark | auto): read before theme.js; an embed never persists it.
+            // `theme` (dark | light | auto): read before theme.js; an embed never persists it.
+            // Absent or invalid means dark; auto follows the visitor's OS.
             var t = (new URLSearchParams(window.location.search).get('theme') || '').trim().toLowerCase();
-            window.__MTLX_THEME_PREF__ = (t === 'light' || t === 'dark') ? t : 'system';
+            window.__MTLX_THEME_PREF__ = t === 'light' ? 'light' : (t === 'auto' ? 'system' : 'dark');
             window.__MTLX_THEME_NO_PERSIST__ = true;
         })();
     </script>

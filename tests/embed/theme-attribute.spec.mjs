@@ -31,13 +31,21 @@ test('theme="light" and theme="dark" set the iframe theme', async ({ page, embed
   }
 });
 
-test('theme auto (default and invalid) follows the OS color scheme', async ({ page, embedURL }) => {
+test('theme defaults to dark (missing or invalid) whatever the OS scheme', async ({ page, embedURL }) => {
   for (const scheme of ['light', 'dark']) {
     await page.emulateMedia({ colorScheme: scheme });
-    for (const opts of [{}, { theme: 'auto' }, { theme: 'bogus' }]) {
+    for (const opts of [{}, { theme: 'bogus' }]) {
       const { frame } = await open(page, embedURL, opts);
-      expect(await dataTheme(frame)).toBe(scheme);
+      expect(await dataTheme(frame)).toBe('dark');
     }
+  }
+});
+
+test('theme="auto" follows the OS color scheme', async ({ page, embedURL }) => {
+  for (const scheme of ['light', 'dark']) {
+    await page.emulateMedia({ colorScheme: scheme });
+    const { frame } = await open(page, embedURL, { theme: 'auto' });
+    expect(await dataTheme(frame)).toBe(scheme);
   }
 });
 

@@ -107,6 +107,13 @@
         return function () { root.removeEventListener(EVENT, handler); };
     }
 
+    // Keeps a <materialx-viewer> on the site's Light/Dark/System preference (system maps to auto).
+    function bindEmbed(el) {
+        const apply = function (pref) { el.theme = pref === 'system' ? 'auto' : (pref === 'light' ? 'light' : 'dark'); };
+        apply(preference);
+        return onChange(function (d) { apply(d.preference); });
+    }
+
     function typeFallback() {
         const p = (DATA.params && (DATA.params[theme] || DATA.params[FALLBACK])) || {};
         return Object.assign({}, p.typeFallback);
@@ -180,6 +187,7 @@
         // Legacy rgba() quantizes alpha to 8 bits; match it so composited pixels stay identical.
         rgba: function (token, a) { return 'rgb(var(--mtlx-' + token + ') / calc(' + Math.round(a * 255) + ' / 255))'; },
         onChange: onChange,
+        bindEmbed: bindEmbed,
         typeFallback: typeFallback,
         param: param,
         tailwindConfig: tailwindConfig,

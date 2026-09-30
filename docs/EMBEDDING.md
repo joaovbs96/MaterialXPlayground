@@ -64,7 +64,7 @@ in-page, for reference while you work.
 | `forcetransparency` | boolean | *(off, or the visitor's last Settings choice)* | Renders materials that have opacity or transmission with real alpha blending instead of the default opaque preview. Not the same feature as `transparent` above. See [Force transparency](#force-transparency). |
 | `displacement` | boolean | on | Enables the CPU-side mesh displacement pass; off previews the undisplaced mesh. This tab-only setting never touches the visitor's shared site preference. |
 | `previewsubdivision` | integer `0`-`3` | `2` | Loop subdivision level applied ahead of displacement, capped per-mesh against a triangle budget. This tab-only setting never touches the visitor's shared site preference. |
-| `theme` | `light`, `dark`, `auto` | `auto` | Light or dark look for the viewer's own UI. `auto` follows the visitor's OS setting live; an invalid value behaves as `auto`. Never persisted for an embed. See [Theming](#theming). |
+| `theme` | `dark`, `light`, `auto` | `dark` | Light or dark look for the viewer's own UI, loading screen included. `auto` follows the visitor's OS setting live; an invalid value behaves as `dark`. Never persisted for an embed. See [Theming](#theming). |
 | `accent` | CSS color | `#3b82f6` | HUD accent color (active state, focus outline, slider fill). See [Theming](#theming). |
 | `surface` | CSS color | `#1f2937` | HUD button/panel background color. See [Theming](#theming). |
 | `text` | CSS color | `#d1d5db` | HUD text/icon color. See [Theming](#theming). |
@@ -213,7 +213,7 @@ reloads the iframe (a real navigation, with a fresh `ready` handshake).
 | `geometryurl` | `.geometryUrl` | URL string (`.obj`/`.glb`/`.gltf`) | (none) | Yes |
 | `transparent` | `.transparent` | boolean | off | Yes |
 | `forcetransparency` | `.forceTransparency` | boolean | off | Yes |
-| `theme` | `.theme` | `light`, `dark`, `auto` | `auto` | Yes |
+| `theme` | `.theme` | `dark`, `light`, `auto` | `dark` | Yes |
 | `accent` | `.accent` | CSS color | `#3b82f6` | Yes |
 | `surface` | `.surface` | CSS color | `#1f2937` | Yes |
 | `text` | `.text` | CSS color | `#d1d5db` | Yes |
@@ -287,11 +287,12 @@ el.addEventListener('mtlx-error', (e) => console.error('viewer error:', e.detail
 
 ## Theming
 
-The `theme` param (`<materialx-viewer theme="...">`) picks `light`, `dark` or `auto`. The default,
-`auto`, follows the visitor's OS color scheme and reacts if it changes. Changing the attribute
-updates the running viewer in place, no reload. The choice is never saved for the visitor. It
-sets the base look, and `accent`, `surface` and `text` below still override it on top. The
-placeholder shown before the viewer loads follows `theme` too.
+The `theme` param (`<materialx-viewer theme="...">`) picks `dark`, `light` or `auto`. The default,
+`dark`, applies when the attribute is missing or invalid. `light` switches the viewer to its light
+look, and `auto` follows the visitor's OS color scheme and reacts if it changes. Changing the
+attribute updates the running viewer in place, no reload. The choice is never saved for the
+visitor. It sets the base look, and `accent`, `surface` and `text` below still override it on top.
+The placeholder and the loading screen shown before the viewer is ready follow `theme` too.
 
 Four params (`accent`, `surface`, `text`, `radius`) map to CSS custom properties consumed by
 `embed/embed-controls.css` (the HUD strip's own stylesheet), which defines them on `:root`

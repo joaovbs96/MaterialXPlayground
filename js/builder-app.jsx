@@ -27,9 +27,9 @@ const builderRadiusPx = (v) => { const t = String(v == null ? '' : v).trim(); re
 // section). "Card" keeps the dark palette but turns the page transparent
 // and rounds corners more, for sitting inside a host card.
 const BUILDER_THEME_PRESETS = [
-    { id: 'dark', label: 'Dark', accent: '#3b82f6', surface: '#1f2937', text: '#d1d5db', radius: '4', transparent: false },
-    { id: 'light', label: 'Light', accent: '#2563eb', surface: '#f9fafb', text: '#374151', radius: '4', transparent: false },
-    { id: 'card', label: 'Transparent Card', accent: '#3b82f6', surface: '#1f2937', text: '#d1d5db', radius: '8', transparent: true },
+    { id: 'dark', label: 'Dark', theme: 'dark', accent: '#3b82f6', surface: '#1f2937', text: '#d1d5db', radius: '4', transparent: false },
+    { id: 'light', label: 'Light', theme: 'light', accent: '#2563eb', surface: '#f9fafb', text: '#374151', radius: '4', transparent: false },
+    { id: 'card', label: 'Transparent Card', theme: 'dark', accent: '#3b82f6', surface: '#1f2937', text: '#d1d5db', radius: '8', transparent: true },
 ];
 
 // Checkerboard backdrop shown behind the preview element while Transparent
@@ -153,6 +153,7 @@ const BUILDER_DEFAULTS = {
     exposure: '',
     envmap: '',
     geometryUrl: '',
+    theme: 'dark',
     accent: BUILDER_THEME_DEFAULTS.accent,
     surface: BUILDER_THEME_DEFAULTS.surface,
     text: BUILDER_THEME_DEFAULTS.text,
@@ -278,6 +279,7 @@ const parseBuilderHashSettings = () => {
         patch.backdrop = params.get('backdrop');
     }
     if (params.has('transparent')) patch.transparent = builderParseBool(params.get('transparent'));
+    if (params.has('theme')) patch.theme = params.get('theme') === 'light' ? 'light' : 'dark';
     if (params.has('accent')) patch.accent = params.get('accent');
     if (params.has('surface')) patch.surface = params.get('surface');
     if (params.has('text')) patch.text = params.get('text');
@@ -319,6 +321,7 @@ const buildShareParams = (s) => {
     if (cs) params.set('controls', cs);
     if (!isBuilderDefault('backdrop', s.backdrop)) params.set('backdrop', s.backdrop);
     if (s.transparent) params.set('transparent', '1');
+    if (s.theme === 'light') params.set('theme', 'light');
     if (!isBuilderDefault('accent', s.accent)) params.set('accent', s.accent.trim());
     if (!isBuilderDefault('surface', s.surface)) params.set('surface', s.surface.trim());
     if (!isBuilderDefault('text', s.text)) params.set('text', s.text.trim());
@@ -385,7 +388,8 @@ const builderSizeSummary = (s) => (s.sizing === 'responsive'
     ? `${builderAspectLabel(s.width, s.height)}, responsive`
     : `${s.width} x ${s.height}, fixed`);
 const builderActiveThemePreset = (s) => BUILDER_THEME_PRESETS.find((p) =>
-    builderNorm(p.accent) === builderNorm(s.accent)
+    (p.theme || 'dark') === (s.theme || 'dark')
+    && builderNorm(p.accent) === builderNorm(s.accent)
     && builderNorm(p.surface) === builderNorm(s.surface)
     && builderNorm(p.text) === builderNorm(s.text)
     && normForCompare('radius', p.radius) === normForCompare('radius', s.radius)
@@ -1028,7 +1032,7 @@ function BuilderApp({ active } = {}) {
     const patch = (values) => setSettings((s) => ({ ...s, ...values }));
     const {
         src, geometry, controls, backdrop, transparent, autorotate, env, exposure, envmap,
-        geometryUrl, accent, surface, text, radius, width, height, sizing, material, camera,
+        geometryUrl, theme, accent, surface, text, radius, width, height, sizing, material, camera,
         wheelZoom, version, poster, eager, displacement, subdivision,
     } = settings;
 
@@ -1107,6 +1111,7 @@ function BuilderApp({ active } = {}) {
         el.controls = controlsStr;
         el.backdrop = backdrop;
         el.transparent = transparent;
+        el.theme = theme;
         el.accent = accent;
         el.surface = surface;
         el.text = text;
@@ -1153,6 +1158,7 @@ function BuilderApp({ active } = {}) {
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.exposure = exposure.trim(); }, [exposure]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.backdrop = backdrop; }, [backdrop]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.transparent = transparent; }, [transparent]);
+    React.useEffect(() => { if (previewElRef.current) previewElRef.current.theme = theme; }, [theme]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.accent = accent; }, [accent]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.surface = surface; }, [surface]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.text = text; }, [text]);
@@ -1339,6 +1345,7 @@ function BuilderApp({ active } = {}) {
         if (controlsStr) entries.push(['controls', controlsStr]);
         if (backdrop !== BUILDER_DEFAULTS.backdrop) entries.push(['backdrop', backdrop]);
         if (transparent) entries.push(['transparent', '1']);
+        if (theme === 'light') entries.push(['theme', 'light']);
         if (builderNorm(accent) !== builderNorm(BUILDER_THEME_DEFAULTS.accent)) entries.push(['accent', accent.trim()]);
         if (builderNorm(surface) !== builderNorm(BUILDER_THEME_DEFAULTS.surface)) entries.push(['surface', surface.trim()]);
         if (builderNorm(text) !== builderNorm(BUILDER_THEME_DEFAULTS.text)) entries.push(['text', text.trim()]);
@@ -1385,6 +1392,7 @@ function BuilderApp({ active } = {}) {
         if (controlsStr) attrs.push(`controls="${controlsStr}"`);
         if (backdrop !== BUILDER_DEFAULTS.backdrop) attrs.push(`backdrop="${backdrop}"`);
         if (transparent) attrs.push('transparent');
+        if (theme === 'light') attrs.push('theme="light"');
         if (builderNorm(accent) !== builderNorm(BUILDER_THEME_DEFAULTS.accent)) attrs.push(`accent="${builderEscAttr(accent.trim())}"`);
         if (builderNorm(surface) !== builderNorm(BUILDER_THEME_DEFAULTS.surface)) attrs.push(`surface="${builderEscAttr(surface.trim())}"`);
         if (builderNorm(text) !== builderNorm(BUILDER_THEME_DEFAULTS.text)) attrs.push(`text="${builderEscAttr(text.trim())}"`);
@@ -1670,7 +1678,7 @@ function BuilderApp({ active } = {}) {
                                 key={p.id} preset={p} active={activeThemePreset && activeThemePreset.id === p.id}
                                 disabled={presetDisabled}
                                 title={presetDisabled ? 'Std. Shader Ball w/ Backdrop cannot be transparent. Pick another geometry to enable this preset.' : undefined}
-                                onClick={() => patch({ accent: p.accent, surface: p.surface, text: p.text, radius: p.radius, transparent: p.transparent })}
+                                onClick={() => patch({ theme: p.theme, accent: p.accent, surface: p.surface, text: p.text, radius: p.radius, transparent: p.transparent })}
                             />
                         );
                     })}

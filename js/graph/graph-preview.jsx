@@ -147,6 +147,8 @@
                         return undefined;
                     }
                     const el = document.createElement('materialx-viewer');
+                    // Follows the site's Light/Dark/System preference live.
+                    if (window.MtlxTheme && window.MtlxTheme.bindEmbed) window.MtlxTheme.bindEmbed(el);
                     el.wheel = 'none';
                     // Experimental depth-peeled alpha blending for opacity and
                     // transmission, matching what-is-materialx.jsx's ViewerPane.

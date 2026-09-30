@@ -330,8 +330,8 @@ window.MTLX_DIFFUSE_ENV = 'sh';
             // Placeholder colors mirror the theme tokens surface-base and fg-muted.
             style.textContent =
                 ':host{--ph-bg:#111827;--ph-fg:#9ca3af;}' +
-                '@media (prefers-color-scheme:light){:host(:not([theme="dark" i])){--ph-bg:#f3f4f6;--ph-fg:#4b5563;}}' +
                 ':host([theme="light" i]){--ph-bg:#f3f4f6;--ph-fg:#4b5563;}' +
+                '@media (prefers-color-scheme:light){:host([theme="auto" i]){--ph-bg:#f3f4f6;--ph-fg:#4b5563;}}' +
                 ':host{display:block;position:relative;width:100%;aspect-ratio:16/9;' +
                 'background:var(--ph-bg);overflow:hidden;box-sizing:border-box;}' +
                 // Layer 4 of 4 (docs/EMBEDDING.md): outside the iframe entirely, so this
