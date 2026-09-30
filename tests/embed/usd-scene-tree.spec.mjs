@@ -640,10 +640,6 @@ test('@scene Reload and Cancel share one slot in the Scene section', async ({ pa
   const reload = page.getByTestId('usd-scene-info-reload');
   const cancel = page.getByTestId('usd-scene-cancel');
   const slot = await reload.boundingBox();
-  // Load example sits beside the slot, not below it.
-  const example = await page.getByTestId('usd-scene-load-example').boundingBox();
-  expect(Math.abs(example.y - slot.y)).toBeLessThanOrEqual(1);
-  expect(example.x).toBeGreaterThan(slot.x + slot.width - 1);
   // A cached reload of this tiny stage takes milliseconds: hold the renderer
   // until the test lets it go, so the busy state can be inspected.
   await page.evaluate(() => {

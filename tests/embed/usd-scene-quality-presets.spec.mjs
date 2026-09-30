@@ -13,6 +13,27 @@ import { test, expect } from './lib/test-base.mjs';
 // segmented control (stageQualityLevel calls forceLiveValue for every live
 // key), same as Reset -- so no row shows a "differs from preset" dot right
 // after a pick.
+// Stages the root.usda fixture set (nested layer + two materials) in a temp
+// folder and uploads it through the folder input, so relative references
+// resolve and root.usda is preferred as the root (rootNamePattern).
+const FIXTURE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../fixtures/usd-scene');
+const FIXTURE_FILES = ['root.usda', 'nested/nested.usda', 'nested/materials/red.mtlx', 'nested/materials/blue.mtlx'];
+async function loadFixtureScene(page) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mtlx-scene-'));
+  const stage = path.join(dir, 'usd-scene');
+  for (const rel of FIXTURE_FILES) {
+    const dest = path.join(stage, rel);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(path.join(FIXTURE_DIR, rel), dest);
+  }
+  try {
+    await page.locator('input[webkitdirectory]').setInputFiles(stage);
+  } finally {
+    // Playwright reads the files during the call, so the copy can go.
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 const PRESET_SETTINGS = {
   performance: { resolution: '512 px', memory: '1 GB', subdivision: 'Off', shadows: false, ao: false, skyVis: false, transparency: false },
   default: { resolution: '2048 px', memory: '1 GB', subdivision: 'Off', shadows: false, ao: false, skyVis: false, transparency: true },
@@ -113,7 +134,7 @@ test('@scene Reset and Apply stay disabled right after picking a preset and righ
   test.setTimeout(240000);
   await page.goto(embedURL + '/index.html#!scene');
   await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
-  await page.getByTestId('usd-scene-load-example').click();
+  await loadFixtureScene(page);
   await waitForReload(page);
 
   const popover = await openPopover(page);
@@ -129,7 +150,7 @@ test('@scene applies every governed setting from the popover Apply', async ({ pa
   test.setTimeout(300000);
   await page.goto(embedURL + '/index.html#!scene');
   await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
-  await page.getByTestId('usd-scene-load-example').click();
+  await loadFixtureScene(page);
   await waitForReload(page);
 
   await applyQualityLevel(page, 'performance');
@@ -166,7 +187,7 @@ test('@scene stages popover changes until Apply, and Cancel discards them', asyn
   test.setTimeout(240000);
   await page.goto(embedURL + '/index.html#!scene');
   await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
-  await page.getByTestId('usd-scene-load-example').click();
+  await loadFixtureScene(page);
   await waitForReload(page);
 
   const popover = await openPopover(page);
@@ -197,7 +218,7 @@ test('@scene applies a staged draft and Reset returns it to the selected level',
   test.setTimeout(240000);
   await page.goto(embedURL + '/index.html#!scene');
   await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
-  await page.getByTestId('usd-scene-load-example').click();
+  await loadFixtureScene(page);
   await waitForReload(page);
 
   const popover = await openPopover(page);
@@ -221,7 +242,7 @@ test('@scene shows an unapplied-changes marker while a draft differs from curren
   test.setTimeout(180000);
   await page.goto(embedURL + '/index.html#!scene');
   await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
-  await page.getByTestId('usd-scene-load-example').click();
+  await loadFixtureScene(page);
   await waitForReload(page);
 
   const popover = await openPopover(page);
@@ -239,7 +260,7 @@ test('@scene moving a live slider away from the level applies immediately, and R
   test.setTimeout(180000);
   await page.goto(embedURL + '/index.html#!scene');
   await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
-  await page.getByTestId('usd-scene-load-example').click();
+  await loadFixtureScene(page);
   await waitForReload(page);
 
   const popover = await openPopover(page);
@@ -261,7 +282,7 @@ test('@scene keeps the same draft and dots across a plain close and reopen, and 
   test.setTimeout(180000);
   await page.goto(embedURL + '/index.html#!scene');
   await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
-  await page.getByTestId('usd-scene-load-example').click();
+  await loadFixtureScene(page);
   await waitForReload(page);
 
   let popover = await openPopover(page);
@@ -303,7 +324,7 @@ test('@scene reloads the stage when the applied preset changes subdivision or tr
   await page.goto(embedURL + '/index.html#!scene');
   await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
 
-  await page.getByTestId('usd-scene-load-example').click();
+  await loadFixtureScene(page);
   await waitForReload(page);
   expect(await page.evaluate(() => window.__usdFactoryCalls)).toBe(1);
 
@@ -361,7 +382,7 @@ test('@scene Apply with no scene loaded only persists settings, never reloads or
 
   // The persisted value is what the next load reads: loading a scene now
   // comes up with Shadows already on, no extra Apply needed.
-  await page.getByTestId('usd-scene-load-example').click();
+  await loadFixtureScene(page);
   await waitForReload(page);
   expect(await page.evaluate(() => window.__usdFactoryCalls)).toBe(1);
   const reopened = await openPopover(page);

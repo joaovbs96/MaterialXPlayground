@@ -14,13 +14,6 @@
     // Sentinel MtlxSelect option (item 4): picking it reveals every root
     // candidate instead of just the top-level ones, never a real root path.
     const SHOW_ALL_ROOT_FILES_VALUE = '__mtlx_scene_show_all_files__';
-    const EXAMPLE_ROOT = 'tests/fixtures/usd-scene/root.usda';
-    const EXAMPLE_FILES = [
-        EXAMPLE_ROOT,
-        'tests/fixtures/usd-scene/nested/nested.usda',
-        'tests/fixtures/usd-scene/nested/materials/red.mtlx',
-        'tests/fixtures/usd-scene/nested/materials/blue.mtlx',
-    ];
     // Self-authored (not imported from js/compare-app.jsx per the ground
     // rule against importing across apps): the same grid-mask empty-stage
     // treatment as Compare's own empty slot.
@@ -156,7 +149,7 @@
         return preferred ? preferred.path : (candidates.length === 1 ? candidates[0].path : '');
     };
     // A candidate's data may be a File/Blob (file picker, window drop) or an
-    // ArrayBuffer/typed array (loadExample's fetch results); normalize both
+    // ArrayBuffer/typed array (host-provided buffers); normalize both
     // to a Blob so slice()/text() work the same way.
     const blobOfCandidate = (file) => {
         const data = file && file.data !== undefined ? file.data : file;
@@ -2276,30 +2269,6 @@
                 setLoadErrorDetails(['[error] Scene failed to load: ' + message]);
             }
         };
-        const loadExample = async () => {
-            treeSceneKeyRef.current = null;
-            const generation = ++generationRef.current;
-            if (abortRef.current) abortRef.current.abort();
-            if (handleRef.current && handleRef.current.dispose) handleRef.current.dispose();
-            handleRef.current = null; setHandle(null); setStage(null);
-            window.__mtlxUsdSceneHandle = null;
-            setStatus('loading-example'); setError(''); setLoadErrorDetails([]);
-            try {
-                const loaded = await Promise.all(EXAMPLE_FILES.map(async (path) => {
-                    const response = await fetch(path, { cache: 'no-store' });
-                    if (!response.ok) throw new Error('Example asset failed to load: ' + path + ' (' + response.status + ')');
-                    return { path, data: await response.arrayBuffer() };
-                }));
-                if (!mountedRef.current || generation !== generationRef.current) return;
-                setFiles(loaded); setRootPath(EXAMPLE_ROOT); setRootTouched(true); await load(loaded, EXAMPLE_ROOT);
-            } catch (e) {
-                if (mountedRef.current && generation === generationRef.current) {
-                    const message = String(e && e.message || e);
-                    setError(message); setStatus('error');
-                    setLoadErrorDetails(['[error] Scene failed to load: ' + message]);
-                }
-            }
-        };
         // VS Code host entry: { files: { relPath: File }, root } from the
         // extension (media/bootstrap.js). load() routes the explicit root by
         // kind, so a USD, glTF/GLB or OBJ root all take the same path.
@@ -3338,7 +3307,7 @@
         // Second, dimmer overlay line: the current item within the phase.
         const RENDERER_STEP_LABELS = { 'shadow-atlas': 'Building shadow atlas', 'sky-visibility': 'Baking sky visibility', 'occlusion-volume': 'Baking occlusion volume', 'shader-join': 'Finishing shader compiles', 'gpu-program': 'Checking GPU programs', 'first-frame': 'Rendering first frame' };
         const progressDetail = progress.phase === 'renderer' ? (RENDERER_STEP_LABELS[progress.step] || '') : (progress.label || '');
-        const busy = status === 'loading' || status === 'loading-example' || status === 'loaded' || status === 'host-loading';
+        const busy = status === 'loading' || status === 'loaded' || status === 'host-loading';
         const canTuneEnvironment = !!handle && typeof handle.setEnvRotation === 'function';
         const envSummary = (envRotation === 0 && envExposureLinear === 1)
             ? 'Default environment'
@@ -4122,14 +4091,9 @@
                         <div data-testid="usd-scene-info-empty" className="text-xs text-gray-500">No scene loaded</div>
                     ) : null)}
 
-                    {sceneSlotButton || !IN_VSCODE ? (
+                    {sceneSlotButton ? (
                         <div className="flex items-center gap-1.5 pt-0.5">
                             {sceneSlotButton}
-                            {!IN_VSCODE && (
-                                <button type="button" data-testid="usd-scene-load-example" onClick={loadExample} className={BTN_SECONDARY + ' flex-1 min-w-0 gap-1'}>
-                                    <MtlxIcon name="file-upload" className="w-3.5 h-3.5 flex-none" />Load example
-                                </button>
-                            )}
                         </div>
                     ) : null}
                 </section>
@@ -4294,9 +4258,6 @@
                                 <div className="text-gray-500 text-sm max-w-sm">
                                     Drop a USD stage (.usd, .usda, .usdc, .usdz), a glTF (.gltf, .glb) or an OBJ (.obj) and its referenced files
                                 </div>
-                                <button type="button" onClick={loadExample} className={PILL_ACTION}>
-                                    <MtlxIcon name="file-upload" className="w-3.5 h-3.5" /> Load example
-                                </button>
                             </div>
                         </React.Fragment>
                     )}
