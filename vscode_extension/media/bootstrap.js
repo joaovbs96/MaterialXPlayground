@@ -547,6 +547,17 @@
         vscode: (document.currentScript && document.currentScript.getAttribute('data-vscode-version')) || '',
     };
 
+    // Theme preference and VS Code theme kind, read synchronously here so
+    // they exist before js/shared/theme.js runs. Edits made in a webview
+    // control go to the extension, which owns the setting and echoes it
+    // back to every webview as 'mtlx-theme-preference'.
+    var themeAttr = function (name) { return (document.currentScript && document.currentScript.getAttribute(name)) || ''; };
+    window.__MTLX_THEME_PREF__ = themeAttr('data-theme-pref') || 'system';
+    window.__MTLX_VSCODE_THEME_KIND__ = themeAttr('data-vscode-theme-kind') || 'dark';
+    window.__mtlxThemePersist = function (pref) {
+        if (vscodeApi) vscodeApi.postMessage({ type: 'mtlx-set-theme-preference', value: pref });
+    };
+
     // ------------------------------------------------------------------
     // Link interception: <base href="${baseUri}"> (webview.html) makes
     // every relative href in the site resolve to a webview-resource URL,
@@ -1255,6 +1266,11 @@
     window.addEventListener('message', function (event) {
         var msg = event.data;
         if (!msg) return;
+        if (msg.type === 'mtlx-theme-preference') {
+            window.__MTLX_THEME_PREF__ = msg.value;
+            if (window.MtlxTheme) window.MtlxTheme.setPreference(msg.value, { persist: false });
+            return;
+        }
         if (msg.type === 'mtlx-save-result') { handleSaveResult(msg); return; }
         if (msg.type === 'mtlx-save-file-result') { handleSaveFileResult(msg); return; }
         if (msg.type === 'mtlx-request-save') { handleRequestSave(msg); return; }

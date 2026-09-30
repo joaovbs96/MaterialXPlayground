@@ -12,8 +12,9 @@ const require = createRequire(import.meta.url);
 let releaseRead = null;
 const vscodeStub = {
     Uri: { joinPath: (base, ...parts) => ({ path: [base.path, ...parts].join('/'), toString() { return this.path; } }) },
-    workspace: { fs: { readFile: () => new Promise((resolve) => { releaseRead = () => resolve(Buffer.from('<html>${cspSource}</html>')); }) } },
-    window: { showErrorMessage: () => {} },
+    workspace: { getConfiguration: () => ({ get: () => 'light', inspect: () => undefined }), fs: { readFile: () => new Promise((resolve) => { releaseRead = () => resolve(Buffer.from('<html>${cspSource}|${themePref}|${themeKind}</html>')); }) } },
+    window: { showErrorMessage: () => {}, activeColorTheme: { kind: 2 } },
+    ColorThemeKind: { Light: 1, Dark: 2, HighContrast: 3, HighContrastLight: 4 },
     version: 'test',
 };
 const originalLoad = Module._load;
@@ -63,7 +64,7 @@ test('buildHtml still renders a live panel', async () => {
     const pending = editorProvider.buildHtml(context, life.webview, '#!viewer', false, null, false, life.isLive);
     releaseRead();
     assert.equal(await pending, true);
-    assert.equal(panel.webview.html, '<html>csp</html>');
+    assert.equal(panel.webview.html, '<html>csp|light|dark</html>');
 });
 
 test('post after dispose is dropped, not thrown', async () => {

@@ -481,7 +481,7 @@ function ThemeTile({ preset, active, disabled, title, onClick }) {
             onClick={onClick}
             className={'h-[58px] w-full rounded-lg border flex flex-col items-center justify-center gap-1.5 transition-colors '
                 + (disabled ? 'opacity-50 cursor-not-allowed border-line'
-                    : active ? 'border-accent-base ring-1 ring-accent-wash/15 bg-accent-wash/5' : 'border-line hover:border-line-strong')}
+                    : active ? 'border-accent-base ring-1 ring-accent-wash/15 bg-accent-wash/5' : 'border-line-control hover:border-line-strong')}
         >
             <div className="flex gap-1">
                 <span className="w-3 h-3 rounded-sm border border-black/25" style={{ background: preset.accent }} />
@@ -565,7 +565,7 @@ function TemplateCard({ t, active, onClick, compact }) {
             onClick={onClick}
             className={'w-full text-left rounded-lg border flex gap-3 transition-colors '
                 + (compact ? 'p-2.5' : 'p-3') + ' '
-                + (active ? 'border-accent-base/70 bg-surface-raised ring-1 ring-accent-wash/20' : 'border-line bg-surface-raised/40 hover:border-line-strong')}
+                + (active ? 'border-accent-base/70 bg-surface-raised ring-1 ring-accent-wash/20' : 'border-line-control bg-surface-raised/40 hover:border-line-strong')}
         >
             <div
                 className={'self-stretch rounded-md border bg-surface-sunken flex items-center justify-center shrink-0 '
@@ -1814,14 +1814,14 @@ function BuilderApp({ active } = {}) {
                     <button
                         type="button" onClick={() => patch({ sizing: 'fixed' })}
                         className={'h-8 px-3 text-xs font-medium transition-colors '
-                            + (sizing === 'fixed' ? 'bg-accent-fill/70 text-on-accent' : 'bg-surface-sunken text-fg-muted hover:text-fg-soft')}
+                            + (sizing === 'fixed' ? 'bg-accent-fill-translucent/70 text-on-accent' : 'bg-surface-sunken text-fg-muted hover:text-fg-soft')}
                     >
                         Fixed (px)
                     </button>
                     <button
                         type="button" onClick={() => patch({ sizing: 'responsive' })}
                         className={'h-8 px-3 text-xs font-medium border-l border-line transition-colors '
-                            + (sizing === 'responsive' ? 'bg-accent-fill/70 text-on-accent' : 'bg-surface-sunken text-fg-muted hover:text-fg-soft')}
+                            + (sizing === 'responsive' ? 'bg-accent-fill-translucent/70 text-on-accent' : 'bg-surface-sunken text-fg-muted hover:text-fg-soft')}
                     >
                         Responsive
                     </button>

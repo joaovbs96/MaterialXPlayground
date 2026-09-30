@@ -1353,7 +1353,7 @@
                             </div>
                             <label
                                 title="Choose a folder"
-                                className="h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-line rounded-md bg-control hover:bg-hover text-fg-secondary cursor-pointer"
+                                className="h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-line-control rounded-md bg-control hover:bg-hover text-fg-secondary cursor-pointer"
                             >
                                 <MtlxIcon name="folder" className="w-3.5 h-3.5" />
                                 <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={onPickFiles} />

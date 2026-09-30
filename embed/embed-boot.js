@@ -162,6 +162,13 @@
     // Applies one theme param, or reports+skips it (leaving whatever was
     // there before, default or previously-applied) if it fails validation.
     function applyTheme(name, value) {
+        if (name === 'theme') {
+            // Invalid or cleared values behave as auto (follow the OS).
+            var t = String(value == null ? '' : value).trim().toLowerCase();
+            var pref = (t === 'light' || t === 'dark') ? t : 'system';
+            if (window.MtlxTheme && window.MtlxTheme.setPreference) window.MtlxTheme.setPreference(pref, { persist: false });
+            return;
+        }
         if (value == null || value === '') return;
         if (!themeValueOk(name, value)) {
             post('error', { message: 'Invalid `' + name + '` value "' + value + '" rejected (failed CSS validation).' });
@@ -673,7 +680,7 @@
     // as the initial query-param pass, so a bad live value still can't
     // reach the stylesheet.
     function handleSetTheme(msg) {
-        if (!THEME_VARS.hasOwnProperty(msg.name)) return;
+        if (msg.name !== 'theme' && !THEME_VARS.hasOwnProperty(msg.name)) return;
         applyTheme(msg.name, msg.value);
     }
 

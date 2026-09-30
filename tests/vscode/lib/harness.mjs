@@ -5,7 +5,7 @@
 /** Mirrors editorProvider.js's buildHtml() substitution exactly:
  * split/join per placeholder (never regex - the fragments can contain
  * literal '$' sequences a replace() callback would mangle). */
-export function substitutePlaceholders(template, { cspSource, baseUri, bootstrapUri, initialHash, docsOnly, sceneOnly, extensionVersion, vscodeVersion }) {
+export function substitutePlaceholders(template, { cspSource, baseUri, bootstrapUri, initialHash, docsOnly, sceneOnly, extensionVersion, vscodeVersion, themePref, themeKind }) {
   let html = template;
   html = html.split('${cspSource}').join(cspSource);
   html = html.split('${baseUri}').join(baseUri);
@@ -15,6 +15,8 @@ export function substitutePlaceholders(template, { cspSource, baseUri, bootstrap
   html = html.split('${sceneOnly}').join(sceneOnly ? '1' : '');
   html = html.split('${extensionVersion}').join(extensionVersion || '');
   html = html.split('${vscodeVersion}').join(vscodeVersion || '');
+  html = html.split('${themePref}').join(themePref || 'system');
+  html = html.split('${themeKind}').join(themeKind || 'dark');
   return html;
 }
 

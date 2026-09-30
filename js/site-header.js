@@ -109,6 +109,30 @@
             '<path d="M12 13.5a1.5 1.5 0 0 1 1 -1.5a2.6 2.6 0 1 0 -3 -4" />' +
         '</svg>';
 
+    // Theme switch icons (Tabler outline, MIT: brightness-half, sun, moon,
+    // device-desktop, check), same viewBox/stroke convention as above.
+    function tablerSvg(inner) {
+        return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + inner + '</svg>';
+    }
+    var ICON_THEME = tablerSvg('<path d="M12 9a3 3 0 0 0 0 6v-6z" /><path d="M6 6h3.5l2.5 -2.5l2.5 2.5h3.5v3.5l2.5 2.5l-2.5 2.5v3.5h-3.5l-2.5 2.5l-2.5 -2.5h-3.5v-3.5l-2.5 -2.5l2.5 -2.5z" />');
+    var THEME_CHOICES = [
+        { value: 'light', label: 'Light', icon: tablerSvg('<path d="M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0" /><path d="M3 12h1m8 -9v1m8 8h1m-9 8v1m-6.4 -15.4l.7 .7m12.1 -.7l-.7 .7m0 11.4l.7 .7m-12.1 -.7l-.7 .7" />') },
+        { value: 'dark', label: 'Dark', icon: tablerSvg('<path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />') },
+        { value: 'system', label: 'System', icon: tablerSvg('<path d="M3 5a1 1 0 0 1 1 -1h16a1 1 0 0 1 1 1v10a1 1 0 0 1 -1 1h-16a1 1 0 0 1 -1 -1v-10z" /><path d="M7 20h10" /><path d="M9 16v4" /><path d="M15 16v4" />') },
+    ];
+    var ICON_THEME_CHECK = tablerSvg('<path d="M5 12l5 5l10 -10" />').replace('<svg ', '<svg class="mtlx-theme-check" ');
+    var themeMenuHtml = THEME_CHOICES.map(function (c) {
+        return '<button type="button" role="menuitemradio" aria-checked="false" tabindex="-1"' +
+            ' class="mtlx-menu-item mtlx-theme-item" data-theme-choice="' + c.value + '">' +
+            c.icon + '<span class="mtlx-menu-label">' + c.label + '</span>' + ICON_THEME_CHECK +
+            '</button>';
+    }).join('');
+    var themeRowHtml = THEME_CHOICES.map(function (c) {
+        return '<button type="button" role="radio" aria-checked="false" aria-label="' + c.label + '"' +
+            ' class="mtlx-theme-row-btn" data-theme-choice="' + c.value + '">' +
+            c.icon + '<span>' + c.label + '</span></button>';
+    }).join('');
+
     // Update-banner icon (alert-triangle), paths only, hand-copied from
     // window.MTLX_ICON_PATHS in js/shared/ui-commons.js, same
     // paths-only convention as ICON_OCTOCAT below (svg tag/class set below).
@@ -464,6 +488,16 @@
                 // filled in by setVer() below) for js/shell.jsx's AboutDialog.
                 (window.__MTLX_VSCODE__ ? '' :
                 '<div id="mtlx-nav-right" class="mtlx-nav-right">' +
+                    // Theme switch, immediately left of the About button.
+                    '<div class="mtlx-theme-wrap">' +
+                        '<button type="button" id="mtlx-theme-btn" class="mtlx-icon-btn"' +
+                            ' title="Theme" aria-label="Theme" aria-haspopup="menu" aria-expanded="false"' +
+                            ' aria-controls="mtlx-theme-menu">' +
+                            ICON_THEME +
+                        '</button>' +
+                        '<div id="mtlx-theme-menu" class="mtlx-menu mtlx-theme-menu" role="menu"' +
+                            ' aria-labelledby="mtlx-theme-btn">' + themeMenuHtml + '</div>' +
+                    '</div>' +
                     // About button, immediately left of the GitHub widget.
                     // Dispatches an event for js/shell.jsx's AboutDialog to
                     // pick up (same "just a CustomEvent" contract as the
@@ -530,6 +564,7 @@
                 // the extension's sidebar instead).
                 (window.__MTLX_VSCODE__ ? '' :
                 '<div class="mtlx-mobile-links">' +
+                    '<div id="mtlx-theme-row" class="mtlx-theme-row" role="radiogroup" aria-label="Theme">' + themeRowHtml + '</div>' +
                     // .mtlx-mobile-link-brand adds a flex row (icon + text)
                     // over .mtlx-mobile-link's flat styling, kept separate
                     // from .mtlx-source-mobile (its gap suits a square glyph).
@@ -754,6 +789,73 @@
         closeAllMenus = function () {
             for (var i = 0; i < groups.length; i++) closeMenu(groups[i], false);
         };
+    })();
+
+    // Theme switch: popup menu on desktop, radio row in the mobile panel.
+    // Both call MtlxTheme.setPreference and follow MtlxTheme.onChange.
+    (function initThemeSwitch() {
+        var btn = document.getElementById('mtlx-theme-btn');
+        var menu = document.getElementById('mtlx-theme-menu');
+        var row = document.getElementById('mtlx-theme-row');
+        var T = window.MtlxTheme;
+        if (!T) return;
+        var items = menu ? Array.prototype.slice.call(menu.querySelectorAll('[role="menuitemradio"]')) : [];
+        var radios = row ? Array.prototype.slice.call(row.querySelectorAll('[role="radio"]')) : [];
+        function sync() {
+            var pref = T.getPreference();
+            items.concat(radios).forEach(function (el) {
+                el.setAttribute('aria-checked', el.getAttribute('data-theme-choice') === pref ? 'true' : 'false');
+            });
+        }
+        function isOpen() { return !!menu && menu.classList.contains('is-open'); }
+        function close(restoreFocus) {
+            if (!menu) return;
+            menu.classList.remove('is-open');
+            btn.setAttribute('aria-expanded', 'false');
+            if (restoreFocus) btn.focus();
+        }
+        function open(focus) {
+            menu.classList.add('is-open');
+            btn.setAttribute('aria-expanded', 'true');
+            if (focus === 'checked') {
+                var cur = items.filter(function (el) { return el.getAttribute('aria-checked') === 'true'; })[0];
+                (cur || items[0]).focus();
+            } else if (focus === 'last') items[items.length - 1].focus();
+        }
+        if (btn && menu) {
+            btn.addEventListener('click', function () { if (isOpen()) close(false); else open(null); });
+            btn.addEventListener('keydown', function (e) {
+                if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open('checked'); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); open('last'); }
+            });
+            menu.addEventListener('keydown', function (e) {
+                var idx = items.indexOf(document.activeElement);
+                if (e.key === 'Escape') { e.preventDefault(); close(true); }
+                else if (e.key === 'ArrowDown') { e.preventDefault(); items[(idx + 1) % items.length].focus(); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); items[(idx <= 0 ? items.length : idx) - 1].focus(); }
+                else if (e.key === 'Home') { e.preventDefault(); items[0].focus(); }
+                else if (e.key === 'End') { e.preventDefault(); items[items.length - 1].focus(); }
+                else if (e.key === 'Tab') close(false);
+            });
+            menu.addEventListener('click', function (e) {
+                var it = e.target.closest && e.target.closest('[data-theme-choice]');
+                if (!it) return;
+                T.setPreference(it.getAttribute('data-theme-choice'));
+                close(true);
+            });
+            document.addEventListener('pointerdown', function (e) {
+                if (isOpen() && !menu.parentNode.contains(e.target)) close(false);
+            });
+            closeAllMenus = (function (prev) { return function () { prev(); close(false); }; })(closeAllMenus);
+        }
+        if (row) {
+            row.addEventListener('click', function (e) {
+                var it = e.target.closest && e.target.closest('[data-theme-choice]');
+                if (it) T.setPreference(it.getAttribute('data-theme-choice'));
+            });
+        }
+        sync();
+        T.onChange(sync);
     })();
 
     // ---- Measured collapse to hamburger ---------------------------------

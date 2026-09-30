@@ -593,6 +593,21 @@
     "configuration": {
       "title": "MaterialX Playground",
       "properties": {
+        "materialxPlayground.theme": {
+          "type": "string",
+          "enum": [
+            "system",
+            "light",
+            "dark"
+          ],
+          "default": "system",
+          "enumDescriptions": [
+            "Follow the VS Code color theme.",
+            "Light.",
+            "Dark."
+          ],
+          "markdownDescription": "Color theme of the MaterialX Playground webviews (Material Viewer, Node Graph Editor, Docs, Scene Viewer) and the sidebar. `system` follows the current VS Code color theme."
+        },
         "materialxPlayground.defaultView": {
           "type": "string",
           "enum": [

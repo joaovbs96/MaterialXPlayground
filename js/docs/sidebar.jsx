@@ -136,7 +136,7 @@
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
                                 placeholder="Search nodes..."
-                                className="w-full bg-surface-sunken border border-line rounded-md h-8 pl-3 pr-16 text-sm text-fg-soft placeholder-fg-subtle focus:outline-none focus:border-focus"
+                                className="w-full bg-surface-sunken border border-line-control rounded-md h-8 pl-3 pr-16 text-sm text-fg-soft placeholder-fg-subtle focus:outline-none focus:border-focus"
                             />
                             <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
                                 {searchQuery && (
@@ -230,7 +230,7 @@
                                         <button
                                             onClick={() => fileInputRef.current && fileInputRef.current.click()}
                                             title="Filter the node tree to categories used in one or more .mtlx files"
-                                            className="text-xs px-2 py-1 rounded border border-line text-fg-muted hover:text-fg-soft hover:bg-hover"
+                                            className="text-xs px-2 py-1 rounded border border-line-control text-fg-muted hover:text-fg-soft hover:bg-hover"
                                         >
                                             Filter by file
                                         </button>
@@ -243,7 +243,7 @@
                                             onClick={onClearFileFilter}
                                             title="Clear the file filter"
                                             aria-label="Clear the file filter"
-                                            className="flex-none text-accent-fg-strong/80 hover:text-on-accent-muted"
+                                            className="flex-none text-accent-fg-strong/80 hover:text-accent-text-on-tint"
                                         >
                                             <MtlxIcon name="x" className="w-3 h-3" />
                                         </button>

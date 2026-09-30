@@ -836,7 +836,7 @@ function MtlxGalleryApp({ active } = {}) {
                                 onChange={(e) => changeQuery(e.target.value)}
                                 placeholder="Search materials…"
                                 aria-label="Search materials"
-                                className="w-full sm:max-w-xs h-9 px-3 rounded-lg border border-line bg-surface-sunken text-sm text-fg-soft placeholder-fg-subtle focus:outline-none focus:border-focus"
+                                className="w-full sm:max-w-xs h-9 px-3 rounded-lg border border-line-control bg-surface-sunken text-sm text-fg-soft placeholder-fg-subtle focus:outline-none focus:border-focus"
                             />
                             <div className="flex flex-wrap items-center gap-2">
                                 {chips.map((c) => {

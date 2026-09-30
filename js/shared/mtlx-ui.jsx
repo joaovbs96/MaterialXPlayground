@@ -14,7 +14,7 @@
 // settings popover's Reset/Cancel) actually looks non-interactive instead
 // of reading as clickable while silently doing nothing.
 const BTN_SECONDARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors disabled:opacity-50 disabled:text-fg-subtle disabled:cursor-not-allowed disabled:pointer-events-none';
-const BTN_PRIMARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-accent-fill/70 border-accent-base text-on-accent hover:bg-accent-fill-hover/70 transition-colors';
+const BTN_PRIMARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-accent-fill-translucent/70 border-accent-base text-on-accent hover:bg-accent-fill-translucent-hover/70 transition-colors';
 // Graph editor toolbar button style. `whitespace-nowrap shrink-0` matters:
 // js/graph-app.jsx's label-collapse measurement needs buttons that don't
 // flex-shrink, so overflow is visible to it instead of silently absorbed.
@@ -1899,7 +1899,7 @@ const defaultGeomFor = (nodegroup) => (
     SHADERBALL_GROUPS.indexOf(String(nodegroup || '').toLowerCase()) !== -1 ? 'shaderball-scene' : 'buffer2d'
 );
 
-const TEXT_INPUT_CLS = 'w-full bg-surface-sunken border border-line rounded px-2.5 py-1.5 text-sm text-fg-soft placeholder-fg-subtle focus:outline-none focus:border-focus';
+const TEXT_INPUT_CLS = 'w-full bg-surface-sunken border border-line-control rounded px-2.5 py-1.5 text-sm text-fg-soft placeholder-fg-subtle focus:outline-none focus:border-focus';
 
 // Fixed-height (20px) field label row shared by every field on the page,
 // so a label with a ReloadsPill lines up exactly with one that has none
@@ -2128,7 +2128,7 @@ function GeometryTile({ label, icon, selected, disabled, title, onClick, badge }
             onClick={onClick}
             className={'relative h-[84px] rounded-lg border flex flex-col items-center pt-3 px-1.5 gap-1.5 transition-colors '
                 + (disabled ? 'opacity-50 cursor-not-allowed border-line text-fg-subtle'
-                    : selected ? 'border-accent-base text-on-accent-muted ring-1 ring-accent-wash/15 bg-accent-wash/5' : 'border-line text-fg-secondary hover:border-line-strong')}
+                    : selected ? 'border-accent-base text-accent-text-on-tint ring-1 ring-accent-wash/15 bg-accent-wash/5' : 'border-line-control text-fg-secondary hover:border-line-strong')}
         >
             {badge && (
                 <span className="absolute top-1 right-1 flex-none text-[8px] uppercase tracking-wide px-1 py-0 rounded border bg-chip/60 border-line-heavy/50 text-fg-secondary">{badge}</span>
@@ -2153,7 +2153,7 @@ function CustomModelTile({ name, selected, expanded, accept, onSelect, onExpand,
     return (
         <div
             className={'relative rounded-lg border overflow-hidden w-full transition-colors '
-                + (selected ? 'border-accent-base text-on-accent-muted ring-1 ring-accent-wash/15 bg-accent-wash/5' : 'border-line text-fg-secondary hover:border-line-strong')
+                + (selected ? 'border-accent-base text-accent-text-on-tint ring-1 ring-accent-wash/15 bg-accent-wash/5' : 'border-line-control text-fg-secondary hover:border-line-strong')
                 + (className ? ' ' + className : '')}
         >
             <span
@@ -2224,7 +2224,7 @@ function FilePickerField({
     // onChoose branch has no such input, so this only applies below).
     inputTestId,
 }) {
-    const buttonCls = 'inline-flex items-center gap-1 border border-l-0 border-line rounded-r-md bg-control hover:bg-hover text-[11px] px-2 text-fg-secondary whitespace-nowrap'
+    const buttonCls = 'inline-flex items-center gap-1 border border-l-0 border-line-control rounded-r-md bg-control hover:bg-hover text-[11px] px-2 text-fg-secondary whitespace-nowrap'
         + (mono ? ' font-mono' : '');
     const [draft, setDraft] = React.useState(value || '');
     // A ref (not state) so blurring alone never re-triggers the seed
@@ -2235,7 +2235,7 @@ function FilePickerField({
         if (draft !== (value || '') && onCommit) onCommit(draft);
     };
     const showClear = !!onClear && !!value;
-    const fieldBase = 'bg-surface-sunken border border-line rounded-l-md px-2 text-[11px] text-fg-secondary h-full w-full'
+    const fieldBase = 'bg-surface-sunken border border-line-control rounded-l-md px-2 text-[11px] text-fg-secondary h-full w-full'
         + (mono ? ' font-mono' : '') + (showClear ? ' pr-6' : '');
     return (
         <div className="flex h-[26px]">
@@ -3005,7 +3005,7 @@ const MXS_SURFACE_BAR_HOVER = 'color-mix(in srgb, ' + MXS_SURFACE_HOVER + ' 80%,
 // fill, so a trigger sitting right under that field reads as one group.
 const MXS_SIDEBAR_SURFACE = 'var(--mx-select-sidebar-surface, rgb(var(--mtlx-surface-sunken, 17 24 39)))';
 const MXS_SIDEBAR_SURFACE_HOVER = 'var(--mx-select-sidebar-surface-hover, rgb(var(--mtlx-hover-subtle, 31 41 55)))';
-const MXS_SIDEBAR_BORDER = 'var(--mx-select-sidebar-border, rgb(var(--mtlx-line, 55 65 81)))';
+const MXS_SIDEBAR_BORDER = 'var(--mx-select-sidebar-border, rgb(var(--mtlx-line-control, 55 65 81)))';
 
 // theme prop keys -> the custom property each one feeds. Used to stamp
 // theme overrides as inline custom properties, and to know which

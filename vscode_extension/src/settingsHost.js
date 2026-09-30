@@ -30,4 +30,26 @@ function affectsSetting(e, key) {
     return e.affectsConfiguration(NEW_SECTION + '.' + key) || e.affectsConfiguration(OLD_SECTION + '.' + key);
 }
 
-module.exports = { getSetting, affectsSetting };
+// Theme preference ('system' | 'light' | 'dark'), no deprecated twin.
+const THEME_VALUES = ['system', 'light', 'dark'];
+function getThemePreference() {
+    const v = vscode.workspace.getConfiguration(NEW_SECTION).get('theme');
+    return THEME_VALUES.includes(v) ? v : 'system';
+}
+
+function setThemePreference(value) {
+    if (!THEME_VALUES.includes(value)) return Promise.resolve();
+    return Promise.resolve(vscode.workspace.getConfiguration(NEW_SECTION).update('theme', value, vscode.ConfigurationTarget.Global)).catch(() => {});
+}
+
+// activeColorTheme.kind mapped to the names theme.js expects.
+function getThemeKind() {
+    const K = vscode.ColorThemeKind;
+    const kind = vscode.window.activeColorTheme && vscode.window.activeColorTheme.kind;
+    if (kind === K.Light) return 'light';
+    if (kind === K.HighContrast) return 'highContrast';
+    if (kind === K.HighContrastLight) return 'highContrastLight';
+    return 'dark';
+}
+
+module.exports = { getSetting, affectsSetting, getThemePreference, setThemePreference, getThemeKind };

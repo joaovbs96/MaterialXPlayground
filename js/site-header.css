@@ -1004,3 +1004,65 @@
     color: inherit;
     opacity: 1;
 }
+
+/* Theme switch: wrapper anchors the popup under the icon button, right
+   aligned so it stays inside the viewport. Reuses .mtlx-menu chrome. */
+.mtlx-theme-wrap {
+    position: relative;
+    display: inline-flex;
+}
+.mtlx-theme-menu {
+    left: auto;
+    right: 0;
+    min-width: 160px;
+}
+button.mtlx-theme-item {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.mtlx-theme-item .mtlx-theme-check {
+    width: 16px;
+    height: 16px;
+    visibility: hidden;
+}
+.mtlx-theme-item[aria-checked="true"] {
+    color: rgb(var(--mtlx-accent-fg-strong));
+}
+.mtlx-theme-item[aria-checked="true"] .mtlx-theme-check {
+    visibility: visible;
+}
+.mtlx-theme-row {
+    display: flex;
+    gap: 6px;
+    padding: 8px 16px;
+}
+.mtlx-theme-row-btn {
+    display: inline-flex;
+    flex: 1 1 0;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 6px;
+    border-radius: 8px;
+    border: 1px solid rgb(var(--mtlx-line));
+    background: transparent;
+    font-size: 14px;
+    line-height: 20px;
+    color: rgb(var(--mtlx-fg-soft));
+    cursor: pointer;
+}
+.mtlx-theme-row-btn svg {
+    width: 18px;
+    height: 18px;
+}
+.mtlx-theme-row-btn:hover {
+    background-color: rgb(var(--mtlx-hover));
+}
+.mtlx-theme-row-btn[aria-checked="true"] {
+    color: rgb(var(--mtlx-accent-fg-strong));
+    border-color: rgb(var(--mtlx-accent-fg-strong));
+}

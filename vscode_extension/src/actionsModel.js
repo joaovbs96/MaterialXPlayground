@@ -69,7 +69,7 @@ function buildActionRows(hasActiveDocument, hasMtlxTextEditor) {
 // 'insertNode' never trusts a category beyond the host's own known set.
 const MESSAGE_TYPES = new Set([
     'ready', 'run', 'toggleExamples', 'toggleInsertNode', 'insertNode',
-    'about', 'github', 'rendered', 'openHelpLink',
+    'about', 'github', 'rendered', 'openHelpLink', 'setTheme',
 ]);
 
 // nextGroupExpansion(current, which, expanded): pure reducer for the two

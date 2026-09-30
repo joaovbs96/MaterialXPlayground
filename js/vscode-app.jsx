@@ -192,7 +192,7 @@ function CopyButton({ text, className }) {
             type="button"
             onClick={onCopy}
             aria-label="Copy to clipboard"
-            className={'w-[26px] h-[26px] rounded-md border border-line bg-control text-fg-muted hover:text-fg flex items-center justify-center transition-colors ' + (className || '')}
+            className={'w-[26px] h-[26px] rounded-md border border-line-control bg-control text-fg-muted hover:text-fg flex items-center justify-center transition-colors ' + (className || '')}
         >
             <MtlxIcon name={copied ? 'copy-check' : 'copy'} className="w-3.5 h-3.5" />
         </button>

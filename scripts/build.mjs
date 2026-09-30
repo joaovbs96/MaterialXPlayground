@@ -165,6 +165,8 @@ async function runThemeStep() {
   );
   // Literal guard: fails on any raw color outside the theme files and the allowlist.
   runNodeScript("theme", path.join(REPO_ROOT, "scripts", "check-theme-literals.mjs"), ["--strict"]);
+  // Contrast: every meta pair in every theme; fails on light failures and unlisted dark failures.
+  runNodeScript("theme", path.join(REPO_ROOT, "scripts", "check-theme-contrast.mjs"), []);
 }
 
 async function runEmbedStep() {
@@ -244,6 +246,7 @@ async function main() {
     await runVersionsStep();
     await runVendorStep();
     await runNodelibStep();
+    await runThemeStep();
     await runEmbedStep();
     await runEmbedDocsStep();
     await runTutorialsStep();

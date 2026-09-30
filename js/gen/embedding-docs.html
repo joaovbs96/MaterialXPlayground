@@ -153,6 +153,12 @@ in-page, for reference while you work.</p>
 <td>Loop subdivision level applied ahead of displacement, capped per-mesh against a triangle budget. This tab-only setting never touches the visitor&#39;s shared site preference.</td>
 </tr>
 <tr>
+<td><code>theme</code></td>
+<td><code>light</code>, <code>dark</code>, <code>auto</code></td>
+<td><code>auto</code></td>
+<td>Light or dark look for the viewer&#39;s own UI. <code>auto</code> follows the visitor&#39;s OS setting live; an invalid value behaves as <code>auto</code>. Never persisted for an embed. See <a href="#theming">Theming</a>.</td>
+</tr>
+<tr>
 <td><code>accent</code></td>
 <td>CSS color</td>
 <td><code>#3b82f6</code></td>
@@ -479,6 +485,13 @@ reloads the iframe (a real navigation, with a fresh <code>ready</code> handshake
 <td>Yes</td>
 </tr>
 <tr>
+<td><code>theme</code></td>
+<td><code>.theme</code></td>
+<td><code>light</code>, <code>dark</code>, <code>auto</code></td>
+<td><code>auto</code></td>
+<td>Yes</td>
+</tr>
+<tr>
 <td><code>accent</code></td>
 <td><code>.accent</code></td>
 <td>CSS color</td>
@@ -636,6 +649,11 @@ el.addEventListener(&#39;mtlx-renderables&#39;, (e) =&gt; console.log(&#39;mater
 el.addEventListener(&#39;mtlx-error&#39;, (e) =&gt; console.error(&#39;viewer error:&#39;, e.detail.message));
 </code></pre>
 <h2 id="theming">Theming</h2>
+<p>The <code>theme</code> param (<code>&lt;materialx-viewer theme=&quot;...&quot;&gt;</code>) picks <code>light</code>, <code>dark</code> or <code>auto</code>. The default,
+<code>auto</code>, follows the visitor&#39;s OS color scheme and reacts if it changes. Changing the attribute
+updates the running viewer in place, no reload. The choice is never saved for the visitor. It
+sets the base look, and <code>accent</code>, <code>surface</code> and <code>text</code> below still override it on top. The
+placeholder shown before the viewer loads follows <code>theme</code> too.</p>
 <p>Four params (<code>accent</code>, <code>surface</code>, <code>text</code>, <code>radius</code>) map to CSS custom properties consumed by
 <code>embed/embed-controls.css</code> (the HUD strip&#39;s own stylesheet), which defines them on <code>:root</code>
 with the defaults below as fallbacks:</p>

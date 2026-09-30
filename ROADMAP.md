@@ -82,10 +82,11 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 
 ## Themes
 
-- [planned] **Theme colors**: move every color in the app, the embed and the integrations onto one set of named theme colors (surfaces, borders, text, accent, status), with today's dark look as the only theme. Nothing changes visually, checked with before and after screenshots of every view.
-- [planned] **Light mode**: a light theme with a light, dark or system switch that follows the operating system's setting live unless you override it, on the website, in the desktop app, in VS Code and in embeds (as a `theme` attribute). The 3D viewport backdrop stays a separate setting.
-- [idea] **Follow the VS Code theme**: the extension picks light, dark or high contrast from your VS Code theme and uses its colors by default, with a setting to override it.
-- [idea] **Theme presets and custom themes**: more built-in themes and your own color themes, shared by every integration.
+- [in progress] **Theme colors**: Step 1 of the theme work. Move every color in the app, the embed and the integrations onto one set of named theme colors (surfaces, borders, text, accent, status), with today's dark look as the only theme. Nothing changes visually, checked with before and after screenshots of every view.
+- [in progress] **Light mode**: Step 2 of the theme work. A light theme with a light, dark or system switch that follows the operating system's setting live unless you override it, on the website, in the desktop app, in VS Code and in embeds (as a `theme` attribute). The 3D viewport backdrop stays a separate setting.
+- [idea] **Custom themes and presets**: Step 3 of the theme work. A theme can be a partial set of colors, and the missing ones are derived from a few seed colors (background, foreground and accent). A contrast check rejects or adjusts color pairs that would be hard to read, and the built-in presets, including a high contrast theme, are made with the same engine.
+- [idea] **Follow the VS Code theme**: Step 4 of the theme work. A theme source that reads your editor's colors and feeds them to the custom theme engine as seed colors. It is on by default in the extension, with a setting to override it.
+- [idea] **Theme editor and sharing**: Step 5 of the theme work. An in-app editor for your own themes, import and export, and theme settings shared across the website, the desktop app, VS Code and embeds.
 
 ## Desktop App
 

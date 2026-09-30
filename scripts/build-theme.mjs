@@ -2,6 +2,8 @@
 // scripts/build-theme.mjs
 // Generates js/gen/theme-tokens.css from js/shared/theme-tokens.js.
 // Only custom properties are emitted (never color-scheme or other properties).
+// dark is the base block (also :root); other themes get :root[data-theme="<name>"]. A token a theme omits
+// is not emitted, so the cascade falls back to the dark value (partial themes are allowed).
 // Usage: node scripts/build-theme.mjs [--check] (--check verifies, writes nothing).
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";

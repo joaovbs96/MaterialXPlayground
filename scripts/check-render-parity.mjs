@@ -162,6 +162,7 @@ const ALLOW = [
   { key: "mtlx_light_limit", file: "js/mtlx-engine.js", reason: "debug kill switch, not a user-facing setting" },
   { key: "mtlxDebugShaders", file: "js/mtlx-engine.js", reason: "debug flag" },
   { key: "mtlxDebugShaders", file: "js/usd-scene-app.jsx", reason: "debug flag" },
+  { key: "mtlxTheme", file: "js/shared/theme.js", reason: "site theme preference (light/dark/system), UI chrome only, not a render setting" },
   { key: "mtlxPerfLog", file: "js/mtlx-engine.js", reason: "debug flag" },
   { key: "mtlxPerfLog", file: "js/shell.jsx", reason: "debug flag" },
   { key: "mtlxPerfLog", file: "js/graph/model.jsx", reason: "debug flag" },
@@ -418,8 +419,9 @@ function checkRenderFeaturesDoc() {
 // Raised for P4c: createTextureSession (js/mtlx-engine.js, precompiled into
 // embed/gen/mtlx-engine.js) adds the refcounted-source/wrapper/idle-LRU
 // texture pipeline and the exact:true resolvers.
+// Raised for the light theme: palette and runtime (js/shared/theme*.js, js/gen/theme-tokens.css), embed theme handling.
 // Raise deliberately (with a comment on why) if the payload grows further.
-const EMBED_PAYLOAD_BUDGET = 2350595;
+const EMBED_PAYLOAD_BUDGET = 2375000;
 
 const EAGER_EMBED_FILES = [
   "vendor/react/react.production.min.js",

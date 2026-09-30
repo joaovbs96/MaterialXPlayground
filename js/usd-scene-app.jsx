@@ -3946,7 +3946,7 @@
                             </div>
                             <label
                                 title="Choose a folder"
-                                className="h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-line rounded-md bg-control hover:bg-hover text-fg-secondary cursor-pointer"
+                                className="h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-line-control rounded-md bg-control hover:bg-hover text-fg-secondary cursor-pointer"
                             >
                                 <MtlxIcon name="folder" className="w-3.5 h-3.5" />
                                 <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={(e) => chooseFiles(e.target.files)} />
@@ -4101,7 +4101,7 @@
                 {sceneTree && (
                     <section data-testid="usd-scene-section-hierarchy" className="flex-1 flex flex-col gap-2 px-3.5 py-3 border-t border-line">
                         <SidebarSectionHeader icon="list-details" title="Hierarchy" summary={objectCount.toLocaleString() + ' object' + (objectCount === 1 ? '' : 's')} testId="usd-scene-section-header" />
-                        <div className="flex-none rounded-md border border-line bg-surface-sunken overflow-hidden focus-within:border-focus">
+                        <div className="flex-none rounded-md border border-line-control bg-surface-sunken overflow-hidden focus-within:border-focus">
                         <div className="relative h-[26px]">
                             <MtlxIcon name="search" className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-fg-subtle pointer-events-none" />
                             <input

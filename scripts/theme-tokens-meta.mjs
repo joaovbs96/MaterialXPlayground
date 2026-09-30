@@ -85,6 +85,12 @@ export const tokens = {
         "derive": "background mixed 18% toward foreground",
         "role": "Default borders and dividers, 1px dividers drawn as bg, dim separator glyphs."
     },
+    "line-control": {
+        "group": "line",
+        "kind": "derivable",
+        "derive": "equals line in dark; light themes need 3:1 (WCAG 1.4.11) against the surface behind",
+        "role": "Boundaries that identify a control: text inputs, search fields, icon buttons, select triggers, selectable tile cards, split-button halves. Not dividers or panel outlines (line)."
+    },
     "line-subtle": {
         "group": "line",
         "kind": "derivable",
@@ -169,11 +175,23 @@ export const tokens = {
         "derive": "accent OKLCH L -7.7, C +0.03",
         "role": "Solid accent fills: primary buttons (/70, /80), active HUD pill, selected tree row, CTA."
     },
+    "accent-fill-translucent": {
+        "group": "accent",
+        "kind": "derivable",
+        "derive": "equals accent-fill in dark; light themes pick the value whose /70 composite over the page keeps 4.5 with on-accent",
+        "role": "Primary-button and active-toggle fill drawn at /70 over page surfaces (BTN_PRIMARY and its inline copies)."
+    },
     "accent-fill-hover": {
         "group": "accent",
         "kind": "derivable",
         "derive": "equals accent in dark (fill lightened toward accent)",
         "role": "Hover of accent fills."
+    },
+    "accent-fill-translucent-hover": {
+        "group": "accent",
+        "kind": "derivable",
+        "derive": "equals accent-fill-hover in dark; light themes go darker so the /70 hover composite keeps 4.5 with on-accent",
+        "role": "Hover fill of the /70 primary button."
     },
     "accent-fill-pressed": {
         "group": "accent",
@@ -216,6 +234,12 @@ export const tokens = {
         "kind": "derivable",
         "derive": "accent OKLCH L +30.9, C x0.17",
         "role": "Secondary foreground on solid accent fills: selected-row icons and counts, selected option card title."
+    },
+    "accent-text-on-tint": {
+        "group": "accent",
+        "kind": "derivable",
+        "derive": "equals on-accent-muted in dark; light themes need a dark accent on the pale tint",
+        "role": "Text and icons on faint accent tints (selected tile cards at /5, docs sidebar clear-filter hover). Solid accent fills keep on-accent-muted."
     },
     "selection": {
         "group": "accent",
@@ -896,7 +920,7 @@ export const tokens = {
     }
 };
 
-// kind: text (4.5), large (3), ui (3).
+// kind: text (4.5), large (3), ui (3), decorative (reported only). alpha+under: bg is composited at alpha over token `under`.
 export const contrast = [
     {
         "fg": "fg",
@@ -1101,7 +1125,7 @@ export const contrast = [
     {
         "fg": "line",
         "bg": "surface-base",
-        "kind": "ui"
+        "kind": "decorative"
     },
     {
         "fg": "hud-line",
@@ -1161,7 +1185,7 @@ export const contrast = [
     {
         "fg": "graph-grid",
         "bg": "graph-canvas",
-        "kind": "ui"
+        "kind": "decorative"
     },
     {
         "fg": "hud-selection",
@@ -1397,5 +1421,65 @@ export const contrast = [
         "fg": "type-untyped",
         "bg": "graph-canvas",
         "kind": "ui"
+    },
+    {
+        "fg": "line-control",
+        "bg": "surface-sunken",
+        "kind": "ui"
+    },
+    {
+        "fg": "line-control",
+        "bg": "surface-raised",
+        "kind": "ui"
+    },
+    {
+        "fg": "line-control",
+        "bg": "surface-base",
+        "kind": "ui"
+    },
+    {
+        "fg": "accent-text-on-tint",
+        "bg": "surface-raised",
+        "kind": "text"
+    },
+    {
+        "fg": "on-accent",
+        "bg": "accent-fill-translucent",
+        "kind": "text",
+        "alpha": 0.7,
+        "under": "surface-raised"
+    },
+    {
+        "fg": "on-accent",
+        "bg": "accent-fill-translucent-hover",
+        "kind": "text",
+        "alpha": 0.7,
+        "under": "surface-raised"
     }
+];
+
+// Pre-existing dark-theme failures ("fg|bg"), frozen: dark values must not change. check-theme-contrast fails on any dark failure not listed here.
+export const knownDarkFailures = [
+    "fg-subtle|surface-raised",
+    "fg-subtle|surface-sunken",
+    "fg-faint|surface-base",
+    "on-accent-muted|accent-fill",
+    "on-accent|success-fill",
+    "code-muted|surface-raised",
+    "line-strong|surface-raised",
+    "line-strong|surface-sunken",
+    "hud-line|hud",
+    "scrollbar-thumb|scrollbar-track",
+    "graph-node-line|graph-canvas",
+    "type-bsdf|graph-node",
+    "type-float|graph-node",
+    "type-float|graph-canvas",
+    "type-integer|graph-node",
+    "type-integer|graph-canvas",
+    "type-matrix44|graph-node",
+    "type-nodegraph|graph-node",
+    "type-nodegraph|graph-canvas",
+    "line-control|surface-sunken",
+    "line-control|surface-raised",
+    "line-control|surface-base",
 ];

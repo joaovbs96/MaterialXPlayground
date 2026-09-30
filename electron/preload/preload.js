@@ -15,6 +15,13 @@ contextBridge.exposeInMainWorld('__MTLX_ELECTRON__', true);
 // goes), so this is the value that decides that layout.
 contextBridge.exposeInMainWorld('__MTLX_PLATFORM__', process.platform);
 
+// Initial theme preference, passed by main.js as --mtlx-theme=<pref> so
+// js/shared/theme.js can read it before any page script runs.
+const themeArg = process.argv.find((a) => a.startsWith('--mtlx-theme='));
+const themePref = themeArg ? themeArg.slice('--mtlx-theme='.length) : 'system';
+contextBridge.exposeInMainWorld('__MTLX_THEME_PREF__', ['light', 'dark', 'system'].includes(themePref) ? themePref : 'system');
+contextBridge.exposeInMainWorld('__mtlxThemePersist', (pref) => ipcRenderer.send('mtlx-set-theme', pref));
+
 // Buffered like the site's own window.__mtlxPendingImport pattern: main
 // may send 'mtlx-open-file' before the page registers onOpenFile, so the
 // payload is held until a callback shows up.

@@ -7717,7 +7717,7 @@
                                 aria-label={isFullscreen ? 'Exit' : 'Fullscreen'}
                                 className={'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border transition-colors whitespace-nowrap shrink-0 '
                                     + (isFullscreen
-                                        ? 'bg-accent-fill/70 border-accent-base text-on-accent hover:bg-accent-fill-hover/70'
+                                        ? 'bg-accent-fill-translucent/70 border-accent-base text-on-accent hover:bg-accent-fill-translucent-hover/70'
                                         : 'bg-transparent border-transparent text-fg-secondary hover:bg-hover/80 hover:border-line-strong')}
                             >
                                 <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
@@ -8584,7 +8584,7 @@
                                             setConfirmCloseOpen(false);
                                             if (a) a();
                                         }}
-                                        className="h-7 text-[11px] px-2.5 rounded border bg-accent-fill/70 border-accent-base text-on-accent hover:bg-accent-fill-hover/70 transition-colors"
+                                        className="h-7 text-[11px] px-2.5 rounded border bg-accent-fill-translucent/70 border-accent-base text-on-accent hover:bg-accent-fill-translucent-hover/70 transition-colors"
                                     >Export & Continue</button>
                                 </div>
                             </div>

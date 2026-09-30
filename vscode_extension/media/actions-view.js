@@ -24,6 +24,10 @@
         'alert-triangle': '<path d="M12 9v4"/><path d="M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0"/><path d="M12 16h.01"/>',
         'file-text': '<path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z"/><path d="M9 9l1 0"/><path d="M9 13l6 0"/><path d="M9 17l6 0"/>',
         puzzle: '<path d="M4 7h3a1 1 0 0 0 1 -1v-1a2 2 0 0 1 4 0v1a1 1 0 0 0 1 1h3a1 1 0 0 1 1 1v3a1 1 0 0 0 1 1h1a2 2 0 0 1 0 4h-1a1 1 0 0 0 -1 1v3a1 1 0 0 1 -1 1h-3a1 1 0 0 1 -1 -1v-1a2 2 0 0 0 -4 0v1a1 1 0 0 1 -1 1h-3a1 1 0 0 1 -1 -1v-3a1 1 0 0 1 1 -1h1a2 2 0 0 0 0 -4h-1a1 1 0 0 1 -1 -1v-3a1 1 0 0 1 1 -1"/>',
+        sun: '<path d="M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0"/><path d="M3 12h1m8 -9v1m8 8h1m-9 8v1m-6.4 -15.4l.7 .7m12.1 -.7l-.7 .7m0 11.4l.7 .7m-12.1 -.7l-.7 .7"/>',
+        moon: '<path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z"/>',
+        'device-desktop': '<path d="M3 5a1 1 0 0 1 1 -1h16a1 1 0 0 1 1 1v10a1 1 0 0 1 -1 1h-16a1 1 0 0 1 -1 -1v-10z"/><path d="M7 20h10"/><path d="M9 16v4"/><path d="M15 16v4"/>',
+        check: '<path d="M5 12l5 5l10 -10"/>',
     };
     const CHEVRON_PATH = '<path d="M6 9l6 6l6 -6"/>';
     const CLOSE_PATH = '<path d="M18 6l-12 12" /><path d="M6 6l12 12" />';
@@ -937,9 +941,94 @@
     }
     moreBtn.addEventListener('click', () => setMoreOpen(!moreOpen, true));
 
+    // ---- Theme menu (Light / Dark / System) next to About. Same menu
+    // pattern as the overflow menu above, with menuitemradio semantics;
+    // the host owns the setting and echoes it back via 'state' / 'theme'.
+    const THEME_CHOICES = [
+        { value: 'light', icon: 'sun', label: 'Light' },
+        { value: 'dark', icon: 'moon', label: 'Dark' },
+        { value: 'system', icon: 'device-desktop', label: 'System' },
+    ];
+    const themeBtn = document.getElementById('mtlx-theme-btn');
+    const themeWrap = document.querySelector('.mtlx-theme-wrap');
+    const themeMenu = document.createElement('div');
+    themeMenu.id = 'mtlx-theme-menu';
+    themeMenu.className = 'mtlx-more-menu';
+    themeMenu.setAttribute('role', 'menu');
+    themeMenu.setAttribute('aria-label', 'Theme');
+    themeMenu.hidden = true;
+    let themePref = 'system';
+    for (const choice of THEME_CHOICES) {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'mtlx-more-item';
+        item.setAttribute('role', 'menuitemradio');
+        item.setAttribute('aria-checked', 'false');
+        item.dataset.theme = choice.value;
+        const icon = document.createElement('span');
+        icon.className = 'mtlx-action-icon';
+        icon.innerHTML = iconSvg(choice.icon);
+        item.appendChild(icon);
+        const label = document.createElement('span');
+        label.className = 'mtlx-theme-label';
+        label.textContent = choice.label;
+        item.appendChild(label);
+        const check = document.createElement('span');
+        check.className = 'mtlx-theme-check';
+        check.innerHTML = iconSvg('check');
+        item.appendChild(check);
+        item.addEventListener('click', () => {
+            setThemeOpen(false);
+            themeBtn.focus();
+            setThemePref(choice.value);
+            vscode.postMessage({ type: 'setTheme', value: choice.value });
+        });
+        themeMenu.appendChild(item);
+    }
+    themeWrap.appendChild(themeMenu);
+
+    function setThemePref(value) {
+        if (value !== 'light' && value !== 'dark' && value !== 'system') return;
+        themePref = value;
+        for (const item of themeMenu.querySelectorAll('.mtlx-more-item')) {
+            item.setAttribute('aria-checked', String(item.dataset.theme === value));
+        }
+    }
+    setThemePref(themePref);
+
+    let themeOpen = false;
+    function onDocClickForTheme(e) {
+        if (!themeMenu.contains(e.target) && !themeBtn.contains(e.target)) setThemeOpen(false);
+    }
+    function onThemeKeydown(e) {
+        const items = Array.from(themeMenu.querySelectorAll('.mtlx-more-item'));
+        const idx = items.indexOf(document.activeElement);
+        if (e.key === 'Escape') { e.preventDefault(); setThemeOpen(false); themeBtn.focus(); return; }
+        if (e.key === 'ArrowDown') { e.preventDefault(); items[(idx + 1) % items.length].focus(); return; }
+        if (e.key === 'ArrowUp') { e.preventDefault(); items[(idx - 1 + items.length) % items.length].focus(); return; }
+        if (e.key === 'Tab') setThemeOpen(false);
+    }
+    function setThemeOpen(open, focusCurrent) {
+        themeOpen = open;
+        themeMenu.hidden = !open;
+        themeBtn.setAttribute('aria-expanded', String(open));
+        if (open) {
+            setMoreOpen(false);
+            document.addEventListener('keydown', onThemeKeydown);
+            document.addEventListener('click', onDocClickForTheme, true);
+            const checked = themeMenu.querySelector('.mtlx-more-item[aria-checked="true"]') || themeMenu.querySelector('.mtlx-more-item');
+            if (focusCurrent && checked) checked.focus();
+        } else {
+            document.removeEventListener('keydown', onThemeKeydown);
+            document.removeEventListener('click', onDocClickForTheme, true);
+        }
+    }
+    themeBtn.addEventListener('click', () => setThemeOpen(!themeOpen, true));
+
     window.addEventListener('message', (event) => {
         const msg = event.data;
         if (!msg) return;
+        if (msg.type === 'theme') { setThemePref(msg.value); return; }
         if (msg.type === 'focusInsertNode') {
             const insertRow = latestState && (latestState.rows || []).find((r) => r.id === 'insertNode');
             if (insertRow && insertRow.disabled) return;
@@ -949,6 +1038,7 @@
         }
         if (msg.type !== 'state') return;
         latestState = msg;
+        if (msg.theme) setThemePref(msg.theme);
         if (Array.isArray(msg.rows)) render(msg.rows);
         if (Array.isArray(msg.examplesCards)) setExamplesCards(msg.examplesCards);
         if (Array.isArray(msg.insertNodeTree)) {
