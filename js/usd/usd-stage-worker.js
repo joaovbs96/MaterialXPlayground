@@ -16,22 +16,6 @@ let activeStage;
 const nativeWarnings = [];
 const originalConsoleError = console.error.bind(console);
 const originalConsoleWarn = console.warn.bind(console);
-// Reused scalar storage keeps weld hashing allocation-free while retaining
-// the fractional bits that distinguish neighboring geometry samples.
-const weldHashBuffer = new ArrayBuffer(8);
-const weldHashFloat64 = new Float64Array(weldHashBuffer);
-const weldHashWords = new Uint32Array(weldHashBuffer);
-function hashWeldNumber(value) {
-  const numeric = Number(value);
-  if (Number.isNaN(numeric)) return 0x7fc00000;
-  if (numeric === 0) {
-    weldHashWords[0] = 0;
-    weldHashWords[1] = 0;
-    return 0;
-  }
-  weldHashFloat64[0] = numeric;
-  return (Math.imul(weldHashWords[0], 0x9e3779b1) ^ Math.imul(weldHashWords[1], 0x85ebca6b)) >>> 0;
-}
 // Bounded copy of the native runtime's console output (Emscripten binds
 // console.error/warn), so load() can read diagnostics openStage does not
 // return, such as an asset path it failed to resolve.
@@ -3343,7 +3327,7 @@ async function load(request) {
   }
   if (diagnostics !== undefined) {
     try {
-      result.diagnostics = JSON.parse(JSON.stringify(diagnostics));
+      result.diagnostics = structuredClone(diagnostics);
     } catch {
       result.diagnostics = { unavailable: true };
     }

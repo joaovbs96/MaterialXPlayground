@@ -14,13 +14,6 @@
     // Sentinel MtlxSelect option (item 4): picking it reveals every root
     // candidate instead of just the top-level ones, never a real root path.
     const SHOW_ALL_ROOT_FILES_VALUE = '__mtlx_scene_show_all_files__';
-    const EXAMPLE_ROOT = 'tests/fixtures/usd-scene/root.usda';
-    const EXAMPLE_FILES = [
-        EXAMPLE_ROOT,
-        'tests/fixtures/usd-scene/nested/nested.usda',
-        'tests/fixtures/usd-scene/nested/materials/red.mtlx',
-        'tests/fixtures/usd-scene/nested/materials/blue.mtlx',
-    ];
     // Self-authored (not imported from js/compare-app.jsx per the ground
     // rule against importing across apps): the same grid-mask empty-stage
     // treatment as Compare's own empty slot.
@@ -156,7 +149,7 @@
         return preferred ? preferred.path : (candidates.length === 1 ? candidates[0].path : '');
     };
     // A candidate's data may be a File/Blob (file picker, window drop) or an
-    // ArrayBuffer/typed array (loadExample's fetch results); normalize both
+    // ArrayBuffer/typed array (host-provided buffers); normalize both
     // to a Blob so slice()/text() work the same way.
     const blobOfCandidate = (file) => {
         const data = file && file.data !== undefined ? file.data : file;
@@ -688,7 +681,7 @@
         }
         groups.scene.count = byPath.size;
         groups.materials.count = groups.materials.children.length;
-        groups.cameras.count = groups.cameras.children.length - 1;
+        groups.cameras.count = groups.cameras.children.length;
         groups.lights.count = groups.lights.children.length;
         return {
             roots, groups, byId, byPath, byRenderPath, meshesByMaterial,
@@ -726,8 +719,8 @@
     };
     // Visible rows in display order. A filter keeps matches, their ancestors (forced
     // open, a group header only when something under it matches) and the descendants
-    // of matches the user expanded.
-    const flattenSceneTree = (tree, expanded, filter) => {
+    // of matches the user expanded. A group key other than 'all' shows only that group.
+    const flattenSceneTree = (tree, expanded, filter, group) => {
         const rows = [];
         if (!tree) return rows;
         const query = String(filter || '').trim().toLowerCase();
@@ -747,11 +740,12 @@
                 const matched = !!matches && matches.has(node);
                 if (matches && !matched && !insideMatch && !forced.has(node)) return;
                 rows.push(node);
-                const open = (forced && forced.has(node)) || expanded.has(node.id);
+                const open = (forced && forced.has(node)) || expanded.has(node.id) || (pinned && node.isGroup && !node.parent);
                 if (open && node.children.length) visit(node.children, insideMatch || matched);
             });
         };
-        visit(tree.roots, false);
+        const pinned = !!group && group !== 'all';
+        visit(pinned ? tree.roots.filter((root) => root.group === group) : tree.roots, false);
         return rows;
     };
     // The four groups start open. Small scenes open fully; larger ones open their roots
@@ -1564,6 +1558,39 @@
             </div>
         );
     };
+    // Hierarchy type filter: the bottom row of the search box, no chrome of its own.
+    const SCENE_TREE_GROUP_OPTIONS = [
+        ['all', 'All', 'Show everything'],
+        ['scene', 'Scene', 'Show only scene objects'],
+        ['materials', 'Materials', 'Show only materials'],
+        ['cameras', 'Cameras', 'Show only cameras'],
+        ['lights', 'Lights', 'Show only lights'],
+    ];
+    const SceneTreeGroupSegments = ({ value, onChange }) => {
+        return (
+            <div role="group" aria-label="Show in hierarchy" data-testid="usd-scene-tree-group" className="flex w-full border-t border-line">
+                {SCENE_TREE_GROUP_OPTIONS.map(([id, label, title], i) => {
+                    const active = value === id;
+                    return (
+                        <button
+                            key={id}
+                            type="button"
+                            data-testid={'usd-scene-tree-group-' + id}
+                            data-active={active ? 'true' : undefined}
+                            aria-pressed={active}
+                            title={title}
+                            onClick={() => onChange(id)}
+                            className={'h-6 min-w-0 flex-1 px-1 flex items-center justify-center text-[11px] font-medium transition-colors '
+                                + (i > 0 ? 'border-l border-line ' : '')
+                                + (active ? 'bg-accent-wash/[0.12] text-accent-fg-strong' : 'bg-transparent text-fg-muted hover:bg-hover-subtle hover:text-fg-soft')}
+                        >
+                            <span className="truncate">{label}</span>
+                        </button>
+                    );
+                })}
+            </div>
+        );
+    };
     // Diagnostics popover over the Statistics footer: this wide, at most this
     // share of the window tall, clamped to the window.
     const DIAGNOSTICS_POPOVER_W = 440;
@@ -1762,6 +1789,7 @@
         // The Environment row's eye: per view like hidden lights, never persisted.
         const [envLightingOff, setEnvLightingOff] = React.useState(false);
         const [treeFilter, setTreeFilter] = React.useState('');
+        const [treeGroup, setTreeGroup] = React.useState('all');
         const [treeReveal, setTreeReveal] = React.useState(0);
         const treeSceneKeyRef = React.useRef(null);
         // The Cameras group's active row: 'default' (frame the scene) or a camera path.
@@ -2241,30 +2269,6 @@
                 setLoadErrorDetails(['[error] Scene failed to load: ' + message]);
             }
         };
-        const loadExample = async () => {
-            treeSceneKeyRef.current = null;
-            const generation = ++generationRef.current;
-            if (abortRef.current) abortRef.current.abort();
-            if (handleRef.current && handleRef.current.dispose) handleRef.current.dispose();
-            handleRef.current = null; setHandle(null); setStage(null);
-            window.__mtlxUsdSceneHandle = null;
-            setStatus('loading-example'); setError(''); setLoadErrorDetails([]);
-            try {
-                const loaded = await Promise.all(EXAMPLE_FILES.map(async (path) => {
-                    const response = await fetch(path, { cache: 'no-store' });
-                    if (!response.ok) throw new Error('Example asset failed to load: ' + path + ' (' + response.status + ')');
-                    return { path, data: await response.arrayBuffer() };
-                }));
-                if (!mountedRef.current || generation !== generationRef.current) return;
-                setFiles(loaded); setRootPath(EXAMPLE_ROOT); setRootTouched(true); await load(loaded, EXAMPLE_ROOT);
-            } catch (e) {
-                if (mountedRef.current && generation === generationRef.current) {
-                    const message = String(e && e.message || e);
-                    setError(message); setStatus('error');
-                    setLoadErrorDetails(['[error] Scene failed to load: ' + message]);
-                }
-            }
-        };
         // VS Code host entry: { files: { relPath: File }, root } from the
         // extension (media/bootstrap.js). load() routes the explicit root by
         // kind, so a USD, glTF/GLB or OBJ root all take the same path.
@@ -2556,6 +2560,10 @@
 
         // Outliner: tree model, renderer sync, selection and activation.
         const sceneTree = React.useMemo(() => (stage ? buildSceneTree(stage) : null), [stage]);
+        // Same camera list as the hierarchy's Cameras group.
+        const cameraOptions = React.useMemo(() => (sceneTree
+            ? sceneTree.groups.cameras.children.map((node) => ({ value: node.isDefaultCamera ? 'default' : node.path, label: node.name }))
+            : []), [sceneTree]);
         React.useEffect(() => {
             if (!sceneTree) return;
             if (treeSceneKeyRef.current === rootPath) {
@@ -2572,6 +2580,7 @@
             setLightsHidden(new Set());
             setEnvLightingOff(false);
             setTreeFilter('');
+            setTreeGroup('all');
             // eslint-disable-next-line react-hooks/exhaustive-deps
         }, [sceneTree]);
         React.useEffect(() => {
@@ -2588,7 +2597,7 @@
             const node = treeSelected && sceneTree ? sceneTree.byId.get(treeSelected) : null;
             handle.setHighlightedPrims(node && !node.isGroup ? sceneTreeRenderPaths(sceneTree, node) : []);
         }, [handle, sceneTree, treeSelected]);
-        const treeRows = React.useMemo(() => flattenSceneTree(sceneTree, treeExpanded, treeFilter), [sceneTree, treeExpanded, treeFilter]);
+        const treeRows = React.useMemo(() => flattenSceneTree(sceneTree, treeExpanded, treeFilter, treeGroup), [sceneTree, treeExpanded, treeFilter, treeGroup]);
         const toggleTreeExpanded = (id) => setTreeExpanded((prev) => {
             const next = new Set(prev);
             if (next.has(id)) next.delete(id); else next.add(id);
@@ -2631,6 +2640,7 @@
             if (!node) { setTreeSelected(''); return; }
             const query = treeFilter.trim().toLowerCase();
             if (query && node.name.toLowerCase().indexOf(query) < 0) setTreeFilter('');
+            if (treeGroup !== 'all' && node.group !== treeGroup) setTreeGroup('all');
             selectTreePath(node.id, true);
         };
         // The material preview for a mesh row (its bound material) or a material row.
@@ -3297,7 +3307,7 @@
         // Second, dimmer overlay line: the current item within the phase.
         const RENDERER_STEP_LABELS = { 'shadow-atlas': 'Building shadow atlas', 'sky-visibility': 'Baking sky visibility', 'occlusion-volume': 'Baking occlusion volume', 'shader-join': 'Finishing shader compiles', 'gpu-program': 'Checking GPU programs', 'first-frame': 'Rendering first frame' };
         const progressDetail = progress.phase === 'renderer' ? (RENDERER_STEP_LABELS[progress.step] || '') : (progress.label || '');
-        const busy = status === 'loading' || status === 'loading-example' || status === 'loaded' || status === 'host-loading';
+        const busy = status === 'loading' || status === 'loaded' || status === 'host-loading';
         const canTuneEnvironment = !!handle && typeof handle.setEnvRotation === 'function';
         const envSummary = (envRotation === 0 && envExposureLinear === 1)
             ? 'Default environment'
@@ -4081,14 +4091,9 @@
                         <div data-testid="usd-scene-info-empty" className="text-xs text-fg-subtle">No scene loaded</div>
                     ) : null)}
 
-                    {sceneSlotButton || !IN_VSCODE ? (
+                    {sceneSlotButton ? (
                         <div className="flex items-center gap-1.5 pt-0.5">
                             {sceneSlotButton}
-                            {!IN_VSCODE && (
-                                <button type="button" data-testid="usd-scene-load-example" onClick={loadExample} className={BTN_SECONDARY + ' flex-1 min-w-0 gap-1'}>
-                                    <MtlxIcon name="file-upload" className="w-3.5 h-3.5 flex-none" />Load example
-                                </button>
-                            )}
                         </div>
                     ) : null}
                 </section>
@@ -4096,7 +4101,8 @@
                 {sceneTree && (
                     <section data-testid="usd-scene-section-hierarchy" className="flex-1 flex flex-col gap-2 px-3.5 py-3 border-t border-line">
                         <SidebarSectionHeader icon="list-details" title="Hierarchy" summary={objectCount.toLocaleString() + ' object' + (objectCount === 1 ? '' : 's')} testId="usd-scene-section-header" />
-                        <div className="relative flex-none h-[26px]">
+                        <div className="flex-none rounded-md border border-line bg-surface-sunken overflow-hidden focus-within:border-focus">
+                        <div className="relative h-[26px]">
                             <MtlxIcon name="search" className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-fg-subtle pointer-events-none" />
                             <input
                                 type="text"
@@ -4115,8 +4121,10 @@
                                 aria-label="Filter objects"
                                 data-testid="usd-scene-tree-filter"
                                 spellCheck={false}
-                                className="w-full h-full bg-surface-sunken border border-line rounded-md pl-7 pr-2 text-[11px] text-fg-secondary placeholder-fg-subtle focus:outline-none focus:border-focus"
+                                className="w-full h-full bg-transparent border-0 pl-7 pr-2 text-[11px] text-fg-secondary placeholder-fg-subtle focus:outline-none"
                             />
+                        </div>
+                        <SceneTreeGroupSegments value={treeGroup} onChange={setTreeGroup} />
                         </div>
                         {treeRows.length ? (
                             <SceneTree
@@ -4250,9 +4258,6 @@
                                 <div className="text-fg-subtle text-sm max-w-sm">
                                     Drop a USD stage (.usd, .usda, .usdc, .usdz), a glTF (.gltf, .glb) or an OBJ (.obj) and its referenced files
                                 </div>
-                                <button type="button" onClick={loadExample} className={PILL_ACTION}>
-                                    <MtlxIcon name="file-upload" className="w-3.5 h-3.5" /> Load example
-                                </button>
                             </div>
                         </React.Fragment>
                     )}
@@ -4325,6 +4330,23 @@
                             <MtlxIcon name="sun" className="w-4 h-4" />
                             {!hudCompact && <span>Environment settings</span>}
                         </button>
+                        {sceneTree && (
+                            <div data-testid="usd-scene-camera-select" className="flex-none">
+                                <MtlxSelect
+                                    value={selectedCamera}
+                                    options={cameraOptions}
+                                    defValue="default"
+                                    onChange={selectCamera}
+                                    icon="camera"
+                                    title="Camera"
+                                    ariaLabel="Camera"
+                                    variant="toolbar"
+                                    size="md"
+                                    maxWidth={hudCompact ? 110 : 180}
+                                    disabled={!handle}
+                                />
+                            </div>
+                        )}
                     </div>
 
                     {envPopover}

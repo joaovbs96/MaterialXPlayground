@@ -51,6 +51,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
+import { parseArgs as nodeParseArgs } from "node:util";
 import { chromium } from "@playwright/test";
 import { startServer } from "../tests/embed/lib/server.mjs";
 
@@ -101,28 +102,36 @@ function parseArgs(argv) {
   let reuseOnly = false;
   let pruneIds = null;
   let pruneIdsAuto = false;
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--manifest" && argv[i + 1]) {
-      manifestPath = path.resolve(argv[++i]);
-    } else if (arg === "--out" && argv[i + 1]) {
-      outDir = path.resolve(argv[++i]);
-    } else if (arg === "--limit" && argv[i + 1]) {
-      limit = Number(argv[++i]);
-    } else if (arg === "--only" && argv[i + 1]) {
-      only = argv[++i];
-    } else if (arg === "--jobs" && argv[i + 1]) {
-      jobs = Math.max(1, Number(argv[++i]) || 1);
-    } else if (arg === "--reuse-from" && argv[i + 1]) {
-      reuseFrom = String(argv[++i]).replace(/\/+$/, "");
-    } else if (arg === "--reuse-only") {
-      reuseOnly = true;
-    } else if (arg === "--prune-ids" && argv[i + 1]) {
-      pruneIds = String(argv[++i]).split(",").map((s) => s.trim()).filter(Boolean);
-    } else if (arg === "--prune-ids-auto") {
-      pruneIdsAuto = true;
-    }
+  let values;
+  try {
+    ({ values } = nodeParseArgs({
+      args: argv,
+      options: {
+        manifest: { type: "string" },
+        out: { type: "string" },
+        limit: { type: "string" },
+        only: { type: "string" },
+        jobs: { type: "string" },
+        "reuse-from": { type: "string" },
+        "reuse-only": { type: "boolean" },
+        "prune-ids": { type: "string" },
+        "prune-ids-auto": { type: "boolean" },
+      },
+      strict: true,
+    }));
+  } catch (err) {
+    console.error(`error: ${err.message}`);
+    process.exit(1);
   }
+  if (values.manifest !== undefined) manifestPath = path.resolve(values.manifest);
+  if (values.out !== undefined) outDir = path.resolve(values.out);
+  if (values.limit !== undefined) limit = Number(values.limit);
+  if (values.only !== undefined) only = values.only;
+  if (values.jobs !== undefined) jobs = Math.max(1, Number(values.jobs) || 1);
+  if (values["reuse-from"] !== undefined) reuseFrom = String(values["reuse-from"]).replace(/\/+$/, "");
+  if (values["reuse-only"]) reuseOnly = true;
+  if (values["prune-ids"] !== undefined) pruneIds = String(values["prune-ids"]).split(",").map((s) => s.trim()).filter(Boolean);
+  if (values["prune-ids-auto"]) pruneIdsAuto = true;
   return { manifestPath, outDir, limit, only, jobs, reuseFrom, reuseOnly, pruneIds, pruneIdsAuto };
 }
 

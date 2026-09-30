@@ -14,6 +14,7 @@ import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { parseArgs as nodeParseArgs } from "node:util";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -90,16 +91,17 @@ function fail(message) {
 }
 
 function parseArgs(argv) {
-  let outDir = path.join(REPO_ROOT, "gallery");
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--out" && argv[i + 1]) {
-      outDir = path.resolve(argv[i + 1]);
-      i++;
-    } else if (arg.startsWith("--out=")) {
-      outDir = path.resolve(arg.slice("--out=".length));
-    }
+  let values;
+  try {
+    ({ values } = nodeParseArgs({
+      args: argv,
+      options: { out: { type: "string" } },
+      strict: true,
+    }));
+  } catch (err) {
+    fail(`error: ${err.message}`);
   }
+  const outDir = values.out ? path.resolve(values.out) : path.join(REPO_ROOT, "gallery");
   return { outDir };
 }
 

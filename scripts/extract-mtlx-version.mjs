@@ -23,6 +23,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { extractVersionFromWasm, readVersionMeta, VERSION_META_PATH, VERSIONS_META_PATH, stampAll, checkStamps } from "./lib/version.mjs";
 import { MTLX_VERSIONS, DEFAULT_MTLX_VERSION } from "./lib/mtlx-versions.mjs";
 
@@ -32,7 +33,18 @@ const REPO_ROOT = path.resolve(__dirname, "..");
 const RELATIVE_META_PATH = path.relative(REPO_ROOT, VERSION_META_PATH);
 const RELATIVE_VERSIONS_META_PATH = path.relative(REPO_ROOT, VERSIONS_META_PATH);
 
-const CHECK_MODE = process.argv.includes("--check");
+let cliValues;
+try {
+  ({ values: cliValues } = parseArgs({
+    args: process.argv.slice(2),
+    options: { check: { type: "boolean" } },
+    strict: true,
+  }));
+} catch (err) {
+  console.error(`error: ${err.message}`);
+  process.exit(1);
+}
+const CHECK_MODE = !!cliValues.check;
 
 function log(...args) {
   console.log(...args);

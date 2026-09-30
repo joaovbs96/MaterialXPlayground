@@ -556,6 +556,11 @@
             // when opened (openShaderExport below), null while closed —
             // same one-shot-computed contract as exportDialog above.
             const [shaderExport, setShaderExport] = React.useState(null);
+            // Kept current every render: blocks the page-wide file-drop hook
+            // while the export dialog or the presets picker is open, so a
+            // stray drop can't clobber the document underneath either one.
+            const dropBlockedRef = React.useRef(false);
+            dropBlockedRef.current = !!shaderExport || presetPickerOpen;
             // Freezes the preview panel to a specific node regardless of
             // what gets selected afterward (item 10's pin toggle) — same
             // { scope, id } shape as previewSel, reset alongside it.
@@ -1470,7 +1475,10 @@
             // loading; textures still merge and rebind live previews.
             // `fromHost` (VS Code only): marks the resulting document as
             // one the host itself sent, see hostDocRef above.
-            const ingest = async (map, rootKey, additive, fromHost) => {
+            // `extraOrigins` (optional): a handoff's carried-over .mxsl
+            // Original, keyed by the exact .mtlx key it belongs to (see
+            // handleImport below), merged in alongside what expandMxsl compiles.
+            const ingest = async (map, rootKey, additive, fromHost, extraOrigins) => {
                 setError(null);
                 const mxslOrigins = {}; // populated below, merged into mxslOriginalsRef after the replace/merge decision
                 const mxslFailures = []; // {rootKey, message} for .mxsl roots that failed to compile
@@ -1481,6 +1489,7 @@
                     // document detection, xi:include resolution, texture
                     // binding) treats them exactly like an authored .mtlx.
                     await expandMxsl(map, mxslOrigins, mxslFailures);
+                    if (extraOrigins) Object.assign(mxslOrigins, extraOrigins);
                 } catch (e) {
                     setError(errMsg(e));
                     return;
@@ -1685,11 +1694,11 @@
             // all three back out without running the pending action.
             const closeConfirm = () => { pendingActionRef.current = null; setConfirmCloseOpen(false); };
             useEscapeToClose(closeConfirm, confirmCloseOpen);
-            const guardedIngest = (map) => {
+            const guardedIngest = (map, extraOrigins) => {
                 // .mxsl becomes .mtlx once ingest() runs expandMxsl(), so it
                 // must be treated as a replacing document here too.
                 const hasMtlx = Object.keys(map).some((k) => /\.(mtlx|mxsl)$/i.test(k));
-                confirmReplace(hasMtlx, () => ingest(map));
+                confirmReplace(hasMtlx, () => ingest(map, undefined, undefined, undefined, extraOrigins));
             };
             // Kept current every render for the [] -dep drag-drop effect
             // below (same trick as ingestRef).
@@ -1706,7 +1715,7 @@
             // Disabled under VS Code: the editor is bound to a single opened
             // .mtlx file, so dropping other documents onto the page doesn't
             // apply.
-            useWindowFileDrop({ activeRef, onFiles: guardedIngest, onDragState: setDragOver, disabled: IN_VSCODE });
+            useWindowFileDrop({ activeRef, onFiles: guardedIngest, onDragState: setDragOver, disabled: IN_VSCODE, blockedRef: dropBlockedRef });
 
             // ---- Receive a material handed off from another view (the
             // "Send to Editor" buttons in viewer-app.jsx/node-preview.jsx,
@@ -1749,17 +1758,22 @@
                     const map = Object.assign({}, payload.files || {}, {
                         [safeName + '.mtlx']: new Blob([payload.xml], { type: 'application/xml' }),
                     });
+                    // A carried-over .mxsl Original (see openInGraphEditor's
+                    // `mxsl`), keyed to the exact .mtlx key just created above.
+                    const extraOrigins = payload.mxsl
+                        ? { [safeName + '.mtlx']: { source: payload.mxsl.source, filename: payload.mxsl.filename } }
+                        : undefined;
                     // Soft (no-confirm) reload of the SAME document: VS Code
                     // requires hostDocRef to confirm it; Electron requires
                     // payload.reload (its own file watcher).
                     if (IN_VSCODE) {
                         if (parsedRef.current && hostDocRef.current) externalReloadRef.current(map);
-                        else ingestRef.current(map, undefined, false, true);
+                        else ingestRef.current(map, undefined, false, true, extraOrigins);
                     } else if (IN_ELECTRON && payload.reload) {
                         if (parsedRef.current) externalReloadRef.current(map);
-                        else ingestRef.current(map);
+                        else ingestRef.current(map, undefined, undefined, undefined, extraOrigins);
                     } else {
-                        guardedIngestRef.current(map);
+                        guardedIngestRef.current(map, extraOrigins);
                     }
                 };
                 if (window.__mtlxPendingImport) {
@@ -3381,7 +3395,10 @@
                 // viewer, so neither travels: the viewer keeps its own.
                 const mode = window.readGraphGeomMode ? window.readGraphGeomMode() : null;
                 const geometry = (mode && mode !== 'pernode' && mode !== 'buffer2d') ? mode : null;
-                openInViewer({ xml, name: defaultExportBase(), files, geometry });
+                // Carry the .mxsl Original across too, so the viewer's Export
+                // dialog keeps offering it instead of losing it on handoff.
+                const mxsl = mxslOriginal ? { source: mxslOriginal.source, filename: mxslOriginal.filename } : null;
+                openInViewer({ xml, name: defaultExportBase(), files, geometry, mxsl });
             };
 
             // Serialize the CURRENT document (edits, connections, layout)

@@ -25,6 +25,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { readVersionMeta, stampAll, checkStamps } from "./lib/version.mjs";
 import { computeBuildId, stampBuildId, checkBuildId } from "./lib/build-id.mjs";
 
@@ -32,10 +33,24 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, "..");
 
-const argv = process.argv.slice(2);
-const CHECK_MODE = argv.includes("--check");
-const WITH_MATERIALX = argv.includes("--with-materialx");
-const STEP = argv.find((a) => !a.startsWith("--")) || "all";
+let cliValues, cliPositionals;
+try {
+  ({ values: cliValues, positionals: cliPositionals } = parseArgs({
+    args: process.argv.slice(2),
+    options: {
+      check: { type: "boolean" },
+      "with-materialx": { type: "boolean" },
+    },
+    strict: true,
+    allowPositionals: true,
+  }));
+} catch (err) {
+  console.error(`error: ${err.message}`);
+  process.exit(1);
+}
+const CHECK_MODE = !!cliValues.check;
+const WITH_MATERIALX = !!cliValues["with-materialx"];
+const STEP = cliPositionals[0] || "all";
 
 const VALID_STEPS = ["all", "version", "versions", "stamp", "vendor", "nodelib", "theme", "embed", "embeddocs", "tutorials", "render", "buildid", "webview"];
 if (!VALID_STEPS.includes(STEP)) {
