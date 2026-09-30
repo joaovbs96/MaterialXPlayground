@@ -458,7 +458,7 @@ function WhatIsMaterialXApp({ active } = {}) {
                 {/* Hero */}
                 <section aria-labelledby="whatis-h1" className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_420px] gap-8 items-center">
                     <div className="flex flex-col gap-[18px] min-w-0">
-                        <img src="images/materialx-logo.svg" alt="MaterialX" className="w-28 sm:w-32 h-auto" />
+                        <img src="images/materialx-logo.svg" alt="MaterialX" className="mtlx-hero-bowtie w-28 sm:w-32 h-auto" />
                         <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-accent-fg-strong">
                             Learn <span className="text-fg-faint">/</span> <span className="text-fg-muted">What is MaterialX?</span>
                         </div>

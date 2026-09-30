@@ -1664,7 +1664,7 @@
                                 title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
                                 className={'w-6 h-6 flex items-center justify-center rounded-full border backdrop-blur transition-colors '
                                     + (isFullscreen
-                                        ? 'bg-accent-fill-translucent/70 border-accent-base text-on-accent hover:bg-accent-fill-translucent-hover/70'
+                                        ? 'mtlx-fill-accent-translucent border-accent-base text-on-accent mtlx-fill-accent-translucent-hover'
                                         : 'bg-hud/70 border-hud-line text-hud-fg hover:bg-hud-hover/80')}
                             >
                                 <MtlxIcon name="maximize" className="w-3.5 h-3.5" />

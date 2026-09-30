@@ -411,6 +411,15 @@
     mask: url("../images/materialx-logo.svg") no-repeat center / contain;
 }
 
+/* Same idea for the What is MaterialX hero <img>, light theme only (dark keeps the white SVG as is):
+   the image content is pushed out of its box and the box is painted brand-mark through the logo mask. */
+:root[data-theme="light"] img.mtlx-hero-bowtie {
+    object-position: -9999px 0;
+    background-color: rgb(var(--mtlx-brand-mark));
+    -webkit-mask: url("../images/materialx-logo.svg") no-repeat center / contain;
+    mask: url("../images/materialx-logo.svg") no-repeat center / contain;
+}
+
 /* GitHub repo widget: a flat icon + text link (no pill chrome), octocat +
    short repo name, with an async facts row (latest release / stars /
    forks) filled in by js/site-header.js's initSourceFacts(). Hover only

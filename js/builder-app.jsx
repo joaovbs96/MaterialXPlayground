@@ -1814,14 +1814,14 @@ function BuilderApp({ active } = {}) {
                     <button
                         type="button" onClick={() => patch({ sizing: 'fixed' })}
                         className={'h-8 px-3 text-xs font-medium transition-colors '
-                            + (sizing === 'fixed' ? 'bg-accent-fill-translucent/70 text-on-accent' : 'bg-surface-sunken text-fg-muted hover:text-fg-soft')}
+                            + (sizing === 'fixed' ? 'mtlx-fill-accent-translucent text-on-accent' : 'bg-surface-sunken text-fg-muted hover:text-fg-soft')}
                     >
                         Fixed (px)
                     </button>
                     <button
                         type="button" onClick={() => patch({ sizing: 'responsive' })}
                         className={'h-8 px-3 text-xs font-medium border-l border-line transition-colors '
-                            + (sizing === 'responsive' ? 'bg-accent-fill-translucent/70 text-on-accent' : 'bg-surface-sunken text-fg-muted hover:text-fg-soft')}
+                            + (sizing === 'responsive' ? 'mtlx-fill-accent-translucent text-on-accent' : 'bg-surface-sunken text-fg-muted hover:text-fg-soft')}
                     >
                         Responsive
                     </button>

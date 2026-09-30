@@ -785,9 +785,11 @@
                 // a divider: with no column left of it, this would just be a
                 // stray line along the graph's own outer edge.
                 if (chrome === 'card' && previewSupported && !previewCollapsed) classNames.push('border-r', 'border-line');
+                // The graph is editor UI, not a render: graph-canvas (same dark value as the row's stage).
+                if (!isTransparent) classNames.push('bg-graph-canvas');
             } else {
                 if (chrome === 'card' && !flush) classNames.push('border', 'border-line', 'rounded-lg');
-                if (!isTransparent) classNames.push('bg-stage');
+                if (!isTransparent) classNames.push('bg-graph-canvas');
             }
 
             // Mounted whenever expanded (placeholder/toggle need somewhere to

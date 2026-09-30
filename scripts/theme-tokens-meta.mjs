@@ -43,6 +43,18 @@ export const tokens = {
         "derive": "equals background in dark; must stay equal to the viewport clear literal 0x111827 until the engine reads it",
         "role": "DOM containers behind 3D renders and image previews; embed page behind the canvas."
     },
+    "stage-fg-muted": {
+        "group": "surface",
+        "kind": "derivable",
+        "derive": "equals fg-muted in dark; tuned for the dark stage in every theme",
+        "role": "Text drawn directly on the stage (no chip): empty and cancelled viewport messages."
+    },
+    "stage-fg-subtle": {
+        "group": "surface",
+        "kind": "derivable",
+        "derive": "equals fg-subtle in dark; tuned for the dark stage in every theme",
+        "role": "Dim hint text drawn directly on the stage (drop hints on empty viewports)."
+    },
     "veil": {
         "group": "surface",
         "kind": "derivable",
@@ -504,6 +516,12 @@ export const tokens = {
         "kind": "independent",
         "derive": "logo blue; does not follow the accent seed",
         "role": "Header brand text, logo crescent."
+    },
+    "brand-logo-inner": {
+        "group": "misc",
+        "kind": "independent",
+        "derive": "white in every theme (brand logo art)",
+        "role": "Inner shape of the Playground logo (site header, home hero, 404)."
     },
     "code-fg": {
         "group": "code",
@@ -1193,6 +1211,16 @@ export const contrast = [
         "kind": "ui"
     },
     {
+        "fg": "stage-fg-muted",
+        "bg": "stage",
+        "kind": "text"
+    },
+    {
+        "fg": "stage-fg-subtle",
+        "bg": "stage",
+        "kind": "text"
+    },
+    {
         "fg": "type-boolean",
         "bg": "graph-node",
         "kind": "ui"
@@ -1446,14 +1474,14 @@ export const contrast = [
         "fg": "on-accent",
         "bg": "accent-fill-translucent",
         "kind": "text",
-        "alpha": 0.7,
+        "alphaParam": ["alpha", "accentFillTranslucent"],
         "under": "surface-raised"
     },
     {
         "fg": "on-accent",
         "bg": "accent-fill-translucent-hover",
         "kind": "text",
-        "alpha": 0.7,
+        "alphaParam": ["alpha", "accentFillTranslucent"],
         "under": "surface-raised"
     }
 ];
@@ -1463,6 +1491,7 @@ export const knownDarkFailures = [
     "fg-subtle|surface-raised",
     "fg-subtle|surface-sunken",
     "fg-faint|surface-base",
+    "stage-fg-subtle|stage",
     "on-accent-muted|accent-fill",
     "on-accent|success-fill",
     "code-muted|surface-raised",

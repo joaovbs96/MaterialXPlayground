@@ -106,7 +106,8 @@
         // Resolved rgba string (RF sets it as an SVG paint), same format as the old literal.
         const minimapMaskColor = () => {
             const h = MtlxTheme.get('graph-minimap-mask');
-            return 'rgba(' + [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(', ') + ', 0.75)';
+            const a = MtlxTheme.param('graph', 'minimapMaskAlpha', 0.75);
+            return 'rgba(' + [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(', ') + ', ' + a + ')';
         };
 
         const handleStyle = (color) => ({

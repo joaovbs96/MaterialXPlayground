@@ -112,6 +112,13 @@
         return Object.assign({}, p.typeFallback);
     }
 
+    // Numeric theme param (params.<theme>.<group>.<key>), falling back to dark, then to `fallback`.
+    function param(group, key, fallback) {
+        const pick = function (t) { const g = DATA.params && DATA.params[t] && DATA.params[t][group]; return g && typeof g[key] === 'number' ? g[key] : undefined; };
+        const v = pick(theme);
+        return v !== undefined ? v : (pick(FALLBACK) !== undefined ? pick(FALLBACK) : fallback);
+    }
+
     function tailwindConfig() {
         const colors = {};
         Object.keys(DATA.themes[FALLBACK] || {}).forEach(function (t) {
@@ -174,6 +181,7 @@
         rgba: function (token, a) { return 'rgb(var(--mtlx-' + token + ') / calc(' + Math.round(a * 255) + ' / 255))'; },
         onChange: onChange,
         typeFallback: typeFallback,
+        param: param,
         tailwindConfig: tailwindConfig,
     };
 })(typeof self !== 'undefined' ? self : this);

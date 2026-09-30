@@ -20,12 +20,20 @@ function value(theme, token) {
   return token in map ? map[token] : data.themes.dark[token];
 }
 
+// Per-theme alpha from params (for example alpha.accentFillTranslucent), falling back to dark.
+function param(theme, [group, key]) {
+  const pick = (t) => data.params && data.params[t] && data.params[t][group] && data.params[t][group][key];
+  const v = pick(theme);
+  return typeof v === "number" ? v : pick("dark");
+}
+
 function measure(theme, p) {
   const fg = rgb(value(theme, p.fg));
   let bg = rgb(value(theme, p.bg));
-  if (p.alpha != null) {
+  const alpha = p.alphaParam ? param(theme, p.alphaParam) : p.alpha;
+  if (alpha != null) {
     const under = rgb(value(theme, p.under));
-    bg = bg.map((v, i) => Math.round(v * p.alpha + under[i] * (1 - p.alpha)));
+    bg = bg.map((v, i) => Math.round(v * alpha + under[i] * (1 - alpha)));
   }
   return ratio(fg, bg);
 }

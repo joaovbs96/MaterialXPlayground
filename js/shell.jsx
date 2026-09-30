@@ -558,7 +558,7 @@ function DesktopCloseConfirmDialog() {
                     <button
                         autoFocus
                         onClick={() => respond('save')}
-                        className="h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-accent-fill-translucent/70 border-accent-base text-on-accent hover:bg-accent-fill-translucent-hover/70 transition-colors"
+                        className="h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border mtlx-fill-accent-translucent border-accent-base text-on-accent mtlx-fill-accent-translucent-hover transition-colors"
                     >Save and Close</button>
                 </div>
             </div>
@@ -835,7 +835,7 @@ function DesktopSettingsDialog() {
                             <button
                                 type="button"
                                 onClick={() => { if (typeof window.__mtlxRelaunch === 'function') window.__mtlxRelaunch(); }}
-                                className="mt-2 h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-accent-fill-translucent/70 border-accent-base text-on-accent hover:bg-accent-fill-translucent-hover/70 transition-colors"
+                                className="mt-2 h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border mtlx-fill-accent-translucent border-accent-base text-on-accent mtlx-fill-accent-translucent-hover transition-colors"
                             >
                                 Relaunch now
                             </button>

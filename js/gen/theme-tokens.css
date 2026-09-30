@@ -9,6 +9,8 @@
   --mtlx-control: 31 41 55;
   --mtlx-chip: 55 65 81;
   --mtlx-stage: 17 24 39;
+  --mtlx-stage-fg-muted: 156 163 175;
+  --mtlx-stage-fg-subtle: 107 114 128;
   --mtlx-veil: 17 24 39;
   --mtlx-scrim: 3 7 18;
   --mtlx-hover: 55 65 81;
@@ -86,6 +88,7 @@
   --mtlx-scrollbar-thumb: 55 65 81;
   --mtlx-brand-mark: 255 255 255;
   --mtlx-brand-accent: 96 165 250;
+  --mtlx-brand-logo-inner: 255 255 255;
   --mtlx-code-fg: 209 213 219;
   --mtlx-code-muted: 107 114 128;
   --mtlx-code-name: 96 165 250;
@@ -151,6 +154,9 @@
   --mtlx-code-block-bg-alt: 15 23 42;
   --mtlx-type-fallback-saturation: 65;
   --mtlx-type-fallback-lightness: 62;
+  --mtlx-graph-minimap-mask-alpha: 0.75;
+  --mtlx-alpha-hud-popover: 0.95;
+  --mtlx-alpha-accent-fill-translucent: 0.7;
 }
 
 :root[data-theme="light"] {
@@ -161,6 +167,8 @@
   --mtlx-control: 255 255 255;
   --mtlx-chip: 229 231 235;
   --mtlx-stage: 17 24 39;
+  --mtlx-stage-fg-muted: 209 213 219;
+  --mtlx-stage-fg-subtle: 156 163 175;
   --mtlx-veil: 249 250 251;
   --mtlx-scrim: 51 65 85;
   --mtlx-hover: 229 231 235;
@@ -181,18 +189,18 @@
   --mtlx-fg-faint: 132 139 152;
   --mtlx-fg-disabled: 156 163 175;
   --mtlx-fg-inverse: 243 244 246;
-  --mtlx-accent-base: 37 99 235;
-  --mtlx-accent-fill: 29 78 216;
-  --mtlx-accent-fill-hover: 30 64 175;
-  --mtlx-accent-fill-pressed: 30 58 138;
-  --mtlx-accent-fill-translucent: 28 55 130;
-  --mtlx-accent-fill-translucent-hover: 23 37 84;
+  --mtlx-accent-base: 59 130 246;
+  --mtlx-accent-fill: 37 99 235;
+  --mtlx-accent-fill-hover: 29 78 216;
+  --mtlx-accent-fill-pressed: 30 64 175;
+  --mtlx-accent-fill-translucent: 37 99 235;
+  --mtlx-accent-fill-translucent-hover: 29 78 216;
   --mtlx-accent-wash: 59 130 246;
   --mtlx-accent-fg: 37 99 235;
   --mtlx-accent-fg-strong: 29 78 216;
   --mtlx-accent-fg-bright: 30 64 175;
   --mtlx-on-accent: 255 255 255;
-  --mtlx-on-accent-muted: 219 234 254;
+  --mtlx-on-accent-muted: 239 246 255;
   --mtlx-accent-text-on-tint: 30 64 175;
   --mtlx-selection: 59 130 246;
   --mtlx-focus: 37 99 235;
@@ -238,6 +246,7 @@
   --mtlx-scrollbar-thumb: 132 139 152;
   --mtlx-brand-mark: 17 24 39;
   --mtlx-brand-accent: 37 99 235;
+  --mtlx-brand-logo-inner: 255 255 255;
   --mtlx-code-fg: 31 41 55;
   --mtlx-code-muted: 107 114 128;
   --mtlx-code-name: 29 78 216;
@@ -247,7 +256,7 @@
   --mtlx-code-inline-fg: 180 83 9;
   --mtlx-code-block-bg: 245 247 250;
   --mtlx-graph-canvas: 243 244 246;
-  --mtlx-graph-grid: 184 190 199;
+  --mtlx-graph-grid: 161 168 179;
   --mtlx-graph-edge-draft: 59 130 246;
   --mtlx-graph-edge-selected: 37 99 235;
   --mtlx-graph-node: 255 255 255;
@@ -256,7 +265,7 @@
   --mtlx-graph-node-line-iface: 107 114 128;
   --mtlx-graph-node-selected: 37 99 235;
   --mtlx-graph-minimap-bg: 255 255 255;
-  --mtlx-graph-minimap-mask: 229 231 235;
+  --mtlx-graph-minimap-mask: 209 213 219;
   --mtlx-graph-minimap-stroke: 255 255 255;
   --mtlx-type-boolean: 210 55 43;
   --mtlx-type-bsdf: 46 125 50;
@@ -303,4 +312,7 @@
   --mtlx-code-block-bg-alt: 245 247 250;
   --mtlx-type-fallback-saturation: 65;
   --mtlx-type-fallback-lightness: 34;
+  --mtlx-graph-minimap-mask-alpha: 0.5;
+  --mtlx-alpha-hud-popover: 1;
+  --mtlx-alpha-accent-fill-translucent: 1;
 }

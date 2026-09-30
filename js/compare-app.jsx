@@ -1282,7 +1282,7 @@ function MaterialCompareApp({ active = true } = {}) {
                             WebkitMaskImage: EMPTY_STAGE_GRID_MASK,
                         }}
                     />
-                    <div className="absolute inset-0 flex items-center justify-center text-center text-fg-subtle text-sm px-6 pointer-events-none">
+                    <div className="absolute inset-0 flex items-center justify-center text-center text-stage-fg-subtle text-sm px-6 pointer-events-none">
                         {'Drop a .mtlx / .zip here or use the sidebar'}
                     </div>
                 </React.Fragment>

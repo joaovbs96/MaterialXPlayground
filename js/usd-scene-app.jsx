@@ -22,6 +22,8 @@
     // Same translucent-over-solid card surface as SectionCard/compare's
     // stats panel (js/shared/mtlx-ui.jsx CARD_SURFACE).
     const PANEL_SURFACE = 'color-mix(in srgb, rgb(var(--mtlx-surface-raised)) 35%, rgb(var(--mtlx-surface-base)))';
+    // Popovers over the render: opacity is a theme param (0.95 dark, opaque light so render colors do not tint them).
+    const HUD_POPOVER_BG = 'rgb(var(--mtlx-surface-raised) / var(--mtlx-alpha-hud-popover))';
 
     // Mirrors js/usd-scene-renderer.js sceneDomeYawDegFromRotation (not
     // exported, math not to be changed here): converts an authored dome
@@ -1001,8 +1003,8 @@
             <div
                 ref={panelRef}
                 data-testid="usd-scene-material-preview"
-                className={'absolute z-40 flex flex-col bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden' + (open ? '' : ' hidden')}
-                style={rectStyle}
+                className={'absolute z-40 flex flex-col backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden' + (open ? '' : ' hidden')}
+                style={Object.assign({ backgroundColor: HUD_POPOVER_BG }, rectStyle)}
                 aria-hidden={!open}
             >
                 <div
@@ -3757,9 +3759,9 @@
             const box = containerRef.current;
             const wanted = pill ? 8 + pill.offsetLeft : 8;
             const left = box ? Math.max(8, Math.min(wanted, box.clientWidth - HUD_POPOVER_W - 8)) : wanted;
-            return { left, width: 'min(' + HUD_POPOVER_W + 'px, calc(100% - 16px))', maxHeight: 'calc(100% - 56px)' };
+            return { left, width: 'min(' + HUD_POPOVER_W + 'px, calc(100% - 16px))', maxHeight: 'calc(100% - 56px)', backgroundColor: HUD_POPOVER_BG };
         };
-        const HUD_POPOVER_CLASS = 'absolute z-30 top-11 flex flex-col bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden';
+        const HUD_POPOVER_CLASS = 'absolute z-30 top-11 flex flex-col backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden';
         const popoverHeader = (icon, title, subtitle, onClose, tag, mono) => (
             <div className="flex-none flex items-center gap-2 px-3 py-2 border-b border-line">
                 <MtlxIcon name={icon} className="w-4 h-4 text-fg-muted shrink-0" />
@@ -3900,8 +3902,8 @@
                 role="dialog"
                 aria-label="Diagnostics"
                 data-testid="usd-scene-diagnostics-popover"
-                style={Object.assign({ position: 'fixed', zIndex: 9999 }, diagnosticsPos || {})}
-                className={(diagnosticsOpen && diagnosticsPos ? 'flex' : 'hidden') + ' flex-col bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden'}
+                style={Object.assign({ position: 'fixed', zIndex: 9999, backgroundColor: HUD_POPOVER_BG }, diagnosticsPos || {})}
+                className={(diagnosticsOpen && diagnosticsPos ? 'flex' : 'hidden') + ' flex-col backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden'}
             >
                 {popoverHeader('alert-triangle', 'Diagnostics', diagnosticsSummary || 'No warnings', () => setDiagnosticsOpen(false))}
                 <div
@@ -4195,8 +4197,8 @@
                             ref={knownIssuesPopRef}
                             data-testid="usd-scene-known-issues"
                             onPointerDown={(e) => e.stopPropagation()}
-                            style={{ position: 'fixed', zIndex: 9999, width: KNOWN_ISSUES_POPOVER_W, left: knownIssuesPos.left, top: knownIssuesPos.top }}
-                            className="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden"
+                            style={{ position: 'fixed', zIndex: 9999, width: KNOWN_ISSUES_POPOVER_W, left: knownIssuesPos.left, top: knownIssuesPos.top, backgroundColor: HUD_POPOVER_BG }}
+                            className="backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden"
                         >
                             <div className="px-3 py-2.5 space-y-1.5">
                                 <div className="text-[12px] font-semibold text-fg-soft">Known issues</div>
@@ -4235,7 +4237,7 @@
 
                     {IN_VSCODE && status === 'cancelled' && (
                         <div data-testid="usd-scene-cancelled" className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 text-center px-6">
-                            <div className="text-fg-muted text-sm">Loading cancelled</div>
+                            <div className="text-stage-fg-muted text-sm">Loading cancelled</div>
                             <button type="button" data-testid="usd-scene-reload" onClick={reloadFromHost} className={PILL_ACTION}>
                                 <MtlxIcon name="refresh" className="w-3.5 h-3.5" /> Reload
                             </button>
@@ -4255,7 +4257,7 @@
                                 }}
                             />
                             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center px-6">
-                                <div className="text-fg-subtle text-sm max-w-sm">
+                                <div className="text-stage-fg-subtle text-sm max-w-sm">
                                     Drop a USD stage (.usd, .usda, .usdc, .usdz), a glTF (.gltf, .glb) or an OBJ (.obj) and its referenced files
                                 </div>
                             </div>
@@ -4356,8 +4358,8 @@
                         <div
                             ref={renderSettingsPopRef}
                             data-testid="usd-scene-render-settings-popover"
-                            className={(renderSettingsOpen ? '' : 'hidden ') + 'absolute z-30 top-11 left-2 flex flex-col bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden'}
-                            style={{ width: 'min(560px, calc(100% - 16px))', maxHeight: 'calc(100% - 56px)' }}
+                            className={(renderSettingsOpen ? '' : 'hidden ') + 'absolute z-30 top-11 left-2 flex flex-col backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden'}
+                            style={{ width: 'min(560px, calc(100% - 16px))', maxHeight: 'calc(100% - 56px)', backgroundColor: HUD_POPOVER_BG }}
                         >
                             <div className="flex-none px-3 py-2 border-b border-line">
                                 <div className="flex items-center gap-2">

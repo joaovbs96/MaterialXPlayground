@@ -15,7 +15,7 @@
 // settings popover's Reset/Cancel) actually looks non-interactive instead
 // of reading as clickable while silently doing nothing.
 const BTN_SECONDARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors disabled:opacity-50 disabled:text-fg-subtle disabled:cursor-not-allowed disabled:pointer-events-none';
-const BTN_PRIMARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-accent-fill-translucent/70 border-accent-base text-on-accent hover:bg-accent-fill-translucent-hover/70 transition-colors';
+const BTN_PRIMARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border mtlx-fill-accent-translucent border-accent-base text-on-accent mtlx-fill-accent-translucent-hover transition-colors';
 // Graph editor toolbar button style. `whitespace-nowrap shrink-0` matters:
 // js/graph-app.jsx's label-collapse measurement needs buttons that don't
 // flex-shrink, so overflow is visible to it instead of silently absorbed.

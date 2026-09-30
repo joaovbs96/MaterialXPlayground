@@ -76,7 +76,7 @@
                                 title={seg.title}
                                 aria-pressed={active}
                                 className={'rounded px-1 leading-none transition-colors ' + (active
-                                    ? 'bg-accent-fill-translucent/70 text-on-accent'
+                                    ? 'mtlx-fill-accent-translucent text-on-accent'
                                     : 'text-fg-muted hover:text-fg-soft')}
                             ><MtlxIcon name={seg.icon} className="w-3.5 h-3.5" /></button>
                         );
