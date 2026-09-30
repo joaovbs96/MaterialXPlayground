@@ -60,12 +60,12 @@
                 <DialogFrame
                     open={true}
                     title="Help & Keybinds"
-                    titleClassName="text-sm font-bold text-gray-100"
+                    titleClassName="text-sm font-bold text-fg"
                     onClose={onClose}
-                    panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[34rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+                    panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[34rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
                 >
                     <div className="overflow-y-auto custom-scrollbar px-4 py-3">
-                        <div className="text-[11px] text-gray-300 leading-relaxed space-y-2">
+                        <div className="text-[11px] text-fg-secondary leading-relaxed space-y-2">
                             <p>
                                 Every edit — connecting ports, changing parameters, renaming,
                                 grouping — writes directly to the underlying MaterialX document
@@ -73,7 +73,7 @@
                                     "Edits are written back to the open .mtlx file through VS Code's normal save flow (Ctrl/Cmd+S)."
                                 ) : (
                                     <React.Fragment>
-                                        Nothing leaves your browser: use <strong className="text-gray-100">Export</strong> to
+                                        Nothing leaves your browser: use <strong className="text-fg">Export</strong> to
                                         download the result as <code>.mtlx</code> (or a <code>.zip</code> with textures).
                                     </React.Fragment>
                                 )} Every document edit can be undone with Ctrl/Cmd+Z.
@@ -90,26 +90,26 @@
                                 compatible nodes and wires the connection for you.
                             </p>
                         </div>
-                        <div className="border-t border-gray-700 my-3" />
-                        <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">Shortcuts & mouse</div>
+                        <div className="border-t border-line my-3" />
+                        <div className="text-xs font-semibold text-fg-muted uppercase tracking-wider mb-1.5">Shortcuts & mouse</div>
                         <table className="w-full text-[11px] font-mono">
                             <tbody>
                                 <tr>
-                                    <td colSpan={2} className="pt-1 pb-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">Mouse & gestures</td>
+                                    <td colSpan={2} className="pt-1 pb-1.5 text-xs font-semibold text-fg-muted uppercase tracking-wider">Mouse & gestures</td>
                                 </tr>
                                 {mouseKeybinds.map((k) => (
                                     <tr key={k.keys} className="align-top">
-                                        <td className="py-1 pr-3 whitespace-nowrap text-blue-300">{k.keys}</td>
-                                        <td className="py-1 text-gray-300">{k.desc}</td>
+                                        <td className="py-1 pr-3 whitespace-nowrap text-accent-fg-strong">{k.keys}</td>
+                                        <td className="py-1 text-fg-secondary">{k.desc}</td>
                                     </tr>
                                 ))}
                                 <tr>
-                                    <td colSpan={2} className="pt-3 pb-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">Keyboard</td>
+                                    <td colSpan={2} className="pt-3 pb-1.5 text-xs font-semibold text-fg-muted uppercase tracking-wider">Keyboard</td>
                                 </tr>
                                 {keyboardKeybinds.map((k) => (
                                     <tr key={k.keys} className="align-top">
-                                        <td className="py-1 pr-3 whitespace-nowrap text-blue-300">{k.keys}</td>
-                                        <td className="py-1 text-gray-300">{k.desc}</td>
+                                        <td className="py-1 pr-3 whitespace-nowrap text-accent-fg-strong">{k.keys}</td>
+                                        <td className="py-1 text-fg-secondary">{k.desc}</td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -147,19 +147,19 @@
                     keepMounted
                     title={label}
                     onClose={onClose}
-                    panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[min(64rem,94%)] h-[90%] overflow-hidden flex flex-col"
+                    panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[min(64rem,94%)] h-[90%] overflow-hidden flex flex-col"
                     headerRight={!IN_VSCODE && (
                         <a href={fullUrl} target="_blank" rel="noopener noreferrer" title="Open in a new tab"
-                            className="text-gray-400 hover:text-gray-200 leading-none px-1"><MtlxIcon name="external-link" className="w-4 h-4" /></a>
+                            className="text-fg-muted hover:text-fg-soft leading-none px-1"><MtlxIcon name="external-link" className="w-4 h-4" /></a>
                     )}
                 >
                     <div className="relative flex-1 min-h-0 overflow-y-auto custom-scrollbar">
                         {loadError ? (
-                            <div className="absolute inset-0 flex items-center justify-center text-xs text-red-400 px-6 text-center">
+                            <div className="absolute inset-0 flex items-center justify-center text-xs text-error px-6 text-center">
                                 {'Failed to load documentation — close and reopen this dialog to retry.'}
                             </div>
                         ) : !docsReady ? (
-                            <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-500 animate-pulse">
+                            <div className="absolute inset-0 flex items-center justify-center text-xs text-fg-subtle animate-pulse">
                                 {'Loading documentation…'}
                             </div>
                         ) : (() => {
@@ -230,22 +230,22 @@
                     open={open}
                     title="Document"
                     onClose={onClose}
-                    panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[38rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col"
+                    panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[38rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col"
                     headerRight={
                         <button
                             onClick={copyXml}
                             title="Copy the XML to the clipboard"
                             className={'h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors '
                                 + (copied
-                                    ? 'bg-green-600/70 border-green-500 text-white'
-                                    : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
+                                    ? 'bg-success-fill/70 border-success-hue text-on-accent'
+                                    : 'bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80')}
                         >
                             <MtlxIcon name={copied ? 'copy-check' : 'copy'} className="w-3.5 h-3.5" />
                             <span>{copied ? 'Copied' : 'Copy'}</span>
                         </button>
                     }
                 >
-                    <pre className="flex-1 min-h-0 overflow-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-gray-300 px-4 py-3 whitespace-pre-wrap break-words">
+                    <pre className="flex-1 min-h-0 overflow-auto custom-scrollbar font-mono text-[11px] leading-relaxed text-fg-secondary px-4 py-3 whitespace-pre-wrap break-words">
                         {highlighted != null
                             ? <code className="hljs" dangerouslySetInnerHTML={{ __html: highlighted }} />
                             : xml}
@@ -265,29 +265,29 @@
                     open={open}
                     title="Validate"
                     onClose={onClose}
-                    panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+                    panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
                 >
                     <div className="overflow-y-auto custom-scrollbar px-4 py-3 text-[12px]">
-                        {!status && <div className="text-gray-400 animate-pulse">Validating{'…'}</div>}
+                        {!status && <div className="text-fg-muted animate-pulse">Validating{'…'}</div>}
                         {status && status.kind === 'valid' && (
-                            <div className="flex items-center gap-1.5 text-green-400 font-bold">
+                            <div className="flex items-center gap-1.5 text-success font-bold">
                                 <MtlxIcon name="check" className="w-4 h-4" /><span>Document is valid</span>
                             </div>
                         )}
                         {status && status.kind === 'invalid' && (
                             <div>
-                                <div className="flex items-center gap-1.5 text-red-400 font-bold mb-2">
+                                <div className="flex items-center gap-1.5 text-error font-bold mb-2">
                                     <MtlxIcon name="x" className="w-4 h-4" /><span>Validation failed</span>
                                 </div>
                                 {status.issues && status.issues.length > 0 && (
-                                    <ul className="list-disc list-inside space-y-1 text-gray-300 font-mono text-[11px]">
+                                    <ul className="list-disc list-inside space-y-1 text-fg-secondary font-mono text-[11px]">
                                         {status.issues.map((s, i) => <li key={i}>{s}</li>)}
                                     </ul>
                                 )}
                             </div>
                         )}
                         {status && status.kind === 'unavailable' && (
-                            <div className="text-gray-400">Validation is not available in this build.</div>
+                            <div className="text-fg-muted">Validation is not available in this build.</div>
                         )}
                     </div>
                 </DialogFrame>
@@ -354,11 +354,11 @@
                     closeDisabled={busy}
                     backdropCloseDisabled={busy}
                     overlayClassName={overlayClassName}
-                    panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+                    panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
                 >
                     <div className="overflow-y-auto custom-scrollbar px-4 py-3 space-y-3 text-[12px]">
                         <label className="block space-y-1">
-                            <span className="text-gray-400">File name</span>
+                            <span className="text-fg-muted">File name</span>
                             <input
                                 type="text"
                                 value={name}
@@ -366,28 +366,28 @@
                                 spellCheck={false}
                                 onChange={(e) => setName(e.target.value)}
                                 onKeyDown={(e) => { if (e.key === 'Enter' && trimmedName && !busy) doExport(); }}
-                                className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-gray-200 font-mono"
+                                className="w-full bg-surface-sunken border border-line-strong rounded px-2 py-1 text-fg-soft font-mono"
                             />
                         </label>
                         <div className="space-y-1.5">
                             <label className="flex items-center gap-2 cursor-pointer">
                                 <input type="radio" name="export-format" checked={format === 'mtlx'}
-                                    onChange={() => setFormat('mtlx')} className="accent-blue-500" />
-                                <span className="text-gray-200">MaterialX document (.mtlx)</span>
+                                    onChange={() => setFormat('mtlx')} className="accent-accent-base" />
+                                <span className="text-fg-soft">MaterialX document (.mtlx)</span>
                             </label>
                             <label className={'flex items-center gap-2 ' + (resolved.length === 0 ? 'cursor-not-allowed' : 'cursor-pointer')}
                                 title={zipDisabledTitle}>
                                 <input type="radio" name="export-format" checked={format === 'zip'}
                                     disabled={resolved.length === 0}
-                                    onChange={() => setFormat('zip')} className="accent-blue-500" />
-                                <span className={resolved.length === 0 ? 'text-gray-500' : 'text-gray-200'}>
+                                    onChange={() => setFormat('zip')} className="accent-accent-base" />
+                                <span className={resolved.length === 0 ? 'text-fg-subtle' : 'text-fg-soft'}>
                                     ZIP with textures (.zip)
                                 </span>
                             </label>
                             {format === 'zip' && (
                                 <div className="flex items-center gap-1.5 pl-6">
-                                    <span className="text-[10px] text-gray-500 flex-none font-mono">Texture format</span>
-                                    <span className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded border border-amber-700/60 bg-amber-900/20 text-amber-400">Experimental</span>
+                                    <span className="text-[10px] text-fg-subtle flex-none font-mono">Texture format</span>
+                                    <span className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded border border-warning-border/60 bg-warning-bg/20 text-warning-marker">Experimental</span>
                                     <MtlxSelect
                                         value={convertTo}
                                         options={['keep', 'png', 'jpeg', 'exr']}
@@ -404,26 +404,26 @@
                             title="A comment after the XML declaration naming MaterialX Playground, its version and address">
                             <input type="checkbox" checked={attribution} data-testid="export-attribution"
                                 onChange={(e) => { setAttribution(e.target.checked); writeExportAttributionPref(e.target.checked); }}
-                                className="h-3.5 w-3.5 accent-blue-500" />
-                            <span className="text-gray-200">Add MaterialX Playground attribution comment</span>
+                                className="h-3.5 w-3.5 accent-accent-base" />
+                            <span className="text-fg-soft">Add MaterialX Playground attribution comment</span>
                         </label>
                         {resolved.length > 0 && (
-                            <div className="text-gray-500 text-[11px]">
+                            <div className="text-fg-subtle text-[11px]">
                                 {resolved.length} texture{resolved.length === 1 ? '' : 's'} will be packaged with the .zip.
                             </div>
                         )}
                         {unresolved.length > 0 && (
-                            <div className="rounded border border-amber-700/60 bg-amber-900/20 px-2.5 py-2 space-y-1">
-                                <div className="text-amber-400 font-bold text-[11px]">
+                            <div className="rounded border border-warning-border/60 bg-warning-bg/20 px-2.5 py-2 space-y-1">
+                                <div className="text-warning-marker font-bold text-[11px]">
                                     Not found in this session, will not be packaged:
                                 </div>
-                                <ul className="list-disc list-inside space-y-0.5 text-amber-200/90 font-mono text-[11px]">
+                                <ul className="list-disc list-inside space-y-0.5 text-warning-text/90 font-mono text-[11px]">
                                     {unresolved.map((ref, i) => <li key={i}>{ref}</li>)}
                                 </ul>
                             </div>
                         )}
                     </div>
-                    <div className="flex justify-end gap-2 px-4 py-2.5 border-t border-gray-700 bg-gray-900/70">
+                    <div className="flex justify-end gap-2 px-4 py-2.5 border-t border-line bg-chrome/70">
                         <button
                             onClick={onClose}
                             disabled={busy}

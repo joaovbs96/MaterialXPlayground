@@ -8419,7 +8419,7 @@
                                                             <label className="flex items-center gap-1.5 text-[10px] text-fg-subtle font-mono">
                                                                 <input
                                                                     type="checkbox"
-                                                                    className="h-3.5 w-3.5 accent-accent-accent-base"
+                                                                    className="h-3.5 w-3.5 accent-accent-base"
                                                                     checked={!!displayNode.data.uiadvanced}
                                                                     disabled={!!displayNode.data.readOnly}
                                                                     onChange={(e) => applyInterfaceMeta(displayNode.id, { uiadvanced: e.target.checked })}

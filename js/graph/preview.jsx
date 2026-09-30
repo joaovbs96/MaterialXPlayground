@@ -1544,7 +1544,7 @@
             return (
                 <div
                     ref={viewportRef}
-                    className="flex flex-col flex-none w-full border-b border-gray-700"
+                    className="flex flex-col flex-none w-full border-b border-line"
                     style={isFullscreen ? { height: '100%' } : undefined}
                 >
                     {/* Viewport controls (F2.1/F2.2): two rows when docked
@@ -1571,21 +1571,21 @@
                             // rowMeta, so this can't drift from it.
                             <div>
                                 <div className="flex items-center justify-between gap-2">
-                                    <span className="inline-flex items-center gap-1.5 text-gray-200">
+                                    <span className="inline-flex items-center gap-1.5 text-fg-soft">
                                         {(rowMeta('graphCompoundCompile', 'graph') || {}).label || 'Compound compile'}
-                                        <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
+                                        <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-experimental-fill/30 border border-experimental-hue/50 text-experimental">Experimental</span>
                                     </span>
                                     <button
                                         onClick={() => setCompoundRoot(!compoundRoot)}
                                         title={compoundRoot ? 'Disable compound compile' : 'Enable compound compile'}
                                         className={`h-5 px-2 rounded border transition-colors shrink-0 ${
-                                            compoundRoot ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300'
+                                            compoundRoot ? 'bg-accent-fill/80 border-accent-base text-on-accent' : 'bg-control/80 border-line-strong text-fg-secondary'
                                         }`}
                                     >
                                         {compoundRoot ? 'On' : 'Off'}
                                     </button>
                                 </div>
-                                <div className="mt-1 text-[11px] text-gray-400">
+                                <div className="mt-1 text-[11px] text-fg-muted">
                                     {(rowMeta('graphCompoundCompile', 'graph') || {}).hint}
                                 </div>
                             </div>
@@ -1600,22 +1600,22 @@
                         // default spot under the Environment button instead.
                         envDialogPlacement={isFullscreen ? undefined : "left"}
                         containerClassName={isFullscreen
-                            ? "flex items-center justify-center gap-1 px-2 py-1 border-b border-gray-700 bg-gray-900/70 flex-none"
+                            ? "flex items-center justify-center gap-1 px-2 py-1 border-b border-line bg-chrome/70 flex-none"
                             // font-sans: the panel wrapper is font-mono and its
                             // wider glyphs eat the 304px strip's width budget.
-                            : "flex flex-col gap-1 px-2 py-1.5 border-b border-gray-700 bg-gray-900/70 flex-none font-sans"}
+                            : "flex flex-col gap-1 px-2 py-1.5 border-b border-line bg-chrome/70 flex-none font-sans"}
                         // Show button labels only in fullscreen, matching the
                         // render's own camera-reset/fullscreen buttons.
                         showLabels={isFullscreen}
                     />
                     <div
-                        className={`relative w-full bg-gray-900/60 ${isFullscreen ? 'flex-1 min-h-0' : 'aspect-square'}`}
+                        className={`relative w-full bg-stage/60 ${isFullscreen ? 'flex-1 min-h-0' : 'aspect-square'}`}
                     >
                         <canvas ref={canvasRef} className="block w-full h-full" />
                         {modelError && (
                             // top-8: clears the pin overlay button below
                             // (top-1 left-1, ~28px tall), same left edge.
-                            <div className="absolute top-8 left-1 z-20 text-[11px] text-red-400 bg-gray-900/85 rounded px-2 py-1">
+                            <div className="absolute top-8 left-1 z-20 text-[11px] text-error bg-hud/85 rounded px-2 py-1">
                                 {modelError}
                             </div>
                         )}
@@ -1623,22 +1623,22 @@
                             // APPLY path in flight against the live view — old
                             // material keeps rendering underneath, so this is a
                             // small corner badge rather than a full overlay/flash.
-                            <div className="absolute bottom-1 right-1 z-10 text-[10px] px-1.5 py-0.5 rounded bg-gray-900/80 text-gray-300 pointer-events-none">{'Updating\u2026'}</div>
+                            <div className="absolute bottom-1 right-1 z-10 text-[10px] px-1.5 py-0.5 rounded bg-hud/80 text-hud-fg pointer-events-none">{'Updating\u2026'}</div>
                         )}
                         <LoadingOverlay
                             show={loading && !notice && !error}
                             label={'Rendering material\u2026'}
-                            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-gray-900/70 pointer-events-none"
-                            labelClassName="text-[12px] text-gray-200 animate-pulse"
+                            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-veil/70 pointer-events-none"
+                            labelClassName="text-[12px] text-fg-soft animate-pulse"
                             barWidthClass="w-32"
                         />
                         {notice && (
-                            <div className="absolute inset-0 flex items-center justify-center text-[11px] text-gray-500 px-3 text-center bg-gray-900/60">
+                            <div className="absolute inset-0 flex items-center justify-center text-[11px] text-fg-subtle px-3 text-center bg-veil/60">
                                 {notice}
                             </div>
                         )}
                         {error && (
-                            <div className="absolute inset-0 overflow-y-auto custom-scrollbar text-[10px] text-red-300 bg-red-950/80 px-2 py-1 break-words">
+                            <div className="absolute inset-0 overflow-y-auto custom-scrollbar text-[10px] text-error-text bg-error-bg/80 px-2 py-1 break-words">
                                 {error}
                             </div>
                         )}
@@ -1654,7 +1654,7 @@
                                         if (v && v.resetCamera) { try { v.resetCamera(); } catch (e) {} }
                                     }}
                                     title="Reset camera"
-                                    className="w-6 h-6 flex items-center justify-center rounded-full border backdrop-blur transition-colors bg-gray-900/70 border-gray-600 text-gray-300 hover:bg-gray-700/80"
+                                    className="w-6 h-6 flex items-center justify-center rounded-full border backdrop-blur transition-colors bg-hud/70 border-hud-line text-hud-fg hover:bg-hud-hover/80"
                                 >
                                     <MtlxIcon name="camera-reset" className="w-3.5 h-3.5" />
                                 </button>
@@ -1664,8 +1664,8 @@
                                 title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
                                 className={'w-6 h-6 flex items-center justify-center rounded-full border backdrop-blur transition-colors '
                                     + (isFullscreen
-                                        ? 'bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70'
-                                        : 'bg-gray-900/70 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
+                                        ? 'bg-accent-fill/70 border-accent-base text-on-accent hover:bg-accent-fill-hover/70'
+                                        : 'bg-hud/70 border-hud-line text-hud-fg hover:bg-hud-hover/80')}
                             >
                                 <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
                             </button>

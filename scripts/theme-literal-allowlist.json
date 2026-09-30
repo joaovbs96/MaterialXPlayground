@@ -108,5 +108,45 @@
     "file": "js/shared/mtlx-ui.jsx",
     "match": "/^#000$/",
     "reason": "Recording preview black (render preview) and ColorPicker value-axis black gradient stop: functional, not themeable."
+  },
+  {
+    "file": "js/graph/texture-convert.jsx",
+    "match": "0x7FFFFF",
+    "reason": "float mantissa bit mask, not a color"
+  },
+  {
+    "file": "js/usd-scene-app.jsx",
+    "match": "/^rgba\\(0$/",
+    "reason": "Empty-stage grid CSS mask alpha stops: alpha only, not a themed color."
+  },
+  {
+    "file": "js/usd-scene-app.jsx",
+    "match": "/^(bg-black\\/60|text-white\\/(90|70|40))$/",
+    "reason": "Render-overlay chips over the 3D stage stay literal (black scrim with white text)."
+  },
+  {
+    "file": "js/usd-scene-renderer.js",
+    "match": "/^0x(ffffff|000000|111827)$/i",
+    "reason": "Renderer internals: mask and clear colors, viewport clear matching the stage backdrop."
+  },
+  {
+    "file": "js/usd-scene-localenv.js",
+    "match": "/^0x000000$/i",
+    "reason": "Render-internal clear color."
+  },
+  {
+    "file": "embed/mtlx-viewer.js",
+    "match": "/^#(111827|9ca3af)$/i",
+    "reason": "host-page shadow DOM has no token CSS; Phase 2 derives these from the theme attribute"
+  },
+  {
+    "file": "embed/embed.css",
+    "match": "/^rgb\\(0$/",
+    "reason": "shadow-lg Tailwind mirror (black shadow alpha), not a themed color."
+  },
+  {
+    "file": "js/site-tokens.css",
+    "match": "/./",
+    "reason": "legacy --site-* palette kept for the Learn/tutorials subsite, which is outside this repo; not loaded by the app"
   }
 ]

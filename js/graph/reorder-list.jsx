@@ -73,7 +73,7 @@
                     {items.map((item, i) => {
                         const grip = (disabled || items.length < 2) ? null : (
                             <span
-                                className="flex-none w-3.5 h-3.5 inline-flex items-center justify-center cursor-grab text-gray-600 hover:text-gray-300 touch-none"
+                                className="flex-none w-3.5 h-3.5 inline-flex items-center justify-center cursor-grab text-fg-disabled hover:text-fg-secondary touch-none"
                                 title="Drag to reorder"
                                 onPointerDown={(e) => startDrag(e, i)}
                             >
@@ -85,7 +85,7 @@
                                 key={keyOf(item)}
                                 data-idx={i}
                                 className={
-                                    (divided ? 'border-b border-gray-700/60 last:border-b-0 ' : '') +
+                                    (divided ? 'border-b border-line/60 last:border-b-0 ' : '') +
                                     (drag && i === drag.from ? 'opacity-60' : '')
                                 }
                             >
@@ -94,7 +94,7 @@
                         );
                     })}
                     {drag && dropLineTop != null && (
-                        <div className="absolute left-0 right-0 h-0.5 bg-blue-500 pointer-events-none" style={{ top: dropLineTop }} />
+                        <div className="absolute left-0 right-0 h-0.5 bg-accent-base pointer-events-none" style={{ top: dropLineTop }} />
                     )}
                 </div>
             );

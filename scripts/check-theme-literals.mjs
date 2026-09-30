@@ -4,6 +4,7 @@
 // is passed (then any non-allowlisted hit exits 1). Allowlist: scripts/theme-literal-allowlist.json.
 // Usage: node scripts/check-theme-literals.mjs [--strict] [--verbose]
 
+import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -145,6 +146,12 @@ function hexIsNotColor(line, m) {
   return /^\s*(?:\{|[>+~.:[]|,\s*[.#\w[:>][^;{}]*\{)/.test(after);
 }
 
+// Token class typos (e.g. accent-accent-base): Tailwind ignores unknown classes. Always fatal.
+const TOKEN_KEYS = new Set(Object.keys(createRequire(import.meta.url)("../js/shared/theme-tokens.js").themes.dark));
+const TOKEN_GROUPS = new Set([...TOKEN_KEYS].map((k) => k.split("-")[0]));
+const TOKEN_CLASS_RE = new RegExp(String.raw`${START}(?:ring-offset|bg|text|border|ring|fill|stroke|from|via|to|divide|outline|shadow|placeholder|accent|caret|decoration)-([a-z][\w-]*?)(?:\/[\w.[\]-]+)?(?![\w\/-])`, "g");
+const unknownBad = [];
+
 const allow = loadAllowlist();
 // Always fatal: legacy rgba() quantized alpha to 8 bits, raw floats shift pixels.
 const ALPHA_RE = /rgb\(var\(--mtlx-[\w-]+\)\s*\/\s*(\d*\.?\d+)\s*\)/g;
@@ -171,6 +178,13 @@ for (const file of trackedFiles()) {
       if (Math.abs(Math.round(a * 255) / 255 - a) < 1e-9) continue;
       if (allow.some((e) => e.file === file && (e.test ? e.test.test(m[0]) : m[0].includes(e.text)))) continue;
       alphaBad.push(`${file}: ${m[0]}`);
+    }
+    if (/\.(jsx?|html)$/.test(file) && file !== "js/shared/theme-tokens.js") {
+      for (const m of line.matchAll(TOKEN_CLASS_RE)) {
+        const r = m[1];
+        if (TOKEN_KEYS.has(r) || !TOKEN_GROUPS.has(r.split("-")[0])) continue;
+        unknownBad.push(`${file}:${ln}: unknown token class ${m[0]}`);
+      }
     }
     for (const [kind, re] of RULES) {
       re.lastIndex = 0;
@@ -201,6 +215,11 @@ console.log(`[check-theme-literals] total: ${total} (allowlisted: ${allowed})${S
 if (alphaBad.length) {
   console.error("[check-theme-literals] FAIL: non-8-bit alpha in rgb(var(--mtlx-*) / a). Use `/ calc(N / 255)` with N = Math.round(a * 255) (or MtlxTheme.rgba) so it matches legacy rgba():");
   for (const b of alphaBad) console.error("  " + b);
+  process.exit(1);
+}
+if (unknownBad.length) {
+  console.error("[check-theme-literals] FAIL: unknown token class (typo, Tailwind silently ignores it):");
+  for (const b of unknownBad) console.error("  " + b);
   process.exit(1);
 }
 if (STRICT && total > 0) process.exit(1);

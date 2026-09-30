@@ -148,8 +148,8 @@ async function runThemeStep() {
     path.join(REPO_ROOT, "scripts", "build-theme.mjs"),
     CHECK_MODE ? ["--check"] : []
   );
-  // Report-only literal guard: never fails the build (see scripts/check-theme-literals.mjs).
-  runNodeScript("theme", path.join(REPO_ROOT, "scripts", "check-theme-literals.mjs"));
+  // Literal guard: fails on any raw color outside the theme files and the allowlist.
+  runNodeScript("theme", path.join(REPO_ROOT, "scripts", "check-theme-literals.mjs"), ["--strict"]);
 }
 
 async function runEmbedStep() {

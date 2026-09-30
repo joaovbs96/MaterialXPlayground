@@ -31,7 +31,7 @@
                     type="button"
                     data-row-id={r.id}
                     className={'w-full flex items-center gap-2 px-2 py-1 rounded text-[12px] font-mono text-left transition-colors '
-                        + (selected ? 'bg-blue-600/30 text-gray-100' : (hi ? 'bg-gray-700/60 text-gray-200' : 'text-gray-300 hover:bg-gray-700/60'))}
+                        + (selected ? 'bg-selection/30 text-fg' : (hi ? 'bg-hover/60 text-fg-soft' : 'text-fg-secondary hover:bg-hover/60'))}
                     title={r.category + (r.type ? ' : ' + r.type : '')}
                     onClick={() => onSelect(r.id)}
                     onDoubleClick={() => {
@@ -40,7 +40,7 @@
                     }}
                 >
                     <span className={'flex-none w-2 h-2 ' + glyphShape} style={{ background: r.color }} />
-                    <span className="flex-none text-[8px] uppercase tracking-wider text-gray-500 w-6">
+                    <span className="flex-none text-[8px] uppercase tracking-wider text-fg-subtle w-6">
                         {SCOPE_ROW_KIND_LABEL[r.kind] || ''}
                     </span>
                     <span className="truncate">{r.name}</span>
@@ -163,7 +163,7 @@
                 <button type="button" className={SCOPE_GROUP_HEADER_CLASS} onClick={() => toggleGroup(key)}>
                     <MtlxIcon name={groupsOpen[key] ? 'chevron-down' : 'chevron-right'} className="w-3 h-3" />
                     <span>{title}</span>
-                    <span className="ml-auto text-[9px] text-gray-500 normal-case tracking-normal">{count}</span>
+                    <span className="ml-auto text-[9px] text-fg-subtle normal-case tracking-normal">{count}</span>
                 </button>
             );
 
@@ -175,29 +175,29 @@
                 // above the embedded type legend, so it must shrink to
                 // share the column instead of claiming the full height.
                 <div className={'flex flex-col flex-1 min-h-0' + (className ? ' ' + className : '')}>
-                    <div className="flex flex-col border-b border-gray-700 bg-gray-900/70">
-                        <div className="flex items-center gap-2 px-3 py-2 min-h-[45px] border-b border-gray-800">
-                            <MtlxIcon name="list-details" className="w-3.5 h-3.5 text-gray-500" />
-                            <span className="text-[13px] font-bold text-gray-100 truncate font-mono flex-1 flex items-center gap-1.5">
+                    <div className="flex flex-col border-b border-line bg-chrome/70">
+                        <div className="flex items-center gap-2 px-3 py-2 min-h-[45px] border-b border-line-subtle">
+                            <MtlxIcon name="list-details" className="w-3.5 h-3.5 text-fg-subtle" />
+                            <span className="text-[13px] font-bold text-fg truncate font-mono flex-1 flex items-center gap-1.5">
                                 {scope && <span className="w-2 h-2 rounded-full flex-none" style={{ background: typeColor('nodegraph') }} />}
                                 {scope || 'Nodes'}
                             </span>
-                            <span className="text-[10px] text-gray-500">{visibleCount}/{total}</span>
+                            <span className="text-[10px] text-fg-subtle">{visibleCount}/{total}</span>
                             <button
                                 type="button"
                                 title="Collapse the node list"
-                                className="flex-none w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700/80 transition-colors"
+                                className="flex-none w-6 h-6 flex items-center justify-center rounded text-fg-muted hover:text-fg-soft hover:bg-hover/80 transition-colors"
                                 onClick={onCollapse}
                             >
                                 <MtlxIcon name="chevrons-left" className="w-4 h-4" />
                             </button>
                         </div>
-                        <div className="flex items-stretch border-b border-gray-700">
+                        <div className="flex items-stretch border-b border-line">
                             <div className="relative flex-1 min-w-0">
-                                <MtlxIcon name="search" className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500 pointer-events-none" />
+                                <MtlxIcon name="search" className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-fg-subtle pointer-events-none" />
                                 <input
                                     ref={inputRef}
-                                    className="w-full bg-gray-900 pl-7 pr-2 py-1.5 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:outline-none"
+                                    className="w-full bg-surface-sunken pl-7 pr-2 py-1.5 text-[12px] font-mono text-fg placeholder-fg-subtle focus:outline-none"
                                     placeholder="Filter nodes"
                                     value={query}
                                     spellCheck={false}
@@ -209,7 +209,7 @@
                                 <button
                                     type="button"
                                     title="Clear filter"
-                                    className="flex-none w-6 self-center mr-1 text-gray-500 hover:text-gray-200"
+                                    className="flex-none w-6 self-center mr-1 text-fg-subtle hover:text-fg-soft"
                                     onClick={() => { setQuery(''); if (inputRef.current) inputRef.current.focus(); }}
                                 >
                                     <MtlxIcon name="x" className="w-3.5 h-3.5" />
@@ -258,7 +258,7 @@
                         className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-0 [scrollbar-gutter:auto] py-1"
                         onKeyDown={handleNavKey}
                     >
-                        {sorted.length === 0 && <div className="text-[11px] text-gray-500 py-2 px-2.5">No matches.</div>}
+                        {sorted.length === 0 && <div className="text-[11px] text-fg-subtle py-2 px-2.5">No matches.</div>}
                         {sorted.length > 0 && !scope && <div className="px-2.5">{sorted.map((r) => renderRow(r))}</div>}
                         {sorted.length > 0 && scope && (
                             <React.Fragment>
