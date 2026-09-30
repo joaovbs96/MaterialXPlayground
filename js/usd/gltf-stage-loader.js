@@ -466,7 +466,7 @@ export async function loadGltfStage({ files, rootPath, signal, onProgress } = {}
     rawJson = parsed.json;
     binBytes = parsed.binBytes;
   }
-  const strippedJson = JSON.parse(JSON.stringify(rawJson));
+  const strippedJson = structuredClone(rawJson);
   stripGltfTextures(strippedJson);
 
   const warnings = [];

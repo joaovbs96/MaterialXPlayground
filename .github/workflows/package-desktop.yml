@@ -1,0 +1,199 @@
+# -----------------------------------------------------------------------------
+# Package a desktop (Electron) TEST installer from any branch
+# -----------------------------------------------------------------------------
+# Manual workflow: "Use workflow from: <branch>" builds the desktop installer
+# for the chosen platform(s) from that branch's tip and uploads it as a
+# workflow artifact (14-day retention). Nothing is published: no release, tag
+# or upload anywhere.
+#
+# Builds are UNSIGNED. Windows SmartScreen: click "More info" then "Run
+# anyway". macOS: right-click the app and choose Open, or run
+#   xattr -dr com.apple.quarantine "/Applications/MaterialX Playground.app"
+#
+# Version naming: outside a release, electron/scripts/lib/resolve-version.mjs
+# resolves "<last tag>-dev.<commits since>" from git describe, which is why the
+# platform jobs check out full history.
+#
+# The `verify` job certifies the tree once (build plus the stale-artifact
+# gate, as in package-prerelease.yml) so the platform runners do not each
+# rebuild; a Windows checkout would also make the byte gate unreliable.
+#
+# The `desktop` steps duplicate release.yml's `desktop` job and must be kept in
+# sync with it.
+#
+# GitHub lists a workflow_dispatch workflow in the Actions tab only once the
+# file is on the default branch.
+# -----------------------------------------------------------------------------
+
+name: Package desktop test build
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform to build
+        type: choice
+        options:
+          - windows
+          - macos
+          - linux
+          - all
+        default: windows
+      run_smoke:
+        description: Smoke-test the desktop shell before packaging
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: package-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
+      - name: Vendor the offline MaterialX snapshot
+        run: npm run vendor:offline
+
+      - name: Build
+        run: npm run build
+
+      # A branch whose committed artifacts are stale would ship a broken app.
+      - name: Verify committed artifacts match a clean rebuild
+        run: |
+          git diff --exit-code || { echo "::error::Committed artifacts are stale on this branch: run 'npm run build' and push before packaging a desktop build."; exit 1; }
+          [ -z "$(git status --porcelain)" ] || { echo "::error::Build produced files not in the commit."; git status --porcelain; exit 1; }
+
+  desktop:
+    needs: verify
+    strategy:
+      # One platform failing must not deny the others their artifacts.
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.platform == 'all' && '["windows-latest","macos-latest","ubuntu-latest"]' || inputs.platform == 'macos' && '["macos-latest"]' || inputs.platform == 'linux' && '["ubuntu-latest"]' || '["windows-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # resolve-version.mjs falls back to `git describe`, which needs
+          # full history to find the last tag.
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Vendor the offline MaterialX snapshot
+        run: npm run vendor:offline
+
+      # The desktop app ships the gallery; reuse the published site's tiles.
+      - name: Populate gallery data from the live site
+        run: |
+          node scripts/build-gallery.mjs
+          node scripts/gallery-shots.mjs --reuse-from "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}" --reuse-only
+
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: electron
+
+      - name: Audit desktop dependencies
+        run: npm audit --audit-level=high
+        working-directory: electron
+
+      - name: Smoke-test the desktop shell
+        if: ${{ inputs.run_smoke }}
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          # ubuntu-24.04 runners restrict unprivileged user namespaces, so
+          # Electron falls back to its SUID helper and aborts unless that
+          # binary is root-owned with mode 4755 (the message it prints).
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update -y && sudo apt-get install -y xvfb
+            # The binary is fetched lazily on first launch, so fetch it now
+            # (idempotent) before fixing the helper's owner and mode.
+            (cd electron && node node_modules/electron/install.js)
+            SANDBOX=electron/node_modules/electron/dist/chrome-sandbox
+            sudo chown root:root "$SANDBOX" && sudo chmod 4755 "$SANDBOX"
+            xvfb-run -a node electron/scripts/dev.mjs --smoke --skip-gallery
+          else
+            node electron/scripts/dev.mjs --smoke --skip-gallery
+          fi
+
+      # pack.mjs stages the site, resolves the version and runs
+      # electron-builder --publish never; it writes nothing tracked.
+      - name: Build desktop app
+        run: node scripts/pack.mjs --skip-gallery
+        working-directory: electron
+
+      - name: Sanity-check desktop output
+        shell: bash
+        run: |
+          test -f electron/dist-site/gallery/manifest.json || { echo "::error::gallery data missing from the staged desktop site"; exit 1; }
+          THUMBS=$(ls electron/dist-site/gallery/thumbs 2>/dev/null | wc -l)
+          echo "staged gallery thumbnails: $THUMBS"
+          COUNT=$(find electron/dist -maxdepth 1 -type f \( -name "*.exe" -o -name "*.dmg" -o -name "*.zip" -o -name "*.AppImage" -o -name "*.deb" \) | wc -l)
+          test "$COUNT" -gt 0 || { echo "::error::electron-builder produced no installer on ${{ matrix.os }}"; exit 1; }
+          find electron/dist -maxdepth 1 -type f \( -name "*.exe" -o -name "*.dmg" -o -name "*.zip" -o -name "*.AppImage" -o -name "*.deb" \) -exec ls -lh {} \;
+
+      # The ref name is user-controlled: it reaches the script only through
+      # an env var, never through direct interpolation.
+      - name: Compute artifact name
+        id: name
+        shell: bash
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          case "$RUNNER_OS" in
+            Windows) SHORT=win ;;
+            macOS) SHORT=mac ;;
+            *) SHORT=linux ;;
+          esac
+          BRANCH_SLUG="$(printf '%s' "$REF_NAME" | tr -c 'A-Za-z0-9._-' '-')"
+          SHA7="$(git rev-parse --short=7 HEAD)"
+          echo "artifact=materialx-playground-desktop-$SHORT-$BRANCH_SLUG-$SHA7" >> "$GITHUB_OUTPUT"
+
+      - name: Upload desktop artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.name.outputs.artifact }}
+          path: |
+            electron/dist/*.exe
+            electron/dist/*.dmg
+            electron/dist/*.zip
+            electron/dist/*.AppImage
+            electron/dist/*.deb
+          retention-days: 14
+          if-no-files-found: error

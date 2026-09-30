@@ -227,16 +227,27 @@ const EmbedControls = ({
                         {!compact && <span>Environment</span>}
                     </button>
                 )}
-                {showScreenshot && (
+                {showScreenshot && showRecord && (
+                    <span className="mtlx-ec-split" data-testid="capture-split">
+                        <button type="button" className="mtlx-ec-btn mtlx-ec-split-main" data-testid="capture-screenshot" onClick={onScreenshot} title="Save a PNG preview of the current view">
+                            <MtlxIcon name="camera" className="mtlx-ec-icon" />
+                            <span>Screenshot</span>
+                        </button>
+                        <button type="button" className="mtlx-ec-btn mtlx-ec-split-record" data-testid="capture-record" onClick={onRecord} title="Record a 360° turntable GIF">
+                            <span>Turntable</span>
+                        </button>
+                    </span>
+                )}
+                {showScreenshot && !showRecord && (
                     <button type="button" className="mtlx-ec-btn" onClick={onScreenshot} title="Save a PNG preview of the current view">
                         <MtlxIcon name="camera" className="mtlx-ec-icon" />
                         {!compact && <span>Screenshot</span>}
                     </button>
                 )}
-                {showRecord && (
+                {!showScreenshot && showRecord && (
                     <button type="button" className="mtlx-ec-btn" onClick={onRecord} title="Record a 360° turntable GIF">
-                        <MtlxIcon name="player-record" className="mtlx-ec-icon" />
-                        {!compact && <span>Record</span>}
+                        <MtlxIcon name="camera" className="mtlx-ec-icon" />
+                        {!compact && <span>Turntable</span>}
                     </button>
                 )}
                 {showSettings && (

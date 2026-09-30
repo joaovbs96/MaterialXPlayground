@@ -1228,19 +1228,22 @@ function ShaderExportDialog({
     if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
     copyTimerRef.current = setTimeout(() => setCopied(false), 1500);
   };
+
+  // Only stages whose code has actually resolved are downloadable; a
+  // still-loading lazy stage (e.g. Decompiled) is simply left out rather
+  // than blocking the whole export.
+  const readyStages = stages ? stages.filter(st => codeOf(st) != null) : [];
+  const notReadyStages = stages ? stages.filter(st => codeOf(st) == null) : [];
+  const downloadTitle = notReadyStages.length ? notReadyStages.map(st => st.label).join(', ') + (notReadyStages.length === 1 ? ' is' : ' are') + ' not ready yet and will not be included' : 'Download the current export';
   const handleDownload = async () => {
-    if (!stages) return;
+    if (!readyStages.length) return;
     const target = exportTargets.find(t => t.key === targetKey);
     const matName = renderables[matIndex] && renderables[matIndex].name || 'material';
     const base = (matName + '_' + targetKey).replace(/[^\w.-]+/g, '_');
-    if (stages.some(st => codeOf(st) == null)) {
-      setError('Export failed: wait for every stage to finish loading before downloading.');
-      return;
-    }
-    if (stages.length === 1) {
-      downloadBlob(new Blob([codeOf(stages[0])], {
+    if (readyStages.length === 1) {
+      downloadBlob(new Blob([codeOf(readyStages[0])], {
         type: 'text/plain'
-      }), base + (target.ext[stages[0].id] || '.txt'));
+      }), base + (target.ext[readyStages[0].id] || '.txt'));
       return;
     }
     if (!window.JSZip) {
@@ -1248,7 +1251,7 @@ function ShaderExportDialog({
       return;
     }
     const zip = new JSZip();
-    stages.forEach(st => zip.file(base + (target.ext[st.id] || '.txt'), codeOf(st)));
+    readyStages.forEach(st => zip.file(base + (target.ext[st.id] || '.txt'), codeOf(st)));
     let blob;
     try {
       blob = await zip.generateAsync({
@@ -1270,15 +1273,15 @@ function ShaderExportDialog({
       onClick: handleCopy,
       disabled: busy || !!error || !stages || currentCode == null,
       title: "Copy the current stage's code to the clipboard",
-      className: 'h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors disabled:opacity-40 ' + (copied ? 'bg-green-600/70 border-green-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')
+      className: 'h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none ' + (copied ? 'bg-green-600/70 border-green-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')
     }, /*#__PURE__*/React.createElement(MtlxIcon, {
       name: copied ? 'copy-check' : 'copy',
       className: "w-3.5 h-3.5"
     }), /*#__PURE__*/React.createElement("span", null, copied ? 'Copied' : 'Copy')), /*#__PURE__*/React.createElement("button", {
       onClick: handleDownload,
-      disabled: busy || !!error || !stages,
-      title: "Download the current export",
-      className: "h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors disabled:opacity-40 bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
+      disabled: busy || !!error || !stages || !readyStages.length,
+      title: downloadTitle,
+      className: "h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
     }, /*#__PURE__*/React.createElement(MtlxIcon, {
       name: "file-download",
       className: "w-3.5 h-3.5"
@@ -1574,7 +1577,8 @@ const openInGraphEditor = ({
   select,
   implOf,
   readOnly,
-  readOnlySource
+  readOnlySource,
+  mxsl
 }) => {
   // Drop out of any active fullscreen (native or the CSS-maximize
   // fallback) before leaving this view — the shell keeps the old view
@@ -1588,6 +1592,8 @@ const openInGraphEditor = ({
   // `readOnly`/`readOnlySource`: view-only handoff (e.g. a Scene Viewer
   // material). The editor enters view-only mode until a different
   // document is loaded.
+  // `mxsl`: optional { source, filename } for the .mxsl Original this
+  // document was loaded from, carried across so the receiver can keep it.
   window.__mtlxPendingImport = {
     xml,
     name,
@@ -1595,7 +1601,8 @@ const openInGraphEditor = ({
     select: select || null,
     implOf: implOf || null,
     readOnly: !!readOnly,
-    readOnlySource: readOnlySource || null
+    readOnlySource: readOnlySource || null,
+    mxsl: mxsl || null
   };
   window.dispatchEvent(new CustomEvent('mtlx-load-document', {
     detail: window.__mtlxPendingImport
@@ -1627,7 +1634,8 @@ const openInViewer = ({
   xml,
   name,
   files,
-  geometry
+  geometry,
+  mxsl
 }) => {
   // Drop out of any active fullscreen (native or the CSS-maximize
   // fallback) before leaving this view — the shell keeps the old view
@@ -1635,11 +1643,14 @@ const openInViewer = ({
   if (fullscreenElement()) toggleFullscreen();
   // `geometry`: optional, so a sender can hand over the geometry it was
   // showing. The viewer re-validates it and ignores anything it cannot render.
+  // `mxsl`: optional { source, filename } for the .mxsl Original this
+  // document was loaded from, carried across so the receiver can keep it.
   window.__mtlxPendingViewerImport = {
     xml,
     name,
     files: files || null,
-    geometry: geometry || null
+    geometry: geometry || null,
+    mxsl: mxsl || null
   };
   window.dispatchEvent(new CustomEvent('mtlx-view-document', {
     detail: window.__mtlxPendingViewerImport
@@ -1650,11 +1661,15 @@ const openInViewer = ({
 // Page-wide drag & drop: files can drop anywhere, not just a drop zone.
 // `activeRef.current === false` suppresses handling for backgrounded
 // views; `disabled` registers no listeners (used by VS Code callers).
+// `blockedRef`: when true (export dialog / presets picker open), drops are
+// still claimed and neutralized (no navigation, no overlay, no onFiles) so
+// a stray drop can't clobber the open dialog's document underneath it.
 const useWindowFileDrop = ({
   activeRef,
   onFiles,
   onDragState,
-  disabled = false
+  disabled = false,
+  blockedRef
 }) => {
   const onFilesRef = React.useRef(onFiles);
   onFilesRef.current = onFiles;
@@ -1667,9 +1682,16 @@ const useWindowFileDrop = ({
       const t = e.dataTransfer && e.dataTransfer.types;
       return !!t && Array.from(t).indexOf('Files') >= 0;
     };
+    const isBlocked = () => !!(blockedRef && blockedRef.current);
     const onEnter = e => {
       if (activeRef && !activeRef.current) return;
       if (!hasFiles(e)) return;
+      if (isBlocked()) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'none';
+        e.__mtlxHandled = true;
+        return;
+      }
       e.preventDefault();
       depth += 1;
       if (onDragStateRef.current) onDragStateRef.current(true);
@@ -1677,11 +1699,18 @@ const useWindowFileDrop = ({
     const onOver = e => {
       if (activeRef && !activeRef.current) return;
       if (!hasFiles(e)) return;
+      if (isBlocked()) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'none';
+        e.__mtlxHandled = true;
+        return;
+      }
       e.preventDefault(); // required, or the browser navigates to the file
     };
     const onLeave = e => {
       if (activeRef && !activeRef.current) return;
       if (!hasFiles(e)) return;
+      if (isBlocked()) return;
       depth = Math.max(0, depth - 1);
       if (depth === 0 && onDragStateRef.current) onDragStateRef.current(false);
     };
@@ -1693,6 +1722,12 @@ const useWindowFileDrop = ({
       // synchronous flag always wins when a view hook is active.
       e.__mtlxHandled = true;
       e.preventDefault();
+      if (isBlocked()) {
+        e.dataTransfer.dropEffect = 'none';
+        depth = 0;
+        if (onDragStateRef.current) onDragStateRef.current(false);
+        return;
+      }
       depth = 0;
       if (onDragStateRef.current) onDragStateRef.current(false);
       if (typeof window.__mtlxDesktopPathDrop === 'function' && typeof window.__mtlxOpenPath === 'function') {
@@ -2808,29 +2843,81 @@ const ViewportControls = ({
           importError: envImportError
         })) : null;
       case 'screenshot':
-        return showScreenshot ? /*#__PURE__*/React.createElement("button", {
-          key: "screenshot",
-          onClick: onScreenshot,
-          title: "Save a PNG preview of the current view",
-          className: buttonClassName(false)
-        }, /*#__PURE__*/React.createElement(MtlxIcon, {
-          name: "camera",
-          className: "w-3.5 h-3.5"
-        }), showLabels && /*#__PURE__*/React.createElement("span", {
-          className: "ml-1.5 whitespace-nowrap"
-        }, "Screenshot")) : null;
+        {
+          const recordAvail = !!(showRecord && onRecord);
+          if (showScreenshot && recordAvail) {
+            // One divided pill, labels always shown. Halves share the outer
+            // rounding and a single divider (collapsed borders).
+            return /*#__PURE__*/React.createElement("span", {
+              key: "screenshot",
+              "data-testid": "capture-split",
+              style: {
+                display: 'inline-flex',
+                alignItems: 'stretch',
+                flex: 'none'
+              }
+            }, /*#__PURE__*/React.createElement("button", {
+              onClick: onScreenshot,
+              title: "Save a PNG preview of the current view",
+              "data-testid": "capture-screenshot",
+              className: buttonClassName(false),
+              style: {
+                borderTopRightRadius: 0,
+                borderBottomRightRadius: 0,
+                width: 'auto',
+                paddingLeft: 8,
+                paddingRight: 8,
+                gap: 6
+              }
+            }, /*#__PURE__*/React.createElement(MtlxIcon, {
+              name: "camera",
+              className: "w-3.5 h-3.5"
+            }), /*#__PURE__*/React.createElement("span", {
+              className: "whitespace-nowrap"
+            }, "Screenshot")), /*#__PURE__*/React.createElement("button", {
+              onClick: onRecord,
+              title: "Record a 360\xB0 turntable GIF",
+              "data-testid": "capture-record",
+              className: buttonClassName(false),
+              style: {
+                borderTopLeftRadius: 0,
+                borderBottomLeftRadius: 0,
+                marginLeft: -1,
+                width: 'auto',
+                paddingLeft: 8,
+                paddingRight: 8
+              }
+            }, /*#__PURE__*/React.createElement("span", {
+              className: "whitespace-nowrap"
+            }, "Turntable")));
+          }
+          if (showScreenshot) {
+            return /*#__PURE__*/React.createElement("button", {
+              key: "screenshot",
+              onClick: onScreenshot,
+              title: "Save a PNG preview of the current view",
+              className: buttonClassName(false)
+            }, /*#__PURE__*/React.createElement(MtlxIcon, {
+              name: "camera",
+              className: "w-3.5 h-3.5"
+            }), showLabels && /*#__PURE__*/React.createElement("span", {
+              className: "ml-1.5 whitespace-nowrap"
+            }, "Screenshot"));
+          }
+          return recordAvail ? /*#__PURE__*/React.createElement("button", {
+            key: "screenshot",
+            onClick: onRecord,
+            title: "Record a 360\xB0 turntable GIF",
+            className: buttonClassName(false)
+          }, /*#__PURE__*/React.createElement(MtlxIcon, {
+            name: "camera",
+            className: "w-3.5 h-3.5"
+          }), showLabels && /*#__PURE__*/React.createElement("span", {
+            className: "ml-1.5 whitespace-nowrap"
+          }, "Turntable")) : null;
+        }
       case 'record':
-        return showRecord && onRecord ? /*#__PURE__*/React.createElement("button", {
-          key: "record",
-          onClick: onRecord,
-          title: "Record a 360\xB0 turntable GIF",
-          className: buttonClassName(false)
-        }, /*#__PURE__*/React.createElement(MtlxIcon, {
-          name: "player-record",
-          className: "w-3.5 h-3.5"
-        }), showLabels && /*#__PURE__*/React.createElement("span", {
-          className: "ml-1.5 whitespace-nowrap"
-        }, "Record")) : null;
+        return null;
       case 'settings':
         return showSettings ? /*#__PURE__*/React.createElement("button", {
           key: "settings",

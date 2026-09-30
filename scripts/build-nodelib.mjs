@@ -13,6 +13,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
+import { parseArgs } from "node:util";
 import { readVersionMeta } from "./lib/version.mjs";
 import {
   vecToArray,
@@ -47,7 +48,18 @@ const SHADING_MODELS = ["standard_surface", "open_pbr_surface", "gltf_pbr", "dis
 const LAMA_DIR = path.join(REPO_ROOT, "libraries", "bxdf", "lama");
 const TRANSLATION_DIR = path.join(REPO_ROOT, "libraries", "bxdf", "translation");
 
-const CHECK_MODE = process.argv.includes("--check");
+let cliValues;
+try {
+  ({ values: cliValues } = parseArgs({
+    args: process.argv.slice(2),
+    options: { check: { type: "boolean" } },
+    strict: true,
+  }));
+} catch (err) {
+  console.error(`error: ${err.message}`);
+  process.exit(1);
+}
+const CHECK_MODE = !!cliValues.check;
 
 function log(...args) {
   console.log(...args);

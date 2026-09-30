@@ -11,13 +11,25 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { Marked } from "marked";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, "..");
 
-const CHECK_MODE = process.argv.includes("--check");
+let cliValues;
+try {
+  ({ values: cliValues } = parseArgs({
+    args: process.argv.slice(2),
+    options: { check: { type: "boolean" } },
+    strict: true,
+  }));
+} catch (err) {
+  console.error(`error: ${err.message}`);
+  process.exit(1);
+}
+const CHECK_MODE = !!cliValues.check;
 
 const SRC_PATH = path.join(REPO_ROOT, "docs", "EMBEDDING.md");
 const OUT_PATH = path.join(REPO_ROOT, "js", "gen", "embedding-docs.html");

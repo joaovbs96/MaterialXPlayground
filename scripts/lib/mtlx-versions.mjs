@@ -55,19 +55,9 @@ export function mtlxVersionAssetUrl(entry) {
   return `https://github.com/AcademySoftwareFoundation/MaterialX/releases/download/${entry.tag}/MaterialX_JavaScript.zip`;
 }
 
-/** Parses "X.Y.Z" into [X, Y, Z] as numbers for a numeric (not lexicographic) comparison. */
-function versionIntegers(version) {
-  return version.split(".").map((part) => Number.parseInt(part, 10));
-}
-
+/** Descending numeric comparison of "X.Y.Z" version strings via localeCompare's numeric collation. */
 function compareVersionsDesc(a, b) {
-  const ai = versionIntegers(a.version);
-  const bi = versionIntegers(b.version);
-  for (let i = 0; i < Math.max(ai.length, bi.length); i++) {
-    const diff = (bi[i] || 0) - (ai[i] || 0);
-    if (diff !== 0) return diff;
-  }
-  return 0;
+  return b.version.localeCompare(a.version, undefined, { numeric: true });
 }
 
 // ---------------------------------------------------------------------------

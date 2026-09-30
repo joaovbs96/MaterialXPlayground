@@ -1040,17 +1040,23 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
         copyTimerRef.current = setTimeout(() => setCopied(false), 1500);
     };
 
+    // Only stages whose code has actually resolved are downloadable; a
+    // still-loading lazy stage (e.g. Decompiled) is simply left out rather
+    // than blocking the whole export.
+    const readyStages = stages ? stages.filter((st) => codeOf(st) != null) : [];
+    const notReadyStages = stages ? stages.filter((st) => codeOf(st) == null) : [];
+    const downloadTitle = notReadyStages.length
+        ? notReadyStages.map((st) => st.label).join(', ') + (notReadyStages.length === 1 ? ' is' : ' are')
+            + ' not ready yet and will not be included'
+        : 'Download the current export';
+
     const handleDownload = async () => {
-        if (!stages) return;
+        if (!readyStages.length) return;
         const target = exportTargets.find((t) => t.key === targetKey);
         const matName = (renderables[matIndex] && renderables[matIndex].name) || 'material';
         const base = (matName + '_' + targetKey).replace(/[^\w.-]+/g, '_');
-        if (stages.some((st) => codeOf(st) == null)) {
-            setError('Export failed: wait for every stage to finish loading before downloading.');
-            return;
-        }
-        if (stages.length === 1) {
-            downloadBlob(new Blob([codeOf(stages[0])], { type: 'text/plain' }), base + (target.ext[stages[0].id] || '.txt'));
+        if (readyStages.length === 1) {
+            downloadBlob(new Blob([codeOf(readyStages[0])], { type: 'text/plain' }), base + (target.ext[readyStages[0].id] || '.txt'));
             return;
         }
         if (!window.JSZip) {
@@ -1058,7 +1064,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
             return;
         }
         const zip = new JSZip();
-        stages.forEach((st) => zip.file(base + (target.ext[st.id] || '.txt'), codeOf(st)));
+        readyStages.forEach((st) => zip.file(base + (target.ext[st.id] || '.txt'), codeOf(st)));
         let blob;
         try {
             blob = await zip.generateAsync({ type: 'blob' });
@@ -1082,7 +1088,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                         onClick={handleCopy}
                         disabled={busy || !!error || !stages || currentCode == null}
                         title="Copy the current stage's code to the clipboard"
-                        className={'h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors disabled:opacity-40 '
+                        className={'h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none '
                             + (copied
                                 ? 'bg-green-600/70 border-green-500 text-white'
                                 : 'bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
@@ -1092,9 +1098,9 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                     </button>
                     <button
                         onClick={handleDownload}
-                        disabled={busy || !!error || !stages}
-                        title="Download the current export"
-                        className="h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors disabled:opacity-40 bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
+                        disabled={busy || !!error || !stages || !readyStages.length}
+                        title={downloadTitle}
+                        className="h-6 inline-flex items-center gap-1 text-[11px] px-2 rounded border backdrop-blur transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
                     >
                         <MtlxIcon name="file-download" className="w-3.5 h-3.5" />
                         <span>Download</span>
@@ -1403,7 +1409,7 @@ const useViewportControls = (viewRef, viewportRef, getSnapshotBase, initialRotat
 // Hand a document off to the node graph editor: stash it (plus any loose
 // files) where js/graph-app.jsx's 'mtlx-load-document' listener expects
 // it, fire that event, then hash-route to the graph view.
-const openInGraphEditor = ({ xml, name, files, select, implOf, readOnly, readOnlySource }) => {
+const openInGraphEditor = ({ xml, name, files, select, implOf, readOnly, readOnlySource, mxsl }) => {
     // Drop out of any active fullscreen (native or the CSS-maximize
     // fallback) before leaving this view — the shell keeps the old view
     // mounted (CSS-hidden), so fullscreen would otherwise persist on it.
@@ -1416,9 +1422,11 @@ const openInGraphEditor = ({ xml, name, files, select, implOf, readOnly, readOnl
     // `readOnly`/`readOnlySource`: view-only handoff (e.g. a Scene Viewer
     // material). The editor enters view-only mode until a different
     // document is loaded.
+    // `mxsl`: optional { source, filename } for the .mxsl Original this
+    // document was loaded from, carried across so the receiver can keep it.
     window.__mtlxPendingImport = {
         xml, name, files: files || null, select: select || null, implOf: implOf || null,
-        readOnly: !!readOnly, readOnlySource: readOnlySource || null,
+        readOnly: !!readOnly, readOnlySource: readOnlySource || null, mxsl: mxsl || null,
     };
     window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: window.__mtlxPendingImport }));
     window.location.hash = '#!graph';
@@ -1441,14 +1449,16 @@ const looseFilesFrom = (fileMap) => {
 // Hand a document off to the material viewer — openInGraphEditor's mirror
 // counterpart. Stashes it (plus loose files) where js/viewer-app.jsx's
 // 'mtlx-view-document' listener expects it, then hash-routes to the viewer.
-const openInViewer = ({ xml, name, files, geometry }) => {
+const openInViewer = ({ xml, name, files, geometry, mxsl }) => {
     // Drop out of any active fullscreen (native or the CSS-maximize
     // fallback) before leaving this view — the shell keeps the old view
     // mounted (CSS-hidden), so fullscreen would otherwise persist on it.
     if (fullscreenElement()) toggleFullscreen();
     // `geometry`: optional, so a sender can hand over the geometry it was
     // showing. The viewer re-validates it and ignores anything it cannot render.
-    window.__mtlxPendingViewerImport = { xml, name, files: files || null, geometry: geometry || null };
+    // `mxsl`: optional { source, filename } for the .mxsl Original this
+    // document was loaded from, carried across so the receiver can keep it.
+    window.__mtlxPendingViewerImport = { xml, name, files: files || null, geometry: geometry || null, mxsl: mxsl || null };
     window.dispatchEvent(new CustomEvent('mtlx-view-document', { detail: window.__mtlxPendingViewerImport }));
     window.location.hash = '#!viewer';
 };
@@ -1456,7 +1466,10 @@ const openInViewer = ({ xml, name, files, geometry }) => {
 // Page-wide drag & drop: files can drop anywhere, not just a drop zone.
 // `activeRef.current === false` suppresses handling for backgrounded
 // views; `disabled` registers no listeners (used by VS Code callers).
-const useWindowFileDrop = ({ activeRef, onFiles, onDragState, disabled = false }) => {
+// `blockedRef`: when true (export dialog / presets picker open), drops are
+// still claimed and neutralized (no navigation, no overlay, no onFiles) so
+// a stray drop can't clobber the open dialog's document underneath it.
+const useWindowFileDrop = ({ activeRef, onFiles, onDragState, disabled = false, blockedRef }) => {
     const onFilesRef = React.useRef(onFiles);
     onFilesRef.current = onFiles;
     const onDragStateRef = React.useRef(onDragState);
@@ -1468,9 +1481,16 @@ const useWindowFileDrop = ({ activeRef, onFiles, onDragState, disabled = false }
             const t = e.dataTransfer && e.dataTransfer.types;
             return !!t && Array.from(t).indexOf('Files') >= 0;
         };
+        const isBlocked = () => !!(blockedRef && blockedRef.current);
         const onEnter = (e) => {
             if (activeRef && !activeRef.current) return;
             if (!hasFiles(e)) return;
+            if (isBlocked()) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'none';
+                e.__mtlxHandled = true;
+                return;
+            }
             e.preventDefault();
             depth += 1;
             if (onDragStateRef.current) onDragStateRef.current(true);
@@ -1478,11 +1498,18 @@ const useWindowFileDrop = ({ activeRef, onFiles, onDragState, disabled = false }
         const onOver = (e) => {
             if (activeRef && !activeRef.current) return;
             if (!hasFiles(e)) return;
+            if (isBlocked()) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'none';
+                e.__mtlxHandled = true;
+                return;
+            }
             e.preventDefault(); // required, or the browser navigates to the file
         };
         const onLeave = (e) => {
             if (activeRef && !activeRef.current) return;
             if (!hasFiles(e)) return;
+            if (isBlocked()) return;
             depth = Math.max(0, depth - 1);
             if (depth === 0 && onDragStateRef.current) onDragStateRef.current(false);
         };
@@ -1494,6 +1521,12 @@ const useWindowFileDrop = ({ activeRef, onFiles, onDragState, disabled = false }
             // synchronous flag always wins when a view hook is active.
             e.__mtlxHandled = true;
             e.preventDefault();
+            if (isBlocked()) {
+                e.dataTransfer.dropEffect = 'none';
+                depth = 0;
+                if (onDragStateRef.current) onDragStateRef.current(false);
+                return;
+            }
             depth = 0;
             if (onDragStateRef.current) onDragStateRef.current(false);
             if (typeof window.__mtlxDesktopPathDrop === 'function' && typeof window.__mtlxOpenPath === 'function') {
@@ -2496,30 +2529,62 @@ const ViewportControls = ({
                         )}
                     </React.Fragment>
                 ) : null;
-            case 'screenshot':
-                return showScreenshot ? (
+            case 'screenshot': {
+                const recordAvail = !!(showRecord && onRecord);
+                if (showScreenshot && recordAvail) {
+                    // One divided pill, labels always shown. Halves share the outer
+                    // rounding and a single divider (collapsed borders).
+                    return (
+                        <span key="screenshot" data-testid="capture-split" style={{ display: 'inline-flex', alignItems: 'stretch', flex: 'none' }}>
+                            <button
+                                onClick={onScreenshot}
+                                title="Save a PNG preview of the current view"
+                                data-testid="capture-screenshot"
+                                className={buttonClassName(false)}
+                                style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0, width: 'auto', paddingLeft: 8, paddingRight: 8, gap: 6 }}
+                            >
+                                <MtlxIcon name="camera" className="w-3.5 h-3.5" />
+                                <span className="whitespace-nowrap">Screenshot</span>
+                            </button>
+                            <button
+                                onClick={onRecord}
+                                title="Record a 360° turntable GIF"
+                                data-testid="capture-record"
+                                className={buttonClassName(false)}
+                                style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0, marginLeft: -1, width: 'auto', paddingLeft: 8, paddingRight: 8 }}
+                            >
+                                <span className="whitespace-nowrap">Turntable</span>
+                            </button>
+                        </span>
+                    );
+                }
+                if (showScreenshot) {
+                    return (
+                        <button
+                            key="screenshot"
+                            onClick={onScreenshot}
+                            title="Save a PNG preview of the current view"
+                            className={buttonClassName(false)}
+                        >
+                            <MtlxIcon name="camera" className="w-3.5 h-3.5" />
+                            {showLabels && <span className="ml-1.5 whitespace-nowrap">Screenshot</span>}
+                        </button>
+                    );
+                }
+                return recordAvail ? (
                     <button
                         key="screenshot"
-                        onClick={onScreenshot}
-                        title="Save a PNG preview of the current view"
-                        className={buttonClassName(false)}
-                    >
-                        <MtlxIcon name="camera" className="w-3.5 h-3.5" />
-                        {showLabels && <span className="ml-1.5 whitespace-nowrap">Screenshot</span>}
-                    </button>
-                ) : null;
-            case 'record':
-                return (showRecord && onRecord) ? (
-                    <button
-                        key="record"
                         onClick={onRecord}
                         title="Record a 360° turntable GIF"
                         className={buttonClassName(false)}
                     >
-                        <MtlxIcon name="player-record" className="w-3.5 h-3.5" />
-                        {showLabels && <span className="ml-1.5 whitespace-nowrap">Record</span>}
+                        <MtlxIcon name="camera" className="w-3.5 h-3.5" />
+                        {showLabels && <span className="ml-1.5 whitespace-nowrap">Turntable</span>}
                     </button>
                 ) : null;
+            }
+            case 'record':
+                return null;
             case 'settings':
                 return showSettings ? (
                     <button
