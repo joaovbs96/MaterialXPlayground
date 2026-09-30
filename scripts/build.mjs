@@ -3,11 +3,12 @@
 // derived/committed artifact in this repo and verifies none drifted.
 //
 // Usage: node scripts/build.mjs [step] [--check] [--with-materialx]
-//   step: all | version | versions | stamp | vendor | nodelib | embed | embeddocs | tutorials | render | buildid | webview
+//   step: all | version | versions | stamp | vendor | nodelib | theme | embed | embeddocs | tutorials | render | buildid | webview
 //
-// Order for `all`: version -> versions -> vendor -> nodelib -> embed -> embeddocs -> tutorials -> render -> buildid -> webview.
+// Order for `all`: version -> versions -> vendor -> nodelib -> theme -> embed -> embeddocs -> tutorials -> render -> buildid -> webview.
 // version runs first: vendor/nodelib read js/gen/mtlx-version.json. embed runs after
-// nodelib (both are source-derived generators); it depends only on the js/ sources.
+// nodelib (both are source-derived generators); theme (js/gen/theme-tokens.css) runs
+// before embed, buildid and webview so their hashes and splices see it; it depends only on the js/ sources.
 // embeddocs runs right after embed, depending only on docs/EMBEDDING.md. render runs
 // after embed/embeddocs (it checks embed/gen output and docs/EMBEDDING.md) and before
 // buildid, so a stale docs/RENDER-FEATURES.md never rides along inside a stamped
@@ -36,7 +37,7 @@ const CHECK_MODE = argv.includes("--check");
 const WITH_MATERIALX = argv.includes("--with-materialx");
 const STEP = argv.find((a) => !a.startsWith("--")) || "all";
 
-const VALID_STEPS = ["all", "version", "versions", "stamp", "vendor", "nodelib", "embed", "embeddocs", "tutorials", "render", "buildid", "webview"];
+const VALID_STEPS = ["all", "version", "versions", "stamp", "vendor", "nodelib", "theme", "embed", "embeddocs", "tutorials", "render", "buildid", "webview"];
 if (!VALID_STEPS.includes(STEP)) {
   console.error(`error: unknown step "${STEP}" — expected one of: ${VALID_STEPS.join(", ")}`);
   process.exit(1);
@@ -140,6 +141,17 @@ async function runNodelibStep() {
   );
 }
 
+async function runThemeStep() {
+  log(`theme: ${CHECK_MODE ? "verifying" : "generating"} js/gen/theme-tokens.css ...`);
+  runNodeScript(
+    "theme",
+    path.join(REPO_ROOT, "scripts", "build-theme.mjs"),
+    CHECK_MODE ? ["--check"] : []
+  );
+  // Report-only literal guard: never fails the build (see scripts/check-theme-literals.mjs).
+  runNodeScript("theme", path.join(REPO_ROOT, "scripts", "check-theme-literals.mjs"));
+}
+
 async function runEmbedStep() {
   log(`embed: ${CHECK_MODE ? "verifying" : "generating"} embed/gen/*.js (precompiled viewer JSX) ...`);
   runNodeScript(
@@ -235,6 +247,8 @@ async function main() {
     await runVendorStep();
   } else if (STEP === "nodelib") {
     await runNodelibStep();
+  } else if (STEP === "theme") {
+    await runThemeStep();
   } else if (STEP === "embed") {
     await runEmbedStep();
   } else if (STEP === "embeddocs") {

@@ -36,7 +36,7 @@
             }
         })();
     </script>
-    <script>window.__MTLX_BUILD = '79dd08c40060514e';</script>
+    <script>window.__MTLX_BUILD = '028d3c3d0a744374';</script>
     <!-- Build-id probe. Lives here, beside the stamp, deliberately: every
          other script (shell.jsx, mtlx-assets.js) is separately cached and
          may itself be the stale file this is meant to detect. -->
@@ -100,6 +100,12 @@
             window.__MTLX_BUILD_CHECK = check();
         })();
     </script>
+    <!-- Theme tokens: data, runtime and generated custom properties, before any
+         stylesheet and before Tailwind Play (its config line follows the Play script). -->
+    <script src="js/shared/theme-tokens.js"></script>
+    <script src="js/shared/theme.js"></script>
+    <link rel="stylesheet" href="js/gen/theme-tokens.css">
+
     <style>
         /* Embed mode (the graph editor's docs dialog iframe): hide the
            shared chrome — the iframe shows only the focused docs view. */
@@ -115,6 +121,7 @@
     <link rel="stylesheet" href="js/site-header.css">
 
     <script src="vendor/tailwind/tailwind-play.min.js"></script>
+    <script>tailwind.config = MtlxTheme.tailwindConfig();</script>
     <script src="vendor/react/react.production.min.js"></script>
     <script src="vendor/react/react-dom.production.min.js"></script>
     <script src="vendor/babel/babel.min.js"></script>

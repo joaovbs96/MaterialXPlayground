@@ -1424,8 +1424,10 @@ function openRouteRouted(route) {
 // Window Controls Overlay theming: matches .mtlx-header's rgba(17,24,39,.95)
 // blended over the same #111827 page background, and the gray-200 icon
 // color from js/site-tokens.css; height matches --site-header-height.
-const TITLEBAR_OVERLAY_COLOR = '#111827';
-const TITLEBAR_OVERLAY_SYMBOL_COLOR = '#e5e7eb';
+// Values come from the site's token data (dark theme), staged with js/ under the site root.
+const THEME_DARK = require(path.join(getSiteRoot(), 'js', 'shared', 'theme-tokens.js')).themes.dark;
+const TITLEBAR_OVERLAY_COLOR = THEME_DARK['native-titlebar'];
+const TITLEBAR_OVERLAY_SYMBOL_COLOR = THEME_DARK['native-titlebar-symbol'];
 const TITLEBAR_OVERLAY_HEIGHT = 56;
 // macOS traffic lights: x is the cluster's left edge. Kept in sync with
 // the --mtlx-traffic-light-gutter reserve in js/site-header.css; change
@@ -1544,7 +1546,7 @@ function createWindow(route) {
         ...(Number.isFinite(bounds.x) && Number.isFinite(bounds.y) ? { x: bounds.x, y: bounds.y } : {}),
         minWidth: WINDOW_MIN_WIDTH,
         minHeight: WINDOW_MIN_HEIGHT,
-        backgroundColor: '#0b0f19',
+        backgroundColor: THEME_DARK['native-window-bg'],
         show: false,
         icon: runtimeIconPath(),
         // Hides the native title bar behind the site header, which becomes

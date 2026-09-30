@@ -1,0 +1,12 @@
+[
+  {
+    "file": "js/shared/theme-tokens.js",
+    "match": "/./",
+    "reason": "Token source of truth: the only place color values are defined."
+  },
+  {
+    "file": "js/gen/theme-tokens.css",
+    "match": "/./",
+    "reason": "Generated from the token source."
+  }
+]

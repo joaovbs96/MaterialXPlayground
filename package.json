@@ -42,6 +42,7 @@
     "build": "node scripts/build.mjs",
     "build:vendor": "node scripts/build.mjs vendor",
     "build:nodelib": "node scripts/build.mjs nodelib",
+    "build:theme": "node scripts/build.mjs theme",
     "build:embed": "node scripts/build.mjs embed",
     "build:embeddocs": "node scripts/build.mjs embeddocs",
     "build:tutorials": "node scripts/build.mjs tutorials",
