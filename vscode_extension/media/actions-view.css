@@ -269,6 +269,21 @@ body {
     visibility: visible;
 }
 
+.mtlx-theme-sep {
+    height: 1px;
+    margin: 4px 0;
+    background: var(--vscode-menu-separatorBackground, var(--vscode-widget-border));
+}
+
+.mtlx-theme-heading {
+    padding: 4px 12px 2px;
+    font-size: 10px;
+    line-height: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--vscode-descriptionForeground);
+}
+
 .mtlx-more-glyph {
     font-size: 16px;
     line-height: 1;

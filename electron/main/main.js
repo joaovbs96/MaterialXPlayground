@@ -1425,20 +1425,32 @@ function openRouteRouted(route) {
 // blended over the same #111827 page background, and the gray-200 icon
 // color from js/site-tokens.css; height matches --site-header-height.
 // Values come from the site's token data (dark theme), staged with js/ under the site root.
-const THEMES = require(path.join(getSiteRoot(), 'js', 'shared', 'theme-tokens.js')).themes;
+const THEME_DATA = require(path.join(getSiteRoot(), 'js', 'shared', 'theme-tokens.js'));
+const THEMES = THEME_DATA.themes;
+const THEME_REGISTRY = THEME_DATA.registry || [{ id: 'dark', base: 'dark' }, { id: 'light', base: 'light' }];
 const THEME_DARK = THEMES.dark;
 const TITLEBAR_OVERLAY_HEIGHT = 56;
 
-// Persisted preference ('light' | 'dark' | 'system'); nativeTheme follows
-// it so the resolved theme (shouldUseDarkColors) drives the native chrome.
-const THEME_PREFS = ['light', 'dark', 'system'];
+// Persisted preference ('system' or a registry id); nativeTheme follows the
+// base of the chosen theme, or the OS for 'system'.
+const THEME_PREFS = ['system'].concat(THEME_REGISTRY.map((t) => t.id));
+function themeBase(pref) {
+    const t = THEME_REGISTRY.find((x) => x.id === pref);
+    return t ? t.base : 'dark';
+}
+function applyThemeSource(pref) {
+    nativeTheme.themeSource = pref === 'system' ? 'system' : themeBase(pref);
+}
 let themePref = THEME_PREFS.includes(readSettingsSync().theme) ? readSettingsSync().theme : 'system';
-nativeTheme.themeSource = themePref;
+applyThemeSource(themePref);
 
-// Token of the resolved theme, falling back to dark per key.
+// Native chrome token of the resolved theme. A preset without its own
+// native-* value falls back to its base theme's, then dark.
 function nativeColor(key) {
-    const t = THEMES[nativeTheme.shouldUseDarkColors ? 'dark' : 'light'];
-    return (t && t[key]) || THEME_DARK[key];
+    const id = themePref === 'system' ? (nativeTheme.shouldUseDarkColors ? 'dark' : 'light') : themePref;
+    const t = THEMES[id];
+    const b = THEMES[themeBase(id)];
+    return (t && t[key]) || (b && b[key]) || THEME_DARK[key];
 }
 
 // Repaints every open window's native chrome for the resolved theme.
@@ -1461,7 +1473,7 @@ nativeTheme.on('updated', applyNativeTheme);
 ipcMain.on('mtlx-set-theme', (event, value) => {
     if (!THEME_PREFS.includes(value)) return;
     themePref = value;
-    nativeTheme.themeSource = value;
+    applyThemeSource(value);
     saveSettings();
     applyNativeTheme();
 });

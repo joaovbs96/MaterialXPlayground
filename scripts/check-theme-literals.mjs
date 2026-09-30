@@ -179,7 +179,7 @@ for (const file of trackedFiles()) {
       if (allow.some((e) => e.file === file && (e.test ? e.test.test(m[0]) : m[0].includes(e.text)))) continue;
       alphaBad.push(`${file}: ${m[0]}`);
     }
-    if (/\.(jsx?|html)$/.test(file) && file !== "js/shared/theme-tokens.js") {
+    if (/\.(jsx?|html)$/.test(file) && !/^js\/shared\/theme-(tokens|engine)\.js$/.test(file)) {
       for (const m of line.matchAll(TOKEN_CLASS_RE)) {
         const r = m[1];
         if (TOKEN_KEYS.has(r) || !TOKEN_GROUPS.has(r.split("-")[0])) continue;

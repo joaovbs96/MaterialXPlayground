@@ -1,68 +1,62 @@
 #!/usr/bin/env node
 // scripts/check-theme-contrast.mjs
-// WCAG 2 contrast for every pair in theme-tokens-meta.mjs, in every theme.
-// Fails on any light failure and on any dark failure not in knownDarkFailures (kinds: text 4.5, large 3, ui 3, decorative reported only).
+// WCAG 2 contrast for every meta pair in every registry theme (presets resolved by the engine), at the entry's level:
+// AA (text 4.5, large 3, ui 3) or AAA (text 7, large 4.5, ui 3). Fails on anything but the listed knownDarkFailures.
 import { createRequire } from "node:module";
 
-const data = createRequire(import.meta.url)("../js/shared/theme-tokens.js");
+const require = createRequire(import.meta.url);
+const data = require("../js/shared/theme-tokens.js");
+const engine = require("../js/shared/theme-engine.js");
 const meta = await import("./theme-tokens-meta.mjs");
 
-const NEED = { text: 4.5, large: 3, ui: 3, decorative: 0 };
 const known = new Set(meta.knownDarkFailures);
+const registry = data.registry && data.registry.length ? data.registry : Object.keys(data.themes).map((id) => ({ id, contrast: "AA" }));
 
-const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
-const lin = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
-const lum = (c) => { const [r, g, b] = c.map(lin); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
-const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
-
-function value(theme, token) {
-  const map = data.themes[theme] || {};
-  return token in map ? map[token] : data.themes.dark[token];
-}
-
-// Per-theme alpha from params (for example alpha.accentFillTranslucent), falling back to dark.
-function param(theme, [group, key]) {
-  const pick = (t) => data.params && data.params[t] && data.params[t][group] && data.params[t][group][key];
-  const v = pick(theme);
-  return typeof v === "number" ? v : pick("dark");
-}
-
-function measure(theme, p) {
-  const fg = rgb(value(theme, p.fg));
-  let bg = rgb(value(theme, p.bg));
-  const alpha = p.alphaParam ? param(theme, p.alphaParam) : p.alpha;
-  if (alpha != null) {
-    const under = rgb(value(theme, p.under));
-    bg = bg.map((v, i) => Math.round(v * alpha + under[i] * (1 - alpha)));
+// Hand-authored themes: a missing token falls back to dark, params per group fall back to dark.
+function builtIn(id) {
+  const tokens = { ...data.themes.dark, ...data.themes[id] };
+  const params = {};
+  for (const src of [data.params.dark, data.params[id]]) {
+    for (const [g, v] of Object.entries(src || {})) params[g] = { ...params[g], ...v };
   }
-  return ratio(fg, bg);
+  return { tokens, params };
 }
 
-const themes = Object.keys(data.themes);
+function resolved(entry) {
+  if (entry.id in data.themes) return builtIn(entry.id);
+  const preset = meta.presets && meta.presets[entry.id];
+  if (!preset) { console.error(`error: registry theme "${entry.id}" has no preset`); process.exit(1); }
+  try {
+    return engine.resolvePreset({ ...preset, contrast: entry.contrast }, { data, pairs: meta.contrast, name: entry.id });
+  } catch (e) {
+    console.error(`[check-theme-contrast] ${e.message}`);
+    process.exit(1);
+  }
+}
+
+const themes = registry.map((e) => ({ ...e, ...resolved(e), need: engine.LEVELS[e.contrast] }));
 const rows = [];
-let lightFails = 0;
-let darkFails = 0;
+const fails = Object.fromEntries(themes.map((t) => [t.id, 0]));
 let fresh = 0;
 for (const p of meta.contrast) {
-  const need = NEED[p.kind];
-  if (need == null) { console.error(`error: pair ${p.fg}|${p.bg} has unknown kind "${p.kind}"`); process.exit(1); }
+  if (engine.LEVELS.AA[p.kind] == null) { console.error(`error: pair ${p.fg}|${p.bg} has unknown kind "${p.kind}"`); process.exit(1); }
   const cells = [];
-  for (const theme of themes) {
-    const r = measure(theme, p);
-    const key = `${p.fg}|${p.bg}`;
+  for (const t of themes) {
+    const need = t.need[p.kind];
+    const r = engine.measurePair(t.tokens, p, t.params);
     let status = "n/a";
     if (need) {
       if (r >= need) status = "pass";
-      else if (theme === "dark" && known.has(key)) { status = "known"; darkFails++; }
-      else { status = "FAIL"; fresh++; if (theme === "dark") darkFails++; else lightFails++; }
+      else if (t.id === "dark" && known.has(`${p.fg}|${p.bg}`)) { status = "known"; fails[t.id]++; }
+      else { status = "FAIL"; fresh++; fails[t.id]++; }
     }
-    cells.push(`${r.toFixed(2)} ${status}`);
+    cells.push(`${r.toFixed(2)} ${status}`.padEnd(10));
   }
-  rows.push(`${p.fg.padEnd(24)} ${p.bg.padEnd(22)} ${p.kind.padEnd(10)} ${String(need || "-").padEnd(4)} ${cells.join("  |  ")}`);
+  rows.push(`${p.fg.padEnd(24)} ${p.bg.padEnd(22)} ${p.kind.padEnd(10)} ${cells.join(" | ")}`);
 }
-console.log(`${"fg".padEnd(24)} ${"bg".padEnd(22)} ${"kind".padEnd(10)} ${"req".padEnd(4)} ${themes.join("  |  ")}`);
+console.log(`${"fg".padEnd(24)} ${"bg".padEnd(22)} ${"kind".padEnd(10)} ${themes.map((t) => `${t.id} ${t.contrast}`.padEnd(10)).join(" | ")}`);
 console.log(rows.join("\n"));
-console.log(`[check-theme-contrast] ${meta.contrast.length} pairs, light failures ${lightFails}, dark failures ${darkFails} (${known.size} known)`);
+console.log(`[check-theme-contrast] ${meta.contrast.length} pairs; failures: ${themes.map((t) => `${t.id} ${fails[t.id]}${t.id === "dark" ? ` (${known.size} known)` : ""}`).join(", ")}`);
 const stale = [...known].filter((k) => !meta.contrast.some((p) => `${p.fg}|${p.bg}` === k));
 if (stale.length) { console.error(`error: knownDarkFailures lists unknown pairs: ${stale.join(", ")}`); process.exit(1); }
-if (fresh) { console.error(`[check-theme-contrast] ${fresh} failing pair(s) not allowed; fix the palette or the pair`); process.exit(1); }
+if (fresh) { console.error(`[check-theme-contrast] ${fresh} failing pair(s) not allowed; fix the palette, the preset or the pair`); process.exit(1); }

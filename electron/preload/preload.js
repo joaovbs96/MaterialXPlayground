@@ -19,7 +19,7 @@ contextBridge.exposeInMainWorld('__MTLX_PLATFORM__', process.platform);
 // js/shared/theme.js can read it before any page script runs.
 const themeArg = process.argv.find((a) => a.startsWith('--mtlx-theme='));
 const themePref = themeArg ? themeArg.slice('--mtlx-theme='.length) : 'system';
-contextBridge.exposeInMainWorld('__MTLX_THEME_PREF__', ['light', 'dark', 'system'].includes(themePref) ? themePref : 'system');
+contextBridge.exposeInMainWorld('__MTLX_THEME_PREF__', /^[a-z0-9-]{1,32}$/.test(themePref) ? themePref : 'system');
 contextBridge.exposeInMainWorld('__mtlxThemePersist', (pref) => ipcRenderer.send('mtlx-set-theme', pref));
 
 // Buffered like the site's own window.__mtlxPendingImport pattern: main

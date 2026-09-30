@@ -598,15 +598,23 @@
           "enum": [
             "system",
             "light",
-            "dark"
+            "dark",
+            "hc-dark",
+            "hc-light",
+            "dim",
+            "paper"
           ],
           "default": "system",
           "enumDescriptions": [
             "Follow the VS Code color theme.",
-            "Light.",
-            "Dark."
+            "Light",
+            "Dark",
+            "High contrast dark",
+            "High contrast light",
+            "Dim",
+            "Paper"
           ],
-          "markdownDescription": "Color theme of the MaterialX Playground webviews (Material Viewer, Node Graph Editor, Docs, Scene Viewer) and the sidebar. `system` follows the current VS Code color theme."
+          "markdownDescription": "Color theme of the MaterialX Playground webviews (Material Viewer, Node Graph Editor, Docs, Scene Viewer) and the sidebar. `system` follows the current VS Code color theme; the other values pin a theme or preset."
         },
         "materialxPlayground.defaultView": {
           "type": "string",

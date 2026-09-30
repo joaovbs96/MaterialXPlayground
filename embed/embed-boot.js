@@ -163,9 +163,11 @@
     // there before, default or previously-applied) if it fails validation.
     function applyTheme(name, value) {
         if (name === 'theme') {
-            // Invalid or cleared values behave as dark, the default; auto follows the OS.
+            // Unknown or cleared values behave as dark, the default; auto follows the OS.
+            // Any registry id (MtlxTheme.list()) is accepted.
             var t = String(value == null ? '' : value).trim().toLowerCase();
-            var pref = t === 'light' ? 'light' : (t === 'auto' ? 'system' : 'dark');
+            var known = window.MtlxTheme && window.MtlxTheme.list ? window.MtlxTheme.list() : [{ id: 'dark' }, { id: 'light' }];
+            var pref = t === 'auto' ? 'system' : (known.some(function (x) { return x.id === t; }) ? t : 'dark');
             if (window.MtlxTheme && window.MtlxTheme.setPreference) window.MtlxTheme.setPreference(pref, { persist: false });
             return;
         }

@@ -17,6 +17,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const actionsModel = require('./actionsModel');
 const { getThemePreference, setThemePreference } = require('./settingsHost');
+const { getThemeChoices } = require('./themeChoices');
 const exampleGallery = require('./exampleGallery');
 const galleryModel = require('./exampleGalleryModel');
 const exampleCatalog = require('./exampleCatalog');
@@ -237,6 +238,7 @@ class MtlxActionsViewProvider {
             hasMtlxTextEditor,
             about,
             theme: getThemePreference(),
+            themeChoices: getThemeChoices(),
         });
     }
 

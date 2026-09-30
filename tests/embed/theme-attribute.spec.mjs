@@ -1,4 +1,4 @@
-// tests/embed/theme-attribute.spec.mjs: the `theme` attribute (light | dark | auto)
+// tests/embed/theme-attribute.spec.mjs: the `theme` attribute (light | dark | auto | any registry id)
 // sets the iframe's data-theme, updates live without a reload, and never persists.
 
 import {
@@ -29,6 +29,29 @@ test('theme="light" and theme="dark" set the iframe theme', async ({ page, embed
     const { frame } = await open(page, embedURL, { theme: value });
     expect(await dataTheme(frame)).toBe(value);
   }
+});
+
+test('theme accepts a registry id such as hc-dark', async ({ page, embedURL }) => {
+  const { idx, frame } = await open(page, embedURL, { theme: 'hc-dark' });
+  expect(await dataTheme(frame)).toBe('hc-dark');
+  expect(await frame.evaluate(() => document.documentElement.dataset.themeBase)).toBe('dark');
+
+  await setProp(page, idx, 'theme', 'light');
+  await expect.poll(() => dataTheme(frame)).toBe('light');
+  await setProp(page, idx, 'theme', 'hc-dark');
+  await expect.poll(() => dataTheme(frame)).toBe('hc-dark');
+  const surface = () => frame.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--mtlx-surface-base').trim());
+  expect(await surface()).toBe('0 0 0');
+});
+
+test('a preset set live loads its stylesheet and switches without a reload', async ({ page, embedURL }) => {
+  const { idx, frame } = await open(page, embedURL, { theme: 'dark' });
+  await frame.evaluate(() => { window.__themeMarker = 1; });
+  await setProp(page, idx, 'theme', 'paper');
+  await expect.poll(() => dataTheme(frame)).toBe('paper');
+  expect(await frame.evaluate(() => document.documentElement.dataset.themeBase)).toBe('light');
+  expect(await frame.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--mtlx-surface-base').trim())).toBe('244 239 230');
+  expect(await frame.evaluate(() => window.__themeMarker)).toBe(1);
 });
 
 test('theme defaults to dark (missing or invalid) whatever the OS scheme', async ({ page, embedURL }) => {

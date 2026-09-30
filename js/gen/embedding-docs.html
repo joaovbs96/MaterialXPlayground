@@ -154,9 +154,9 @@ in-page, for reference while you work.</p>
 </tr>
 <tr>
 <td><code>theme</code></td>
-<td><code>dark</code>, <code>light</code>, <code>auto</code></td>
+<td><code>dark</code>, <code>light</code>, <code>auto</code>, or a theme id (see Theming)</td>
 <td><code>dark</code></td>
-<td>Light or dark look for the viewer&#39;s own UI, loading screen included. <code>auto</code> follows the visitor&#39;s OS setting live; an invalid value behaves as <code>dark</code>. Never persisted for an embed. See <a href="#theming">Theming</a>.</td>
+<td>Look of the viewer&#39;s own UI, loading screen included. <code>auto</code> follows the visitor&#39;s OS setting live; an unknown value behaves as <code>dark</code>. Never persisted for an embed. See <a href="#theming">Theming</a>.</td>
 </tr>
 <tr>
 <td><code>accent</code></td>
@@ -487,7 +487,7 @@ reloads the iframe (a real navigation, with a fresh <code>ready</code> handshake
 <tr>
 <td><code>theme</code></td>
 <td><code>.theme</code></td>
-<td><code>dark</code>, <code>light</code>, <code>auto</code></td>
+<td><code>dark</code>, <code>light</code>, <code>auto</code>, theme id</td>
 <td><code>dark</code></td>
 <td>Yes</td>
 </tr>
@@ -649,12 +649,47 @@ el.addEventListener(&#39;mtlx-renderables&#39;, (e) =&gt; console.log(&#39;mater
 el.addEventListener(&#39;mtlx-error&#39;, (e) =&gt; console.error(&#39;viewer error:&#39;, e.detail.message));
 </code></pre>
 <h2 id="theming">Theming</h2>
-<p>The <code>theme</code> param (<code>&lt;materialx-viewer theme=&quot;...&quot;&gt;</code>) picks <code>dark</code>, <code>light</code> or <code>auto</code>. The default,
-<code>dark</code>, applies when the attribute is missing or invalid. <code>light</code> switches the viewer to its light
+<p>The <code>theme</code> param (<code>&lt;materialx-viewer theme=&quot;...&quot;&gt;</code>) picks <code>dark</code>, <code>light</code>, <code>auto</code> or any theme id from
+the list below. The default, <code>dark</code>, applies when the attribute is missing or unknown. <code>light</code> switches the viewer to its light
 look, and <code>auto</code> follows the visitor&#39;s OS color scheme and reacts if it changes. Changing the
 attribute updates the running viewer in place, no reload. The choice is never saved for the
 visitor. It sets the base look, and <code>accent</code>, <code>surface</code> and <code>text</code> below still override it on top.
-The placeholder and the loading screen shown before the viewer is ready follow <code>theme</code> too.</p>
+The placeholder and the loading screen shown before the viewer is ready follow <code>theme</code> too. The host page
+only knows the light themes it was told about, so the placeholder uses dark colors for any other id until
+the viewer itself loads.</p>
+<p>Theme ids and labels:</p>
+<table>
+<thead>
+<tr>
+<th>Id</th>
+<th>Label</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>light</code></td>
+<td>Light</td>
+</tr>
+<tr>
+<td><code>dark</code></td>
+<td>Dark</td>
+</tr>
+<tr>
+<td><code>hc-dark</code></td>
+<td>High contrast dark</td>
+</tr>
+<tr>
+<td><code>hc-light</code></td>
+<td>High contrast light</td>
+</tr>
+<tr>
+<td><code>dim</code></td>
+<td>Dim</td>
+</tr>
+<tr>
+<td><code>paper</code></td>
+<td>Paper</td>
+</tr>
+</tbody></table>
 <p>Four params (<code>accent</code>, <code>surface</code>, <code>text</code>, <code>radius</code>) map to CSS custom properties consumed by
 <code>embed/embed-controls.css</code> (the HUD strip&#39;s own stylesheet), which defines them on <code>:root</code>
 with the defaults below as fallbacks:</p>

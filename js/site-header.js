@@ -115,23 +115,64 @@
         return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + inner + '</svg>';
     }
     var ICON_THEME = tablerSvg('<path d="M12 9a3 3 0 0 0 0 6v-6z" /><path d="M6 6h3.5l2.5 -2.5l2.5 2.5h3.5v3.5l2.5 2.5l-2.5 2.5v3.5h-3.5l-2.5 2.5l-2.5 -2.5h-3.5v-3.5l-2.5 -2.5l2.5 -2.5z" />');
-    var THEME_CHOICES = [
-        { value: 'light', label: 'Light', icon: tablerSvg('<path d="M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0" /><path d="M3 12h1m8 -9v1m8 8h1m-9 8v1m-6.4 -15.4l.7 .7m12.1 -.7l-.7 .7m0 11.4l.7 .7m-12.1 -.7l-.7 .7" />') },
-        { value: 'dark', label: 'Dark', icon: tablerSvg('<path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />') },
-        { value: 'system', label: 'System', icon: tablerSvg('<path d="M3 5a1 1 0 0 1 1 -1h16a1 1 0 0 1 1 1v10a1 1 0 0 1 -1 1h-16a1 1 0 0 1 -1 -1v-10z" /><path d="M7 20h10" /><path d="M9 16v4" /><path d="M15 16v4" />') },
-    ];
+    var THEME_ICONS = {
+        system: tablerSvg('<path d="M3 5a1 1 0 0 1 1 -1h16a1 1 0 0 1 1 1v10a1 1 0 0 1 -1 1h-16a1 1 0 0 1 -1 -1v-10z" /><path d="M7 20h10" /><path d="M9 16v4" /><path d="M15 16v4" />'),
+        light: tablerSvg('<path d="M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0" /><path d="M3 12h1m8 -9v1m8 8h1m-9 8v1m-6.4 -15.4l.7 .7m12.1 -.7l-.7 .7m0 11.4l.7 .7m-12.1 -.7l-.7 .7" />'),
+        dark: tablerSvg('<path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />'),
+        // Tabler contrast and palette.
+        contrast: tablerSvg('<path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M12 3v18" /><path d="M12 14l7 -7" /><path d="M12 19l8.5 -8.5" /><path d="M12 9l4.2 -4.2" />'),
+        palette: tablerSvg('<path d="M12 21a9 9 0 0 1 0 -18c4.97 0 9 3.582 9 8c0 1.06 -.474 2.078 -1.318 2.828c-.844 .75 -1.989 1.172 -3.182 1.172h-2.5a2 2 0 0 0 -1 3.75a1.3 1.3 0 0 1 -1 2.25" /><path d="M8.5 10.5m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /><path d="M12.5 7.5m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /><path d="M16.5 10.5m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />')
+    };
     var ICON_THEME_CHECK = tablerSvg('<path d="M5 12l5 5l10 -10" />').replace('<svg ', '<svg class="mtlx-theme-check" ');
-    var themeMenuHtml = THEME_CHOICES.map(function (c) {
+    function themeIcon(c) {
+        if (THEME_ICONS[c.id]) return THEME_ICONS[c.id];
+        return c.group === 'accessibility' ? THEME_ICONS.contrast : THEME_ICONS.palette;
+    }
+    function escAttr(v) { return String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+    // System first, then standard, then labeled Accessibility / Presets sections.
+    function themeSections() {
+        var list = (window.MtlxTheme && window.MtlxTheme.list && window.MtlxTheme.list()) || [];
+        function pick(g) { return list.filter(function (c) { return c.group === g; }); }
+        var top = [{ id: 'system', label: 'System', group: 'standard' }].concat(pick('standard'));
+        var more = [];
+        if (pick('accessibility').length) more.push({ label: 'Accessibility', items: pick('accessibility') });
+        if (pick('presets').length) more.push({ label: 'Presets', items: pick('presets') });
+        return { top: top, more: more };
+    }
+    function themeItemHtml(c) {
         return '<button type="button" role="menuitemradio" aria-checked="false" tabindex="-1"' +
-            ' class="mtlx-menu-item mtlx-theme-item" data-theme-choice="' + c.value + '">' +
-            c.icon + '<span class="mtlx-menu-label">' + c.label + '</span>' + ICON_THEME_CHECK +
+            ' class="mtlx-menu-item mtlx-theme-item" data-theme-choice="' + escAttr(c.id) + '">' +
+            themeIcon(c) + '<span class="mtlx-menu-label">' + escAttr(c.label) + '</span>' + ICON_THEME_CHECK +
             '</button>';
-    }).join('');
-    var themeRowHtml = THEME_CHOICES.map(function (c) {
-        return '<button type="button" role="radio" aria-checked="false" aria-label="' + c.label + '"' +
-            ' class="mtlx-theme-row-btn" data-theme-choice="' + c.value + '">' +
-            c.icon + '<span>' + c.label + '</span></button>';
-    }).join('');
+    }
+    function themeMenuHtml() {
+        var s = themeSections();
+        var html = s.top.map(themeItemHtml).join('');
+        if (s.more.length) {
+            html += '<div class="mtlx-theme-sep" role="separator"></div><div class="mtlx-theme-more" role="presentation">More themes</div>';
+            s.more.forEach(function (g) {
+                html += '<div class="mtlx-theme-group" role="presentation">' + g.label + '</div>' + g.items.map(themeItemHtml).join('');
+            });
+        }
+        return html;
+    }
+    function themeRowHtml() {
+        var s = themeSections();
+        var html = s.top.map(function (c) {
+            return '<button type="button" role="radio" aria-checked="false" aria-label="' + escAttr(c.label) + '"' +
+                ' class="mtlx-theme-row-btn" data-theme-choice="' + escAttr(c.id) + '">' +
+                themeIcon(c) + '<span>' + escAttr(c.label) + '</span></button>';
+        }).join('');
+        if (s.more.length) {
+            html += '<select class="mtlx-theme-more-select" aria-label="More themes" data-theme-more="1">' +
+                '<option value="">More</option>' + s.more.map(function (g) {
+                    return '<optgroup label="' + g.label + '">' + g.items.map(function (c) {
+                        return '<option value="' + escAttr(c.id) + '">' + escAttr(c.label) + '</option>';
+                    }).join('') + '</optgroup>';
+                }).join('') + '</select>';
+        }
+        return html;
+    }
 
     // Update-banner icon (alert-triangle), paths only, hand-copied from
     // window.MTLX_ICON_PATHS in js/shared/ui-commons.js, same
@@ -496,7 +537,7 @@
                             ICON_THEME +
                         '</button>' +
                         '<div id="mtlx-theme-menu" class="mtlx-menu mtlx-theme-menu" role="menu"' +
-                            ' aria-labelledby="mtlx-theme-btn">' + themeMenuHtml + '</div>' +
+                            ' aria-labelledby="mtlx-theme-btn"></div>' +
                     '</div>' +
                     // About button, immediately left of the GitHub widget.
                     // Dispatches an event for js/shell.jsx's AboutDialog to
@@ -564,7 +605,7 @@
                 // the extension's sidebar instead).
                 (window.__MTLX_VSCODE__ ? '' :
                 '<div class="mtlx-mobile-links">' +
-                    '<div id="mtlx-theme-row" class="mtlx-theme-row" role="radiogroup" aria-label="Theme">' + themeRowHtml + '</div>' +
+                    '<div id="mtlx-theme-row" class="mtlx-theme-row" role="radiogroup" aria-label="Theme"></div>' +
                     // .mtlx-mobile-link-brand adds a flex row (icon + text)
                     // over .mtlx-mobile-link's flat styling, kept separate
                     // from .mtlx-source-mobile (its gap suits a square glyph).
@@ -799,13 +840,31 @@
         var row = document.getElementById('mtlx-theme-row');
         var T = window.MtlxTheme;
         if (!T) return;
-        var items = menu ? Array.prototype.slice.call(menu.querySelectorAll('[role="menuitemradio"]')) : [];
-        var radios = row ? Array.prototype.slice.call(row.querySelectorAll('[role="radio"]')) : [];
+        var items = [];
+        var radios = [];
+        var moreSel = null;
+        // Menu is rebuilt on every open so it reflects the live registry.
+        function build() {
+            if (!menu) return;
+            menu.innerHTML = themeMenuHtml();
+            items = Array.prototype.slice.call(menu.querySelectorAll('[role="menuitemradio"]'));
+        }
+        if (row) {
+            row.innerHTML = themeRowHtml();
+            radios = Array.prototype.slice.call(row.querySelectorAll('[role="radio"]'));
+            moreSel = row.querySelector('[data-theme-more]');
+        }
+        build();
         function sync() {
             var pref = T.getPreference();
             items.concat(radios).forEach(function (el) {
                 el.setAttribute('aria-checked', el.getAttribute('data-theme-choice') === pref ? 'true' : 'false');
             });
+            if (moreSel) {
+                moreSel.value = pref;
+                if (moreSel.value !== pref) moreSel.value = '';
+                moreSel.classList.toggle('is-active', moreSel.value !== '');
+            }
         }
         function isOpen() { return !!menu && menu.classList.contains('is-open'); }
         function close(restoreFocus) {
@@ -815,6 +874,8 @@
             if (restoreFocus) btn.focus();
         }
         function open(focus) {
+            build();
+            sync();
             menu.classList.add('is-open');
             btn.setAttribute('aria-expanded', 'true');
             if (focus === 'checked') {
@@ -852,6 +913,9 @@
             row.addEventListener('click', function (e) {
                 var it = e.target.closest && e.target.closest('[data-theme-choice]');
                 if (it) T.setPreference(it.getAttribute('data-theme-choice'));
+            });
+            if (moreSel) moreSel.addEventListener('change', function () {
+                if (moreSel.value) T.setPreference(moreSel.value);
             });
         }
         sync();

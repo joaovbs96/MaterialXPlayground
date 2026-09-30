@@ -71,14 +71,19 @@
             if (['1', 'true', 'yes', 'on'].indexOf(v) !== -1) {
                 document.documentElement.style.setProperty('--mtlx-page-bg', 'transparent');
             }
-            // `theme` (dark | light | auto): read before theme.js; an embed never persists it.
-            // Absent or invalid means dark; auto follows the visitor's OS.
-            var t = (new URLSearchParams(window.location.search).get('theme') || '').trim().toLowerCase();
-            window.__MTLX_THEME_PREF__ = t === 'light' ? 'light' : (t === 'auto' ? 'system' : 'dark');
-            window.__MTLX_THEME_NO_PERSIST__ = true;
         })();
     </script>
     <script src="js/shared/theme-tokens.js"></script>
+    <script>
+        // `theme` (auto or a registry id): read before theme.js, so a preset loads before first paint; never persisted.
+        // Absent or unknown means dark; auto follows the visitor's OS.
+        (function () {
+            var t = (new URLSearchParams(window.location.search).get('theme') || '').trim().toLowerCase();
+            var reg = (window.MTLX_THEME_TOKENS && window.MTLX_THEME_TOKENS.registry) || [];
+            window.__MTLX_THEME_PREF__ = t === 'auto' ? 'system' : (reg.some(function (e) { return e.id === t; }) ? t : 'dark');
+            window.__MTLX_THEME_NO_PERSIST__ = true;
+        })();
+    </script>
     <script src="js/shared/theme.js"></script>
     <link rel="stylesheet" href="js/gen/theme-tokens.css">
     <!-- Token utility rules go BEFORE embed.css so its hand rules (bg-transparent) still win, as the old palette mirrors did. -->

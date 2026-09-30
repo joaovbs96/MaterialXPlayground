@@ -1530,3 +1530,78 @@ export const knownDarkFailures = [
     "line-control|surface-raised",
     "line-control|surface-base",
 ];
+
+// Presets resolved by scripts/build-theme.mjs through js/shared/theme-engine.js (deriveTheme, then enforceContrast
+// at the registry's contrast level) into js/gen/themes/<id>.css and .js. Every non-dark, non-light registry id needs
+// one. seeds and overrides are partial: a missing seed comes from the base theme, a missing token from its recipe.
+export const presets = {
+    "hc-dark": {
+        base: "dark",
+        seeds: { background: "#000000", foreground: "#ffffff", accent: "#3b82f6" },
+        params: { alpha: { hudPopover: 1, accentFillTranslucent: 1 } },
+        overrides: {
+            "line-subtle": "#525252",
+            "line": "#737373",
+            "line-control": "#a3a3a3",
+            "line-strong": "#a3a3a3",
+            "line-heavy": "#d4d4d4",
+            "hud-line": "#a3a3a3",
+            "notice-line": "#a3a3a3",
+            "graph-node-line": "#a3a3a3",
+            "graph-node-line-iface": "#d4d4d4",
+            "scrollbar-thumb": "#a3a3a3",
+            "focus": "#93c5fd",
+            "accent-fill": "#1e40af",
+            "accent-fill-hover": "#1e3a8a",
+            "accent-fill-pressed": "#172554",
+            "accent-fill-translucent": "#1e40af",
+            "accent-fill-translucent-hover": "#1e3a8a",
+            "selection": "#1e40af",
+            "success-fill": "#166534",
+            "error-fill": "#991b1b",
+            "error-fill-hover": "#7f1d1d",
+        },
+    },
+    "hc-light": {
+        base: "light",
+        seeds: { background: "#ffffff", foreground: "#000000", accent: "#1d4ed8" },
+        params: { alpha: { hudPopover: 1, accentFillTranslucent: 1 } },
+        overrides: {
+            "accent-base": "#1d4ed8",
+            "line-subtle": "#a3a3a3",
+            "line": "#737373",
+            "line-control": "#404040",
+            "line-strong": "#404040",
+            "line-heavy": "#262626",
+            "hud-line": "#404040",
+            "notice-line": "#404040",
+            "graph-node-line": "#525252",
+            "graph-node-line-iface": "#262626",
+            "scrollbar-thumb": "#525252",
+            "focus": "#1d4ed8",
+            "accent-fill": "#1e40af",
+            "accent-fill-hover": "#1e3a8a",
+            "accent-fill-pressed": "#172554",
+            "accent-fill-translucent": "#1e40af",
+            "accent-fill-translucent-hover": "#1e3a8a",
+            "selection": "#1d4ed8",
+            "success-fill": "#166534",
+            "error-fill": "#991b1b",
+            "error-fill-hover": "#7f1d1d",
+        },
+    },
+    "dim": {
+        base: "dark",
+        seeds: { background: "#1f2430", foreground: "#e3e7ee", accent: "#4c8df6" },
+        overrides: {
+            "accent-fill": "#2563eb",
+            "accent-fill-translucent": "#2563eb",
+            "success-fill": "#15803d",
+        },
+    },
+    "paper": {
+        base: "light",
+        seeds: { background: "#f4efe6", foreground: "#2a2520", accent: "#2b5bd7" },
+        overrides: {},
+    },
+};

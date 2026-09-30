@@ -94,6 +94,8 @@ window.MTLX_DIFFUSE_ENV = 'sh';
     // Theme attributes forwarded verbatim as `setTheme` messages — see
     // embed-boot.js's THEME_VARS/applyTheme, which does the actual
     // CSS.supports() validation on the other side of the iframe boundary.
+    // Light-base theme ids for the placeholder; a unit test keeps this equal to the registry.
+    var LIGHT_THEME_IDS = ['light', 'hc-light', 'paper'];
     var THEME_ATTRS = { accent: 1, surface: 1, text: 1, radius: 1, theme: 1 };
 
     // `displacement` off-like spellings, see the `displacement` getter.
@@ -330,7 +332,8 @@ window.MTLX_DIFFUSE_ENV = 'sh';
             // Placeholder colors mirror the theme tokens surface-base and fg-muted.
             style.textContent =
                 ':host{--ph-bg:#111827;--ph-fg:#9ca3af;}' +
-                ':host([theme="light" i]){--ph-bg:#f3f4f6;--ph-fg:#4b5563;}' +
+                // The host page has no registry: known light-base ids get the light literals, anything else dark.
+                LIGHT_THEME_IDS.map(function (id) { return ':host([theme="' + id + '" i])'; }).join(',') + '{--ph-bg:#f3f4f6;--ph-fg:#4b5563;}' +
                 '@media (prefers-color-scheme:light){:host([theme="auto" i]){--ph-bg:#f3f4f6;--ph-fg:#4b5563;}}' +
                 ':host{display:block;position:relative;width:100%;aspect-ratio:16/9;' +
                 'background:var(--ph-bg);overflow:hidden;box-sizing:border-box;}' +
