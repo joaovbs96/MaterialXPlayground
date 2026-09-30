@@ -7201,6 +7201,15 @@ const envIrradianceForShading = (env) => {
     return env.irradiance;
 };
 
+// Runs the idempotent, retryable prefilter/convolve (no-op past the first
+// try) then reads back the pair to bind, so the FIRST build matches what
+// the shader was generated for, the same way setEnvironment already does.
+const resolveShadingEnv = (renderer, env) => {
+    ensurePrefilteredEnv(renderer, env);
+    ensureConvolvedIrradiance(renderer, env);
+    return { radiance: envRadianceForShading(env), irradiance: envIrradianceForShading(env) };
+};
+
 const buildEnvFromParsedTexture = (raw) => {
     // Extraction mutates raw's pixels (clamps the sun) BEFORE mips/SH/
     // background are built below, so it disappears from all three,
@@ -11195,7 +11204,8 @@ const createMtlxRenderView = async ({
                     const radianceSrc = env ? env.radiance : makeEnvTexture(256, 128, false);
                     if (needsLighting) {
                         if (env) {
-                            envRadiance = envRadianceForShading(env); envIrradiance = envIrradianceForShading(env); envMips = env.mips;
+                            const shaded = resolveShadingEnv(renderer, env);
+                            envRadiance = shaded.radiance; envIrradiance = shaded.irradiance; envMips = env.mips;
                             envBgTexture = env.background;
                             envHasFile = true;
                             envPrefilteredIrr = !!env.prefilteredIrr;
@@ -12382,16 +12392,15 @@ const createMtlxRenderView = async ({
             // scene-mode's PMREM. No-op on views with no lighting/env.
             setEnvironment: (env) => {
                 if (!env) return;
-                ensurePrefilteredEnv(renderer, env);
-                ensureConvolvedIrradiance(renderer, env);
-                if (envRadSamplerName && uniforms[envRadSamplerName]) uniforms[envRadSamplerName].value = envRadianceForShading(env);
-                if (envIrrSamplerName && uniforms[envIrrSamplerName]) uniforms[envIrrSamplerName].value = envIrradianceForShading(env);
+                const shaded = resolveShadingEnv(renderer, env);
+                if (envRadSamplerName && uniforms[envRadSamplerName]) uniforms[envRadSamplerName].value = shaded.radiance;
+                if (envIrrSamplerName && uniforms[envIrrSamplerName]) uniforms[envIrrSamplerName].value = shaded.irradiance;
                 if (uniforms.u_envRadianceMips) uniforms.u_envRadianceMips.value = env.mips;
                 // Persist onto the SHELL env state too, not just the
                 // current material's uniforms, otherwise a future swap
                 // silently reverts to the stale env.
-                envRadiance = envRadianceForShading(env);
-                envIrradiance = envIrradianceForShading(env);
+                envRadiance = shaded.radiance;
+                envIrradiance = shaded.irradiance;
                 envMips = env.mips;
                 envBgTexture = env.background;
                 // New env => possibly a new (or no) key light; refresh the
@@ -12955,7 +12964,7 @@ Object.assign(window, {
     createMtlxRenderView, compileMtlxSceneMaterial, createMtlxSceneUniforms, createLightTransportUniforms,
     generatePreviewSources, generatePreviewSourcesWithinBudget,
     evaluateDisplacement, generateDisplacementSourcesUnlocked, detectDisplacementMode,
-    ensurePrefilteredEnv, getSpecularEnvMethod,
+    ensurePrefilteredEnv, resolveShadingEnv, getSpecularEnvMethod,
     ensureConvolvedIrradiance, envIrradianceForShading, getDiffuseEnvMethod, setDiffuseEnvMethod,
     getDummyTexWhite, getDummyTex3DWhite,
     SHADOW_FACE_SLOTS, SHADOW_LIGHT_SLOTS_MAX,
