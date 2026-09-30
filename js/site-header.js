@@ -168,15 +168,24 @@
                 ' class="mtlx-theme-row-btn" data-theme-choice="' + escAttr(c.id) + '">' +
                 themeIcon(c) + '<span>' + escAttr(c.label) + '</span></button>';
         }).join('');
-        if (s.more.length) {
-            html += '<select class="mtlx-theme-more-select" aria-label="More themes" data-theme-more="1">' +
-                '<option value="">More</option>' + s.more.map(function (g) {
-                    return '<optgroup label="' + g.label + '">' + g.items.map(function (c) {
-                        return '<option value="' + escAttr(c.id) + '">' + escAttr(c.label) + '</option>';
-                    }).join('') + '</optgroup>';
-                }).join('') + '</select>';
-        }
         return html;
+    }
+
+    // Mobile disclosure: toggle row plus grouped rows, same markup as the popup.
+    var ICON_CHEVRON = tablerSvg('<path d="M6 9l6 6l6 -6" />').replace('<svg ', '<svg class="mtlx-theme-chev" ');
+    function themeMoreHtml() {
+        var s = themeSections();
+        if (!s.more.length) return '';
+        var list = s.more.map(function (g) {
+            return '<div class="mtlx-theme-group" role="presentation">' + g.label + '</div>' +
+                g.items.map(function (c) {
+                    return themeItemHtml(c).replace('role="menuitemradio"', 'role="radio"');
+                }).join('');
+        }).join('');
+        return '<button type="button" id="mtlx-theme-more-btn" class="mtlx-menu-item mtlx-theme-more-btn"' +
+            ' aria-expanded="false" aria-controls="mtlx-theme-more-list">' +
+            '<span class="mtlx-menu-label">More themes</span>' + ICON_CHEVRON + '</button>' +
+            '<div id="mtlx-theme-more-list" class="mtlx-theme-more-list" role="radiogroup" aria-label="More themes" hidden>' + list + '</div>';
     }
 
     // Update-banner icon (alert-triangle), paths only, hand-copied from
@@ -611,6 +620,7 @@
                 (window.__MTLX_VSCODE__ ? '' :
                 '<div class="mtlx-mobile-links">' +
                     '<div id="mtlx-theme-row" class="mtlx-theme-row" role="radiogroup" aria-label="Theme"></div>' +
+                    '<div id="mtlx-theme-more" class="mtlx-theme-morewrap"></div>' +
                     // .mtlx-mobile-link-brand adds a flex row (icon + text)
                     // over .mtlx-mobile-link's flat styling, kept separate
                     // from .mtlx-source-mobile (its gap suits a square glyph).
@@ -847,7 +857,9 @@
         if (!T) return;
         var items = [];
         var radios = [];
-        var moreSel = null;
+        var moreBtn = null;
+        var moreList = null;
+        var moreItems = [];
         // Menu is rebuilt on every open so it reflects the live registry.
         function build() {
             if (!menu) return;
@@ -857,18 +869,29 @@
         if (row) {
             row.innerHTML = themeRowHtml();
             radios = Array.prototype.slice.call(row.querySelectorAll('[role="radio"]'));
-            moreSel = row.querySelector('[data-theme-more]');
+        }
+        var moreWrap = document.getElementById('mtlx-theme-more');
+        if (moreWrap) {
+            moreWrap.innerHTML = themeMoreHtml();
+            moreBtn = moreWrap.querySelector('#mtlx-theme-more-btn');
+            moreList = moreWrap.querySelector('#mtlx-theme-more-list');
+            if (moreList) moreItems = Array.prototype.slice.call(moreList.querySelectorAll('[role="radio"]'));
+        }
+        function setMore(on) {
+            if (!moreBtn) return;
+            moreList.hidden = !on;
+            moreBtn.setAttribute('aria-expanded', on ? 'true' : 'false');
         }
         build();
         function sync() {
             var pref = T.getPreference();
-            items.concat(radios).forEach(function (el) {
+            items.concat(radios, moreItems).forEach(function (el) {
                 el.setAttribute('aria-checked', el.getAttribute('data-theme-choice') === pref ? 'true' : 'false');
             });
-            if (moreSel) {
-                moreSel.value = pref;
-                if (moreSel.value !== pref) moreSel.value = '';
-                moreSel.classList.toggle('is-active', moreSel.value !== '');
+            var inMore = moreItems.some(function (el) { return el.getAttribute('aria-checked') === 'true'; });
+            if (moreBtn) {
+                moreBtn.classList.toggle('is-active', inMore);
+                if (inMore) setMore(true);
             }
         }
         function isOpen() { return !!menu && menu.classList.contains('is-open'); }
@@ -919,8 +942,28 @@
                 var it = e.target.closest && e.target.closest('[data-theme-choice]');
                 if (it) T.setPreference(it.getAttribute('data-theme-choice'));
             });
-            if (moreSel) moreSel.addEventListener('change', function () {
-                if (moreSel.value) T.setPreference(moreSel.value);
+        }
+        if (moreBtn) {
+            moreBtn.addEventListener('click', function () { setMore(moreList.hidden); });
+            moreBtn.addEventListener('keydown', function (e) {
+                if (e.key === 'ArrowDown') { e.preventDefault(); setMore(true); moreItems[0].focus(); }
+                else if (e.key === 'ArrowRight' && moreList.hidden) { e.preventDefault(); setMore(true); }
+                else if (e.key === 'ArrowLeft' && !moreList.hidden) { e.preventDefault(); setMore(false); }
+            });
+            moreList.addEventListener('click', function (e) {
+                var it = e.target.closest && e.target.closest('[data-theme-choice]');
+                if (it) T.setPreference(it.getAttribute('data-theme-choice'));
+            });
+            moreList.addEventListener('keydown', function (e) {
+                var idx = moreItems.indexOf(document.activeElement);
+                if (e.key === 'ArrowDown') { e.preventDefault(); moreItems[(idx + 1) % moreItems.length].focus(); }
+                else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    if (idx <= 0) moreBtn.focus(); else moreItems[idx - 1].focus();
+                }
+                else if (e.key === 'Home') { e.preventDefault(); moreItems[0].focus(); }
+                else if (e.key === 'End') { e.preventDefault(); moreItems[moreItems.length - 1].focus(); }
+                else if (e.key === 'Escape') { e.preventDefault(); setMore(false); moreBtn.focus(); }
             });
         }
         sync();
