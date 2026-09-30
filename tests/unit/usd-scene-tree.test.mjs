@@ -94,7 +94,7 @@ test('Cameras start with the default camera; Lights with the environment', () =>
   assert.equal(cameras[0].isDefaultCamera, true);
   assert.equal(cameras[0].name, 'Default camera');
   assert.equal(cameras[2].name, 'RigCam');
-  assert.equal(model.cameraCount, 2, 'the default camera is not a scene item');
+  assert.equal(model.cameraCount, 3, 'the default camera counts, like the environment light');
   const lights = model.groups.lights.children;
   assert.deepEqual(ids(lights), ['light:environment', 'light:/World/Sun', 'light:/World/Lamps/Key']);
   assert.equal(lights[0].isEnvironment, true);

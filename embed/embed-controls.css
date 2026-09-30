@@ -94,6 +94,26 @@
     color: #fff;
 }
 
+/* Screenshot/record divided pill: labels stay visible in compact mode. */
+.mtlx-ec-split {
+    display: inline-flex;
+    align-items: stretch;
+}
+.mtlx-ec-split .mtlx-ec-btn,
+.mtlx-ec--compact .mtlx-ec-split .mtlx-ec-btn {
+    width: auto;
+    padding: 0 7px;
+}
+.mtlx-ec-split-main {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}
+.mtlx-ec-split-record {
+    margin-left: -1px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+}
+
 .mtlx-ec-icon {
     width: 14px;
     height: 14px;

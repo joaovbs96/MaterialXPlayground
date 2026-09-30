@@ -2443,30 +2443,62 @@ const ViewportControls = ({
                         )}
                     </React.Fragment>
                 ) : null;
-            case 'screenshot':
-                return showScreenshot ? (
+            case 'screenshot': {
+                const recordAvail = !!(showRecord && onRecord);
+                if (showScreenshot && recordAvail) {
+                    // One divided pill, labels always shown. Halves share the outer
+                    // rounding and a single divider (collapsed borders).
+                    return (
+                        <span key="screenshot" data-testid="capture-split" style={{ display: 'inline-flex', alignItems: 'stretch', flex: 'none' }}>
+                            <button
+                                onClick={onScreenshot}
+                                title="Save a PNG preview of the current view"
+                                data-testid="capture-screenshot"
+                                className={buttonClassName(false)}
+                                style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0, width: 'auto', paddingLeft: 8, paddingRight: 8, gap: 6 }}
+                            >
+                                <MtlxIcon name="camera" className="w-3.5 h-3.5" />
+                                <span className="whitespace-nowrap">Screenshot</span>
+                            </button>
+                            <button
+                                onClick={onRecord}
+                                title="Record a 360° turntable GIF"
+                                data-testid="capture-record"
+                                className={buttonClassName(false)}
+                                style={{ borderTopLeftRadius: 0, borderBottomLeftRadius: 0, marginLeft: -1, width: 'auto', paddingLeft: 8, paddingRight: 8 }}
+                            >
+                                <span className="whitespace-nowrap">Turntable</span>
+                            </button>
+                        </span>
+                    );
+                }
+                if (showScreenshot) {
+                    return (
+                        <button
+                            key="screenshot"
+                            onClick={onScreenshot}
+                            title="Save a PNG preview of the current view"
+                            className={buttonClassName(false)}
+                        >
+                            <MtlxIcon name="camera" className="w-3.5 h-3.5" />
+                            {showLabels && <span className="ml-1.5 whitespace-nowrap">Screenshot</span>}
+                        </button>
+                    );
+                }
+                return recordAvail ? (
                     <button
                         key="screenshot"
-                        onClick={onScreenshot}
-                        title="Save a PNG preview of the current view"
-                        className={buttonClassName(false)}
-                    >
-                        <MtlxIcon name="camera" className="w-3.5 h-3.5" />
-                        {showLabels && <span className="ml-1.5 whitespace-nowrap">Screenshot</span>}
-                    </button>
-                ) : null;
-            case 'record':
-                return (showRecord && onRecord) ? (
-                    <button
-                        key="record"
                         onClick={onRecord}
                         title="Record a 360° turntable GIF"
                         className={buttonClassName(false)}
                     >
-                        <MtlxIcon name="player-record" className="w-3.5 h-3.5" />
-                        {showLabels && <span className="ml-1.5 whitespace-nowrap">Record</span>}
+                        <MtlxIcon name="camera" className="w-3.5 h-3.5" />
+                        {showLabels && <span className="ml-1.5 whitespace-nowrap">Turntable</span>}
                     </button>
                 ) : null;
+            }
+            case 'record':
+                return null;
             case 'settings':
                 return showSettings ? (
                     <button

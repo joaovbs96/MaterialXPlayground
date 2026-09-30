@@ -2741,29 +2741,81 @@ const ViewportControls = ({
           importError: envImportError
         })) : null;
       case 'screenshot':
-        return showScreenshot ? /*#__PURE__*/React.createElement("button", {
-          key: "screenshot",
-          onClick: onScreenshot,
-          title: "Save a PNG preview of the current view",
-          className: buttonClassName(false)
-        }, /*#__PURE__*/React.createElement(MtlxIcon, {
-          name: "camera",
-          className: "w-3.5 h-3.5"
-        }), showLabels && /*#__PURE__*/React.createElement("span", {
-          className: "ml-1.5 whitespace-nowrap"
-        }, "Screenshot")) : null;
+        {
+          const recordAvail = !!(showRecord && onRecord);
+          if (showScreenshot && recordAvail) {
+            // One divided pill, labels always shown. Halves share the outer
+            // rounding and a single divider (collapsed borders).
+            return /*#__PURE__*/React.createElement("span", {
+              key: "screenshot",
+              "data-testid": "capture-split",
+              style: {
+                display: 'inline-flex',
+                alignItems: 'stretch',
+                flex: 'none'
+              }
+            }, /*#__PURE__*/React.createElement("button", {
+              onClick: onScreenshot,
+              title: "Save a PNG preview of the current view",
+              "data-testid": "capture-screenshot",
+              className: buttonClassName(false),
+              style: {
+                borderTopRightRadius: 0,
+                borderBottomRightRadius: 0,
+                width: 'auto',
+                paddingLeft: 8,
+                paddingRight: 8,
+                gap: 6
+              }
+            }, /*#__PURE__*/React.createElement(MtlxIcon, {
+              name: "camera",
+              className: "w-3.5 h-3.5"
+            }), /*#__PURE__*/React.createElement("span", {
+              className: "whitespace-nowrap"
+            }, "Screenshot")), /*#__PURE__*/React.createElement("button", {
+              onClick: onRecord,
+              title: "Record a 360\xB0 turntable GIF",
+              "data-testid": "capture-record",
+              className: buttonClassName(false),
+              style: {
+                borderTopLeftRadius: 0,
+                borderBottomLeftRadius: 0,
+                marginLeft: -1,
+                width: 'auto',
+                paddingLeft: 8,
+                paddingRight: 8
+              }
+            }, /*#__PURE__*/React.createElement("span", {
+              className: "whitespace-nowrap"
+            }, "Turntable")));
+          }
+          if (showScreenshot) {
+            return /*#__PURE__*/React.createElement("button", {
+              key: "screenshot",
+              onClick: onScreenshot,
+              title: "Save a PNG preview of the current view",
+              className: buttonClassName(false)
+            }, /*#__PURE__*/React.createElement(MtlxIcon, {
+              name: "camera",
+              className: "w-3.5 h-3.5"
+            }), showLabels && /*#__PURE__*/React.createElement("span", {
+              className: "ml-1.5 whitespace-nowrap"
+            }, "Screenshot"));
+          }
+          return recordAvail ? /*#__PURE__*/React.createElement("button", {
+            key: "screenshot",
+            onClick: onRecord,
+            title: "Record a 360\xB0 turntable GIF",
+            className: buttonClassName(false)
+          }, /*#__PURE__*/React.createElement(MtlxIcon, {
+            name: "camera",
+            className: "w-3.5 h-3.5"
+          }), showLabels && /*#__PURE__*/React.createElement("span", {
+            className: "ml-1.5 whitespace-nowrap"
+          }, "Turntable")) : null;
+        }
       case 'record':
-        return showRecord && onRecord ? /*#__PURE__*/React.createElement("button", {
-          key: "record",
-          onClick: onRecord,
-          title: "Record a 360\xB0 turntable GIF",
-          className: buttonClassName(false)
-        }, /*#__PURE__*/React.createElement(MtlxIcon, {
-          name: "player-record",
-          className: "w-3.5 h-3.5"
-        }), showLabels && /*#__PURE__*/React.createElement("span", {
-          className: "ml-1.5 whitespace-nowrap"
-        }, "Record")) : null;
+        return null;
       case 'settings':
         return showSettings ? /*#__PURE__*/React.createElement("button", {
           key: "settings",
