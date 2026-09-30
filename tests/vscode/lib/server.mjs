@@ -4,46 +4,8 @@
 
 import http from 'node:http';
 import fs from 'node:fs';
-import path from 'node:path';
 import { VSCE_VERSION } from '../../../scripts/lib/vsce.mjs';
-
-const MIME = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.wasm': 'application/wasm',
-  '.data': 'application/octet-stream',
-  '.glb': 'model/gltf-binary',
-  '.exr': 'application/octet-stream',
-  '.hdr': 'application/octet-stream',
-  '.mtlx': 'application/xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon',
-};
-
-function mimeFor(filePath) {
-  return MIME[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
-}
-
-function resolveSafePath(root, pathname) {
-  let decoded;
-  try {
-    decoded = decodeURIComponent(pathname);
-  } catch (e) {
-    return null;
-  }
-  const resolvedRoot = path.resolve(root);
-  if (decoded.includes('\0')) return null;
-  decoded = decoded.replaceAll('\\', '/');
-  const full = path.resolve(resolvedRoot, '.' + decoded);
-  if (full !== resolvedRoot && !full.startsWith(resolvedRoot + path.sep)) return null;
-  return full;
-}
+import { mimeFor, resolveSafePath, listenLocal } from '../../lib/static-server.mjs';
 
 /** Starts a whitelist-only static server rooted at `root`. `allowedFiles`
  * is a Set of repo-relative paths (forward slashes, no leading '/') -
@@ -85,17 +47,7 @@ export function startWhitelistServer({ root, allowedFiles }) {
     });
   });
 
-  return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const { port } = server.address();
-      resolve({
-        port,
-        baseURL: `http://127.0.0.1:${port}`,
-        close: () => new Promise((r) => server.close(() => r())),
-      });
-    });
-  });
+  return listenLocal(server);
 }
 
 /** Runs `npx --yes @vscode/vsce@<VSCE_VERSION> ls --no-dependencies` (or reads

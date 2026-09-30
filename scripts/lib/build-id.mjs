@@ -53,23 +53,16 @@ function assertStampMatchesOnce(content) {
  * js/gen/build-id.json specifically. Sorted by POSIX relative path. */
 async function collectJsInputPaths() {
   const out = [];
-  async function walk(dirAbs) {
-    const entries = await readdir(dirAbs, { withFileTypes: true });
-    for (const entry of entries) {
-      const abs = path.join(dirAbs, entry.name);
-      const relToJs = toPosix(path.relative(JS_ROOT, abs));
-      if (entry.isDirectory()) {
-        if (relToJs === "materialx" || relToJs.startsWith("materialx/")) continue;
-        await walk(abs);
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      if (!INPUT_EXTENSIONS.has(path.extname(entry.name))) continue;
-      if (relToJs === "gen/build-id.json") continue;
-      out.push(abs);
-    }
+  const entries = await readdir(JS_ROOT, { recursive: true, withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const abs = path.join(entry.parentPath, entry.name);
+    const relToJs = toPosix(path.relative(JS_ROOT, abs));
+    if (relToJs === "materialx" || relToJs.startsWith("materialx/")) continue;
+    if (!INPUT_EXTENSIONS.has(path.extname(entry.name))) continue;
+    if (relToJs === "gen/build-id.json") continue;
+    out.push(abs);
   }
-  await walk(JS_ROOT);
   out.sort((a, b) => toPosix(path.relative(REPO_ROOT, a)).localeCompare(toPosix(path.relative(REPO_ROOT, b))));
   return out;
 }

@@ -12,13 +12,25 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import * as Babel from "@babel/standalone";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, "..");
 
-const CHECK_MODE = process.argv.includes("--check");
+let cliValues;
+try {
+  ({ values: cliValues } = parseArgs({
+    args: process.argv.slice(2),
+    options: { check: { type: "boolean" } },
+    strict: true,
+  }));
+} catch (err) {
+  console.error(`error: ${err.message}`);
+  process.exit(1);
+}
+const CHECK_MODE = !!cliValues.check;
 
 // ---------------------------------------------------------------------
 // Drift guard: embed/viewer.html is HAND-WRITTEN (see its own header

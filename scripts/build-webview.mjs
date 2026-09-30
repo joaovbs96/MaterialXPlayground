@@ -10,6 +10,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,7 +20,18 @@ const INDEX_PATH = path.join(REPO_ROOT, "index.html");
 const OUTPUT_PATH = path.join(REPO_ROOT, "vscode_extension", "media", "webview.html");
 const RELATIVE_OUTPUT_PATH = path.relative(REPO_ROOT, OUTPUT_PATH);
 
-const CHECK_MODE = process.argv.includes("--check");
+let cliValues;
+try {
+  ({ values: cliValues } = parseArgs({
+    args: process.argv.slice(2),
+    options: { check: { type: "boolean" } },
+    strict: true,
+  }));
+} catch (err) {
+  console.error(`error: ${err.message}`);
+  process.exit(1);
+}
+const CHECK_MODE = !!cliValues.check;
 
 // Canonicalize to LF so anchor matching and the --check byte-compare
 // are unaffected by git's autocrlf setting (.gitattributes pins these

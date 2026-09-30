@@ -490,6 +490,11 @@ function MaterialViewerApp({
   const [presetPickerOpen, setPresetPickerOpen] = React.useState(false);
   // Shader export dialog ("Export Shader Code" overlay button).
   const [shaderExportOpen, setShaderExportOpen] = React.useState(false);
+  // Kept current every render: blocks the page-wide file-drop hook
+  // while the export dialog or the presets picker is open, so a
+  // stray drop can't clobber the document underneath either one.
+  const dropBlockedRef = React.useRef(false);
+  dropBlockedRef.current = shaderExportOpen || presetPickerOpen;
   // True from "parsing a document" until the render view is live (or
   // failed) — drives the loading bar in the viewport. Covers first
   // load AND every material/geometry regeneration.
@@ -606,10 +611,17 @@ function MaterialViewerApp({
     // (renderedMtlx), not the requested value (chosenMtlx);
     // a failed switch leaves those two disagreeing.
     const name = (renderedMtlx || 'material').replace(/\.mtlx$/i, '').split('/').pop();
+    // Carry the .mxsl Original across too, so the editor's Export
+    // dialog keeps offering it instead of losing it on handoff.
+    const mxsl = mxslOriginal ? {
+      source: mxslOriginal.source,
+      filename: mxslOriginal.filename
+    } : null;
     openInGraphEditor({
       xml,
       name,
-      files
+      files,
+      mxsl
     });
   };
 
@@ -645,7 +657,12 @@ function MaterialViewerApp({
     await window.mtlxLoadViewDeps('galleryDetail');
     setPresetPickerOpen(true);
   };
-  const ingest = async (map, rootKey) => {
+
+  // `extraOrigins` (optional): a handoff's carried-over .mxsl
+  // Original, keyed by the exact .mtlx key it belongs to (see
+  // handleImport below), merged in alongside anything expandMxsl
+  // compiles itself.
+  const ingest = async (map, rootKey, extraOrigins) => {
     setError(null);
     const mxslOrigins = {}; // populated below, merged into mxslOriginalsRef after the replace/merge decision
     const mxslFailures = []; // {rootKey, message} for .mxsl roots that failed to compile
@@ -661,6 +678,7 @@ function MaterialViewerApp({
       if (mxslcAvailable) {
         await window.expandMxsl(map, mxslOrigins, mxslFailures);
       }
+      if (extraOrigins) Object.assign(mxslOrigins, extraOrigins);
     } catch (e) {
       reportError(errMsg(e));
       return;
@@ -741,7 +759,8 @@ function MaterialViewerApp({
       ingestRef.current(map);
     },
     onDragState: setDragOver,
-    disabled: IN_VSCODE || chromeless
+    disabled: IN_VSCODE || chromeless,
+    blockedRef: dropBlockedRef
   });
 
   // ---- Receives a material handed off by the graph editor's
@@ -762,6 +781,14 @@ function MaterialViewerApp({
         type: 'application/xml'
       })
     });
+    // A carried-over .mxsl Original (see openInViewer's `mxsl`),
+    // keyed to the exact .mtlx key just created above.
+    const extraOrigins = payload.mxsl ? {
+      [safeName + '.mtlx']: {
+        source: payload.mxsl.source,
+        filename: payload.mxsl.filename
+      }
+    } : undefined;
     // A sender's geometry, re-validated here rather than trusted:
     // resolveViewerGeom drops anything unrenderable and handles
     // the transparent-vs-room fallback.
@@ -773,7 +800,7 @@ function MaterialViewerApp({
     // across an inbound import (Send to Viewer, or the embed's
     // own `load` message, both funnel through here).
     setBackdropMode(resolveViewerBackdrop(backdropMode, transparent));
-    ingestRef.current(map);
+    ingestRef.current(map, undefined, extraOrigins);
   };
   React.useEffect(() => {
     if (window.__mtlxPendingViewerImport) {

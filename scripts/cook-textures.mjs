@@ -28,6 +28,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
 import { spawnSync } from "node:child_process";
+import { parseArgs as nodeParseArgs } from "node:util";
 import { chromium } from "@playwright/test";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -37,16 +38,32 @@ const SOURCE_EXTS = new Set([".png", ".jpg", ".jpeg", ".tif", ".tiff", ".exr", "
 const SRGB_NAME_HINTS = /(basecolor|albedo|diffuse|color|emissive)/i;
 
 function parseArgs(argv) {
-  const args = { folder: null, quality: "default", jobs: 1, dryRun: false, force: false, encoder: "auto" };
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--quality") args.quality = argv[++i];
-    else if (a === "--jobs") args.jobs = Math.max(1, parseInt(argv[++i], 10) || 1);
-    else if (a === "--dry-run") args.dryRun = true;
-    else if (a === "--force") args.force = true;
-    else if (a === "--encoder") args.encoder = argv[++i];
-    else if (!args.folder) args.folder = a;
+  let values, positionals;
+  try {
+    ({ values, positionals } = nodeParseArgs({
+      args: argv,
+      options: {
+        quality: { type: "string" },
+        jobs: { type: "string" },
+        "dry-run": { type: "boolean" },
+        force: { type: "boolean" },
+        encoder: { type: "string" },
+      },
+      strict: true,
+      allowPositionals: true,
+    }));
+  } catch (err) {
+    console.error(`error: ${err.message}`);
+    process.exit(1);
   }
+  const args = {
+    folder: positionals[0] || null,
+    quality: values.quality ?? "default",
+    jobs: Math.max(1, parseInt(values.jobs, 10) || 1),
+    dryRun: !!values["dry-run"],
+    force: !!values.force,
+    encoder: values.encoder ?? "auto",
+  };
   if (!args.folder || !["auto", "toktx", "basis"].includes(args.encoder)) {
     console.error("usage: node scripts/cook-textures.mjs <folder> [--quality fast|default|high] [--jobs N] [--dry-run] [--force] [--encoder auto|toktx|basis]");
     process.exit(1);
@@ -85,34 +102,38 @@ function qualityToUastcLevel(quality) {
 // Returns a basename -> "srgb" | "linear" map; names the documents disagree
 // about, and names no document references, are left out for the caller's
 // name heuristic to decide.
+// True if any path segment (relative to `dir`) is a macOS side file/folder.
+function hasJunkSegment(dir, abs) {
+  const rel = path.relative(dir, abs);
+  return rel.split(path.sep).some((seg) => /^(\._|__MACOSX$|\.DS_Store$)/.test(seg));
+}
+
 async function readAuthoredColorspaces(dir) {
   const seen = new Map(); // basename -> Set of "srgb"/"linear"
-  async function walk(current) {
-    for (const entry of await readdir(current, { withFileTypes: true })) {
-      if (/^(\._|__MACOSX$|\.DS_Store$)/.test(entry.name)) continue;
-      const abs = path.join(current, entry.name);
-      if (entry.isDirectory()) { await walk(abs); continue; }
-      if (path.extname(entry.name).toLowerCase() !== ".mtlx") continue;
-      const text = await readFile(abs, "utf8");
-      // Scan to the self-closing "/>" rather than the first ">": a UDIM
-      // reference is written "<UDIM>" inside the value, so stopping at any
-      // ">" cuts the tag in half and loses the filename entirely.
-      const re = /<input\b[\s\S]*?\/>/g;
-      for (const tag of text.match(re) || []) {
-        if (!/\bname="file"/.test(tag)) continue;
-        const value = /\bvalue="([^"]*)"/.exec(tag);
-        if (!value) continue;
-        const cs = /\bcolorspace="([^"]*)"/.exec(tag);
-        // No authored colorspace means the document colorspace applies,
-        // which for every 1.39 document is a linear one.
-        const kind = cs && /^srgb/i.test(cs[1]) ? "srgb" : "linear";
-        const base = path.basename(value[1]).toLowerCase();
-        if (!seen.has(base)) seen.set(base, new Set());
-        seen.get(base).add(kind);
-      }
+  const entries = await readdir(dir, { recursive: true, withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const abs = path.join(entry.parentPath, entry.name);
+    if (hasJunkSegment(dir, abs)) continue;
+    if (path.extname(entry.name).toLowerCase() !== ".mtlx") continue;
+    const text = await readFile(abs, "utf8");
+    // Scan to the self-closing "/>" rather than the first ">": a UDIM
+    // reference is written "<UDIM>" inside the value, so stopping at any
+    // ">" cuts the tag in half and loses the filename entirely.
+    const re = /<input\b[\s\S]*?\/>/g;
+    for (const tag of text.match(re) || []) {
+      if (!/\bname="file"/.test(tag)) continue;
+      const value = /\bvalue="([^"]*)"/.exec(tag);
+      if (!value) continue;
+      const cs = /\bcolorspace="([^"]*)"/.exec(tag);
+      // No authored colorspace means the document colorspace applies,
+      // which for every 1.39 document is a linear one.
+      const kind = cs && /^srgb/i.test(cs[1]) ? "srgb" : "linear";
+      const base = path.basename(value[1]).toLowerCase();
+      if (!seen.has(base)) seen.set(base, new Set());
+      seen.get(base).add(kind);
     }
   }
-  await walk(dir);
   const out = new Map();
   for (const [base, kinds] of seen) if (kinds.size === 1) out.set(base, [...kinds][0]);
   return out;
@@ -134,25 +155,19 @@ function authoredColorspaceFor(map, basename) {
 /** Recursively find source texture files under `dir`, skipping .ktx2 siblings unless --force. */
 async function findSources(dir, force) {
   const out = [];
-  async function walk(current) {
-    const entries = await readdir(current, { withFileTypes: true });
-    for (const entry of entries) {
-      const abs = path.join(current, entry.name);
-      // macOS side files (AppleDouble ._x, __MACOSX, .DS_Store) are not textures.
-      if (/^(\._|__MACOSX$|\.DS_Store$)/.test(entry.name)) continue;
-      if (entry.isDirectory()) {
-        await walk(abs);
-        continue;
-      }
-      const ext = path.extname(entry.name).toLowerCase();
-      if (!SOURCE_EXTS.has(ext)) continue;
-      const stem = abs.slice(0, -ext.length);
-      const ktx2Path = `${stem}.ktx2`;
-      if (!force && existsSync(ktx2Path)) continue;
-      out.push({ srcPath: abs, ktx2Path, ext });
-    }
+  const entries = await readdir(dir, { recursive: true, withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const abs = path.join(entry.parentPath, entry.name);
+    // macOS side files (AppleDouble ._x, __MACOSX, .DS_Store) are not textures.
+    if (hasJunkSegment(dir, abs)) continue;
+    const ext = path.extname(entry.name).toLowerCase();
+    if (!SOURCE_EXTS.has(ext)) continue;
+    const stem = abs.slice(0, -ext.length);
+    const ktx2Path = `${stem}.ktx2`;
+    if (!force && existsSync(ktx2Path)) continue;
+    out.push({ srcPath: abs, ktx2Path, ext });
   }
-  await walk(dir);
   return out;
 }
 
