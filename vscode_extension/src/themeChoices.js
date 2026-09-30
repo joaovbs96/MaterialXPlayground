@@ -5,6 +5,7 @@
 
 const pkg = require('../../package.json');
 
+const VSCODE = { id: 'vscode', label: 'Match VS Code', group: 'system' };
 const SYSTEM = { id: 'system', label: 'System', group: 'system' };
 
 function groupOf(id) {
@@ -16,9 +17,10 @@ function groupOf(id) {
 // Built from the enum and its enumDescriptions (registry labels).
 function buildThemeChoices(configProps) {
     const prop = (configProps || {})['materialxPlayground.theme'] || {};
-    const ids = Array.isArray(prop.enum) ? prop.enum : ['system'];
+    const ids = Array.isArray(prop.enum) ? prop.enum : ['vscode', 'system'];
     const descs = Array.isArray(prop.enumDescriptions) ? prop.enumDescriptions : [];
     return ids.map((id, i) => {
+        if (id === 'vscode') return VSCODE;
         if (id === 'system') return SYSTEM;
         return { id, label: String(descs[i] || id).replace(/\.$/, ''), group: groupOf(id) };
     });

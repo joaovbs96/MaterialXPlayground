@@ -1,0 +1,140 @@
+// GENERATED FILE, DO NOT EDIT BY HAND. Theme source "vscode" (registry base auto) from scripts/theme-tokens-meta.mjs
+// by scripts/build-theme.mjs: contrast pairs and overrides for js/shared/theme-engine.js, which derives it at runtime.
+(function (root) {
+    'use strict';
+    var id = "vscode";
+    var source = {
+        contrast: "AA",
+        overrides: {
+            "dark": {
+                "success-fill": "#15803d"
+            },
+            "light": {}
+        },
+        pairs: [
+            {"fg":"fg","bg":"surface-base","kind":"text"},
+            {"fg":"fg","bg":"surface-raised","kind":"text"},
+            {"fg":"fg-strong","bg":"surface-raised","kind":"text"},
+            {"fg":"fg-soft","bg":"surface-sunken","kind":"text"},
+            {"fg":"fg-secondary","bg":"surface-raised","kind":"text"},
+            {"fg":"fg-secondary","bg":"control","kind":"text"},
+            {"fg":"fg-muted","bg":"surface-base","kind":"text"},
+            {"fg":"fg-muted","bg":"surface-raised","kind":"text"},
+            {"fg":"fg-subtle","bg":"surface-raised","kind":"text"},
+            {"fg":"fg-subtle","bg":"surface-sunken","kind":"text"},
+            {"fg":"fg-faint","bg":"surface-base","kind":"large"},
+            {"fg":"fg-inverse","bg":"fg","kind":"text"},
+            {"fg":"on-accent","bg":"accent-fill","kind":"text"},
+            {"fg":"on-accent-muted","bg":"accent-fill","kind":"text"},
+            {"fg":"on-accent","bg":"success-fill","kind":"text"},
+            {"fg":"on-accent","bg":"error-fill","kind":"text"},
+            {"fg":"accent-fg","bg":"surface-base","kind":"text"},
+            {"fg":"accent-fg","bg":"surface-raised","kind":"text"},
+            {"fg":"accent-fg-strong","bg":"surface-raised","kind":"text"},
+            {"fg":"accent-fg-bright","bg":"drop-target","kind":"text"},
+            {"fg":"hud-fg","bg":"hud","kind":"text"},
+            {"fg":"hud-fg-muted","bg":"hud","kind":"text"},
+            {"fg":"hud-fg-strong","bg":"hud","kind":"text"},
+            {"fg":"warning","bg":"surface-raised","kind":"text"},
+            {"fg":"warning-text","bg":"warning-bg","kind":"text"},
+            {"fg":"error","bg":"surface-raised","kind":"text"},
+            {"fg":"error-text","bg":"error-bg","kind":"text"},
+            {"fg":"success","bg":"surface-raised","kind":"text"},
+            {"fg":"success-text","bg":"surface-raised","kind":"text"},
+            {"fg":"info","bg":"surface-raised","kind":"text"},
+            {"fg":"info-text","bg":"info-bg","kind":"text"},
+            {"fg":"experimental","bg":"surface-raised","kind":"text"},
+            {"fg":"code-fg","bg":"code-block-bg","kind":"text"},
+            {"fg":"code-muted","bg":"surface-raised","kind":"text"},
+            {"fg":"code-name","bg":"surface-raised","kind":"text"},
+            {"fg":"code-attr","bg":"surface-raised","kind":"text"},
+            {"fg":"code-string","bg":"surface-raised","kind":"text"},
+            {"fg":"code-inline-fg","bg":"surface-sunken","kind":"text"},
+            {"fg":"line-strong","bg":"surface-raised","kind":"ui"},
+            {"fg":"line-strong","bg":"surface-sunken","kind":"ui"},
+            {"fg":"line","bg":"surface-base","kind":"decorative"},
+            {"fg":"hud-line","bg":"hud","kind":"ui"},
+            {"fg":"focus","bg":"surface-base","kind":"ui"},
+            {"fg":"focus","bg":"surface-raised","kind":"ui"},
+            {"fg":"focus","bg":"surface-sunken","kind":"ui"},
+            {"fg":"accent-base","bg":"surface-raised","kind":"ui"},
+            {"fg":"on-accent","bg":"accent-base","kind":"ui"},
+            {"fg":"progress","bg":"surface-raised","kind":"ui"},
+            {"fg":"scrollbar-thumb","bg":"scrollbar-track","kind":"ui"},
+            {"fg":"graph-edge-selected","bg":"graph-canvas","kind":"ui"},
+            {"fg":"graph-node-selected","bg":"graph-canvas","kind":"ui"},
+            {"fg":"graph-node-line","bg":"graph-canvas","kind":"ui"},
+            {"fg":"graph-grid","bg":"graph-canvas","kind":"decorative"},
+            {"fg":"builder-stage-grid","bg":"builder-stage","kind":"decorative"},
+            {"fg":"hud-selection","bg":"stage","kind":"decorative"},
+            {"fg":"stage-fg-muted","bg":"stage","kind":"text"},
+            {"fg":"stage-fg-subtle","bg":"stage","kind":"text"},
+            {"fg":"type-boolean","bg":"graph-node","kind":"ui"},
+            {"fg":"type-boolean","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-bsdf","bg":"graph-node","kind":"ui"},
+            {"fg":"type-bsdf","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-color3","bg":"graph-node","kind":"ui"},
+            {"fg":"type-color3","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-color4","bg":"graph-node","kind":"ui"},
+            {"fg":"type-color4","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-displacementshader","bg":"graph-node","kind":"ui"},
+            {"fg":"type-displacementshader","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-edf","bg":"graph-node","kind":"ui"},
+            {"fg":"type-edf","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-filename","bg":"graph-node","kind":"ui"},
+            {"fg":"type-filename","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-float","bg":"graph-node","kind":"ui"},
+            {"fg":"type-float","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-integer","bg":"graph-node","kind":"ui"},
+            {"fg":"type-integer","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-lightshader","bg":"graph-node","kind":"ui"},
+            {"fg":"type-lightshader","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-material","bg":"graph-node","kind":"ui"},
+            {"fg":"type-material","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-matrix33","bg":"graph-node","kind":"ui"},
+            {"fg":"type-matrix33","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-matrix44","bg":"graph-node","kind":"ui"},
+            {"fg":"type-matrix44","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-string","bg":"graph-node","kind":"ui"},
+            {"fg":"type-string","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-surfaceshader","bg":"graph-node","kind":"ui"},
+            {"fg":"type-surfaceshader","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-vector2","bg":"graph-node","kind":"ui"},
+            {"fg":"type-vector2","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-vector3","bg":"graph-node","kind":"ui"},
+            {"fg":"type-vector3","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-vector4","bg":"graph-node","kind":"ui"},
+            {"fg":"type-vector4","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-vdf","bg":"graph-node","kind":"ui"},
+            {"fg":"type-vdf","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-volumeshader","bg":"graph-node","kind":"ui"},
+            {"fg":"type-volumeshader","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-node","bg":"graph-node","kind":"ui"},
+            {"fg":"type-node","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-nodegraph","bg":"graph-node","kind":"ui"},
+            {"fg":"type-nodegraph","bg":"graph-canvas","kind":"ui"},
+            {"fg":"type-untyped","bg":"graph-node","kind":"ui"},
+            {"fg":"type-untyped","bg":"graph-canvas","kind":"ui"},
+            {"fg":"line-control","bg":"surface-sunken","kind":"ui"},
+            {"fg":"line-control","bg":"surface-raised","kind":"ui"},
+            {"fg":"line-control","bg":"surface-base","kind":"ui"},
+            {"fg":"accent-text-on-tint","bg":"surface-raised","kind":"text"},
+            {"fg":"on-accent","bg":"accent-fill-translucent","kind":"text","alphaParam":["alpha","accentFillTranslucent"],"under":"surface-raised"},
+            {"fg":"on-accent","bg":"accent-fill-translucent-hover","kind":"text","alphaParam":["alpha","accentFillTranslucent"],"under":"surface-raised"},
+        ],
+    };
+    if (typeof module === 'object' && module.exports) { module.exports = { id: id, source: source }; return; }
+    var d = root.MTLX_THEME_TOKENS;
+    var doc = root.document;
+    if (!d || !doc) return;
+    (d.sources = d.sources || {})[id] = source;
+    var start = function (E) { E.startSource(id, { root: root, data: d, source: source }); };
+    if (root.MtlxThemeEngine) { start(root.MtlxThemeEngine); return; }
+    d.onEngine = start;
+    var me = doc.currentScript;
+    var src = me && me.src ? me.src.replace(/js\/gen\/themes\/[^/]+\.js([?#].*)?$/, 'js/shared/theme-engine.js') : 'js/shared/theme-engine.js';
+    if (doc.readyState === 'loading' && me && !me.async) { doc.write('<script src="' + src + '"><\/script>'); return; }
+    var s = doc.createElement('script');
+    s.src = src;
+    doc.head.appendChild(s);
+})(typeof self !== 'undefined' ? self : this);

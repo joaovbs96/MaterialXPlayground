@@ -164,10 +164,10 @@
     function applyTheme(name, value) {
         if (name === 'theme') {
             // Unknown or cleared values behave as dark, the default; auto follows the OS.
-            // Any registry id (MtlxTheme.list()) is accepted.
+            // Any registry id (MtlxTheme.list()) is accepted except 'vscode' (webview-only).
             var t = String(value == null ? '' : value).trim().toLowerCase();
             var known = window.MtlxTheme && window.MtlxTheme.list ? window.MtlxTheme.list() : [{ id: 'dark' }, { id: 'light' }];
-            var pref = t === 'auto' ? 'system' : (known.some(function (x) { return x.id === t; }) ? t : 'dark');
+            var pref = t === 'auto' ? 'system' : (t !== 'vscode' && known.some(function (x) { return x.id === t; }) ? t : 'dark');
             if (window.MtlxTheme && window.MtlxTheme.setPreference) window.MtlxTheme.setPreference(pref, { persist: false });
             return;
         }

@@ -10,9 +10,10 @@ const { buildThemeChoices } = require('../../vscode_extension/src/themeChoices.j
 
 const prop = pkg.contributes.configuration.properties['materialxPlayground.theme'];
 
-test('theme enum is system plus every registry id, in order', () => {
+test('theme enum is vscode, system, then every other registry id, in order', () => {
   assert.ok(Array.isArray(tokens.registry) && tokens.registry.length >= 4);
-  assert.deepEqual(prop.enum, ['system', ...tokens.registry.map((t) => t.id)]);
+  assert.deepEqual(prop.enum, ['vscode', 'system', ...tokens.registry.filter((t) => t.id !== 'vscode').map((t) => t.id)]);
+  assert.equal(prop.default, 'vscode');
 });
 
 test('embed placeholder light-base ids equal the registry light bases', async () => {
@@ -26,7 +27,8 @@ test('embed placeholder light-base ids equal the registry light bases', async ()
 
 test('enumDescriptions match the registry labels', () => {
   assert.equal(prop.enumDescriptions.length, prop.enum.length);
-  tokens.registry.forEach((t, i) => assert.equal(prop.enumDescriptions[i + 1], t.label));
+  const rest = tokens.registry.filter((t) => t.id !== 'vscode');
+  rest.forEach((t, i) => assert.equal(prop.enumDescriptions[i + 2], t.label));
 });
 
 test('sidebar choices carry the registry groups', () => {
@@ -34,8 +36,10 @@ test('sidebar choices carry the registry groups', () => {
   for (const t of tokens.registry) {
     const c = choices.find((x) => x.id === t.id);
     assert.ok(c, t.id);
+    if (t.id === 'vscode') continue;
     assert.equal(c.group, t.group);
     assert.equal(c.label, t.label);
   }
-  assert.equal(choices[0].id, 'system');
+  assert.equal(choices[0].id, 'vscode');
+  assert.equal(choices[1].id, 'system');
 });

@@ -76,11 +76,11 @@
     <script src="js/shared/theme-tokens.js"></script>
     <script>
         // `theme` (auto or a registry id): read before theme.js, so a preset loads before first paint; never persisted.
-        // Absent or unknown means dark; auto follows the visitor's OS.
+        // Absent, unknown or host-limited (vscode) means dark; auto follows the visitor's OS.
         (function () {
             var t = (new URLSearchParams(window.location.search).get('theme') || '').trim().toLowerCase();
             var reg = (window.MTLX_THEME_TOKENS && window.MTLX_THEME_TOKENS.registry) || [];
-            window.__MTLX_THEME_PREF__ = t === 'auto' ? 'system' : (reg.some(function (e) { return e.id === t; }) ? t : 'dark');
+            window.__MTLX_THEME_PREF__ = t === 'auto' ? 'system' : (reg.some(function (e) { return e.id === t && (!e.hosts || e.hosts.indexOf('web') >= 0); }) ? t : 'dark');
             window.__MTLX_THEME_NO_PERSIST__ = true;
         })();
     </script>

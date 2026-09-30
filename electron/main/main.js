@@ -8,6 +8,7 @@ const path = require('node:path');
 const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const docScanner = require('./doc-scanner');
+const themePrefsLib = require('./theme-prefs');
 
 // macOS diverges on window chrome and menu layout, both decided at
 // startup; the existing one-off process.platform checks stay as they are.
@@ -1427,21 +1428,21 @@ function openRouteRouted(route) {
 // Values come from the site's token data (dark theme), staged with js/ under the site root.
 const THEME_DATA = require(path.join(getSiteRoot(), 'js', 'shared', 'theme-tokens.js'));
 const THEMES = THEME_DATA.themes;
-const THEME_REGISTRY = THEME_DATA.registry || [{ id: 'dark', base: 'dark' }, { id: 'light', base: 'light' }];
+// Entries of other hosts (vscode, base auto) are dropped; see theme-prefs.js.
+const THEME_REGISTRY = themePrefsLib.electronRegistry(THEME_DATA.registry || [{ id: 'dark', base: 'dark' }, { id: 'light', base: 'light' }]);
 const THEME_DARK = THEMES.dark;
 const TITLEBAR_OVERLAY_HEIGHT = 56;
 
 // Persisted preference ('system' or a registry id); nativeTheme follows the
 // base of the chosen theme, or the OS for 'system'.
-const THEME_PREFS = ['system'].concat(THEME_REGISTRY.map((t) => t.id));
+const THEME_PREFS = themePrefsLib.themePrefs(THEME_REGISTRY);
 function themeBase(pref) {
-    const t = THEME_REGISTRY.find((x) => x.id === pref);
-    return t ? t.base : 'dark';
+    return themePrefsLib.themeBase(pref, THEME_REGISTRY);
 }
 function applyThemeSource(pref) {
     nativeTheme.themeSource = pref === 'system' ? 'system' : themeBase(pref);
 }
-let themePref = THEME_PREFS.includes(readSettingsSync().theme) ? readSettingsSync().theme : 'system';
+let themePref = themePrefsLib.normalizeThemePref(readSettingsSync().theme, THEME_REGISTRY);
 applyThemeSource(themePref);
 
 // Native chrome token of the resolved theme. A preset without its own

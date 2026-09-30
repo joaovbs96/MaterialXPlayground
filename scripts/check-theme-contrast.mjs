@@ -2,6 +2,7 @@
 // scripts/check-theme-contrast.mjs
 // WCAG 2 contrast for every meta pair in every registry theme (presets resolved by the engine), at the entry's level:
 // AA (text 4.5, large 3, ui 3) or AAA (text 7, large 4.5, ui 3). Fails on anything but the listed knownDarkFailures.
+// Runtime sources (base auto, e.g. vscode) have no fixed palette: the engine enforces their level when it derives them.
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
@@ -10,7 +11,7 @@ const engine = require("../js/shared/theme-engine.js");
 const meta = await import("./theme-tokens-meta.mjs");
 
 const known = new Set(meta.knownDarkFailures);
-const registry = data.registry && data.registry.length ? data.registry : Object.keys(data.themes).map((id) => ({ id, contrast: "AA" }));
+const registry = (data.registry && data.registry.length ? data.registry : Object.keys(data.themes).map((id) => ({ id, contrast: "AA" }))).filter((e) => e.base !== "auto");
 
 // Hand-authored themes: a missing token falls back to dark, params per group fall back to dark.
 function builtIn(id) {

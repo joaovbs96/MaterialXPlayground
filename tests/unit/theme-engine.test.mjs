@@ -101,7 +101,7 @@ test('an unreachable pair or a failing seed foreground fails loudly, naming the 
 });
 
 test('every preset resolves at its registry level and matches the generated files', () => {
-  for (const entry of data.registry.filter((e) => !(e.id in data.themes))) {
+  for (const entry of data.registry.filter((e) => !(e.id in data.themes) && e.base !== 'auto')) {
     const r = E.resolvePreset({ ...meta.presets[entry.id], contrast: entry.contrast }, { pairs: meta.contrast, name: entry.id });
     assert.ok(r.report.every((row) => row.pass), entry.id);
     assert.equal(r.base, entry.base);

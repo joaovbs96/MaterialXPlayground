@@ -31,11 +31,11 @@ function affectsSetting(e, key) {
     return e.affectsConfiguration(NEW_SECTION + '.' + key) || e.affectsConfiguration(OLD_SECTION + '.' + key);
 }
 
-// Theme preference ('system' or a registry id, from the package.json enum), no deprecated twin.
+// Theme preference ('vscode', 'system' or a registry id, from the package.json enum), no deprecated twin.
 const THEME_VALUES = getThemeChoices().map((c) => c.id);
 function getThemePreference() {
     const v = vscode.workspace.getConfiguration(NEW_SECTION).get('theme');
-    return THEME_VALUES.includes(v) ? v : 'system';
+    return THEME_VALUES.includes(v) ? v : 'vscode';
 }
 
 function setThemePreference(value) {

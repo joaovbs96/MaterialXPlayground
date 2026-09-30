@@ -28,7 +28,7 @@
         return null;
     }
 
-    function baseOf(id) { const e = entry(id); return e && e.base === 'light' ? 'light' : 'dark'; }
+    function baseOf(id) { const e = entry(id), b = (DATA.bases || {})[id] || e && e.base; return b === 'auto' ? baseOf(systemTheme()) : b === 'light' ? 'light' : 'dark'; }
 
     function normalize(p) {
         if (p === 'auto' || p === 'system') return 'system';
@@ -70,8 +70,9 @@
         return mql && mql.matches === false ? 'light' : 'dark';
     }
 
+    // vscode: system outside VS Code and for high contrast kinds.
     function resolveTheme() {
-        const t = preference === 'system' ? systemTheme() : preference;
+        const t = preference === 'system' || preference === 'vscode' && !(root.__MTLX_VSCODE__ && vscodeTheme().indexOf('hc-')) ? systemTheme() : preference;
         return entry(t) ? t : FALLBACK;
     }
 
@@ -91,8 +92,8 @@
     }
 
     // Apply a ready theme; notify only when the applied theme or the preference changed.
-    function commit(next, silent) {
-        const changed = next !== theme || preference !== shown;
+    function commit(next, silent, force) {
+        const changed = force || next !== theme || preference !== shown;
         theme = next;
         shown = preference;
         writeDom();
@@ -118,7 +119,7 @@
         doc.head.appendChild(s);
     }
 
-    DATA.loaded = function (id) { done[id] = true; if (id === want) commit(id, false); };
+    DATA.loaded = function (id, force) { done[id] = true; if (id === want) commit(id, false, force); };
 
     // A preset not yet loaded keeps the previous theme (first run: the preset's base) until DATA.loaded.
     function update(silent) {
@@ -175,7 +176,7 @@
         if (bodyObserved || !doc || !doc.body || typeof root.MutationObserver !== 'function') return;
         bodyObserved = true;
         try {
-            new root.MutationObserver(function () { if (preference === 'system') update(false); })
+            new root.MutationObserver(function () { update(false); })
                 .observe(doc.body, { attributes: true, attributeFilter: ['class'] });
         } catch (e) { /* no observer */ }
     }
@@ -186,14 +187,14 @@
             if (!bodyObserved && doc && typeof doc.addEventListener === 'function') {
                 doc.addEventListener('DOMContentLoaded', function () {
                     observeBody();
-                    if (preference === 'system') update(false);
+                    update(false);
                 });
             }
             return;
         }
         try { mql = typeof root.matchMedia === 'function' ? root.matchMedia('(prefers-color-scheme: dark)') : null; } catch (e) { mql = null; }
         if (!mql) return;
-        const onScheme = function () { if (preference === 'system') update(false); };
+        const onScheme = function () { update(false); };
         if (typeof mql.addEventListener === 'function') mql.addEventListener('change', onScheme);
         else if (typeof mql.addListener === 'function') mql.addListener(onScheme);
     }
@@ -217,7 +218,7 @@
     root.MtlxTheme = {
         current: function () { return theme; },
         currentBase: function () { return baseOf(theme); },
-        list: function () { return REG.map(function (e) { return Object.assign({}, e); }); },
+        list: function () { return REG.filter(function (e) { return !e.hosts || e.hosts.indexOf(root.__MTLX_VSCODE__ ? 'vscode' : 'web') >= 0; }).map(function (e) { return Object.assign({}, e); }); },
         getPreference: function () { return preference; },
         setPreference: setPreference,
         get: get,

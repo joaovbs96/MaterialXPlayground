@@ -1,10 +1,15 @@
-// Theme engine: OKLab/OKLCH color math, WCAG contrast, recipe-based theme derivation and a contrast pass.
-// Used by scripts/build-theme.mjs to resolve presets; never loaded eagerly (a future theme editor may load it).
-// UMD: window.MtlxThemeEngine in the browser, module.exports under Node.
+// Theme engine: OKLab/OKLCH color math, WCAG contrast, recipe-based theme derivation, a contrast pass and runtime sources.
+// Build: scripts/build-theme.mjs resolves presets. Browser: loaded on demand only by js/gen/themes/vscode.js (VS Code webview).
+// UMD: window.MtlxThemeEngine in the browser (then MTLX_THEME_TOKENS.onEngine(api) runs), module.exports under Node.
 (function (root, factory) {
     const api = factory(root);
     if (typeof module === 'object' && module.exports) module.exports = api;
-    else root.MtlxThemeEngine = api;
+    else {
+        root.MtlxThemeEngine = api;
+        const d = root.MTLX_THEME_TOKENS;
+        const f = d && d.onEngine;
+        if (typeof f === 'function') { d.onEngine = null; f(api); }
+    }
 })(typeof self !== 'undefined' ? self : this, function (root) {
     'use strict';
 
@@ -566,6 +571,196 @@
         return { base: d.base, seeds: d.seeds, tokens: c.tokens, params: d.params, sources: d.sources, moved: c.moved, report: c.report };
     }
 
+    // ---- Runtime sources (VS Code) ----
+    // CSS color (#rgb, #rgba, #rrggbb, #rrggbbaa, rgb()/rgba()) to #rrggbb; alpha composites over `under` (else dropped).
+    function parseCssColor(str, under) {
+        const s = String(str == null ? '' : str).trim().toLowerCase();
+        let c = null, a = 1, m;
+        if ((m = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/.exec(s))) {
+            let h = m[1];
+            if (h.length < 6) h = h.split('').map(function (x) { return x + x; }).join('');
+            c = [0, 2, 4].map(function (i) { return parseInt(h.substr(i, 2), 16); });
+            if (h.length === 8) a = parseInt(h.substr(6, 2), 16) / 255;
+        } else if ((m = /^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)\s*(?:[,/]\s*([\d.]+)(%?))?\s*\)$/.exec(s))) {
+            c = [m[1], m[2], m[3]].map(Number);
+            if (m[4] != null) a = Number(m[4]) / (m[5] ? 100 : 1);
+        }
+        if (!c || c.some(isNaN)) return null;
+        const hex = toHex(c);
+        return a < 1 && under ? composite(hex, under, Math.max(0, a)) : hex;
+    }
+
+    // Seed vars in priority order; VS Code writes them on <html style> in its webviews.
+    const VSCODE_VARS = {
+        background: ['--vscode-editor-background'],
+        foreground: ['--vscode-editor-foreground', '--vscode-foreground'],
+        accent: ['--vscode-button-background', '--vscode-focusBorder', '--vscode-textLink-foreground'],
+        focus: ['--vscode-focusBorder'],
+    };
+
+    // Kind: body class (live), then the injected kind, then background luminance. hc: a high contrast kind.
+    function vscodeKind(w, bg) {
+        const doc = w.document;
+        const cl = doc && doc.body && doc.body.classList;
+        const has = function (c) { return !!(cl && cl.contains(c)); };
+        if (has('vscode-high-contrast-light')) return { base: 'light', hc: true };
+        if (has('vscode-high-contrast')) return { base: 'dark', hc: true };
+        if (has('vscode-light')) return { base: 'light', hc: false };
+        if (has('vscode-dark')) return { base: 'dark', hc: false };
+        const k = w.__MTLX_VSCODE_THEME_KIND__;
+        if (k === 'highContrastLight' || k === 'highContrast') return { base: k === 'highContrast' ? 'dark' : 'light', hc: true };
+        if (k === 'light' || k === 'dark') return { base: k, hc: false };
+        return { base: luminance(bg) > 0.18 ? 'light' : 'dark', hc: false };
+    }
+
+    // { background, foreground, accent, focus, base, hc } from the webview, or null while --vscode-editor-background is unset.
+    function readVscode(w) {
+        const doc = w && w.document;
+        const el = doc && doc.documentElement;
+        if (!el) return null;
+        let cs = null;
+        try { cs = typeof w.getComputedStyle === 'function' ? w.getComputedStyle(el) : null; } catch (e) { cs = null; }
+        const read = function (n) {
+            const v = (cs && cs.getPropertyValue(n)) || (el.style && typeof el.style.getPropertyValue === 'function' ? el.style.getPropertyValue(n) : '');
+            return String(v || '').trim();
+        };
+        const pick = function (names, under) {
+            for (let i = 0; i < names.length; i++) { const c = parseCssColor(read(names[i]), under); if (c) return c; }
+            return null;
+        };
+        const bg = pick(VSCODE_VARS.background, null);
+        if (!bg) return null;
+        const kind = vscodeKind(w, bg);
+        return { background: bg, foreground: pick(VSCODE_VARS.foreground, bg), accent: pick(VSCODE_VARS.accent, bg), focus: pick(VSCODE_VARS.focus, bg), base: kind.base, hc: kind.hc };
+    }
+
+    // Moves the accent seed in OKLCH lightness (nearest first, either way) until white on-accent reads on the accent fills
+    // and the accent reads on raised surfaces; the contrast pass cannot fix these (on-accent is shared with status fills).
+    function fitAccent(o) {
+        const need = LEVELS[o.level || 'AA'];
+        const ps = (o.pairs || []).filter(function (p) { return (p.fg === 'on-accent' && /^accent-/.test(p.bg)) || p.fg === 'accent-base'; });
+        const lch = toOklch(o.seeds.accent);
+        for (let k = 0; k <= 100; k++) {
+            for (const dir of k ? [-1, 1] : [1]) {
+                const L = lch[0] + dir * k * 0.01;
+                if (L < 0 || L > 1) continue;
+                const accent = fromOklch([L, lch[1], lch[2]]);
+                const d = deriveTheme({ base: o.base, seeds: Object.assign({}, o.seeds, { accent: accent }), overrides: o.overrides, data: o.data });
+                if (ps.every(function (p) { return measurePair(d.tokens, p, d.params) >= need[p.kind]; })) return accent;
+            }
+        }
+        return null;
+    }
+
+    // Seeds from readVscode to a checked theme: derive, then the contrast pass (only surface-base locked). Falls back to
+    // the base accent, then the base seeds; `fallback` is the attempt used (0: the editor's colors, accent fitted).
+    function deriveVscode(s, opts) {
+        const o = opts || {};
+        const data = tokenData(o.data);
+        const base = s.base === 'light' ? 'light' : 'dark';
+        const level = o.level || 'AA';
+        const pairs = o.pairs || [];
+        const over = (o.overrides || {})[base] || {};
+        const seeds = {};
+        if (s.background) seeds.background = s.background;
+        if (s.foreground) seeds.foreground = s.foreground;
+        const tries = [null];
+        if (s.accent) tries[0] = [Object.assign({ accent: fitAccent({ base: base, seeds: Object.assign({ accent: s.accent }, seeds), overrides: over, data: data, pairs: pairs, level: level }) || s.accent }, seeds), s.focus];
+        tries.push([seeds, s.focus], [seeds, null], [{}, null]);
+        let err = null;
+        for (let i = 0; i < tries.length; i++) {
+            if (!tries[i]) continue;
+            const ov = Object.assign({}, over);
+            if (tries[i][1]) ov.focus = tries[i][1];
+            try {
+                const d = deriveTheme({ base: base, seeds: tries[i][0], overrides: ov, data: data });
+                const c = enforceContrast(d.tokens, pairs, level, { params: d.params, locked: ['surface-base'], name: 'vscode' });
+                return { base: base, seeds: d.seeds, tokens: c.tokens, params: d.params, moved: c.moved, report: c.report, fallback: i };
+            } catch (e) { err = e; }
+        }
+        throw err;
+    }
+
+    function kebab(x) { return x.replace(/[A-Z]/g, function (c) { return '-' + c.toLowerCase(); }); }
+
+    // One `:root[data-theme="<id>"]` block in the generated CSS format (every token as R G B, then params).
+    function themeCss(id, tokens, params, order) {
+        const lines = (order || Object.keys(tokens)).map(function (t) { return '  --mtlx-' + t + ': ' + parseHex(tokens[t]).join(' ') + ';'; });
+        Object.keys(params || {}).forEach(function (g) {
+            Object.keys(params[g]).forEach(function (k) { lines.push('  --mtlx-' + kebab(g) + '-' + kebab(k) + ': ' + params[g][k] + ';'); });
+        });
+        return ':root[data-theme="' + id + '"] {\n' + lines.join('\n') + '\n}\n';
+    }
+
+    // Live VS Code source: derives now (before first paint when the vars are set), then again when <html> style or class
+    // or <body> class change the seeds or kind. Publishes data.themes/params/bases[id], one <style>, then data.loaded.
+    function startVscode(o) {
+        const w = o.root;
+        const data = o.data;
+        const doc = w.document;
+        const id = o.id || 'vscode';
+        const src = o.source || {};
+        let key = null;
+        let last = null;
+        let timer = null;
+        let style = null;
+        function apply() {
+            timer = null;
+            const s = readVscode(w);
+            if (!s) return;
+            const k = JSON.stringify(s);
+            if (k === key) return;
+            key = k;
+            if (s.hc) return; // js/shared/theme.js maps high contrast kinds to the hc presets
+            let r;
+            try {
+                r = deriveVscode(s, { data: data, pairs: src.pairs, overrides: src.overrides, level: src.contrast });
+            } catch (e) {
+                if (w.console) w.console.warn('[theme] VS Code colors could not be matched: ' + e.message);
+                return;
+            }
+            const css = themeCss(id, r.tokens, r.params, Object.keys(data.themes.dark));
+            if (css === last) return;
+            const first = last === null;
+            last = css;
+            if (!style) {
+                style = doc.createElement('style');
+                style.id = 'mtlx-theme-' + id;
+                (doc.head || doc.documentElement).appendChild(style);
+            }
+            style.textContent = css;
+            data.themes[id] = r.tokens;
+            (data.params = data.params || {})[id] = r.params;
+            (data.bases = data.bases || {})[id] = r.base;
+            if (typeof data.loaded === 'function') data.loaded(id, !first);
+        }
+        // The first appearance of the vars applies at once; later changes are debounced (VS Code rewrites in bursts).
+        const kick = function () {
+            if (key === null || typeof w.setTimeout !== 'function') return apply();
+            if (timer === null) timer = w.setTimeout(apply, o.debounce == null ? 50 : o.debounce);
+        };
+        if (typeof w.MutationObserver === 'function') {
+            try {
+                const mo = new w.MutationObserver(kick);
+                const watchBody = function () { if (doc.body) mo.observe(doc.body, { attributes: true, attributeFilter: ['class'] }); };
+                mo.observe(doc.documentElement, { attributes: true, attributeFilter: ['style', 'class'] });
+                if (doc.body) watchBody();
+                else if (typeof doc.addEventListener === 'function') doc.addEventListener('DOMContentLoaded', function () { watchBody(); kick(); });
+            } catch (e) { /* no observer: the first derivation stays */ }
+        }
+        apply();
+        return { refresh: apply };
+    }
+
+    const SOURCES = { vscode: startVscode };
+
+    // Entry point for js/gen/themes/<id>.js of a runtime source (registry base auto).
+    function startSource(id, opts) {
+        const f = SOURCES[id];
+        if (!f) throw new Error('theme-engine: unknown theme source "' + id + '"');
+        return f(Object.assign({ id: id }, opts));
+    }
+
     return {
         parseHex: parseHex, toHex: toHex, normHex: normHex,
         toOklab: toOklab, fromOklab: fromOklab, toOklch: toOklch, fromOklch: fromOklch,
@@ -573,5 +768,7 @@
         luminance: luminance, contrast: contrast, deltaE: deltaE,
         RECIPES: RECIPES, LEVELS: LEVELS,
         deriveTheme: deriveTheme, measurePair: measurePair, enforceContrast: enforceContrast, resolvePreset: resolvePreset,
+        parseCssColor: parseCssColor, VSCODE_VARS: VSCODE_VARS, readVscode: readVscode, fitAccent: fitAccent,
+        deriveVscode: deriveVscode, themeCss: themeCss, startVscode: startVscode, startSource: startSource,
     };
 });

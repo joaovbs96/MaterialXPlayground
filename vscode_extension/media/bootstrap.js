@@ -552,7 +552,7 @@
     // control go to the extension, which owns the setting and echoes it
     // back to every webview as 'mtlx-theme-preference'.
     var themeAttr = function (name) { return (document.currentScript && document.currentScript.getAttribute(name)) || ''; };
-    window.__MTLX_THEME_PREF__ = themeAttr('data-theme-pref') || 'system';
+    window.__MTLX_THEME_PREF__ = themeAttr('data-theme-pref') || 'vscode';
     window.__MTLX_VSCODE_THEME_KIND__ = themeAttr('data-vscode-theme-kind') || 'dark';
     window.__mtlxThemePersist = function (pref) {
         if (vscodeApi) vscodeApi.postMessage({ type: 'mtlx-set-theme-preference', value: pref });

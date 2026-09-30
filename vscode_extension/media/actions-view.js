@@ -947,11 +947,13 @@
     // Accessibility and Presets groups. The host owns the setting and the
     // choice list, and echoes both back via 'state' / 'theme'.
     let themeChoices = [
+        { id: 'vscode', label: 'Match VS Code', group: 'system' },
         { id: 'system', label: 'System', group: 'system' },
         { id: 'light', label: 'Light', group: 'standard' },
         { id: 'dark', label: 'Dark', group: 'standard' },
     ];
     function themeIconName(c) {
+        if (c.id === 'vscode') return 'palette';
         if (c.id === 'system') return 'device-desktop';
         if (c.id === 'light') return 'sun';
         if (c.id === 'dark') return 'moon';
@@ -965,7 +967,7 @@
     themeMenu.setAttribute('role', 'menu');
     themeMenu.setAttribute('aria-label', 'Theme');
     themeMenu.hidden = true;
-    let themePref = 'system';
+    let themePref = 'vscode';
     function buildThemeItem(choice) {
         const item = document.createElement('button');
         item.type = 'button';

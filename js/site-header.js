@@ -116,6 +116,7 @@
     }
     var ICON_THEME = tablerSvg('<path d="M12 9a3 3 0 0 0 0 6v-6z" /><path d="M6 6h3.5l2.5 -2.5l2.5 2.5h3.5v3.5l2.5 2.5l-2.5 2.5v3.5h-3.5l-2.5 2.5l-2.5 -2.5h-3.5v-3.5l-2.5 -2.5l2.5 -2.5z" />');
     var THEME_ICONS = {
+        vscode: tablerSvg('<path d="M12 21a9 9 0 0 1 0 -18c4.97 0 9 3.582 9 8c0 1.06 -.474 2.078 -1.318 2.828c-.844 .75 -1.989 1.172 -3.182 1.172h-2.5a2 2 0 0 0 -1 3.75a1.3 1.3 0 0 1 -1 2.25" />'),
         system: tablerSvg('<path d="M3 5a1 1 0 0 1 1 -1h16a1 1 0 0 1 1 1v10a1 1 0 0 1 -1 1h-16a1 1 0 0 1 -1 -1v-10z" /><path d="M7 20h10" /><path d="M9 16v4" /><path d="M15 16v4" />'),
         light: tablerSvg('<path d="M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0" /><path d="M3 12h1m8 -9v1m8 8h1m-9 8v1m-6.4 -15.4l.7 .7m12.1 -.7l-.7 .7m0 11.4l.7 .7m-12.1 -.7l-.7 .7" />'),
         dark: tablerSvg('<path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />'),
@@ -133,7 +134,11 @@
     function themeSections() {
         var list = (window.MtlxTheme && window.MtlxTheme.list && window.MtlxTheme.list()) || [];
         function pick(g) { return list.filter(function (c) { return c.group === g; }); }
-        var top = [{ id: 'system', label: 'System', group: 'standard' }].concat(pick('standard'));
+        // 'vscode' leads when offered (VS Code host only); never shown elsewhere.
+        var inVsc = !!window.__MTLX_VSCODE__;
+        var vsc = inVsc ? list.filter(function (c) { return c.id === 'vscode'; }) : [];
+        var std = pick('standard').filter(function (c) { return c.id !== 'vscode'; });
+        var top = vsc.concat([{ id: 'system', label: 'System', group: 'standard' }], std);
         var more = [];
         if (pick('accessibility').length) more.push({ label: 'Accessibility', items: pick('accessibility') });
         if (pick('presets').length) more.push({ label: 'Presets', items: pick('presets') });

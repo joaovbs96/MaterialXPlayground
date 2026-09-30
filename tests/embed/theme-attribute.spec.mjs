@@ -57,7 +57,7 @@ test('a preset set live loads its stylesheet and switches without a reload', asy
 test('theme defaults to dark (missing or invalid) whatever the OS scheme', async ({ page, embedURL }) => {
   for (const scheme of ['light', 'dark']) {
     await page.emulateMedia({ colorScheme: scheme });
-    for (const opts of [{}, { theme: 'bogus' }]) {
+    for (const opts of [{}, { theme: 'bogus' }, { theme: 'vscode' }]) {
       const { frame } = await open(page, embedURL, opts);
       expect(await dataTheme(frame)).toBe('dark');
     }

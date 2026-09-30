@@ -1605,3 +1605,15 @@ export const presets = {
         overrides: {},
     },
 };
+
+// Runtime sources (registry base auto), resolved in the browser by js/shared/theme-engine.js. build-theme.mjs writes
+// js/gen/themes/<id>.js with these overrides (per derived base) and the contrast pairs; the level is the registry's.
+// vscode: the editor's colors as seeds (engine VSCODE_VARS); success-fill as in dim so white text keeps AA.
+export const sources = {
+    "vscode": {
+        overrides: {
+            dark: { "success-fill": "#15803d" },
+            light: {},
+        },
+    },
+};

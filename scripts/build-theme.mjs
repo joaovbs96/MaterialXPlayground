@@ -2,6 +2,7 @@
 // scripts/build-theme.mjs
 // Generates js/gen/theme-tokens.css (dark as :root, light as :root[data-theme="light"]; custom properties only, an omitted
 // token falls back to dark) and, per preset registry id, js/gen/themes/<id>.css + .js resolved by js/shared/theme-engine.js.
+// Registry ids with base auto are runtime sources: js/gen/themes/<id>.js carries their pairs and overrides, no CSS.
 // Usage: node scripts/build-theme.mjs [--check] (--check verifies, writes nothing).
 
 import { readFile, writeFile, mkdir, readdir, unlink } from "node:fs/promises";
@@ -75,12 +76,26 @@ function render() {
 
 // ---- Presets ----
 const registry = data.registry || [];
-const presetIds = registry.filter((e) => !(e.id in data.themes)).map((e) => e.id);
+const sourceIds = registry.filter((e) => e.base === "auto").map((e) => e.id);
+const presetIds = registry.filter((e) => !(e.id in data.themes) && e.base !== "auto").map((e) => e.id);
 {
   for (const e of registry) {
     if (!/^[a-z][a-z0-9-]*$/.test(e.id)) fail(`error: registry id "${e.id}" must be lowercase kebab-case`);
-    if (e.base !== "dark" && e.base !== "light") fail(`error: registry "${e.id}" has base "${e.base}"`);
+    if (!["dark", "light", "auto"].includes(e.base)) fail(`error: registry "${e.id}" has base "${e.base}"`);
     if (!engine.LEVELS[e.contrast]) fail(`error: registry "${e.id}" has contrast level "${e.contrast}"`);
+    if (e.hosts !== undefined && !(Array.isArray(e.hosts) && e.hosts.length)) fail(`error: registry "${e.id}" hosts must be a non-empty array`);
+  }
+  const srcDefs = meta.sources || {};
+  for (const id of sourceIds) {
+    if (!srcDefs[id]) fail(`error: registry "${id}" (base auto) has no source in scripts/theme-tokens-meta.mjs`);
+    if (id in data.themes || (meta.presets || {})[id]) fail(`error: source "${id}" must not also be a theme or a preset`);
+    for (const [base, over] of Object.entries(srcDefs[id].overrides || {})) {
+      if (base !== "dark" && base !== "light") fail(`error: source "${id}" overrides base "${base}"`);
+      for (const t of Object.keys(over)) if (!(t in data.themes.dark)) fail(`error: source "${id}" overrides unknown token "${t}"`);
+    }
+  }
+  for (const id of Object.keys(srcDefs)) {
+    if (!sourceIds.includes(id)) fail(`error: source "${id}" is not a base auto registry entry`);
   }
   for (const name of Object.keys(data.themes)) {
     if (!registry.some((e) => e.id === name)) fail(`error: theme "${name}" is not in the registry`);
@@ -148,8 +163,50 @@ function presetJs(id, r) {
 `;
 }
 
+// Runtime source: registers { contrast, overrides, pairs } as MTLX_THEME_TOKENS.sources[id], then loads the engine
+// (document.write while the head parses, else a <script>) whose startSource(id) derives and applies the theme.
+function sourceJs(id) {
+  const entry = registry.find((e) => e.id === id);
+  const pairs = meta.contrast.map((p) => {
+    const o = { fg: p.fg, bg: p.bg, kind: p.kind };
+    for (const k of ["alpha", "alphaParam", "under"]) if (p[k] !== undefined) o[k] = p[k];
+    return o;
+  });
+  const overrides = JSON.stringify(meta.sources[id].overrides || {}, null, 4).replace(/\n/g, "\n        ");
+  const list = pairs.map((p) => JSON.stringify(p)).join(",\n            ");
+  return `// GENERATED FILE, DO NOT EDIT BY HAND. Theme source "${id}" (registry base auto) from scripts/theme-tokens-meta.mjs
+// by scripts/build-theme.mjs: contrast pairs and overrides for js/shared/theme-engine.js, which derives it at runtime.
+(function (root) {
+    'use strict';
+    var id = ${JSON.stringify(id)};
+    var source = {
+        contrast: ${JSON.stringify(entry.contrast)},
+        overrides: ${overrides},
+        pairs: [
+            ${list},
+        ],
+    };
+    if (typeof module === 'object' && module.exports) { module.exports = { id: id, source: source }; return; }
+    var d = root.MTLX_THEME_TOKENS;
+    var doc = root.document;
+    if (!d || !doc) return;
+    (d.sources = d.sources || {})[id] = source;
+    var start = function (E) { E.startSource(id, { root: root, data: d, source: source }); };
+    if (root.MtlxThemeEngine) { start(root.MtlxThemeEngine); return; }
+    d.onEngine = start;
+    var me = doc.currentScript;
+    var src = me && me.src ? me.src.replace(/js\\/gen\\/themes\\/[^/]+\\.js([?#].*)?$/, 'js/shared/theme-engine.js') : 'js/shared/theme-engine.js';
+    if (doc.readyState === 'loading' && me && !me.async) { doc.write('<script src="' + src + '"><\\/script>'); return; }
+    var s = doc.createElement('script');
+    s.src = src;
+    doc.head.appendChild(s);
+})(typeof self !== 'undefined' ? self : this);
+`;
+}
+
 function outputs() {
   const files = new Map([[OUTPUT_PATH, render()]]);
+  for (const id of sourceIds) files.set(path.join(PRESET_DIR, `${id}.js`), sourceJs(id));
   for (const id of presetIds) {
     const r = resolvePreset(id);
     files.set(path.join(PRESET_DIR, `${id}.css`), presetCss(id, r));
@@ -179,10 +236,10 @@ if (CHECK_MODE) {
     if (actual !== text) fail(`[build-theme] ${rel(file)} is out of date; run \`npm run build:theme\``);
   }
   if (stale.length) fail(`[build-theme] stale preset output: ${stale.map(rel).join(", ")}; run \`npm run build:theme\``);
-  console.log(`[build-theme] js/gen/theme-tokens.css and ${presetIds.length} preset(s) are up to date`);
+  console.log(`[build-theme] js/gen/theme-tokens.css, ${presetIds.length} preset(s) and ${sourceIds.length} source(s) are up to date`);
 } else {
   await mkdir(PRESET_DIR, { recursive: true });
   for (const [file, text] of expected) await writeFile(file, text);
   for (const p of stale) await unlink(p);
-  console.log(`[build-theme] wrote js/gen/theme-tokens.css (${TOKEN_NAMES.length} tokens) and ${presetIds.length} preset(s) in js/gen/themes/`);
+  console.log(`[build-theme] wrote js/gen/theme-tokens.css (${TOKEN_NAMES.length} tokens), ${presetIds.length} preset(s) and ${sourceIds.length} source(s) in js/gen/themes/`);
 }

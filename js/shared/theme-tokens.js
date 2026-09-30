@@ -334,15 +334,16 @@
 
     const themes = { dark: dark, light: light };
 
-    // [id, label, base, group, contrast level] in menu order; ids beyond dark and light are lazy presets (js/gen/themes/).
+    // [id, label, base, group, contrast level, hosts?] in menu order; ids beyond dark and light are lazy presets (js/gen/themes/).
     const registry = [
+        ['vscode', 'Match VS Code', 'auto', 'standard', 'AA', ['vscode']],
         ['light', 'Light', 'light', 'standard', 'AA'],
         ['dark', 'Dark', 'dark', 'standard', 'AA'],
         ['hc-dark', 'High contrast dark', 'dark', 'accessibility', 'AAA'],
         ['hc-light', 'High contrast light', 'light', 'accessibility', 'AAA'],
         ['dim', 'Dim', 'dark', 'presets', 'AA'],
         ['paper', 'Paper', 'light', 'presets', 'AA'],
-    ].map(function (r) { return { id: r[0], label: r[1], base: r[2], group: r[3], contrast: r[4] }; });
+    ].map(function (r) { const e = { id: r[0], label: r[1], base: r[2], group: r[3], contrast: r[4] }; if (r[5]) e.hosts = r[5]; return e; });
 
     return { version: 1, seeds, params, themes, registry };
 });

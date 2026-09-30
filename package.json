@@ -596,6 +596,7 @@
         "materialxPlayground.theme": {
           "type": "string",
           "enum": [
+            "vscode",
             "system",
             "light",
             "dark",
@@ -604,8 +605,9 @@
             "dim",
             "paper"
           ],
-          "default": "system",
+          "default": "vscode",
           "enumDescriptions": [
+            "Match the current VS Code color theme",
             "Follow the VS Code color theme.",
             "Light",
             "Dark",
@@ -614,7 +616,7 @@
             "Dim",
             "Paper"
           ],
-          "markdownDescription": "Color theme of the MaterialX Playground webviews (Material Viewer, Node Graph Editor, Docs, Scene Viewer) and the sidebar. `system` follows the current VS Code color theme; the other values pin a theme or preset."
+          "markdownDescription": "Color theme of the MaterialX Playground webviews (Material Viewer, Node Graph Editor, Docs, Scene Viewer) and the sidebar. By default (`vscode`) the webviews match the colors of the current VS Code theme; any other value overrides it, and `system` follows the light or dark kind of the VS Code theme."
         },
         "materialxPlayground.defaultView": {
           "type": "string",
