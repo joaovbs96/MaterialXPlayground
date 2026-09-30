@@ -8,8 +8,8 @@
 .mtlx-graph-preview .react-flow__handle::after { inset: 0; }
 
 .mtlx-graph-preview .react-flow__attribution { background: transparent; font-size: 9px; }
-.mtlx-graph-preview .react-flow__attribution a { color: #6b7280; text-decoration: none; }
-.mtlx-graph-preview .react-flow__attribution a:hover { color: #9ca3af; }
+.mtlx-graph-preview .react-flow__attribution a { color: rgb(var(--mtlx-fg-subtle)); text-decoration: none; }
+.mtlx-graph-preview .react-flow__attribution a:hover { color: rgb(var(--mtlx-fg-muted)); }
 
 /* Only matters when interactive=false, where RF still sets pointer-events:
    none on every node wrapper (elementsSelectable is false again then).

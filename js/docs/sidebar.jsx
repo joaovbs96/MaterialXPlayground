@@ -6,10 +6,10 @@
         // (MTLX_ICON_PATHS 'chevron-right'/'chevron-down', js/mtlx-engine.js).
         // className passed explicitly since it differs from MtlxIcon's default.
         const ChevronRight = () => (
-            <MtlxIcon name="chevron-right" className="w-4 h-4 inline-block mr-1 text-gray-500" />
+            <MtlxIcon name="chevron-right" className="w-4 h-4 inline-block mr-1 text-fg-subtle" />
         );
         const ChevronDown = () => (
-            <MtlxIcon name="chevron-down" className="w-4 h-4 inline-block mr-1 text-gray-400" />
+            <MtlxIcon name="chevron-down" className="w-4 h-4 inline-block mr-1 text-fg-muted" />
         );
 
         // DocsSidebar — the "Node Library" panel (header + lib/group/node
@@ -50,13 +50,13 @@
                 // min-w-0: a grid item's default min-width:auto lets wide
                 // content (long node names) push past a fixed track instead
                 // of wrapping, which would make the panel visually resize.
-                <div className={(collapsed ? 'md:hidden ' : 'md:col-span-1 md:min-w-0 ') + 'bg-gray-800 rounded-xl border border-gray-800 max-h-[45vh] md:max-h-none md:min-h-0 overflow-y-auto custom-scrollbar [scrollbar-gutter:stable]'}>
+                <div className={(collapsed ? 'md:hidden ' : 'md:col-span-1 md:min-w-0 ') + 'bg-surface-raised rounded-xl border border-line-subtle max-h-[45vh] md:max-h-none md:min-h-0 overflow-y-auto custom-scrollbar [scrollbar-gutter:stable]'}>
                     {/* Sticky header stays visible while the tree scrolls beneath it. The
                         scroll container is unpadded; the sticky block and tree wrapper
                         carry their own padding so the header sits flush at top with no overlap. */}
-                    <div className="sticky top-0 z-10 bg-gray-800 px-4 pt-4 pb-1">
-                        <div className="flex items-center justify-between mb-3 border-b border-gray-700 pb-2">
-                            <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500">
+                    <div className="sticky top-0 z-10 bg-surface-raised px-4 pt-4 pb-1">
+                        <div className="flex items-center justify-between mb-3 border-b border-line pb-2">
+                            <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">
                                 Node Library
                             </h3>
                             <div className="flex items-center gap-1">
@@ -64,7 +64,7 @@
                                     onClick={onShowHelp}
                                     title="How to use this page"
                                     aria-label="Help"
-                                    className="p-1 rounded-md text-gray-500 hover:text-gray-200 hover:bg-gray-700"
+                                    className="p-1 rounded-md text-fg-subtle hover:text-fg-soft hover:bg-hover"
                                 >
                                     <MtlxIcon name="help" className="w-4 h-4" />
                                 </button>
@@ -77,8 +77,8 @@
                                         : '3D previews are off — click to enable the WebGL node previews'}
                                     className={`p-1 rounded-md transition-colors ${
                                         showPreviews
-                                            ? 'text-blue-400 hover:text-blue-300 hover:bg-blue-500/10'
-                                            : 'text-amber-400 hover:text-amber-300 hover:bg-amber-500/10'
+                                            ? 'text-accent-fg hover:text-accent-fg-strong hover:bg-accent-wash/10'
+                                            : 'text-warning-marker hover:text-warning hover:bg-warning-hue/10'
                                     }`}
                                 >
                                     <MtlxIcon name={showPreviews ? 'cube' : 'cube-off'} className="w-4 h-4" />
@@ -87,7 +87,7 @@
                                     onClick={onCollapse}
                                     title="Collapse the node library panel"
                                     aria-label="Collapse the node library panel"
-                                    className="hidden md:block p-1 rounded-md text-gray-500 hover:text-gray-200 hover:bg-gray-700"
+                                    className="hidden md:block p-1 rounded-md text-fg-subtle hover:text-fg-soft hover:bg-hover"
                                 >
                                     <MtlxIcon name="chevrons-left" className="w-4 h-4" />
                                 </button>
@@ -97,7 +97,7 @@
                             and the separate documented/undocumented filter icons. Each
                             segment's own count swaps for the live match count while a
                             search or type filter narrows the tree. */}
-                        <div className="flex items-stretch rounded-md border border-gray-700 overflow-hidden mb-2 h-8" role="group" aria-label="Documentation filter">
+                        <div className="flex items-stretch rounded-md border border-line overflow-hidden mb-2 h-8" role="group" aria-label="Documentation filter">
                             {[
                                 { mode: 'all', label: 'All', title: 'All', count: stats ? stats.total : 0 },
                                 { mode: 'documented', label: 'Docs', title: 'Documented nodes', count: stats ? stats.total - stats.undoc : 0 },
@@ -106,8 +106,8 @@
                                 const active = docFilter === mode;
                                 const shownCount = active && matchCount !== null ? matchCount : count;
                                 const countCls = mode === 'undocumented'
-                                    ? 'text-amber-400'
-                                    : (active ? 'text-blue-300' : 'text-gray-500');
+                                    ? 'text-warning-marker'
+                                    : (active ? 'text-accent-fg-strong' : 'text-fg-subtle');
                                 return (
                                     <button
                                         key={mode}
@@ -116,10 +116,10 @@
                                         aria-label={title}
                                         aria-pressed={active}
                                         style={{ flex: '1 1 auto', whiteSpace: 'nowrap', paddingLeft: '6px', paddingRight: '6px' }}
-                                        className={`min-w-0 flex items-center justify-center gap-1 text-xs transition-colors ${i > 0 ? 'border-l border-gray-700' : ''} ${
+                                        className={`min-w-0 flex items-center justify-center gap-1 text-xs transition-colors ${i > 0 ? 'border-l border-line' : ''} ${
                                             active
-                                                ? 'bg-blue-500/[0.12] text-blue-300'
-                                                : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
+                                                ? 'bg-accent-wash/[0.12] text-accent-fg-strong'
+                                                : 'bg-control text-fg-muted hover:bg-hover hover:text-fg-soft'
                                         }`}
                                     >
                                         <span className="truncate">{label}</span>
@@ -136,7 +136,7 @@
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
                                 placeholder="Search nodes..."
-                                className="w-full bg-gray-900 border border-gray-700 rounded-md h-8 pl-3 pr-16 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                                className="w-full bg-surface-sunken border border-line rounded-md h-8 pl-3 pr-16 text-sm text-fg-soft placeholder-fg-subtle focus:outline-none focus:border-focus"
                             />
                             <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
                                 {searchQuery && (
@@ -144,7 +144,7 @@
                                         onClick={() => setSearchQuery('')}
                                         title="Clear search"
                                         aria-label="Clear search"
-                                        className="p-1 rounded text-gray-500 hover:text-gray-200"
+                                        className="p-1 rounded text-fg-subtle hover:text-fg-soft"
                                     >
                                         <MtlxIcon name="x" className="w-3.5 h-3.5" />
                                     </button>
@@ -153,7 +153,7 @@
                                     onClick={allOpen ? collapseAll : expandAll}
                                     title={allOpen ? 'Collapse all' : 'Expand all'}
                                     aria-label={allOpen ? 'Collapse all' : 'Expand all'}
-                                    className="p-1 rounded text-gray-500 hover:text-gray-200"
+                                    className="p-1 rounded text-fg-subtle hover:text-fg-soft"
                                 >
                                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         {allOpen
@@ -230,20 +230,20 @@
                                         <button
                                             onClick={() => fileInputRef.current && fileInputRef.current.click()}
                                             title="Filter the node tree to categories used in one or more .mtlx files"
-                                            className="text-xs px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-gray-200 hover:bg-gray-700"
+                                            className="text-xs px-2 py-1 rounded border border-line text-fg-muted hover:text-fg-soft hover:bg-hover"
                                         >
                                             Filter by file
                                         </button>
                                     </React.Fragment>
                                 )}
                                 {fileFilter && (
-                                    <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-blue-500/[0.12] text-blue-300 max-w-full">
+                                    <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-accent-wash/[0.12] text-accent-fg-strong max-w-full">
                                         <span className="truncate">In {fileFilter.file}</span>
                                         <button
                                             onClick={onClearFileFilter}
                                             title="Clear the file filter"
                                             aria-label="Clear the file filter"
-                                            className="flex-none text-blue-300/80 hover:text-blue-100"
+                                            className="flex-none text-accent-fg-strong/80 hover:text-on-accent-muted"
                                         >
                                             <MtlxIcon name="x" className="w-3 h-3" />
                                         </button>
@@ -254,14 +254,14 @@
                     </div>
                     <div className="px-4 pb-4 pt-1">
                     {docFilter !== 'all' && !forceOpen && Object.keys(treeData).length === 0 && (
-                        <div className="text-xs text-gray-500 italic">No matching nodes.</div>
+                        <div className="text-xs text-fg-subtle italic">No matching nodes.</div>
                     )}
                     <div className="space-y-1 text-sm">
                         {Object.entries(treeData).map(([lib, groups]) => (
                             <div key={lib} className="select-none">
                                 {/* Library Level */}
                                 <div
-                                    className="flex items-center cursor-pointer hover:text-blue-400 text-gray-200 font-medium py-1"
+                                    className="flex items-center cursor-pointer hover:text-accent-fg text-fg-soft font-medium py-1"
                                     onClick={() => toggleLib(lib)}
                                 >
                                     {(expandedLibs[lib] || forceOpen) ? <ChevronDown /> : <ChevronRight />}
@@ -270,13 +270,13 @@
 
                                 {/* Group Level */}
                                 {(expandedLibs[lib] || forceOpen) && (
-                                    <div className="ml-4 border-l border-gray-700 pl-2 space-y-1 mt-1">
+                                    <div className="ml-4 border-l border-line pl-2 space-y-1 mt-1">
                                         {Object.entries(groups).map(([group, nodes]) => {
                                             const groupKey = `${lib}-${group}`;
                                             return (
                                                 <div key={groupKey}>
                                                     <div
-                                                        className="flex items-center cursor-pointer hover:text-blue-300 text-gray-400 py-1"
+                                                        className="flex items-center cursor-pointer hover:text-accent-fg-strong text-fg-muted py-1"
                                                         onClick={() => toggleGroup(lib, group)}
                                                     >
                                                         {(expandedGroups[groupKey] || forceOpen) ? <ChevronDown /> : <ChevronRight />}
@@ -285,7 +285,7 @@
 
                                                     {/* Node Level */}
                                                     {(expandedGroups[groupKey] || forceOpen) && (
-                                                        <div className="ml-4 border-l border-gray-700 pl-2 space-y-1 mt-1">
+                                                        <div className="ml-4 border-l border-line pl-2 space-y-1 mt-1">
                                                             {Object.entries(nodes).map(([nodeName, nodeInfo]) => {
                                                                 // A node name can exist in several groups (e.g. the
                                                                 // color `mix` and the shader `mix`), so selection is
@@ -299,8 +299,8 @@
                                                                 // isUndocumented (and rebuilding port tables) per keystroke.
                                                                 const undoc = stats && stats.undocKeys.has(`${lib}-${group}-${nodeName}`);
                                                                 const rowCls = isSelected
-                                                                    ? 'bg-blue-600 text-white'
-                                                                    : (undoc ? 'text-gray-400 hover:bg-amber-900/20 hover:text-amber-300' : 'text-gray-400 hover:bg-blue-900/20 hover:text-blue-300');
+                                                                    ? 'bg-accent-fill text-on-accent'
+                                                                    : (undoc ? 'text-fg-muted hover:bg-warning-bg/20 hover:text-warning' : 'text-fg-muted hover:bg-hover-accent/20 hover:text-accent-fg-strong');
                                                                 return (
                                                                     <div
                                                                         key={nodeName}
@@ -308,7 +308,7 @@
                                                                         className={`cursor-pointer py-1 px-2 rounded font-mono text-xs break-all ${rowCls}`}
                                                                     >
                                                                         {nodeName}
-                                                                        {undoc && <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400/80 ml-1.5 align-middle" />}
+                                                                        {undoc && <span className="inline-block w-1.5 h-1.5 rounded-full bg-warning-marker/80 ml-1.5 align-middle" />}
                                                                     </div>
                                                                 )
                                                             })}
@@ -337,28 +337,28 @@
             // hijack position:fixed's containing block and break the overlay.
             return ReactDOM.createPortal(
                 <div
-                    className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60"
+                    className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-scrim-alt/60"
                     onClick={onClose}
                     role="dialog"
                     aria-modal="true"
                     aria-label="Help"
                 >
                     <div
-                        className="bg-gray-800 border border-gray-700 rounded-lg shadow-xl max-w-xl w-full max-h-[85vh] overflow-y-auto custom-scrollbar p-5 sm:p-6"
+                        className="bg-surface-raised border border-line rounded-lg shadow-xl max-w-xl w-full max-h-[85vh] overflow-y-auto custom-scrollbar p-5 sm:p-6"
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="flex items-start justify-between gap-4 mb-3">
-                            <h2 className="text-lg font-semibold text-white">How to use the Node Library</h2>
+                            <h2 className="text-lg font-semibold text-fg-strong">How to use the Node Library</h2>
                             <button
                                 onClick={onClose}
                                 title="Close (Esc)"
-                                className="text-gray-400 hover:text-gray-200 text-xl leading-none px-1"
+                                className="text-fg-muted hover:text-fg-soft text-xl leading-none px-1"
                                 aria-label="Close help"
                             >
                                 &times;
                             </button>
                         </div>
-                        <div className="space-y-3 text-sm text-gray-300">
+                        <div className="space-y-3 text-sm text-fg-secondary">
                             <p>
                                 Documentation browser and live previews for the MaterialX node libraries.
                             </p>
@@ -369,7 +369,7 @@
                                 by the MaterialX runtime itself.
                             </p>
                             <p>
-                                <span className="font-semibold text-gray-100">Browsing.</span>{' '}
+                                <span className="font-semibold text-fg">Browsing.</span>{' '}
                                 The left panel lists every node, grouped by library and node group. The
                                 segmented control above the search box shows all nodes, only documented, or
                                 only undocumented ones, each with its count. Use the search box to filter by
@@ -382,13 +382,13 @@
                                 combined with a name and with each other.
                             </p>
                             <p>
-                                <span className="font-semibold text-gray-100">Documentation.</span>{' '}
+                                <span className="font-semibold text-fg">Documentation.</span>{' '}
                                 Selecting a node shows its description, port tables, and references from the
                                 specification. Links to other nodes open directly in the app; everything else
                                 opens the official spec on GitHub.
                             </p>
                             <p>
-                                <span className="font-semibold text-gray-100">3D preview.</span>{' '}
+                                <span className="font-semibold text-fg">3D preview.</span>{' '}
                                 Most nodes render live in WebGL: drag to orbit, scroll to zoom. The controls
                                 on the viewport switch the preview geometry, start/stop the turntable
                                 rotation, show the environment as background, save a PNG preview, and go
@@ -397,13 +397,13 @@
                                 The cube button in the panel header toggles all WebGL previews globally, to
                                 save resources on slow machines.
                             </p>
-                            <p className="text-gray-400">
+                            <p className="text-fg-muted">
                                 Something broken or missing? Report it on the{' '}
                                 <a
                                     href={window.SITE_LINKS.issues}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="text-blue-400 hover:text-blue-300 underline decoration-blue-500/40"
+                                    className="text-accent-fg hover:text-accent-fg-strong underline decoration-accent-wash/40"
                                 >Feedback &amp; Issues</a>{' '}
                                 page.
                             </p>

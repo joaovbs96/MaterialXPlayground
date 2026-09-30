@@ -103,8 +103,14 @@
             return typeColor('node');
         };
 
+        // Resolved rgba string (RF sets it as an SVG paint), same format as the old literal.
+        const minimapMaskColor = () => {
+            const h = MtlxTheme.get('graph-minimap-mask');
+            return 'rgba(' + [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(', ') + ', 0.75)';
+        };
+
         const handleStyle = (color) => ({
-            width: 9, height: 9, border: '1.5px solid #111827', background: color,
+            width: 9, height: 9, border: '1.5px solid ' + MtlxTheme.var('graph-canvas'), background: color,
         });
         // Port mode 'authored' shows only doc-set inputs; 'all' shows
         // all nodedef inputs. keepRow pins a disconnected port visible
@@ -191,6 +197,6 @@
         const CONN_ATTRS = ['interfacename', 'nodegraph', 'nodename', 'output'];
 
 Object.assign(window, {
-    getNodeColor, handleStyle, NODE_W, nodeHeight, layoutScope,
+    getNodeColor, handleStyle, minimapMaskColor, NODE_W, nodeHeight, layoutScope,
     visiblePortsFor, toFlow, toRfEdge, CONN_ATTRS,
 });

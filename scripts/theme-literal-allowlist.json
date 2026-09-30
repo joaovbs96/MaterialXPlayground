@@ -98,5 +98,15 @@
     "file": "js/builder-app.jsx",
     "match": "/^rgba[(]1$/",
     "reason": "Builder preview stage grid lines (stay literal per token spec)."
+  },
+  {
+    "file": "js/builder-app.jsx",
+    "match": "/^#(374151|000000)$/i",
+    "reason": "Builder Light preset text color (product data written into snippets) and color-input fallback value."
+  },
+  {
+    "file": "js/shared/mtlx-ui.jsx",
+    "match": "/^#000$/",
+    "reason": "Recording preview black (render preview) and ColorPicker value-axis black gradient stop: functional, not themeable."
   }
 ]

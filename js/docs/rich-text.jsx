@@ -16,13 +16,13 @@
         // <nodename> tokens render in monospace. Vector needs >=2
         // comma-sep numbers; token must start with a letter ("a < b" is safe).
         const INLINE_STYLE_RE = /(\[\s*[+-]?\d[\d.eE+-]*(?:\s*,\s*[+-]?\d[\d.eE+-]*)+\s*\]|<[A-Za-z_][\w.:-]*>)/g;
-        const MONO = 'font-mono text-[0.9em] bg-gray-900/70 border border-gray-700 rounded px-1 py-0.5';
+        const MONO = 'font-mono text-[0.9em] bg-surface-sunken/70 border border-line rounded px-1 py-0.5';
         const styleInlinePlain = (text, kp) => {
             const parts = String(text).split(INLINE_STYLE_RE);
             return parts.map((part, i) => {
                 if (!part) return null;
                 if (part[0] === '[' && part[part.length - 1] === ']') {
-                    return <code key={kp + 'v' + i} className={MONO + ' text-amber-300'}>{part}</code>;
+                    return <code key={kp + 'v' + i} className={MONO + ' text-code-inline-fg'}>{part}</code>;
                 }
                 if (part[0] === '<' && part[part.length - 1] === '>') {
                     // Cross-reference: <nodename> tokens that match a loaded
@@ -37,11 +37,11 @@
                                 key={kp + 'n' + i}
                                 onClick={() => window.dispatchEvent(new CustomEvent('mtlx-open-node', { detail: { key } }))}
                                 title={'Open node: ' + idx[key].name}
-                                className={MONO + ' text-blue-300 underline decoration-blue-500/40 cursor-pointer hover:text-blue-200'}
+                                className={MONO + ' text-accent-fg-strong underline decoration-accent-wash/40 cursor-pointer hover:text-accent-fg-bright'}
                             >{part}</code>
                         );
                     }
-                    return <code key={kp + 'n' + i} className={MONO + ' text-blue-300'}>{part}</code>;
+                    return <code key={kp + 'n' + i} className={MONO + ' text-accent-fg-strong'}>{part}</code>;
                 }
                 return <React.Fragment key={kp + 't' + i}>{part}</React.Fragment>;
             });
@@ -75,7 +75,7 @@
                         key={kp + 'l' + i}
                         href={url}
                         onClick={(e) => { e.preventDefault(); openDocLink(url); }}
-                        className="text-blue-400 hover:text-blue-300 underline decoration-blue-500/40 cursor-pointer"
+                        className="text-accent-fg hover:text-accent-fg-strong underline decoration-accent-wash/40 cursor-pointer"
                         title={url}
                     >{m[1]}</a>
                 );
@@ -156,7 +156,7 @@
                             if (ref) {
                                 const marker = `[${ref.n}]`;
                                 return (
-                                    <sup key={i} className="text-blue-400">
+                                    <sup key={i} className="text-accent-fg">
                                         {ref.url ? (
                                             <a href={ref.url} target="_blank" rel="noreferrer"
                                                title={ref.text || fn[1]}
@@ -200,13 +200,13 @@
                         const h = block.match(SUBHEADING_RE);
                         if (h) {
                             return (
-                                <h4 key={i} className="text-xs font-semibold text-gray-200 uppercase tracking-wider mt-5 mb-2">
+                                <h4 key={i} className="text-xs font-semibold text-fg-soft uppercase tracking-wider mt-5 mb-2">
                                     {h[1]}
                                 </h4>
                             );
                         }
                         return (
-                            <p key={i} className="text-sm leading-6 text-gray-400 mb-3">
+                            <p key={i} className="text-sm leading-6 text-fg-muted mb-3">
                                 <MathText text={block} refs={refs} />
                             </p>
                         );

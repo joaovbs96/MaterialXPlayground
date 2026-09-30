@@ -133,13 +133,13 @@
             return (
                 <div
                     ref={panelRef}
-                    className={'docs-impl-preview bg-gray-800 border border-gray-700 overflow-hidden flex flex-col'
+                    className={'docs-impl-preview bg-surface-raised border border-line overflow-hidden flex flex-col'
                         + (isFullscreen ? ' fixed inset-0 z-50 h-screen w-screen rounded-none' : ' rounded-xl')}
                 >
-                    <div className="flex-none flex items-center justify-between gap-2 px-3 py-2 border-b border-gray-700 bg-gray-900/70">
+                    <div className="flex-none flex items-center justify-between gap-2 px-3 py-2 border-b border-line bg-chrome/70">
                         <div className="min-w-0 flex flex-col">
-                            <span className="text-[11px] text-gray-400 truncate">{lib}<span className="text-gray-600"> / </span>{group}</span>
-                            <span className="text-sm font-semibold text-gray-100 truncate">{nodeName} implementation</span>
+                            <span className="text-[11px] text-fg-muted truncate">{lib}<span className="text-fg-faint"> / </span>{group}</span>
+                            <span className="text-sm font-semibold text-fg truncate">{nodeName} implementation</span>
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0">
                             {!inVSCode && (
@@ -148,7 +148,7 @@
                                     onClick={openInEditor}
                                     disabled={state.status !== 'ready'}
                                     title="Open this implementation graph in the Node Graph Editor"
-                                    className="inline-flex items-center gap-1 h-6 px-2 rounded-md border border-gray-600/50 bg-gray-900/70 text-[11px] font-medium text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                    className="inline-flex items-center gap-1 h-6 px-2 rounded-md border border-hud-line/50 bg-hud/70 text-[11px] font-medium text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                 >
                                     <MtlxIcon name="external-link" className="w-3.5 h-3.5" />
                                     View in Graph Editor
@@ -159,7 +159,7 @@
                                 onClick={toggleFsPanel}
                                 title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
                                 aria-label={isFullscreen ? 'Exit full screen' : 'View full screen'}
-                                className="inline-flex items-center justify-center w-6 h-6 rounded-md border border-gray-600/50 bg-gray-900/70 text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 transition-colors"
+                                className="inline-flex items-center justify-center w-6 h-6 rounded-md border border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong transition-colors"
                             >
                                 <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
                             </button>
@@ -168,7 +168,7 @@
                                 onClick={closePanel}
                                 aria-label="Close implementation preview"
                                 title="Close"
-                                className="inline-flex items-center justify-center w-6 h-6 rounded-md border border-gray-600/50 bg-gray-900/70 text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 transition-colors"
+                                className="inline-flex items-center justify-center w-6 h-6 rounded-md border border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong transition-colors"
                             >
                                 <MtlxIcon name="x" className="w-3.5 h-3.5" />
                             </button>
@@ -176,12 +176,12 @@
                     </div>
                     <div className="docs-impl-preview-body relative flex-1 min-h-0">
                         {(state.status === 'loading' || !depsReady) && (
-                            <div className="h-[22rem] flex items-center justify-center text-gray-400 text-sm animate-pulse">
+                            <div className="h-[22rem] flex items-center justify-center text-fg-muted text-sm animate-pulse">
                                 Loading preview
                             </div>
                         )}
                         {state.status === 'error' && depsReady && (
-                            <div className="flex items-start gap-2 px-3 py-3 text-sm text-amber-300">
+                            <div className="flex items-start gap-2 px-3 py-3 text-sm text-warning">
                                 <MtlxIcon name="alert-triangle" className="w-4 h-4 shrink-0 mt-px" />
                                 Could not resolve this node's implementation graph.
                             </div>

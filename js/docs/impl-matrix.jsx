@@ -53,7 +53,7 @@
             return (
                 <div className="mt-3 mb-6 text-xs">
                     <div className="flex items-start gap-2 flex-wrap">
-                        <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500 pt-0.5">
+                        <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle pt-0.5">
                             Implementations:
                         </span>
                         <div className="flex flex-col gap-1.5">
@@ -70,12 +70,12 @@
                                                 rel="noopener noreferrer"
                                                 title={'Nodegraph implementation — view source: ' + row.graphFile}
                                                 aria-label="View nodegraph implementation source"
-                                                className={badgeBase + ' border-blue-700/60 bg-blue-950/40 text-blue-300'}
+                                                className={badgeBase + ' border-info-border-alt/60 bg-info-bg/40 text-accent-fg-strong'}
                                             >
                                                 Graph (all targets)
                                             </a>
                                         ) : (
-                                            <span className={badgeBase + ' border-blue-700/60 bg-blue-950/40 text-blue-300'}>
+                                            <span className={badgeBase + ' border-info-border-alt/60 bg-info-bg/40 text-accent-fg-strong'}>
                                                 Graph (all targets)
                                             </span>
                                         )
@@ -90,10 +90,10 @@
                                             const href = implFileUrl(path);
                                             const badgeClassName = badgeBase + (
                                                 explicit
-                                                    ? ' border-green-700/60 bg-green-950/30 text-green-400'
+                                                    ? ' border-success-border/60 bg-success-bg/30 text-success'
                                                     : inherited
-                                                        ? ' border-green-800/40 border-dashed bg-green-950/10 text-green-600'
-                                                        : ' border-gray-700 bg-gray-900 text-gray-600'
+                                                        ? ' border-success-border-muted/40 border-dashed bg-success-bg/10 text-success-fill'
+                                                        : ' border-line bg-surface-sunken text-fg-disabled'
                                             );
                                             const badgeChildren = (
                                                 <React.Fragment>{explicit ? '✓' : inherited ? '✓*' : '–'} {friendlyTargetLabel(t)}</React.Fragment>
@@ -131,7 +131,7 @@
                                             );
                                         })
                                     ) : (
-                                        <span className="text-gray-600 italic">No implementations found.</span>
+                                        <span className="text-fg-faint italic">No implementations found.</span>
                                     )}
                                 </div>
                             ))}

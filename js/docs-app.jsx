@@ -929,12 +929,12 @@
                 <div className="relative space-y-4 sm:space-y-6 md:flex-1 md:min-h-0 md:flex md:flex-col">
                     {/* Data source status: visible only while loading or on failure */}
                     {autoLoad === 'loading' && (
-                        <div className="bg-gray-800 p-4 rounded-xl border border-gray-800 text-sm text-gray-400">
+                        <div className="bg-surface-raised p-4 rounded-xl border border-line-subtle text-sm text-fg-muted">
                             Loading the node library…
                         </div>
                     )}
                     {autoLoad === 'failed' && (
-                        <div className="bg-gray-800 p-4 rounded-xl border border-amber-700/60 text-sm text-gray-300">
+                        <div className="bg-surface-raised p-4 rounded-xl border border-warning-border/60 text-sm text-fg-secondary">
                             Could not load the pregenerated node library data
                             (js/gen/nodelib.json, js/gen/nodelib-index.json). Reload the
                             page, or if you're building from source, run
@@ -974,7 +974,7 @@
                                         title="Expand the node library panel"
                                         aria-label="Expand the node library panel"
                                         aria-expanded="false"
-                                        className="h-full w-7 flex flex-col items-center gap-1.5 py-2 bg-gray-900 border-r border-gray-800 text-gray-400 hover:text-gray-200 transition-colors"
+                                        className="h-full w-7 flex flex-col items-center gap-1.5 py-2 bg-surface-sunken border-r border-line-subtle text-fg-muted hover:text-fg-soft transition-colors"
                                     >
                                         <MtlxIcon name="chevrons-right" className="w-4 h-4 shrink-0" />
                                         <span className="text-xs [writing-mode:vertical-rl] whitespace-nowrap">Search Nodes</span>
@@ -1023,14 +1023,14 @@
 
                             {/* Right Content Area: Node Details */}
                             <div className={(chromeless || sidebarCollapsed ? '' : 'md:col-span-3 ')
-                                + 'bg-gray-800 p-4 sm:p-6'
+                                + 'bg-surface-raised p-4 sm:p-6'
                                 /* Inline (the graph editor's docs dialog): the DialogFrame
                                    panel is the edge and its scroller already reserves a
                                    gutter, so card chrome would box a box and a second
                                    overflow-y-auto would reserve a second gutter. ?embed=1
                                    keeps the shell's page padding, so it keeps the card. */
                                 + (inline ? ''
-                                    : ' rounded-xl border border-gray-800 md:min-h-0 md:overflow-y-auto custom-scrollbar'
+                                    : ' rounded-xl border border-line-subtle md:min-h-0 md:overflow-y-auto custom-scrollbar'
                                     /* Collapsed (md+) docs pane loses its card chrome, rounded
                                        corners and border, so it reads as edge-to-edge content
                                        against the now-flush (md:-m-6) shell background. */
@@ -1038,10 +1038,10 @@
                                 {selectedNode ? (
                                     <div>
                                         <div className="mb-4">
-                                            <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-blue-300 mb-1">
-                                                {selectedNode.lib}<span className="text-gray-600">/</span><span className="text-gray-400">{selectedNode.group}</span>
+                                            <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-accent-fg-strong mb-1">
+                                                {selectedNode.lib}<span className="text-fg-faint">/</span><span className="text-fg-muted">{selectedNode.group}</span>
                                             </div>
-                                            <h2 className="flex items-center gap-2 sm:gap-2.5 text-xl sm:text-3xl font-bold text-white font-mono tracking-[-0.01em] min-w-0">
+                                            <h2 className="flex items-center gap-2 sm:gap-2.5 text-xl sm:text-3xl font-bold text-fg-strong font-mono tracking-[-0.01em] min-w-0">
                                                 <span
                                                     className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5 rounded-full shrink-0"
                                                     style={{ backgroundColor: typeColor(previewType) }}
@@ -1049,13 +1049,13 @@
                                                 <span className="break-words min-w-0">
                                                     {selectedNode.name}
                                                     {previewType && (
-                                                        <span className="text-base sm:text-xl font-normal text-gray-400"> ({previewType})</span>
+                                                        <span className="text-base sm:text-xl font-normal text-fg-muted"> ({previewType})</span>
                                                     )}
                                                 </span>
                                             </h2>
                                             <div className="flex items-center gap-2 flex-wrap mt-2">
                                                 {selectedNode.info.section && (
-                                                    <span className="inline-flex items-center h-6 px-2 rounded-md border border-gray-700 bg-gray-800/60 text-[11px] font-medium text-gray-400">
+                                                    <span className="inline-flex items-center h-6 px-2 rounded-md border border-line bg-surface-raised/60 text-[11px] font-medium text-fg-muted">
                                                         spec: {selectedNode.info.section}
                                                     </span>
                                                 )}
@@ -1065,7 +1065,7 @@
                                                     // instead.
                                                     <span
                                                         title="This node has no entry in the official specification documents"
-                                                        className="inline-flex items-center gap-1 h-6 px-2 rounded-md border border-gray-700 bg-gray-800/50 text-[11px] font-medium text-gray-600 cursor-not-allowed select-none"
+                                                        className="inline-flex items-center gap-1 h-6 px-2 rounded-md border border-line bg-surface-raised/50 text-[11px] font-medium text-fg-disabled cursor-not-allowed select-none"
                                                     >
                                                         Official spec <MtlxIcon name="external-link" className="w-3.5 h-3.5" />
                                                     </span>
@@ -1074,7 +1074,7 @@
                                                         href={specUrlForNode(selectedNode)}
                                                         target="_blank" rel="noopener noreferrer"
                                                         title="Open this node in the official MaterialX specification on GitHub"
-                                                        className="inline-flex items-center gap-1 h-6 px-2 rounded-md border border-gray-600/50 bg-gray-900/70 text-[11px] font-medium text-blue-300 hover:text-blue-200 hover:border-blue-500/60 transition-colors"
+                                                        className="inline-flex items-center gap-1 h-6 px-2 rounded-md border border-hud-line/50 bg-hud/70 text-[11px] font-medium text-accent-fg-strong hover:text-accent-fg-bright hover:border-accent-base/60 transition-colors"
                                                     >
                                                         Official spec <MtlxIcon name="external-link" className="w-3.5 h-3.5" />
                                                     </a>
@@ -1088,8 +1088,8 @@
                                                     title="Copy a direct link to this node"
                                                     className={'inline-flex items-center gap-1 h-6 px-2 rounded-md border text-[11px] font-medium transition-colors ' + (
                                                         copied
-                                                            ? 'bg-green-700/30 border-green-600/60 text-green-300'
-                                                            : 'border-gray-600/50 bg-gray-900/70 text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100'
+                                                            ? 'bg-success-border/30 border-success-fill/60 text-success-text'
+                                                            : 'border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong'
                                                     )}
                                                 >
                                                     {copied ? (
@@ -1112,8 +1112,8 @@
                                                     aria-pressed={implPanelOpen}
                                                     className={'inline-flex items-center gap-1 h-6 px-2 rounded-md border text-[11px] font-medium transition-colors ' + (
                                                         implPanelOpen
-                                                            ? 'bg-blue-700/30 border-blue-600/60 text-blue-300'
-                                                            : 'border-gray-600/50 bg-gray-900/70 text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100'
+                                                            ? 'bg-accent-fill-pressed/30 border-accent-fill/60 text-accent-fg-strong'
+                                                            : 'border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong'
                                                     )}
                                                 >
                                                     <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
@@ -1135,7 +1135,7 @@
                                                     <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
                                                         {sigCount > 1 && (
                                                             <React.Fragment>
-                                                                <label className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">
+                                                                <label className="text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">
                                                                     Signature
                                                                 </label>
                                                                 <MtlxSelect
@@ -1155,7 +1155,7 @@
                                                         )}
                                                         {showVersionPicker && (
                                                             <React.Fragment>
-                                                                <label className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500">
+                                                                <label className="text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">
                                                                     Version
                                                                 </label>
                                                                 <MtlxSelect
@@ -1234,11 +1234,11 @@
                                             styled placeholder when the spec has no entry at all. */}
                                         {isUndocumented(selectedNode.info) ? (
                                             <div className="flex items-start gap-3 mt-4 mb-4">
-                                                <div className="w-9 h-9 rounded-[9px] bg-blue-500/10 border border-blue-500/25 flex items-center justify-center text-blue-400 shrink-0">
+                                                <div className="w-9 h-9 rounded-[9px] bg-accent-wash/10 border border-accent-wash/25 flex items-center justify-center text-accent-fg shrink-0">
                                                     <MtlxIcon name="info-circle" className="w-[18px] h-[18px]" />
                                                 </div>
-                                                <div className="min-w-0 text-sm leading-5 text-gray-400 pt-0.5">
-                                                    <div className="text-gray-200 font-medium">No specification entry for this node.</div>
+                                                <div className="min-w-0 text-sm leading-5 text-fg-muted pt-0.5">
+                                                    <div className="text-fg-soft font-medium">No specification entry for this node.</div>
                                                     <div className="mt-0.5">Ports, types and defaults below are read from its MaterialX nodedef; descriptions are unavailable.</div>
                                                 </div>
                                             </div>
@@ -1273,23 +1273,23 @@
                                             <RichBlocks
                                                 text={selectedNode.info.notes}
                                                 refs={refs}
-                                                className="mt-8 pt-6 border-t border-gray-700"
+                                                className="mt-8 pt-6 border-t border-line"
                                             />
                                         )}
 
                                         {/* References: footnotes cited by this node */}
                                         {references.length > 0 && (
-                                            <div className="mt-8 pt-6 border-t border-gray-700">
-                                                <h4 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500 mb-3">References</h4>
-                                                <ol className="space-y-2 text-sm text-gray-400">
+                                            <div className="mt-8 pt-6 border-t border-line">
+                                                <h4 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle mb-3">References</h4>
+                                                <ol className="space-y-2 text-sm text-fg-muted">
                                                     {references.map((r, i) => (
                                                         <li key={r.key} className="flex gap-2">
-                                                            <span className="text-gray-500 shrink-0">[{i + 1}]</span>
+                                                            <span className="text-fg-subtle shrink-0">[{i + 1}]</span>
                                                             <span>
                                                                 {r.text || r.key}
                                                                 {r.url && (
                                                                     <a href={r.url} target="_blank" rel="noreferrer"
-                                                                       className="ml-2 text-blue-400 hover:underline break-all">
+                                                                       className="ml-2 text-accent-fg hover:underline break-all">
                                                                         {r.url}
                                                                     </a>
                                                                 )}
@@ -1302,10 +1302,10 @@
                                     </div>
                                 ) : (
                                     <div className="flex flex-col items-center justify-center gap-3 h-full">
-                                        <div className="w-9 h-9 rounded-[9px] bg-blue-500/10 border border-blue-500/25 flex items-center justify-center text-blue-400">
+                                        <div className="w-9 h-9 rounded-[9px] bg-accent-wash/10 border border-accent-wash/25 flex items-center justify-center text-accent-fg">
                                             <MtlxIcon name="file-code" className="w-[18px] h-[18px]" />
                                         </div>
-                                        <div className="text-sm text-gray-500">Select a node from the tree to view its details.</div>
+                                        <div className="text-sm text-fg-subtle">Select a node from the tree to view its details.</div>
                                     </div>
                                 )}
                             </div>

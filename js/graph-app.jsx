@@ -60,12 +60,12 @@
                     ref={rootRef}
                     onPointerDown={(e) => e.stopPropagation()}
                     style={style}
-                    className="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden"
+                    className="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden"
                 >
-                    <div className="flex items-stretch border-b border-gray-700">
+                    <div className="flex items-stretch border-b border-line">
                         <input
                             ref={inputRef}
-                            className="flex-1 min-w-0 bg-gray-900 px-3 py-2 text-sm font-mono text-gray-100 placeholder-gray-500 focus:outline-none"
+                            className="flex-1 min-w-0 bg-surface-sunken px-3 py-2 text-sm font-mono text-fg placeholder-fg-subtle focus:outline-none"
                             placeholder={'Filter ports on ' + portPicker.targetName + '…'}
                             value={q}
                             spellCheck={false}
@@ -75,7 +75,7 @@
                     </div>
                     <div ref={listRef} className="max-h-[300px] overflow-y-auto custom-scrollbar">
                         {!items.length && (
-                            <div className="px-3 py-3 text-[11px] text-gray-500">No port matches {'“'}{q}{'”'}.</div>
+                            <div className="px-3 py-3 text-[11px] text-fg-subtle">No port matches {'“'}{q}{'”'}.</div>
                         )}
                         {items.map((c, i) => (
                             <button
@@ -84,16 +84,16 @@
                                 onMouseEnter={() => setHi(i)}
                                 onClick={() => onPick(c)}
                                 className={'w-full flex items-center gap-2 px-3 py-1.5 text-left text-[12px] font-mono transition-colors '
-                                    + (i === hi ? 'bg-blue-600/30 text-gray-100' : 'text-gray-300 hover:bg-gray-700/60')}
+                                    + (i === hi ? 'bg-selection/30 text-fg' : 'text-fg-secondary hover:bg-hover/60')}
                             >
                                 <span className="w-2 h-2 rounded-full flex-none" style={{ background: typeColor(c.type) }} />
                                 <span className="flex-1 truncate">{c.label}</span>
-                                {c.connected && <span className="flex-none text-gray-500">(connected)</span>}
+                                {c.connected && <span className="flex-none text-fg-subtle">(connected)</span>}
                                 <span className="ml-auto flex-none text-[9px] uppercase tracking-wider" style={{ color: typeColor(c.type) }}>{c.type}</span>
                             </button>
                         ))}
                     </div>
-                    <div className="px-3 py-1.5 border-t border-gray-700 text-[10px] text-gray-500">
+                    <div className="px-3 py-1.5 border-t border-line text-[10px] text-fg-subtle">
                         {'↑↓'} select {'·'} Enter connect {'·'} Esc close
                     </div>
                 </div>
@@ -155,35 +155,35 @@
             };
 
             return (
-                <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70">
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-scrim/70">
                     <div
                         ref={panelRef}
                         tabIndex={-1}
                         onKeyDown={onKeyDown}
-                        className="bg-gray-800 border border-gray-600 rounded-lg shadow-2xl w-[60rem] max-w-[95%] p-4 outline-none"
+                        className="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[60rem] max-w-[95%] p-4 outline-none"
                     >
-                        <div className="text-sm font-semibold text-gray-100 mb-1">Restore a previous session?</div>
-                        <div className="text-[12px] text-gray-400 mb-3">
+                        <div className="text-sm font-semibold text-fg mb-1">Restore a previous session?</div>
+                        <div className="text-[12px] text-fg-muted mb-3">
                             One or more editing sessions ended with unsaved changes. Pick one below, then restore or discard it.
                         </div>
                         <div className="flex gap-3">
-                            <div ref={listRef} className="w-[13rem] flex-none max-h-80 overflow-y-auto custom-scrollbar border border-gray-700 rounded-md">
+                            <div ref={listRef} className="w-[13rem] flex-none max-h-80 overflow-y-auto custom-scrollbar border border-line rounded-md">
                                 {offers.map((o, i) => (
                                     <button
                                         key={o.id}
                                         type="button"
                                         onClick={() => setHi(i)}
-                                        className={'w-full text-left px-2 py-1.5 border-b border-gray-700 last:border-b-0 transition-colors '
-                                            + (i === hi ? 'bg-blue-600/30 text-gray-100' : 'text-gray-300 hover:bg-gray-700/60')}
+                                        className={'w-full text-left px-2 py-1.5 border-b border-line last:border-b-0 transition-colors '
+                                            + (i === hi ? 'bg-selection/30 text-fg' : 'text-fg-secondary hover:bg-hover/60')}
                                     >
                                         <div className="text-[11px] font-mono truncate">{o.name || 'untitled'}</div>
-                                        <div className="text-[10px] text-gray-500">
+                                        <div className="text-[10px] text-fg-subtle">
                                             {formatDraftAge(o.closedAt || Math.max(o.savedAt || 0, o.beat || 0))}
                                         </div>
                                     </button>
                                 ))}
                             </div>
-                            <div className="flex-1 min-w-0 rounded-md overflow-hidden border border-gray-700 bg-gray-900" style={{ height: 320 }}>
+                            <div className="flex-1 min-w-0 rounded-md overflow-hidden border border-line bg-surface-sunken" style={{ height: 320 }}>
                                 {shown ? (
                                     <MtlxGraphPreview
                                         xml={shown.xml}
@@ -200,7 +200,7 @@
                                         height={320}
                                     />
                                 ) : (
-                                    <div className="w-full h-full flex items-center justify-center text-[11px] text-gray-500">
+                                    <div className="w-full h-full flex items-center justify-center text-[11px] text-fg-subtle">
                                         {'Loading preview' + '\u2026'}
                                     </div>
                                 )}
@@ -266,23 +266,23 @@
             };
 
             return (
-                <div className="absolute inset-0 z-50 flex items-center justify-center bg-gray-950/70">
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-scrim/70">
                     <div
                         ref={panelRef}
                         tabIndex={-1}
                         onKeyDown={onKeyDown}
-                        className="bg-gray-800 border border-gray-600 rounded-lg shadow-2xl w-[32rem] max-w-[95%] p-4 outline-none"
+                        className="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[32rem] max-w-[95%] p-4 outline-none"
                     >
-                        <div className="text-sm font-semibold text-gray-100 mb-1">Open Recent</div>
-                        <div className="text-[12px] text-gray-400 mb-3">
+                        <div className="text-sm font-semibold text-fg mb-1">Open Recent</div>
+                        <div className="text-[12px] text-fg-muted mb-3">
                             Pick a document you have opened or saved before.
                         </div>
-                        <div ref={listRef} className="max-h-72 overflow-y-auto custom-scrollbar border border-gray-700 rounded-md">
+                        <div ref={listRef} className="max-h-72 overflow-y-auto custom-scrollbar border border-line rounded-md">
                             {list === null && (
-                                <div className="px-3 py-3 text-[11px] text-gray-500">{'Loading' + '…'}</div>
+                                <div className="px-3 py-3 text-[11px] text-fg-subtle">{'Loading' + '…'}</div>
                             )}
                             {list && list.length === 0 && (
-                                <div className="px-3 py-3 text-[11px] text-gray-500">No recent documents.</div>
+                                <div className="px-3 py-3 text-[11px] text-fg-subtle">No recent documents.</div>
                             )}
                             {list && list.map((p, i) => (
                                 <button
@@ -290,11 +290,11 @@
                                     type="button"
                                     onClick={() => setHi(i)}
                                     onDoubleClick={() => onOpen(p)}
-                                    className={'w-full text-left px-2 py-1.5 border-b border-gray-700 last:border-b-0 transition-colors '
-                                        + (i === hi ? 'bg-blue-600/30 text-gray-100' : 'text-gray-300 hover:bg-gray-700/60')}
+                                    className={'w-full text-left px-2 py-1.5 border-b border-line last:border-b-0 transition-colors '
+                                        + (i === hi ? 'bg-selection/30 text-fg' : 'text-fg-secondary hover:bg-hover/60')}
                                 >
                                     <div className="text-[11px] font-mono truncate">{pathBasename(p)}</div>
-                                    <div className="text-[10px] text-gray-500 truncate">{p}</div>
+                                    <div className="text-[10px] text-fg-subtle truncate">{p}</div>
                                 </button>
                             ))}
                         </div>
@@ -363,6 +363,7 @@
         // ---- App ---------------------------------------------------------------
 
         function NodeGraphApp({ active = true } = {}) {
+            useMtlxTheme(); // re-render so React Flow color props resolve again
             // True when hosted in the VS Code extension's webview (set by
             // its bootstrap before any script runs); bound to a single
             // opened .mtlx file, so browser-only affordances are hidden.
@@ -7508,7 +7509,7 @@
             return (
                 <div
                     ref={panelRef}
-                    className="absolute inset-0 bg-gray-900 overflow-hidden flex flex-col"
+                    className="absolute inset-0 bg-graph-canvas overflow-hidden flex flex-col"
                     // Locks the cursor/selection for the whole panel during a
                     // sidebar drag so a fast pointer move (leaving the thin
                     // handle strip) doesn't flicker the cursor or select text.
@@ -7517,7 +7518,7 @@
                     {/* Menu bar and canvas+sidebar body row below are real
                         flex children; only dialogs and full-editor overlays
                         further down stay absolutely positioned on top. */}
-                    <div ref={toolbarBarRef} className="gtb-bar flex-none grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-2 px-2 py-1.5 bg-gray-900 border-b border-gray-700">
+                    <div ref={toolbarBarRef} className="gtb-bar flex-none grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-start gap-2 px-2 py-1.5 bg-chrome border-b border-line">
                         {/* Top-left cluster: the File and Edit menus, plus
                             the undo/redo pair that stays out of them, the
                             way Word keeps those on the toolbar too. */}
@@ -7550,7 +7551,7 @@
                                 <MtlxMenu label="Edit" items={editMenuItems} title="Editing actions" />
                                 <MtlxMenu label="View" items={viewMenuItems} title="View options" />
                             </MtlxMenuBar>
-                            <div className="w-px h-5 bg-gray-700 shrink-0" aria-hidden="true" />
+                            <div className="w-px h-5 bg-line shrink-0" aria-hidden="true" />
                             {/* Icon-only on purpose: these two are also in
                                 the Edit menu, so the bar carries the fast
                                 path and the menu carries the discoverability. */}
@@ -7570,7 +7571,7 @@
                             >
                                 <MtlxIcon name="arrow-forward-up" className="w-3.5 h-3.5" />
                             </button>
-                            <div className="w-px h-5 bg-gray-700 shrink-0" aria-hidden="true" />
+                            <div className="w-px h-5 bg-line shrink-0" aria-hidden="true" />
                             <button
                                 onClick={openXmlOrTextEditor}
                                 disabled={!parsed}
@@ -7587,8 +7588,8 @@
                             centre no matter what the clusters contain, and items-start keeps it on the bar's top row when a cluster wraps. */}
                         {parsed ? (
                             <div className="gtb-crumb flex items-center h-7 min-w-0">
-                                <div className="text-[11px] font-sans text-gray-400 max-w-full truncate">
-                                    <button className="hover:text-gray-200 underline decoration-dotted" onClick={goUpScope}>
+                                <div className="text-[11px] font-sans text-fg-muted max-w-full truncate">
+                                    <button className="hover:text-fg-soft underline decoration-dotted" onClick={goUpScope}>
                                         {/* A docs-page implementation handoff (scopeOriginRef.returnHash)
                                             makes this scope's "up" action a page navigation back to
                                             Node Specs, not a step up the document — label it that way. */}
@@ -7598,14 +7599,14 @@
                                     {docReadOnly && (
                                         <span
                                             title={'View only: material from ' + (docReadOnlySource || 'a scene')}
-                                            className="inline-flex items-center align-middle ml-1.5 px-1 rounded text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-300 bg-amber-900/40 border border-amber-700/40"
+                                            className="inline-flex items-center align-middle ml-1.5 px-1 rounded text-[10px] font-semibold uppercase tracking-[0.08em] text-warning bg-warning-bg/40 border border-warning-border/40"
                                         >
                                             View only
                                         </span>
                                     )}
-                                    {scope && <span className="inline-flex items-center align-middle text-gray-500 mx-1"><MtlxIcon name="chevron-right" className="w-3 h-3" /></span>}
-                                    {scope && <span className="text-blue-300">{scope}</span>}
-                                    {scope && scopeLocked && !docReadOnly && <span className="text-amber-300"> (library, view only)</span>}
+                                    {scope && <span className="inline-flex items-center align-middle text-fg-subtle mx-1"><MtlxIcon name="chevron-right" className="w-3 h-3" /></span>}
+                                    {scope && <span className="text-accent-fg-strong">{scope}</span>}
+                                    {scope && scopeLocked && !docReadOnly && <span className="text-warning"> (library, view only)</span>}
                                 </div>
                             </div>
                         ) : <div />}
@@ -7645,7 +7646,7 @@
                                 >
                                     <MtlxIcon name="share" className="w-3.5 h-3.5" />
                                     <span className="gtb-label">Add Node</span>
-                                    <span className="gtb-label inline-block text-[9px] text-gray-500 border border-gray-600 rounded px-1 leading-tight">Tab</span>
+                                    <span className="gtb-label inline-block text-[9px] text-fg-subtle border border-line-strong rounded px-1 leading-tight">Tab</span>
                                 </button>
                             )}
                             {parsed && (
@@ -7660,7 +7661,7 @@
                                 >
                                     <MtlxIcon name="trash" className="w-3.5 h-3.5" />
                                     <span className="gtb-label">Delete Nodes</span>
-                                    <span className="gtb-label inline-block text-[9px] text-gray-500 border border-gray-600 rounded px-1 leading-tight">Del</span>
+                                    <span className="gtb-label inline-block text-[9px] text-fg-subtle border border-line-strong rounded px-1 leading-tight">Del</span>
                                 </button>
                             )}
                             {parsed && (
@@ -7671,12 +7672,12 @@
                                     /* Borderless at rest like the rest of the bar, but a
                                        validation result keeps its coloured edge: that
                                        edge is the status, not decoration. */
-                                    className={'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-transparent hover:bg-gray-700/80 transition-colors whitespace-nowrap shrink-0 '
+                                    className={'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-transparent hover:bg-hover/80 transition-colors whitespace-nowrap shrink-0 '
                                         + (validateStatus && validateStatus.kind === 'valid'
-                                            ? 'border-green-500/60 text-green-300'
+                                            ? 'border-success-hue/60 text-success-text'
                                             : validateStatus && validateStatus.kind === 'invalid'
-                                                ? 'border-red-500/60 text-red-300'
-                                                : 'border-transparent text-gray-300 hover:border-gray-600')}
+                                                ? 'border-error-hue/60 text-error-text'
+                                                : 'border-transparent text-fg-secondary hover:border-line-strong')}
                                 >
                                     <MtlxIcon name={validateStatus && validateStatus.kind === 'valid' ? 'check'
                                         : validateStatus && validateStatus.kind === 'invalid' ? 'x' : 'copy-check'}
@@ -7699,8 +7700,8 @@
                                 aria-label={isFullscreen ? 'Exit' : 'Fullscreen'}
                                 className={'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded border transition-colors whitespace-nowrap shrink-0 '
                                     + (isFullscreen
-                                        ? 'bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70'
-                                        : 'bg-transparent border-transparent text-gray-300 hover:bg-gray-700/80 hover:border-gray-600')}
+                                        ? 'bg-accent-fill/70 border-accent-base text-on-accent hover:bg-accent-fill-hover/70'
+                                        : 'bg-transparent border-transparent text-fg-secondary hover:bg-hover/80 hover:border-line-strong')}
                             >
                                 <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
                                 <span className="gtb-label">{isFullscreen ? 'Exit' : 'Fullscreen'}</span>
@@ -7712,7 +7713,7 @@
                         <React.Fragment>
                             <aside
                                 style={{ width: leftWidth }}
-                                className="flex-none flex flex-col bg-gray-800/95 border-r border-gray-600 overflow-hidden font-mono">
+                                className="flex-none flex flex-col bg-surface-raised/95 border-r border-line-strong overflow-hidden font-mono">
                                 <ScopeList
                                     rows={scopeRows}
                                     scope={scope}
@@ -7748,7 +7749,7 @@
                                 onMouseDown={onLeftHandleMouseDown}
                                 title="Drag to resize"
                                 className={'flex-none w-1.5 cursor-col-resize transition-colors '
-                                    + (leftDragging ? 'bg-blue-500/70' : 'bg-transparent hover:bg-blue-500/50')}
+                                    + (leftDragging ? 'bg-accent-base/70' : 'bg-transparent hover:bg-accent-base/50')}
                             />
                         </React.Fragment>
                         )}
@@ -7792,7 +7793,7 @@
                                     onConnectEnd={onConnectEnd}
                                     isValidConnection={isValidConnection}
                                     connectionRadius={24}
-                                    connectionLineStyle={{ stroke: '#60a5fa', strokeWidth: 1.5 }}
+                                    connectionLineStyle={{ stroke: MtlxTheme.get('graph-edge-draft'), strokeWidth: 1.5 }}
                                     onEdgeUpdate={onEdgeUpdate}
                                     onEdgeUpdateStart={onEdgeUpdateStart}
                                     onEdgeUpdateEnd={onEdgeUpdateEnd}
@@ -7814,7 +7815,7 @@
                                     // (repositioned, not hidden; see the style tag above).
                                     proOptions={{ account: '', hideAttribution: false }}
                                 >
-                                    <Background color="#374151" gap={18} size={1.5} />
+                                    <Background color={MtlxTheme.get('graph-grid')} gap={18} size={1.5} />
                                     {/* Zoom + fit controls: a custom cluster docked
                                         to the TOP of the Types window instead of
                                         React Flow's own bottom-left <Controls>. */}
@@ -7826,13 +7827,13 @@
                                             pannable zoomable
                                             position="bottom-right"
                                             nodeColor={(n) => getNodeColor(n.data)}
-                                            nodeStrokeColor="#111827"
-                                            maskColor="rgba(17, 24, 39, 0.75)"
+                                            nodeStrokeColor={MtlxTheme.get('graph-minimap-stroke')}
+                                            maskColor={minimapMaskColor()}
                                             // Sits LEFT of the preview panel while
                                             // open, sliding to the corner when
                                             // collapsed. Explicit width/height make this a KNOWN box for fixed-arithmetic sizing.
                                             style={{
-                                                background: '#1f2937',
+                                                background: MtlxTheme.var('graph-minimap-bg'),
                                                 width: 200,
                                                 height: 150,
                                                 marginRight: minimapMarginRight,
@@ -7856,7 +7857,7 @@
                                             <button
                                                 onClick={() => setMinimapOpen(false)}
                                                 title="Minimize the minimap"
-                                                className="w-6 h-6 flex items-center justify-center rounded bg-gray-900/70 text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
+                                                className="w-6 h-6 flex items-center justify-center rounded bg-hud/70 text-hud-fg hover:bg-hud-hover hover:text-hud-fg-strong transition-colors"
                                             ><MtlxIcon name="minus" className="w-3.5 h-3.5" /></button>
                                         </Panel>
                                     )}
@@ -7891,7 +7892,7 @@
                                 sits below its measured height (hudTop); min-w-0
                                 lets the text wrap instead of overflowing. */}
                             {scopeLocked && (
-                                <div ref={lockBannerRef} className="absolute top-2 left-2 right-2 z-20 flex flex-wrap items-center justify-center gap-2 px-3 py-1.5 bg-amber-900/40 border border-amber-700/50 rounded-md text-[11px] text-amber-200 backdrop-blur">
+                                <div ref={lockBannerRef} className="absolute top-2 left-2 right-2 z-20 flex flex-wrap items-center justify-center gap-2 px-3 py-1.5 bg-warning-bg/40 border border-warning-border/50 rounded-md text-[11px] text-warning-text backdrop-blur">
                                     <MtlxIcon name="lock" className="w-3.5 h-3.5 shrink-0" />
                                     {docReadOnly ? (
                                         <>
@@ -7900,7 +7901,7 @@
                                             </span>
                                             <button
                                                 onClick={openExportDialog}
-                                                className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium bg-amber-800/60 hover:bg-amber-800 text-amber-100 transition-colors"
+                                                className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium bg-warning-bg-strong/60 hover:bg-warning-bg-strong text-warning-text-strong transition-colors"
                                             >
                                                 Export .mtlx
                                             </button>
@@ -7973,7 +7974,7 @@
 
                             {/* Error banner, centered along the top */}
                             {error && (
-                                <div className={'absolute left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-red-950/90 border border-red-800/60 text-red-200 text-sm rounded-lg px-4 py-2.5 break-words shadow-lg'} style={{ top: hudTop }}>
+                                <div className={'absolute left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-error-bg/90 border border-error-border/60 text-error-text-strong text-sm rounded-lg px-4 py-2.5 break-words shadow-lg'} style={{ top: hudTop }}>
                                     {error}
                                 </div>
                             )}
@@ -7982,21 +7983,21 @@
                                 above the type-color legend card (or its chip), in
                                 one flex column so it rides up/down with legendShowAll. */}
                             <div className="absolute bottom-2 left-2 z-30 flex flex-col items-start gap-1.5">
-                                <div className="flex items-center gap-0.5 bg-gray-800/80 backdrop-blur border border-gray-600 rounded-lg p-0.5">
+                                <div className="flex items-center gap-0.5 bg-control/80 backdrop-blur border border-line-strong rounded-lg p-0.5">
                                     <button
                                         onClick={() => { const inst = rfInstRef.current; if (inst) inst.zoomOut({ duration: 150 }); }}
                                         title="Zoom out"
-                                        className="w-6 h-6 flex items-center justify-center rounded text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
+                                        className="w-6 h-6 flex items-center justify-center rounded text-fg-secondary hover:bg-hover hover:text-fg transition-colors"
                                     ><MtlxIcon name="zoom-out" className="w-3.5 h-3.5" /></button>
                                     <button
                                         onClick={() => { const inst = rfInstRef.current; if (inst) inst.zoomIn({ duration: 150 }); }}
                                         title="Zoom in"
-                                        className="w-6 h-6 flex items-center justify-center rounded text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
+                                        className="w-6 h-6 flex items-center justify-center rounded text-fg-secondary hover:bg-hover hover:text-fg transition-colors"
                                     ><MtlxIcon name="zoom-in" className="w-3.5 h-3.5" /></button>
                                     <button
                                         onClick={() => fitViewSoon({ padding: 0.15, duration: 350 })}
                                         title="Fit view (F)"
-                                        className="w-6 h-6 flex items-center justify-center rounded text-gray-300 hover:bg-gray-700 hover:text-gray-100 transition-colors"
+                                        className="w-6 h-6 flex items-center justify-center rounded text-fg-secondary hover:bg-hover hover:text-fg transition-colors"
                                     ><MtlxIcon name="zoom-in-area" className="w-3.5 h-3.5" /></button>
                                 </div>
                                 {/* Wrapped so the geometry effect above can
@@ -8045,11 +8046,11 @@
                             onMouseDown={onSidebarHandleMouseDown}
                             title="Drag to resize"
                             className={'flex-none w-1.5 cursor-col-resize transition-colors '
-                                + (sidebarDragging ? 'bg-blue-500/70' : 'bg-transparent hover:bg-blue-500/50')}
+                                + (sidebarDragging ? 'bg-accent-base/70' : 'bg-transparent hover:bg-accent-base/50')}
                         />
                         <aside
                             style={{ width: sidebarWidth }}
-                            className="flex-none max-w-[70%] flex flex-col bg-gray-800/95 border-l border-gray-600 overflow-hidden font-mono">
+                            className="flex-none max-w-[70%] flex flex-col bg-surface-raised/95 border-l border-line-strong overflow-hidden font-mono">
                             {/* The preview target on a shaderball — same
                                 render pipeline as the docs page. Re-renders
                                 on every committed param edit and target change. */}
@@ -8062,8 +8063,8 @@
                                             : 'Pin the preview to this node, it stays put regardless of what you select next'}
                                         className={'absolute top-1 left-1 z-10 w-6 h-6 flex items-center justify-center rounded-full border backdrop-blur transition-colors '
                                             + (pinnedTarget
-                                                ? 'bg-blue-600/80 border-blue-400 text-white hover:bg-blue-500/80'
-                                                : 'bg-gray-900/70 border-gray-600 text-gray-300 hover:bg-gray-700/80')}
+                                                ? 'bg-accent-fill/80 border-accent-fg text-on-accent hover:bg-accent-fill-hover/80'
+                                                : 'bg-hud/70 border-hud-line text-hud-fg hover:bg-hud-hover/80')}
                                     >
                                         <MtlxIcon name={pinnedTarget ? 'pin-filled' : 'pin'} className="w-3.5 h-3.5" />
                                     </button>
@@ -8102,7 +8103,7 @@
                                             key="sendToViewer"
                                             onClick={sendToViewer}
                                             title="Open in Material Viewer"
-                                            className="h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80"
+                                            className="h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80"
                                         >
                                             <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
                                             <span className="ml-1.5 whitespace-nowrap">Send to Viewer</span>
@@ -8115,32 +8116,32 @@
                                             key="collapse"
                                             onClick={() => setParamsOpen(false)}
                                             title="Collapse the preview panel"
-                                            className="flex-none w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700/80 transition-colors"
+                                            className="flex-none w-6 h-6 flex items-center justify-center rounded text-fg-muted hover:text-fg-soft hover:bg-hover/80 transition-colors"
                                         >
                                             <MtlxIcon name="chevrons-right" className="w-4 h-4" />
                                         </button>
                                     ),
                                 })}
                             />
-                            <div className="flex flex-col border-b border-gray-700 bg-gray-900/70">
+                            <div className="flex flex-col border-b border-line bg-chrome/70">
                                 {/* Top Row: Color dot, Name, and docs button (collapse
                                     now lives in the preview strip's row 1). */}
                                 {/* Same height with or without the About this Node button:
                                     28px button + 16px padding + the 1px border-b that
                                     border-box min-height counts. */}
-                                <div className="flex items-center gap-2 px-3 py-2 min-h-[45px] border-b border-gray-800">
+                                <div className="flex items-center gap-2 px-3 py-2 min-h-[45px] border-b border-line-subtle">
                                     {scopeLocked && (
                                         <span className="flex-none" title="View only">
-                                            <MtlxIcon name="lock" className="w-3.5 h-3.5 text-amber-300" />
+                                            <MtlxIcon name="lock" className="w-3.5 h-3.5 text-warning" />
                                         </span>
                                     )}
                                     {selectedIds.length > 1 ? (
-                                        <span className="w-2 h-2 rounded-full flex-none bg-blue-400" />
+                                        <span className="w-2 h-2 rounded-full flex-none bg-accent-fg" />
                                     ) : displayNode ? (
                                         <span className="w-2 h-2 rounded-full flex-none"
                                             style={{ background: getNodeColor(displayNode.data) }} />
                                     ) : (
-                                        <span className="w-2 h-2 rounded-full flex-none bg-gray-600" />
+                                        <span className="w-2 h-2 rounded-full flex-none bg-fg-faint" />
                                     )}
                                     {selectedIds.length <= 1 && nameEditable && nameEditing ? (
                                         <div className="relative flex-1 min-w-0">
@@ -8148,8 +8149,8 @@
                                                 autoFocus
                                                 spellCheck={false}
                                                 onFocus={(e) => e.target.select()}
-                                                className={'w-full text-[13px] font-bold font-mono py-0.5 bg-gray-900 border rounded text-gray-100 focus:outline-none '
-                                                    + (nameIssue ? 'pl-1 pr-6 border-red-500' : 'px-1 border-gray-600')}
+                                                className={'w-full text-[13px] font-bold font-mono py-0.5 bg-surface-sunken border rounded text-fg focus:outline-none '
+                                                    + (nameIssue ? 'pl-1 pr-6 border-error-hue' : 'px-1 border-line-strong')}
                                                 title={nameIssue || ''}
                                                 value={nameDraft}
                                                 onChange={(e) => setNameDraft(e.target.value)}
@@ -8167,13 +8168,13 @@
                                                 }}
                                             />
                                             {nameIssue && (
-                                                <MtlxIcon name="x" className="w-3.5 h-3.5 text-red-500 pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2" />
+                                                <MtlxIcon name="x" className="w-3.5 h-3.5 text-error-hue pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2" />
                                             )}
                                         </div>
                                     ) : (
                                         <div
-                                            className={'text-[13px] font-bold text-gray-100 truncate font-mono flex-1'
-                                                + (selectedIds.length <= 1 && nameEditable ? ' cursor-text hover:text-white' : '')}
+                                            className={'text-[13px] font-bold text-fg truncate font-mono flex-1'
+                                                + (selectedIds.length <= 1 && nameEditable ? ' cursor-text hover:text-fg-strong' : '')}
                                             title={selectedIds.length <= 1 && nameEditable ? 'Click to rename' : undefined}
                                             onClick={selectedIds.length <= 1 && nameEditable ? startNameEdit : undefined}
                                         >
@@ -8195,19 +8196,19 @@
                                 </div>
 
                                 {nameEditing && nameIssue && (
-                                    <div className="mx-3 mb-1.5 -mt-1 px-2 py-1 rounded border border-red-800/60 bg-red-950/60 text-red-300 text-[11px]">{nameIssue}</div>
+                                    <div className="mx-3 mb-1.5 -mt-1 px-2 py-1 rounded border border-error-border/60 bg-error-bg/60 text-error-text text-[11px]">{nameIssue}</div>
                                 )}
 
                                 <div className={'overflow-hidden' + (isDefinitionCard ? '' : ' pb-1.5')}>
                                     {selectedIds.length <= 1 && displayNode ? (
                                         <div className="flex items-center gap-2 px-3 py-1">
-                                            <div className="text-[10px] text-gray-500 truncate font-mono flex-1">
+                                            <div className="text-[10px] text-fg-subtle truncate font-mono flex-1">
                                                 {displayNode.data.category}{displayNode.data.type ? ' : ' + displayNode.data.type : ''}
                                             </div>
 
                                             {(displayNode.data.lib || displayNode.data.group) && (
                                                 <div
-                                                    className="flex-none px-1 py-0.5 rounded text-[8px] leading-none font-mono bg-gray-950/50 border border-gray-700 text-gray-400 tracking-wide"
+                                                    className="flex-none px-1 py-0.5 rounded text-[8px] leading-none font-mono bg-surface-deep/50 border border-line text-fg-muted tracking-wide"
                                                     title="Library / Group"
                                                 >
                                                     {[displayNode.data.lib, displayNode.data.group].filter(Boolean).join('/')}
@@ -8222,13 +8223,13 @@
                                     {selectedIds.length <= 1 && displayNode && showSigPicker ? (
                                         <div className="flex items-center gap-2 px-3 py-1">
                                             <span
-                                                className="flex-none text-[9px] text-gray-500 uppercase tracking-wider"
+                                                className="flex-none text-[9px] text-fg-subtle uppercase tracking-wider"
                                                 title="This category has several signatures (distinct input/output type sets)"
                                             >sig</span>
                                             <span className="w-2 h-2 rounded-full flex-none"
                                                 style={{ background: typeColor(currentSigGroup ? currentSigGroup.type : '') }} />
                                             <select
-                                                className="flex-1 min-w-0 h-6 bg-gray-900 border border-gray-600 rounded px-1.5 py-0 text-[10px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none"
+                                                className="flex-1 min-w-0 h-6 bg-surface-sunken border border-line-strong rounded px-1.5 py-0 text-[10px] font-mono text-fg-soft focus:border-accent-base focus:outline-none"
                                                 title="Switch this node to another signature: inputs keeping their name, type and a customized value survive (wires included); the rest, including untouched defaults, follow the new signature"
                                                 value={currentSigGroup ? currentSigGroup.key : ''}
                                                 onChange={(e) => {
@@ -8256,11 +8257,11 @@
                                     {selectedIds.length <= 1 && displayNode && showVersionPicker ? (
                                         <div className="flex items-center gap-2 px-3 py-1">
                                             <span
-                                                className="flex-none text-[9px] text-gray-500 uppercase tracking-wider"
+                                                className="flex-none text-[9px] text-fg-subtle uppercase tracking-wider"
                                                 title="This signature has several versions"
                                             >ver</span>
                                             <select
-                                                className="flex-1 min-w-0 h-6 bg-gray-900 border border-gray-600 rounded px-1.5 py-0 text-[10px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none"
+                                                className="flex-1 min-w-0 h-6 bg-surface-sunken border border-line-strong rounded px-1.5 py-0 text-[10px] font-mono text-fg-soft focus:border-accent-base focus:outline-none"
                                                 title="Switch this node to another version. Ports are identical, only defaults may differ"
                                                 value={currentDefName}
                                                 onChange={(e) => {
@@ -8280,16 +8281,16 @@
                             </div>
                             <div className={'flex-1 min-h-0 overflow-y-auto custom-scrollbar py-1' + (isDefinitionCard ? ' px-0 [scrollbar-gutter:auto]' : ' px-2.5')}>
                                 {selectedIds.length > 1 ? (
-                                    <div className="text-[11px] text-gray-400 py-2 space-y-1.5">
+                                    <div className="text-[11px] text-fg-muted py-2 space-y-1.5">
                                         <div>{selectedIds.length} nodes selected.</div>
-                                        <div className="text-gray-500">
+                                        <div className="text-fg-subtle">
                                             Ctrl/Cmd+C to copy {'·'} Ctrl/Cmd+V to paste {'·'} Ctrl/Cmd+G to encapsulate {'·'} Del removes them all.
                                         </div>
                                         {scope === '' && (
                                             <button
                                                 onClick={encapsulateSelection}
                                                 title="Collapse the selected nodes into a new nodegraph"
-                                                className="h-7 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                                className="h-7 text-[11px] px-2 rounded border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors"
                                             >
                                                 Encapsulate into nodegraph (Ctrl+G)
                                             </button>
@@ -8318,13 +8319,13 @@
                                             <button
                                                 onClick={() => ungroupNodegraph(displayNode.data.name)}
                                                 title="Dissolve this nodegraph back into its nodes, keeping every connection"
-                                                className="h-7 text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                                className="h-7 text-[11px] px-2 rounded border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors"
                                             >
                                                 Ungroup (Ctrl+Shift+G)
                                             </button>
                                             <div className="flex items-center gap-1.5">
                                                 <input
-                                                    className="flex-1 min-w-0 px-1.5 py-0.5 placeholder-gray-600 bg-gray-900 border border-gray-600 rounded text-[11px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none"
+                                                    className="flex-1 min-w-0 px-1.5 py-0.5 placeholder-fg-faint bg-surface-sunken border border-line-strong rounded text-[11px] font-mono text-fg-soft focus:border-accent-base focus:outline-none"
                                                     value={promoteNameDraft}
                                                     placeholder="node name"
                                                     spellCheck={false}
@@ -8333,7 +8334,7 @@
                                                 <button
                                                     onClick={() => promoteNodegraph(displayNode.data.name, promoteNameDraft)}
                                                     title="Turn this nodegraph into a nodedef plus implementation graph and replace it with an instance"
-                                                    className="h-7 flex-none text-[11px] px-2 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                                    className="h-7 flex-none text-[11px] px-2 rounded border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors"
                                                 >
                                                     Convert to Definition
                                                 </button>
@@ -8350,7 +8351,7 @@
                                                 onClick={() => setIfaceMetaOpen((o) => !o)}
                                                 className={GROUP_HEADER_CLASS}
                                             >
-                                                <MtlxIcon name={ifaceMetaOpen ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5 text-gray-500" />
+                                                <MtlxIcon name={ifaceMetaOpen ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5 text-fg-subtle" />
                                                 <span className="truncate">Interface</span>
                                             </button>
                                             {ifaceMetaOpen && (
@@ -8362,21 +8363,21 @@
                                                             : !!displayNode.data.readOnly);
                                                         return (
                                                             <div className="flex items-center gap-1.5">
-                                                                <span className="w-24 flex-none text-[10px] text-gray-500 font-mono truncate">order</span>
+                                                                <span className="w-24 flex-none text-[10px] text-fg-subtle font-mono truncate">order</span>
                                                                 <MoveStack
                                                                     upDisabled={pinReadOnly || ifacePinPos.pos === 0}
                                                                     downDisabled={pinReadOnly || ifacePinPos.pos === ifacePinPos.count - 1}
                                                                     onUp={() => interfaceActions.moveInterfacePin(displayNode.id, -1)}
                                                                     onDown={() => interfaceActions.moveInterfacePin(displayNode.id, 1)}
                                                                 />
-                                                                <span className="text-[10px] text-gray-500 font-mono">{ifacePinPos.pos + 1} of {ifacePinPos.count}</span>
+                                                                <span className="text-[10px] text-fg-subtle font-mono">{ifacePinPos.pos + 1} of {ifacePinPos.count}</span>
                                                             </div>
                                                         );
                                                     })()}
                                                     {displayNode.id.indexOf('i:') === 0 && (
                                                         <React.Fragment>
                                                             <div className="flex items-center gap-1.5">
-                                                                <span className="w-24 flex-none text-[10px] text-gray-500 font-mono truncate">uiname</span>
+                                                                <span className="w-24 flex-none text-[10px] text-fg-subtle font-mono truncate">uiname</span>
                                                                 <IfaceMetaField
                                                                     value={displayNode.data.uiname}
                                                                     placeholder="(none)"
@@ -8385,7 +8386,7 @@
                                                                 />
                                                             </div>
                                                             <div className="flex items-center gap-1.5">
-                                                                <span className="w-24 flex-none text-[10px] text-gray-500 font-mono truncate">uifolder</span>
+                                                                <span className="w-24 flex-none text-[10px] text-fg-subtle font-mono truncate">uifolder</span>
                                                                 <IfaceMetaField
                                                                     value={displayNode.data.uifolder}
                                                                     placeholder="(none)"
@@ -8395,7 +8396,7 @@
                                                             </div>
                                                             {ifaceNumericType(displayNode.data.type) && (
                                                                 <div className="flex items-center gap-1.5">
-                                                                    <span className="w-24 flex-none text-[10px] text-gray-500 font-mono truncate">uimin</span>
+                                                                    <span className="w-24 flex-none text-[10px] text-fg-subtle font-mono truncate">uimin</span>
                                                                     <IfaceMetaField
                                                                         value={displayNode.data.uimin}
                                                                         placeholder="(none)"
@@ -8406,7 +8407,7 @@
                                                             )}
                                                             {ifaceNumericType(displayNode.data.type) && (
                                                                 <div className="flex items-center gap-1.5">
-                                                                    <span className="w-24 flex-none text-[10px] text-gray-500 font-mono truncate">uimax</span>
+                                                                    <span className="w-24 flex-none text-[10px] text-fg-subtle font-mono truncate">uimax</span>
                                                                     <IfaceMetaField
                                                                         value={displayNode.data.uimax}
                                                                         placeholder="(none)"
@@ -8415,10 +8416,10 @@
                                                                     />
                                                                 </div>
                                                             )}
-                                                            <label className="flex items-center gap-1.5 text-[10px] text-gray-500 font-mono">
+                                                            <label className="flex items-center gap-1.5 text-[10px] text-fg-subtle font-mono">
                                                                 <input
                                                                     type="checkbox"
-                                                                    className="h-3.5 w-3.5 accent-blue-500"
+                                                                    className="h-3.5 w-3.5 accent-accent-accent-base"
                                                                     checked={!!displayNode.data.uiadvanced}
                                                                     disabled={!!displayNode.data.readOnly}
                                                                     onChange={(e) => applyInterfaceMeta(displayNode.id, { uiadvanced: e.target.checked })}
@@ -8432,7 +8433,7 @@
                                         </div>
                                     ),
                                     !isDefinitionCard && !panelInputs.length && (
-                                        <div key="none" className="text-[11px] text-gray-500 py-2">This node has no parameters.</div>
+                                        <div key="none" className="text-[11px] text-fg-subtle py-2">This node has no parameters.</div>
                                     ),
                                     !isDefinitionCard && panelParamGroups.ungrouped.map(renderParamRow).concat(
                                         panelParamGroups.folders.map((f, fi) => {
@@ -8449,7 +8450,7 @@
                                                         onClick={() => setPanelFoldersOpen((prev) => Object.assign({}, prev, { [f.name]: !open }))}
                                                         className={GROUP_HEADER_CLASS}
                                                     >
-                                                        <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5 text-gray-500" />
+                                                        <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5 text-fg-subtle" />
                                                         <span className="truncate">{f.name}</span>
                                                     </button>
                                                     {open && <div className="pt-1.5">{f.inputs.map(renderParamRow)}</div>}
@@ -8469,9 +8470,9 @@
                                                 onClick={() => setDownstreamOpen((o) => !o)}
                                                 className={GROUP_HEADER_CLASS}
                                             >
-                                                <MtlxIcon name={downstreamOpen ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5 text-gray-500" />
+                                                <MtlxIcon name={downstreamOpen ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5 text-fg-subtle" />
                                                 <span className="truncate">Downstream Connections</span>
-                                                <span className="ml-auto flex-none text-[9px] text-gray-500 normal-case tracking-normal">{downstreamEdges.length}</span>
+                                                <span className="ml-auto flex-none text-[9px] text-fg-subtle normal-case tracking-normal">{downstreamEdges.length}</span>
                                             </button>
                                             {downstreamOpen && <div className="pt-1.5">{downstreamEdges.map((e) => {
                                                 const outName = e.sourceHandle.slice(4);
@@ -8483,7 +8484,7 @@
                                                         <button
                                                             onClick={() => focusNode(e.target, true)}
                                                             title="Select and show the node this output feeds"
-                                                            className="max-w-full inline-flex items-center gap-1 text-left text-[10px] text-blue-300 hover:text-blue-200 font-mono underline decoration-dotted truncate"
+                                                            className="max-w-full inline-flex items-center gap-1 text-left text-[10px] text-accent-fg-strong hover:text-accent-fg-bright font-mono underline decoration-dotted truncate"
                                                         >
                                                             <MtlxIcon name="arrow-right" className="w-3 h-3 shrink-0" />
                                                             <span className="truncate">{multiOut ? outName + ' → ' : 'to '}{e.target.slice(2)} ({inName})</span>
@@ -8494,7 +8495,7 @@
                                         </div>
                                     ),
                                 ] : (
-                                    <div className="text-[11px] text-gray-500 py-2">
+                                    <div className="text-[11px] text-fg-subtle py-2">
                                         {docReadOnly ? 'Click a node to inspect its parameters.' : 'Click a node to inspect and edit its parameters.'}
                                     </div>
                                 )}
@@ -8526,7 +8527,7 @@
                                 targetKey === "slx"
                                     ? generateSlxExportStages()
                                     : generateTargetSources({ mx: parsed.mx, renderable, label, targetKey })}
-                            overlayClassName="absolute inset-0 z-[55] flex items-center justify-center bg-gray-950/70"
+                            overlayClassName="absolute inset-0 z-[55] flex items-center justify-center bg-scrim/70"
                         />
                     )}
 
@@ -8534,12 +8535,12 @@
                         .mtlx / switching documents while dirty (never the
                         additive Import). See confirmReplace; z-[56] beats z-55/z-50 peers. */}
                     {confirmCloseOpen && (
-                        <div className="absolute inset-0 z-[56] flex items-center justify-center bg-gray-950/70"
+                        <div className="absolute inset-0 z-[56] flex items-center justify-center bg-scrim/70"
                             onMouseDown={closeConfirm}>
-                            <div className="bg-gray-800 border border-gray-600 rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
+                            <div className="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
                                 onMouseDown={(e) => e.stopPropagation()}>
-                                <div className="text-sm font-semibold text-gray-100 mb-1">Unsaved changes</div>
-                                <div className="text-[12px] text-gray-400 mb-4">
+                                <div className="text-sm font-semibold text-fg mb-1">Unsaved changes</div>
+                                <div className="text-[12px] text-fg-muted mb-4">
                                     This document has edits that haven't been exported. Export before
                                     continuing, discard them, or cancel.
                                 </div>
@@ -8566,7 +8567,7 @@
                                             setConfirmCloseOpen(false);
                                             if (a) a();
                                         }}
-                                        className="h-7 text-[11px] px-2.5 rounded border bg-blue-600/70 border-blue-500 text-white hover:bg-blue-500/70 transition-colors"
+                                        className="h-7 text-[11px] px-2.5 rounded border bg-accent-fill/70 border-accent-base text-on-accent hover:bg-accent-fill-hover/70 transition-colors"
                                     >Export & Continue</button>
                                 </div>
                             </div>
@@ -8600,8 +8601,8 @@
                     {/* Full-stage drop indicator */}
                     {dragOver && (
                         <div className="absolute inset-0 z-40 pointer-events-none p-2 sm:p-4">
-                            <div className="w-full h-full rounded-xl border-4 border-dashed border-blue-500/70 bg-blue-950/40 flex items-center justify-center">
-                                <div className="flex items-center gap-2 text-blue-200 text-lg font-semibold bg-gray-900/80 rounded-lg px-5 py-3">
+                            <div className="w-full h-full rounded-xl border-4 border-dashed border-accent-base/70 bg-drop-target/40 flex items-center justify-center">
+                                <div className="flex items-center gap-2 text-accent-fg-bright text-lg font-semibold bg-hud/80 rounded-lg px-5 py-3">
                                     <MtlxIcon name="file-upload" className="w-6 h-6" /> Drop to load
                                 </div>
                             </div>
@@ -8610,8 +8611,8 @@
 
                     {/* Loading overlay */}
                     {busy && (
-                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70">
-                            {status && <span className="text-sm text-gray-300 animate-pulse">{status}</span>}
+                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-veil/70">
+                            {status && <span className="text-sm text-fg-secondary animate-pulse">{status}</span>}
                             <div className="mtlx-loading-bar w-56" />
                         </div>
                     )}
@@ -8620,24 +8621,24 @@
                         nodegraph (changeScope) rebuilds the flow
                         synchronously; reuses the shared LoadingOverlay component. */}
                     <LoadingOverlay show={scopeBusy} label={'Loading graph' + '\u2026'}
-                        className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70"
-                        labelClassName="text-sm text-gray-300 animate-pulse"
+                        className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-veil/70"
+                        labelClassName="text-sm text-fg-secondary animate-pulse"
                         barWidthClass="w-56" />
 
                     {/* Action-busy overlay (items 2 & 3): a heavy,
                         doc-mutating action (Ctrl+G, deleting a nodegraph)
                         is in flight; actionBusy already carries a trailing ellipsis as the label. */}
                     <LoadingOverlay show={!!actionBusy} label={actionBusy || ''}
-                        className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-900/70"
-                        labelClassName="text-sm text-gray-300 animate-pulse"
+                        className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-veil/70"
+                        labelClassName="text-sm text-fg-secondary animate-pulse"
                         barWidthClass="w-56" />
 
                     {/* Empty state: nothing loaded, nothing loading */}
                     {emptyHint && (
                         <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
-                            <div className="text-center bg-gray-800/90 border border-gray-700 rounded-xl px-8 py-6">
-                                <MtlxIcon name="file-upload" className="w-10 h-10 block mx-auto mb-3 text-gray-400" />
-                                <div className="text-sm text-gray-300 font-medium">
+                            <div className="text-center bg-surface-raised/90 border border-line rounded-xl px-8 py-6">
+                                <MtlxIcon name="file-upload" className="w-10 h-10 block mx-auto mb-3 text-fg-muted" />
+                                <div className="text-sm text-fg-secondary font-medium">
                                     {status || (IN_VSCODE
                                         ? 'No document loaded yet.'
                                         : 'Drop a .mtlx (or a folder / .zip containing one) to begin.')}
@@ -8646,7 +8647,7 @@
                                     neither of which exist under VS Code (single opened
                                     .mtlx file). */}
                                 {!IN_VSCODE && (
-                                <div className="text-xs text-gray-500 mt-1.5">
+                                <div className="text-xs text-fg-subtle mt-1.5">
                                     Files can be dropped anywhere on the page — or use Open or Presets in the top left.
                                 </div>
                                 )}
@@ -8697,7 +8698,7 @@
                             textures={exportDialog.textures}
                             onExport={handleExportDialogSubmit}
                             onClose={() => setExportDialog(null)}
-                            overlayClassName="absolute inset-0 z-[55] flex items-center justify-center bg-gray-950/70"
+                            overlayClassName="absolute inset-0 z-[55] flex items-center justify-center bg-scrim/70"
                             coveredByConfirm={confirmCloseOpen}
                         />
                     )}
