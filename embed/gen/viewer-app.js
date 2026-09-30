@@ -924,7 +924,14 @@ function MaterialViewerApp({
     mtlxVersions.filter(v => v !== mtlxDefaultVersion).forEach(v => {
       fetch('js/materialx/' + v + '/JsMaterialXGenShader.js', {
         method: 'HEAD',
-        cache: 'no-store'
+        cache: 'no-store',
+        // Pin to same-origin: this probe's result gates whether the
+        // engine later injects this exact URL as an executable
+        // <script> (mtlx-engine.js's loadMxFactoryViaScript). Without
+        // this, a MITM'd redirect to a cross-origin host could make an
+        // absent/tampered version probe as "available" and feed that
+        // origin's response into the script loader.
+        mode: 'same-origin'
       }).then(res => {
         if (cancelled) return;
         setVersionAvailable(prev => Object.assign({}, prev, {
