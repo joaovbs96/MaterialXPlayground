@@ -309,6 +309,53 @@ function TeReport({ report, labelOf, title }) {
     );
 }
 
+// Header pill showing the contrast state; hover or click opens the report popover (click pins it).
+function TeContrastPill({ report, labelOf, showSeq }) {
+    const [hover, setHover] = React.useState(false);
+    const [pinned, setPinned] = React.useState(false);
+    const wrapRef = React.useRef(null);
+    const timer = React.useRef(0);
+    const popId = TE_ID + '-contrast-pop';
+    const open = hover || pinned;
+    React.useEffect(() => () => clearTimeout(timer.current), []);
+    React.useEffect(() => { if (showSeq) setPinned(true); }, [showSeq]);
+    React.useEffect(() => {
+        if (!pinned) return undefined;
+        const onDown = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) { setPinned(false); setHover(false); } };
+        window.addEventListener('pointerdown', onDown);
+        return () => window.removeEventListener('pointerdown', onDown);
+    }, [pinned]);
+    if (!report) return null;
+    const n = report.adjusted.length;
+    const bad = report.errors.length > 0;
+    const enter = () => { clearTimeout(timer.current); timer.current = setTimeout(() => setHover(true), 150); };
+    const leave = () => { clearTimeout(timer.current); timer.current = setTimeout(() => setHover(false), 200); };
+    const onKeyDown = (e) => {
+        if (e.key === 'Escape' && open) { e.stopPropagation(); e.preventDefault(); setPinned(false); setHover(false); }
+    };
+    const tone = bad
+        ? 'bg-warning-bg/30 border-warning-border/60 text-warning-text hover:bg-warning-bg/40'
+        : n ? 'bg-hover/40 border-line text-fg-soft hover:bg-hover/60' : 'border-line-subtle text-fg-muted hover:text-fg-soft';
+    return (
+        <div ref={wrapRef} className="relative flex-none" onMouseEnter={enter} onMouseLeave={leave} onKeyDown={onKeyDown}>
+            <button type="button" aria-expanded={open} aria-controls={popId} aria-haspopup="dialog"
+                onClick={() => { clearTimeout(timer.current); setPinned((p) => !p); setHover(false); }}
+                className={'inline-flex items-center gap-1 h-6 px-2 rounded-full border text-[10px] whitespace-nowrap ' + tone + ' ' + TE_FOCUS}>
+                <MtlxIcon name={bad ? 'alert-triangle' : n ? 'info-circle' : 'check'} className="w-3 h-3" />
+                {bad ? 'Contrast issue' : n ? n + ' adjusted' : 'Contrast OK'}
+            </button>
+            {open && (
+                <div id={popId} role="dialog" aria-label="Contrast report"
+                    className="absolute right-0 top-full pt-1.5 z-10 w-[300px] max-w-[80vw]">
+                    <div className="max-h-60 overflow-y-auto custom-scrollbar rounded-lg border border-line-strong bg-surface-raised shadow-2xl px-3 py-2.5">
+                        <TeReport report={report} labelOf={labelOf} />
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
 function TeTokenRow({ token, hex, overridden, onSet, onClear }) {
     return (
         <div className="flex items-center gap-2 py-1">
@@ -356,6 +403,9 @@ function MtlxThemeEditor({ open, openSeq, onClose }) {
     const [busy, setBusy] = React.useState(false);
     const [listTick, setListTick] = React.useState(0);
     const [liveTick, setLiveTick] = React.useState(0);
+    const [showSeq, setShowSeq] = React.useState(0);
+    const outsideRef = React.useRef(null);
+    const nameEdited = React.useRef(false);
 
     const apiOk = !!(T && typeof T.previewDraft === 'function' && typeof T.saveCustom === 'function');
 
@@ -387,6 +437,7 @@ function MtlxThemeEditor({ open, openSeq, onClose }) {
 
     const loadEntry = async (entry, asBaseline) => {
         const d = await teDraftFor(entry);
+        nameEdited.current = false;
         setDraft(d);
         setEditingId(entry.group === 'custom' && teCustomSpec(entry.id) ? entry.id : null);
         if (asBaseline) setBaseline(teKey(d));
@@ -405,11 +456,11 @@ function MtlxThemeEditor({ open, openSeq, onClose }) {
     const baseColorKey = baseline ? JSON.parse(baseline)[0] : '';
 
     const takenIds = () => new Set((T.list() || []).map((e) => e.id));
-    const makeSpec = (id) => {
+    const makeSpec = (id, label) => {
         const spec = {
             v: 1,
             id: id || editingId || 'custom:' + teSlug(draft.label),
-            label: (draft.label || '').trim().slice(0, TE_MAX_LABEL) || 'My theme',
+            label: (label || draft.label || '').trim().slice(0, TE_MAX_LABEL) || 'My theme',
             base: draft.base,
             seeds: Object.assign({}, draft.seeds),
             overrides: Object.assign({}, draft.overrides),
@@ -518,17 +569,25 @@ function MtlxThemeEditor({ open, openSeq, onClose }) {
     };
 
     const save = async (asNew) => {
-        if (!apiOk || !draft) return;
-        const id = !asNew && editingId ? editingId : teUniqueId(draft.label, takenIds());
+        if (!apiOk || !draft) return false;
+        let label = '';
+        if (!nameEdited.current && !(editingId && !asNew)) {
+            const used = new Set((T.list() || []).map((e) => String(e.label || '').toLowerCase()));
+            let n = 1;
+            while (used.has(n > 1 ? 'custom theme ' + n : 'custom theme')) n++;
+            label = n > 1 ? 'Custom theme ' + n : 'Custom theme';
+        }
+        const id = !asNew && editingId ? editingId : teUniqueId(label || draft.label, takenIds());
         setBusy(true);
         let res;
-        try { res = await T.saveCustom(makeSpec(id)); } catch (e) { res = { ok: false, error: teErrText(e, 'Could not save this theme.') }; }
+        try { res = await T.saveCustom(makeSpec(id, label)); } catch (e) { res = { ok: false, error: teErrText(e, 'Could not save this theme.') }; }
         setBusy(false);
         if (!res || !res.ok) {
-            setStatus({ tone: 'error', text: teErrText(res && res.error, 'Could not save this theme.') });
-            return;
+            const text = teErrText(res && res.error, 'Could not save this theme.');
+            setStatus({ tone: 'error', text });
+            return { ok: false, text };
         }
-        const saved = res.spec || makeSpec(id);
+        const saved = res.spec || makeSpec(id, label);
         previewSeq.current++;
         if (previewActive.current) { T.clearDraft(); previewActive.current = false; }
         T.setPreference(saved.id);
@@ -539,7 +598,30 @@ function MtlxThemeEditor({ open, openSeq, onClose }) {
         setStartFrom(TE_CURRENT);
         setReport(null);
         setStatus({ tone: 'ok', text: 'Saved "' + saved.label + '".', adjusted: Array.isArray(res.adjusted) ? res.adjusted : [] });
+        return { ok: true };
     };
+
+    // Outside click: close without saving when unchanged, else save then close; a blocked save keeps it open.
+    outsideRef.current = async () => {
+        if (!draft || busy || confirm || !apiOk) return;
+        if (!dirty) { close(); return; }
+        if (blocking) { setShowSeq((n) => n + 1); return; }
+        const r = await save(false);
+        if (r && r.ok) { close(); return; }
+        if (r) setReport({ adjusted: [], errors: [r.text] });
+        setShowSeq((n) => n + 1);
+    };
+    React.useEffect(() => {
+        if (!open) return undefined;
+        let off = null;
+        const onDown = (e) => {
+            const p = panelRef.current;
+            if (!p || p.contains(e.target) || teInPopover(e.target) || tePopoverOpen()) return;
+            if (outsideRef.current) outsideRef.current();
+        };
+        const t = setTimeout(() => { off = true; window.addEventListener('pointerdown', onDown); }, 0);
+        return () => { clearTimeout(t); if (off) window.removeEventListener('pointerdown', onDown); };
+    }, [open, openSeq]);
 
     const del = async () => {
         if (!editingId || typeof T.deleteCustom !== 'function') return;
@@ -592,6 +674,7 @@ function MtlxThemeEditor({ open, openSeq, onClose }) {
                 else throw new Error(notTheme);
             }
             setDraft({ label: spec.label, base: spec.base, seeds: Object.assign({}, spec.seeds), overrides: Object.assign({}, spec.overrides || {}), modifiers: teMods(spec.modifiers) });
+            nameEdited.current = true;
             setEditingId(null);
             setStartFrom(null);
             setImportOpen(false); setImportText(''); setImportError(''); setCode(null);
@@ -668,6 +751,7 @@ function MtlxThemeEditor({ open, openSeq, onClose }) {
                 <div className="flex items-center gap-2 mb-2.5">
                     <MtlxIcon name="palette" className="w-4 h-4 text-fg-muted" />
                     <h2 id={TE_ID + '-title'} className="flex-1 text-[13px] font-semibold text-fg">Theme editor</h2>
+                    <TeContrastPill report={report} labelOf={labelOf} showSeq={showSeq} />
                     <button type="button" onClick={requestClose} title="Close" aria-label="Close theme editor"
                         className={'w-7 h-7 inline-flex items-center justify-center rounded text-fg-muted hover:text-fg hover:bg-hover/60 ' + TE_FOCUS}>
                         <MtlxIcon name="x" className="w-4 h-4" />
@@ -680,7 +764,7 @@ function MtlxThemeEditor({ open, openSeq, onClose }) {
                     value={draft.label}
                     maxLength={TE_MAX_LABEL}
                     placeholder="My theme"
-                    onChange={(e) => update({ label: e.target.value.slice(0, TE_MAX_LABEL) })}
+                    onChange={(e) => { nameEdited.current = true; update({ label: e.target.value.slice(0, TE_MAX_LABEL) }); }}
                     className={TE_INPUT_CLS}
                 />
             </div>
@@ -730,11 +814,7 @@ function MtlxThemeEditor({ open, openSeq, onClose }) {
                             <TeSlider key={m.key} mod={m} value={teMods(draft.modifiers)[m.key]} onChange={(v) => setMod(m.key, v)} />
                         ))}
                     </div>
-                    <div className="mt-3 min-h-[18px]">
-                        {report
-                            ? <TeReport report={report} labelOf={labelOf} />
-                            : <div className="text-[11px] text-fg-subtle">{dirty ? 'Previewing…' : 'Changes preview live on this page.'}</div>}
-                    </div>
+                    {!report && <div className="mt-3 min-h-[18px] text-[11px] text-fg-subtle">{dirty ? 'Previewing…' : 'Changes preview live on this page.'}</div>}
                 </section>
 
                 <section>
