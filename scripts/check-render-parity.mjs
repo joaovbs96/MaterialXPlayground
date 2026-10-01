@@ -163,6 +163,8 @@ const ALLOW = [
   { key: "mtlxDebugShaders", file: "js/mtlx-engine.js", reason: "debug flag" },
   { key: "mtlxDebugShaders", file: "js/usd-scene-app.jsx", reason: "debug flag" },
   { key: "mtlxTheme", file: "js/shared/theme.js", reason: "site theme preference (light/dark/system), UI chrome only, not a render setting" },
+  { key: "mtlxCustomThemes", file: "js/shared/theme.js", reason: "label cache of saved custom themes, read before theme-custom.js loads; UI chrome only" },
+  { key: "mtlxCustomThemes", file: "js/shared/theme-custom.js", reason: "saved custom theme codes (web store; Electron and VS Code persist through their host hook), UI chrome only, not a render setting" },
   { key: "mtlxPerfLog", file: "js/mtlx-engine.js", reason: "debug flag" },
   { key: "mtlxPerfLog", file: "js/shell.jsx", reason: "debug flag" },
   { key: "mtlxPerfLog", file: "js/graph/model.jsx", reason: "debug flag" },

@@ -75,12 +75,14 @@
     </script>
     <script src="js/shared/theme-tokens.js"></script>
     <script>
-        // `theme` (auto or a registry id): read before theme.js, so a preset loads before first paint; never persisted.
-        // Absent, unknown or host-limited (vscode) means dark; auto follows the visitor's OS.
+        // `theme` (auto, a registry id or a theme code): read before theme.js, so a preset or a custom theme applies
+        // before first paint; never persisted. Absent, unknown, host-limited (vscode) or an invalid code means dark.
+        // A code (mtlx1.) passes through untouched: theme.js decodes it strictly and loads the engine on demand.
         (function () {
-            var t = (new URLSearchParams(window.location.search).get('theme') || '').trim().toLowerCase();
+            var raw = (new URLSearchParams(window.location.search).get('theme') || '').trim();
+            var t = raw.toLowerCase();
             var reg = (window.MTLX_THEME_TOKENS && window.MTLX_THEME_TOKENS.registry) || [];
-            window.__MTLX_THEME_PREF__ = t === 'auto' ? 'system' : (reg.some(function (e) { return e.id === t && (!e.hosts || e.hosts.indexOf('web') >= 0); }) ? t : 'dark');
+            window.__MTLX_THEME_PREF__ = /^mtlx\d+\./.test(raw) ? raw : t === 'auto' ? 'system' : (reg.some(function (e) { return e.id === t && (!e.hosts || e.hosts.indexOf('web') >= 0); }) ? t : 'dark');
             window.__MTLX_THEME_NO_PERSIST__ = true;
         })();
     </script>

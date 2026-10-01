@@ -11,7 +11,7 @@
 
 const path = require('path');
 const vscode = require('vscode');
-const { broadcastThemePreference, MaterialXEditorProvider, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel, isDocsPanelOpen, postDocsFilter, getSharedOutputChannel, logLine, disposeSharedOutputChannel, getPanelForUri, setPendingInitialView, postToDocumentPanel, onDidSelectInGraph, testApi } = require('./editorProvider');
+const { broadcastCustomThemes, onCustomThemeMeta, openThemeEditorInActivePanel, broadcastThemePreference, MaterialXEditorProvider, saveActiveGraph, undoActiveGraph, redoActiveGraph, openDocsPanel, isDocsPanelOpen, postDocsFilter, getSharedOutputChannel, logLine, disposeSharedOutputChannel, getPanelForUri, setPendingInitialView, postToDocumentPanel, onDidSelectInGraph, testApi } = require('./editorProvider');
 const mtlxSymbols = require('./mtlxSymbols');
 const validator = require('./validator');
 const { ValidationClient } = require('./validationClient');
@@ -30,7 +30,7 @@ const sceneProvider = require('./sceneProvider');
 const usdFileSet = require('./usdFileSet');
 const docScanner = require('./docScanner');
 const { errMsg } = require('./util');
-const { getSetting, getThemePreference } = require('./settingsHost');
+const { getSetting, getThemePreference, getCustomThemes, initCustomThemeMeta } = require('./settingsHost');
 const { MTLX_TEXTURE_EXTS } = require('../../js/shared/texture-formats.js');
 const formatter = require('./formatter');
 
@@ -458,7 +458,11 @@ function activate(context) {
     });
 
     // Theme setting: push to every open webview and the sidebar live.
+    initCustomThemeMeta(context.globalState);
+    onCustomThemeMeta((meta) => actionsProvider.postCustomThemes(meta));
+    context.subscriptions.push(vscode.commands.registerCommand('materialxPlayground.customizeTheme', () => openThemeEditorInActivePanel()));
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration('materialxPlayground.customThemes')) broadcastCustomThemes(getCustomThemes());
         if (!e.affectsConfiguration('materialxPlayground.theme')) return;
         const value = getThemePreference();
         broadcastThemePreference(value);

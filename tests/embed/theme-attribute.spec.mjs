@@ -1,4 +1,4 @@
-// tests/embed/theme-attribute.spec.mjs: the `theme` attribute (light | dark | auto | any registry id)
+// tests/embed/theme-attribute.spec.mjs: the `theme` attribute (light | dark | auto | any registry id | a custom theme code)
 // sets the iframe's data-theme, updates live without a reload, and never persists.
 
 import {
@@ -84,6 +84,27 @@ test('changing theme live updates the iframe without reloading it', async ({ pag
   await setProp(page, idx, 'theme', 'auto');
   await expect.poll(() => dataTheme(frame)).toBe('dark');
   expect(await frame.evaluate(() => window.__themeMarker)).toBe(1);
+});
+
+test('theme accepts a custom theme code: decoded in the iframe, base on the placeholder, invalid is dark', async ({ page, embedURL }) => {
+  // "Sand": light base, seeds #f6f1e7 / #2b2620 / #2659c9 (the docs/EMBEDDING.md example).
+  const code = 'mtlx1.LPbx5ysmICZZyQRzYW5kBFNhbmQA';
+  await page.emulateMedia({ colorScheme: 'dark' });
+  const { idx, frame } = await open(page, embedURL, { theme: code });
+  expect(await dataTheme(frame)).toBe('custom:sand');
+  expect(await frame.evaluate(() => document.documentElement.dataset.themeBase)).toBe('light');
+  const surface = () => frame.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--mtlx-surface-base').trim());
+  expect(await surface()).toBe('246 241 231');
+  const phBg = () => page.evaluate((i) => getComputedStyle(window.__viewers[i]).getPropertyValue('--ph-bg').trim(), idx);
+  expect(await phBg(), 'the placeholder reads the base from the code').toBe('#f3f4f6');
+
+  await frame.evaluate(() => { window.__themeMarker = 1; });
+  await setProp(page, idx, 'theme', 'mtlx1.not-a-real-code');
+  await expect.poll(() => dataTheme(frame)).toBe('dark');
+  await setProp(page, idx, 'theme', code);
+  await expect.poll(() => dataTheme(frame)).toBe('custom:sand');
+  expect(await frame.evaluate(() => window.__themeMarker)).toBe(1);
+  expect(await frame.evaluate(() => [window.localStorage.getItem('mtlxCustomThemes'), window.localStorage.getItem('mtlxTheme')])).toEqual([null, null]);
 });
 
 test('the embed never writes the theme preference to localStorage', async ({ page, embedURL }) => {

@@ -1,5 +1,5 @@
 // Theme engine: OKLab/OKLCH color math, WCAG contrast, recipe-based theme derivation, a contrast pass and runtime sources.
-// Build: scripts/build-theme.mjs resolves presets. Browser: loaded on demand only by js/gen/themes/vscode.js (VS Code webview).
+// Build: scripts/build-theme.mjs resolves presets. Browser: loaded on demand only (js/gen/themes/vscode.js, custom themes).
 // UMD: window.MtlxThemeEngine in the browser (then MTLX_THEME_TOKENS.onEngine(api) runs), module.exports under Node.
 (function (root, factory) {
     const api = factory(root);
@@ -449,11 +449,24 @@
         return d;
     }
 
-    function evalRecipe(r, token, seeds, baseMap, darkMap) {
+    // Modifier contrast c (-1..1) on a neutral mix amount: layers and lines (amount < 0.5) move away from the
+    // background by (1 + c/2), text levels toward the foreground by (1 - c/2). Tint t (0..1) moves the OKLab a/b
+    // of a derived neutral toward 20% of the accent's chroma at the accent's hue, keeping lightness.
+    function modAmount(a, c) { return a < 0.5 ? a * (1 + c / 2) : 1 - (1 - a) * (1 - c / 2); }
+
+    function tintHex(hex, accent, t) {
+        const x = toOklab(hex), y = toOklab(accent);
+        return fromOklab([x[0], x[1] + (0.2 * y[1] - x[1]) * t, x[2] + (0.2 * y[2] - x[2]) * t]);
+    }
+
+    function evalRecipe(r, token, seeds, baseMap, darkMap, mods) {
         if (!r || r.fixedFromBase) return normHex(token in baseMap ? baseMap[token] : darkMap[token]);
         const src = seeds[r.from];
         if (!src) throw new Error('theme-engine: recipe for "' + token + '" names unknown seed "' + r.from + '"');
-        if (r.mixToward) return mix(src, seeds[r.mixToward], r.amount);
+        if (r.mixToward) {
+            const m = mix(src, seeds[r.mixToward], mods.contrast ? modAmount(r.amount, mods.contrast) : r.amount);
+            return mods.tint ? tintHex(m, seeds.accent, mods.tint) : m;
+        }
         if (r.lightness != null || r.chroma != null || r.hue != null) return adjust(src, r);
         return normHex(src);
     }
@@ -465,7 +478,8 @@
         return out;
     }
 
-    // Full token map from a base ('dark' | 'light'), partial seeds and partial overrides (token -> hex).
+    // Full token map from a base ('dark' | 'light'), partial seeds, partial overrides (token -> hex) and optional
+    // modifiers { contrast, tint } (custom themes only; 0 or absent leaves the recipes untouched).
     // Returns { tokens, params, sources }; sources[token] is 'override', 'recipe' or 'base'.
     function deriveTheme(opts) {
         const o = opts || {};
@@ -480,10 +494,12 @@
         const recipes = (o.recipes || RECIPES)[base] || {};
         const tokens = {};
         const sources = {};
+        const mo = o.modifiers || {};
+        const mods = { contrast: Math.max(-1, Math.min(1, +mo.contrast || 0)), tint: Math.max(0, Math.min(1, +mo.tint || 0)) };
         Object.keys(darkMap).forEach(function (t) {
             if (t in overrides) { tokens[t] = normHex(overrides[t]); sources[t] = 'override'; return; }
             const r = recipes[t];
-            tokens[t] = evalRecipe(r, t, seeds, baseMap, darkMap);
+            tokens[t] = evalRecipe(r, t, seeds, baseMap, darkMap, mods);
             sources[t] = !r || r.fixedFromBase ? 'base' : 'recipe';
         });
         Object.keys(overrides).forEach(function (t) { if (!(t in darkMap)) throw new Error('theme-engine: override of unknown token "' + t + '"'); });
@@ -520,6 +536,13 @@
 
     // Moves each failing pair's FOREGROUND token in OKLCH lightness, away from its ground, by the smallest
     // step that passes. Locked tokens (seeds) never move; an unreachable pair throws naming the pair.
+    // Errors of the contrast pass carry the pair (fg, bg, kind, ratio, need, why: 'seed' | 'unreachable') for user messages.
+    function pairError(msg, p, ratio, need, why) {
+        const e = new Error(msg);
+        e.pair = { fg: p.fg, bg: p.bg, kind: p.kind, ratio: ratio, need: need, why: why };
+        return e;
+    }
+
     function enforceContrast(map, pairs, level, opts) {
         const o = opts || {};
         const need = LEVELS[level];
@@ -535,7 +558,8 @@
                 if (req == null) throw new Error('theme-engine: pair ' + p.fg + '|' + p.bg + ' has unknown kind "' + p.kind + '"');
                 if (!req || measurePair(tokens, p, o.params) >= req) continue;
                 const name = p.fg + '|' + p.bg;
-                if (locked.has(p.fg)) throw new Error('theme-engine: ' + label + 'pair ' + name + ' fails (' + measurePair(tokens, p, o.params).toFixed(2) + ' < ' + req + ') and its foreground is a seed');
+                const ratio = measurePair(tokens, p, o.params);
+                if (locked.has(p.fg)) throw pairError('theme-engine: ' + label + 'pair ' + name + ' fails (' + ratio.toFixed(2) + ' < ' + req + ') and its foreground is a seed', p, ratio, req, 'seed');
                 const bg = pairBg(tokens, p, o.params);
                 const lch = toOklch(tokens[p.fg]);
                 const dir = luminance(tokens[p.fg]) >= luminance(bg) ? 1 : -1;
@@ -546,7 +570,7 @@
                     if (measurePair(tokens, p, o.params, hex) >= req) found = hex;
                     else if (L <= 0 || L >= 1) break;
                 }
-                if (!found) throw new Error('theme-engine: ' + label + 'pair ' + name + ' (' + p.kind + ', needs ' + req + ') cannot be satisfied by moving ' + p.fg);
+                if (!found) throw pairError('theme-engine: ' + label + 'pair ' + name + ' (' + p.kind + ', needs ' + req + ') cannot be satisfied by moving ' + p.fg, p, ratio, req, 'unreachable');
                 if (!moved[p.fg]) moved[p.fg] = { from: tokens[p.fg] };
                 tokens[p.fg] = found;
                 moved[p.fg].to = found;
@@ -569,6 +593,64 @@
         const d = deriveTheme({ base: preset.base, seeds: preset.seeds, overrides: preset.overrides, params: preset.params, data: o.data });
         const c = enforceContrast(d.tokens, o.pairs || [], preset.contrast || 'AA', { params: d.params, name: o.name });
         return { base: d.base, seeds: d.seeds, tokens: c.tokens, params: d.params, sources: d.sources, moved: c.moved, report: c.report };
+    }
+
+    // ---- Custom themes ----
+    // Solid fills (accent, success, error) and accent-base that fail under on-accent move in OKLCH lightness away from
+    // it first: on-accent is shared by all of them, so the contrast pass cannot fix them. Overrides stay put.
+    function fitFills(tokens, pairs, need, params, keep) {
+        const moved = [];
+        pairs.forEach(function (p) {
+            const req = need[p.kind];
+            if (p.fg !== 'on-accent' || !/-fill(-|$)|^accent-base$/.test(p.bg) || keep[p.bg] || !req || measurePair(tokens, p, params) >= req) return;
+            const lch = toOklch(tokens[p.bg]);
+            const dir = luminance(tokens[p.fg]) >= luminance(tokens[p.bg]) ? -1 : 1;
+            for (let k = 1; k <= 500; k++) {
+                const L = lch[0] + dir * k * 0.002;
+                if (L < 0 || L > 1) break;
+                const t = Object.assign({}, tokens);
+                t[p.bg] = fromOklch([L, lch[1], lch[2]]);
+                if (measurePair(t, p, params) < req) continue;
+                moved.push({ fg: p.fg, bg: p.bg, token: p.bg, from: tokens[p.bg], to: t[p.bg] });
+                tokens[p.bg] = t[p.bg];
+                break;
+            }
+        });
+        return moved;
+    }
+
+    // A validated custom spec ({ base, seeds, overrides, modifiers }) to { ok, base, tokens, params, adjusted, report, error }.
+    // adjusted: [{ fg, bg, token, from, to }] per fixed pair (token is the color that moved; only surface-base and fg are
+    // locked, as for VS Code). ok false: tokens are the uncorrected derivation and error is a short user-facing message.
+    function resolveCustom(spec, opts) {
+        const o = opts || {};
+        const pairs = o.pairs || [];
+        const level = o.level || 'AA';
+        const d = deriveTheme({ base: spec.base, seeds: spec.seeds, overrides: spec.overrides, modifiers: spec.modifiers, data: o.data });
+        const out = { ok: true, base: d.base, tokens: d.tokens, params: d.params, adjusted: [], report: [], error: null };
+        try {
+            const fitted = Object.assign({}, d.tokens);
+            out.adjusted = fitFills(fitted, pairs, LEVELS[level] || LEVELS.AA, d.params, spec.overrides || {});
+            const c = enforceContrast(fitted, pairs, level, { params: d.params, name: 'custom', locked: ['surface-base', 'fg'] });
+            out.tokens = c.tokens;
+            out.report = c.report;
+            c.report.forEach(function (r) {
+                const m = c.moved[r.fg];
+                if (m && r.need && r.before < r.need) out.adjusted.push({ fg: r.fg, bg: r.bg, token: r.fg, from: m.from, to: m.to });
+            });
+        } catch (e) {
+            const q = e.pair;
+            out.ok = false;
+            out.error = !q ? 'These colors cannot all reach ' + level + ' contrast together. Pick other colors.'
+                : q.why === 'seed' ? 'Contrast too low: ' + q.fg + ' on ' + q.bg + ' is ' + q.ratio.toFixed(2) + ':1, needs ' + q.need + ':1. Change the base colors.'
+                    : q.fg + ' on ' + q.bg + ' cannot reach ' + q.need + ':1 contrast. Pick other colors.';
+            const need = LEVELS[level];
+            out.report = pairs.map(function (p) {
+                const r = measurePair(d.tokens, p, d.params);
+                return { fg: p.fg, bg: p.bg, kind: p.kind, need: need[p.kind], ratio: r, before: r, pass: !need[p.kind] || r >= need[p.kind] };
+            });
+        }
+        return out;
     }
 
     // ---- Runtime sources (VS Code) ----
@@ -767,7 +849,7 @@
         mix: mix, adjust: adjust, lighten: lighten, darken: darken, composite: composite,
         luminance: luminance, contrast: contrast, deltaE: deltaE,
         RECIPES: RECIPES, LEVELS: LEVELS,
-        deriveTheme: deriveTheme, measurePair: measurePair, enforceContrast: enforceContrast, resolvePreset: resolvePreset,
+        deriveTheme: deriveTheme, measurePair: measurePair, enforceContrast: enforceContrast, resolvePreset: resolvePreset, resolveCustom: resolveCustom,
         parseCssColor: parseCssColor, VSCODE_VARS: VSCODE_VARS, readVscode: readVscode, fitAccent: fitAccent,
         deriveVscode: deriveVscode, themeCss: themeCss, startVscode: startVscode, startSource: startSource,
     };

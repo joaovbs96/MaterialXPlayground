@@ -938,7 +938,7 @@ function saveSettings() {
     try {
         fsSync.writeFileSync(
             getSettingsPath(),
-            JSON.stringify({ openInNewWindow, showRecentInSystem, documentOpenView, safeMode, windowBounds, theme: themePref }),
+            JSON.stringify({ openInNewWindow, showRecentInSystem, documentOpenView, safeMode, windowBounds, theme: themePref, themeBase: customThemeBase, customThemes }),
             'utf8'
         );
     } catch (e) {
@@ -1440,15 +1440,23 @@ function themeBase(pref) {
     return themePrefsLib.themeBase(pref, THEME_REGISTRY);
 }
 function applyThemeSource(pref) {
-    nativeTheme.themeSource = pref === 'system' ? 'system' : themeBase(pref);
+    nativeTheme.themeSource = themePrefsLib.themeSource(pref, THEME_REGISTRY, customThemeBase);
 }
-let themePref = themePrefsLib.normalizeThemePref(readSettingsSync().theme, THEME_REGISTRY);
+const initialSettings = readSettingsSync();
+let themePref = themePrefsLib.normalizeThemePref(initialSettings.theme, THEME_REGISTRY);
+// Base of a custom preference as reported by the renderer; null until known.
+let customThemeBase = themePrefsLib.normalizeBase(initialSettings.themeBase);
+// Opaque theme codes: stored and handed to the renderer, never decoded here.
+let customThemes = themePrefsLib.sanitizeCustomThemes(initialSettings.customThemes);
 applyThemeSource(themePref);
 
 // Native chrome token of the resolved theme. A preset without its own
 // native-* value falls back to its base theme's, then dark.
 function nativeColor(key) {
-    const id = themePref === 'system' ? (nativeTheme.shouldUseDarkColors ? 'dark' : 'light') : themePref;
+    const custom = themePrefsLib.isCustomPref(themePref);
+    const id = themePref === 'system' || (custom && !customThemeBase)
+        ? (nativeTheme.shouldUseDarkColors ? 'dark' : 'light')
+        : (custom ? customThemeBase : themePref);
     const t = THEMES[id];
     const b = THEMES[themeBase(id)];
     return (t && t[key]) || (b && b[key]) || THEME_DARK[key];
@@ -1471,12 +1479,25 @@ function applyNativeTheme() {
 nativeTheme.on('updated', applyNativeTheme);
 
 // Wired to window.__mtlxThemePersist (preload.js) via the header switch.
-ipcMain.on('mtlx-set-theme', (event, value) => {
-    if (!THEME_PREFS.includes(value)) return;
+// Payload is { preference, base } (a bare string is accepted too); base only matters for custom themes.
+ipcMain.on('mtlx-set-theme', (event, payload) => {
+    const value = payload && typeof payload === 'object' ? payload.preference : payload;
+    const custom = themePrefsLib.isCustomPref(value);
+    if (!custom && !THEME_PREFS.includes(value)) return;
+    const base = custom ? themePrefsLib.normalizeBase(payload && payload.base) : null;
+    if (value === themePref && base === customThemeBase) return;
     themePref = value;
+    customThemeBase = base;
     applyThemeSource(value);
     saveSettings();
     applyNativeTheme();
+});
+
+// Custom theme codes: read synchronously by preload.js before page scripts, saved on change.
+ipcMain.on('mtlx-get-custom-themes', (event) => { event.returnValue = customThemes; });
+ipcMain.on('mtlx-set-custom-themes', (event, codes) => {
+    customThemes = themePrefsLib.sanitizeCustomThemes(codes);
+    saveSettings();
 });
 // macOS traffic lights: x is the cluster's left edge. Kept in sync with
 // the --mtlx-traffic-light-gutter reserve in js/site-header.css; change

@@ -16,7 +16,7 @@ const vscode = require('vscode');
 const fs = require('fs');
 const crypto = require('crypto');
 const actionsModel = require('./actionsModel');
-const { getThemePreference, setThemePreference } = require('./settingsHost');
+const { getThemePreference, setThemePreference, getCustomThemeMeta } = require('./settingsHost');
 const { getThemeChoices } = require('./themeChoices');
 const exampleGallery = require('./exampleGallery');
 const galleryModel = require('./exampleGalleryModel');
@@ -239,12 +239,18 @@ class MtlxActionsViewProvider {
             about,
             theme: getThemePreference(),
             themeChoices: getThemeChoices(),
+            customThemes: getCustomThemeMeta(),
         });
     }
 
     // Called on a materialxPlayground.theme change so the menu's check mark follows.
     postTheme(value) {
         if (this._view) this._view.webview.postMessage({ type: 'theme', value });
+    }
+
+    // Labels of the user's themes ({id, label}), reported by a Playground webview.
+    postCustomThemes(meta) {
+        if (this._view) this._view.webview.postMessage({ type: 'customThemes', themes: meta });
     }
 
     async resolveWebviewView(webviewView) {
@@ -290,6 +296,7 @@ class MtlxActionsViewProvider {
             return;
         }
         if (msg.type === 'setTheme') { await setThemePreference(msg.value); return; }
+        if (msg.type === 'customizeTheme') { vscode.commands.executeCommand('materialxPlayground.customizeTheme'); return; }
         if (msg.type === 'toggleExamples') { this._examplesExpanded = !!msg.expanded; return; }
         if (msg.type === 'toggleInsertNode') { this._insertNodeExpanded = !!msg.expanded; return; }
         if (msg.type === 'insertNode') { await this._insertNode(msg.category, msg.outputType); return; }

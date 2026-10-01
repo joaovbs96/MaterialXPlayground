@@ -285,6 +285,15 @@ const VIEW_DEPS = {
             'js/graph/graph-preview.jsx',
         ],
     },
+    // Dependency-only bundle for the Theme editor side panel (ThemeEditorHost
+    // below), loaded on the first 'mtlx-open-theme-editor' event.
+    themeEditor: {
+        css: [],
+        scripts: [],
+        babelScripts: ['js/shared/mtlx-ui.jsx'],
+        app: 'js/shared/theme-editor.jsx',
+        globalName: 'MtlxThemeEditor',
+    },
     scene: {
         css: [],
         // vendor/utif/UTIF.js: loadTifTexture (js/mtlx-engine.js) needs it for
@@ -1121,6 +1130,63 @@ function AboutDialog() {
     );
 }
 
+// Theme editor side panel: 'mtlx-open-theme-editor' (header Customize item, or a
+// host such as the VS Code sidebar) lazy-loads VIEW_DEPS.themeEditor once, then the
+// panel stays mounted (keep-alive). Closing returns focus to whatever opened it.
+function ThemeEditorHost() {
+    const [state, setState] = React.useState({ status: 'idle', open: false, seq: 0 });
+    const openRef = React.useRef(false);
+    const openerRef = React.useRef(null);
+
+    React.useEffect(() => {
+        if (EMBED) return undefined;
+        const onOpen = (e) => {
+            if (!openRef.current) {
+                const opener = e && e.detail && e.detail.opener;
+                openerRef.current = opener && opener.nodeType === 1 ? opener : document.activeElement;
+            }
+            openRef.current = true;
+            setState((s) => ({
+                status: s.status === 'idle' || s.status === 'error' ? 'loading' : s.status,
+                open: true,
+                seq: s.open ? s.seq : s.seq + 1,
+            }));
+        };
+        window.addEventListener('mtlx-open-theme-editor', onOpen);
+        return () => window.removeEventListener('mtlx-open-theme-editor', onOpen);
+    }, []);
+
+    React.useEffect(() => {
+        if (state.status !== 'loading') return;
+        loadViewDeps('themeEditor').then(
+            () => setState((s) => ({ ...s, status: 'ready' })),
+            (err) => {
+                console.error('[mtlx] Failed to load the theme editor', err);
+                if (window.mtlxRecordError) window.mtlxRecordError('Theme editor load failed: ' + String((err && err.message) || err));
+                openRef.current = false;
+                setState((s) => ({ ...s, status: 'error', open: false }));
+            },
+        );
+    }, [state.status]);
+
+    const onClose = React.useCallback(() => {
+        openRef.current = false;
+        setState((s) => ({ ...s, open: false }));
+        const el = openerRef.current;
+        openerRef.current = null;
+        if (el && el.isConnected && typeof el.focus === 'function') {
+            try { el.focus(); } catch (e) { /* not focusable */ }
+        }
+    }, []);
+
+    if (state.status !== 'ready' || !window.MtlxThemeEditor) return null;
+    return (
+        <ViewErrorBoundary view="theme-editor">
+            {React.createElement(window.MtlxThemeEditor, { open: state.open, openSeq: state.seq, onClose })}
+        </ViewErrorBoundary>
+    );
+}
+
 // ------------------------------------------------------------------
 // Shell component
 // ------------------------------------------------------------------
@@ -1430,6 +1496,7 @@ function Shell() {
             <DesktopNoticeBar />
             <DesktopSettingsDialog />
             <AboutDialog />
+            <ThemeEditorHost />
         </div>
     );
 }

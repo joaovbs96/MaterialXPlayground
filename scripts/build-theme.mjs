@@ -3,6 +3,7 @@
 // Generates js/gen/theme-tokens.css (dark as :root, light as :root[data-theme="light"]; custom properties only, an omitted
 // token falls back to dark) and, per preset registry id, js/gen/themes/<id>.css + .js resolved by js/shared/theme-engine.js.
 // Registry ids with base auto are runtime sources: js/gen/themes/<id>.js carries their pairs and overrides, no CSS.
+// Custom themes: js/gen/theme-pairs.js (contrast pairs) and js/gen/theme-groups.js (editor labels), both lazily loaded.
 // Usage: node scripts/build-theme.mjs [--check] (--check verifies, writes nothing).
 
 import { readFile, writeFile, mkdir, readdir, unlink } from "node:fs/promises";
@@ -14,6 +15,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
 const OUTPUT_PATH = path.join(REPO_ROOT, "js", "gen", "theme-tokens.css");
 const PRESET_DIR = path.join(REPO_ROOT, "js", "gen", "themes");
+const PAIRS_PATH = path.join(REPO_ROOT, "js", "gen", "theme-pairs.js");
+const GROUPS_PATH = path.join(REPO_ROOT, "js", "gen", "theme-groups.js");
 const CHECK_MODE = process.argv.includes("--check");
 
 const require = createRequire(import.meta.url);
@@ -165,13 +168,17 @@ function presetJs(id, r) {
 
 // Runtime source: registers { contrast, overrides, pairs } as MTLX_THEME_TOKENS.sources[id], then loads the engine
 // (document.write while the head parses, else a <script>) whose startSource(id) derives and applies the theme.
-function sourceJs(id) {
-  const entry = registry.find((e) => e.id === id);
-  const pairs = meta.contrast.map((p) => {
+function pairList() {
+  return meta.contrast.map((p) => {
     const o = { fg: p.fg, bg: p.bg, kind: p.kind };
     for (const k of ["alpha", "alphaParam", "under"]) if (p[k] !== undefined) o[k] = p[k];
     return o;
   });
+}
+
+function sourceJs(id) {
+  const entry = registry.find((e) => e.id === id);
+  const pairs = pairList();
   const overrides = JSON.stringify(meta.sources[id].overrides || {}, null, 4).replace(/\n/g, "\n        ");
   const list = pairs.map((p) => JSON.stringify(p)).join(",\n            ");
   return `// GENERATED FILE, DO NOT EDIT BY HAND. Theme source "${id}" (registry base auto) from scripts/theme-tokens-meta.mjs
@@ -204,8 +211,64 @@ function sourceJs(id) {
 `;
 }
 
+// Contrast pairs for custom themes: registers MTLX_THEME_TOKENS.customPairs, then pings js/shared/theme-custom.js.
+function pairsJs() {
+  const list = pairList().map((p) => JSON.stringify(p)).join(",\n            ");
+  return `// GENERATED FILE, DO NOT EDIT BY HAND. Contrast pairs for custom themes from scripts/theme-tokens-meta.mjs
+// by scripts/build-theme.mjs. Loaded on demand by js/shared/theme-custom.js together with js/shared/theme-engine.js.
+(function (root) {
+    'use strict';
+    var custom = {
+        contrast: 'AA',
+        pairs: [
+            ${list},
+        ],
+    };
+    if (typeof module === 'object' && module.exports) { module.exports = custom; return; }
+    var d = root.MTLX_THEME_TOKENS;
+    if (!d) return;
+    d.customPairs = custom;
+    if (typeof d.ping === 'function') d.ping();
+})(typeof self !== 'undefined' ? self : this);
+`;
+}
+
+// Editor groups in meta order: [{ group, label, tokens: [{ id, label, role }] }]; registers MTLX_THEME_TOKENS.groups.
+function groupsJs() {
+  const groups = [];
+  for (const t of TOKEN_NAMES) {
+    const m = meta.tokens[t];
+    let g = groups.find((x) => x.group === m.group);
+    if (!g) {
+      if (!meta.groupLabels[m.group]) fail(`error: theme group "${m.group}" has no label in scripts/theme-tokens-meta.mjs groupLabels`);
+      groups.push((g = { group: m.group, label: meta.groupLabels[m.group], tokens: [] }));
+    }
+    const label = meta.labels[t] || (m.group === "type" ? m.role : null);
+    if (!label) fail(`error: theme token "${t}" has no label in scripts/theme-tokens-meta.mjs labels`);
+    g.tokens.push({ id: t, label, role: m.role });
+  }
+  for (const t of Object.keys(meta.labels)) if (!(t in data.themes.dark)) fail(`error: label for unknown token "${t}"`);
+  const order = Object.keys(meta.groupLabels);
+  groups.sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group));
+  const body = groups.map((g) => JSON.stringify(g)).join(",\n        ");
+  return `// GENERATED FILE, DO NOT EDIT BY HAND. Token groups and labels for the custom theme editor, from
+// scripts/theme-tokens-meta.mjs (groupLabels, labels, roles) by scripts/build-theme.mjs. Loaded on demand.
+(function (root) {
+    'use strict';
+    var groups = [
+        ${body},
+    ];
+    if (typeof module === 'object' && module.exports) { module.exports = groups; return; }
+    var d = root.MTLX_THEME_TOKENS;
+    if (!d) return;
+    d.groups = groups;
+    if (typeof d.onGroups === 'function') d.onGroups();
+})(typeof self !== 'undefined' ? self : this);
+`;
+}
+
 function outputs() {
-  const files = new Map([[OUTPUT_PATH, render()]]);
+  const files = new Map([[OUTPUT_PATH, render()], [PAIRS_PATH, pairsJs()], [GROUPS_PATH, groupsJs()]]);
   for (const id of sourceIds) files.set(path.join(PRESET_DIR, `${id}.js`), sourceJs(id));
   for (const id of presetIds) {
     const r = resolvePreset(id);
@@ -236,10 +299,10 @@ if (CHECK_MODE) {
     if (actual !== text) fail(`[build-theme] ${rel(file)} is out of date; run \`npm run build:theme\``);
   }
   if (stale.length) fail(`[build-theme] stale preset output: ${stale.map(rel).join(", ")}; run \`npm run build:theme\``);
-  console.log(`[build-theme] js/gen/theme-tokens.css, ${presetIds.length} preset(s) and ${sourceIds.length} source(s) are up to date`);
+  console.log(`[build-theme] js/gen/theme-tokens.css, theme-pairs.js, theme-groups.js, ${presetIds.length} preset(s) and ${sourceIds.length} source(s) are up to date`);
 } else {
   await mkdir(PRESET_DIR, { recursive: true });
   for (const [file, text] of expected) await writeFile(file, text);
   for (const p of stale) await unlink(p);
-  console.log(`[build-theme] wrote js/gen/theme-tokens.css (${TOKEN_NAMES.length} tokens), ${presetIds.length} preset(s) and ${sourceIds.length} source(s) in js/gen/themes/`);
+  console.log(`[build-theme] wrote js/gen/theme-tokens.css (${TOKEN_NAMES.length} tokens), theme-pairs.js, theme-groups.js, ${presetIds.length} preset(s) and ${sourceIds.length} source(s) in js/gen/themes/`);
 }

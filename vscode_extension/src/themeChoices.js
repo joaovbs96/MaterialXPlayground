@@ -16,7 +16,9 @@ function groupOf(id) {
 
 // Built from the enum and its enumDescriptions (registry labels).
 function buildThemeChoices(configProps) {
-    const prop = (configProps || {})['materialxPlayground.theme'] || {};
+    const raw = (configProps || {})['materialxPlayground.theme'] || {};
+    // The setting is anyOf [enum of built-ins, custom:<slug> pattern]; a plain enum shape still works.
+    const prop = Array.isArray(raw.anyOf) ? (raw.anyOf.find((x) => x && Array.isArray(x.enum)) || {}) : raw;
     const ids = Array.isArray(prop.enum) ? prop.enum : ['vscode', 'system'];
     const descs = Array.isArray(prop.enumDescriptions) ? prop.enumDescriptions : [];
     return ids.map((id, i) => {

@@ -47,13 +47,15 @@ function load({ vscode = true, pref = 'vscode', kind, vars = {}, classes = [], b
     body: body ? makeBody() : null,
     querySelector: (s) => (s === 'meta[name="theme-color"]' ? meta : null),
     addEventListener: (t, h) => { (docListeners[t] = docListeners[t] || []).push(h); },
-    head: { children: [], appendChild(el) { this.children.push(el); } },
+    // js/shared/theme-custom.js (custom themes) is kept apart in `ext` so preset assertions stay exact; serve() runs it.
+    ext: [],
+    head: { children: [], appendChild(el) { if (/theme-custom.js$/.test(el.src || '')) document.ext.push(el); else this.children.push(el); } },
     createElement: (tag) => ({ tagName: tag, async: tag === 'script', textContent: '' }),
     readyState: parsing ? 'loading' : 'complete',
     currentScript: null,
     written: [],
     log: [],
-    write(h) { this.written.push(h); this.log.push(h); },
+    write(h) { if (/theme-custom.js/.test(h)) this.ext.push({ src: /src="([^"]+)"/.exec(h)[1], async: false }); else { this.written.push(h); this.log.push(h); } },
   };
   class CustomEvent { constructor(type, init) { this.type = type; this.detail = init && init.detail; } }
   class MutationObserver {
@@ -85,9 +87,7 @@ function load({ vscode = true, pref = 'vscode', kind, vars = {}, classes = [], b
   }
   document.currentScript = null;
   const run = (src, async) => {
-    let file;
-    if (/js\/shared\/theme-engine\.js$/.test(src)) file = path.join(root, 'js', 'shared', 'theme-engine.js');
-    else file = path.join(root, 'js', 'gen', 'themes', /themes\/([\w-]+)\.js$/.exec(src)[1] + '.js');
+    const file = path.join(root, src.replace(PAGE, '').replace(/[?#].*$/, ''));
     document.currentScript = { src, async };
     vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
     document.currentScript = null;
@@ -103,6 +103,7 @@ function load({ vscode = true, pref = 'vscode', kind, vars = {}, classes = [], b
     serve() {
       for (let guard = 0; guard < 10; guard++) {
         let progressed = false;
+        while (document.ext.length) { const el = document.ext.shift(); run(el.src, el.async); progressed = true; }
         while (document.written.length) {
           const h = document.written.shift();
           for (const m of h.matchAll(/<script src="([^"]+)"/g)) { run(m[1], false); progressed = true; }

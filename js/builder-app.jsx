@@ -20,6 +20,9 @@ const BUILDER_CONTROLS = [
 // radius is stored/edited as a bare number (the field is numeric, docs/
 // EMBEDDING.md); the "px" suffix is appended wherever it's emitted, since
 // embed-boot.js validates with CSS.supports and rejects a bare number.
+// A custom theme travels as its code (mtlx1.<payload>); the embed validates it and falls back to dark.
+const builderIsThemeCode = (v) => typeof v === 'string' && /^mtlx1\.[A-Za-z0-9_-]{1,8000}$/.test(v);
+const builderThemeAttrValue = (v) => (v === 'light' ? 'light' : builderIsThemeCode(v) ? v : 'dark');
 const BUILDER_THEME_DEFAULTS = { accent: '#3b82f6', surface: '#1f2937', text: '#d1d5db', radius: '4' };
 const builderRadiusPx = (v) => { const t = String(v == null ? '' : v).trim(); return t ? t + 'px' : ''; };
 
@@ -279,7 +282,7 @@ const parseBuilderHashSettings = () => {
         patch.backdrop = params.get('backdrop');
     }
     if (params.has('transparent')) patch.transparent = builderParseBool(params.get('transparent'));
-    if (params.has('theme')) patch.theme = params.get('theme') === 'light' ? 'light' : 'dark';
+    if (params.has('theme')) patch.theme = builderThemeAttrValue(params.get('theme'));
     if (params.has('accent')) patch.accent = params.get('accent');
     if (params.has('surface')) patch.surface = params.get('surface');
     if (params.has('text')) patch.text = params.get('text');
@@ -321,7 +324,7 @@ const buildShareParams = (s) => {
     if (cs) params.set('controls', cs);
     if (!isBuilderDefault('backdrop', s.backdrop)) params.set('backdrop', s.backdrop);
     if (s.transparent) params.set('transparent', '1');
-    if (s.theme === 'light') params.set('theme', 'light');
+    if (s.theme === 'light' || builderIsThemeCode(s.theme)) params.set('theme', s.theme);
     if (!isBuilderDefault('accent', s.accent)) params.set('accent', s.accent.trim());
     if (!isBuilderDefault('surface', s.surface)) params.set('surface', s.surface.trim());
     if (!isBuilderDefault('text', s.text)) params.set('text', s.text.trim());
@@ -1030,6 +1033,26 @@ function PreviewStage({
 function BuilderApp({ active } = {}) {
     const [settings, setSettings] = React.useState(() => ({ ...BUILDER_DEFAULTS, ...parseBuilderHashSettings() }));
     const patch = (values) => setSettings((s) => ({ ...s, ...values }));
+    // The user's saved themes (editor in the header); re-listed when they change.
+    const [customThemeTick, setCustomThemeTick] = React.useState(0);
+    React.useEffect(() => {
+        const bump = () => setCustomThemeTick((n) => n + 1);
+        window.addEventListener('mtlx-custom-themes-change', bump);
+        return () => window.removeEventListener('mtlx-custom-themes-change', bump);
+    }, []);
+    const themeChoice = React.useMemo(() => {
+        const options = ['dark', 'light'];
+        const labels = { dark: 'Dark', light: 'Light' };
+        let specs = [];
+        try { specs = (window.MtlxTheme && window.MtlxTheme.listCustom && window.MtlxTheme.listCustom()) || []; } catch (e) { specs = []; }
+        for (const spec of specs) {
+            try {
+                const code = window.MtlxTheme.encodeTheme(spec);
+                if (!options.includes(code)) { options.push(code); labels[code] = String(spec.label || spec.id); }
+            } catch (e) { /* unencodable theme: not offered */ }
+        }
+        return { options, labels };
+    }, [customThemeTick]);
     const {
         src, geometry, controls, backdrop, transparent, autorotate, env, exposure, envmap,
         geometryUrl, theme, accent, surface, text, radius, width, height, sizing, material, camera,
@@ -1345,7 +1368,7 @@ function BuilderApp({ active } = {}) {
         if (controlsStr) entries.push(['controls', controlsStr]);
         if (backdrop !== BUILDER_DEFAULTS.backdrop) entries.push(['backdrop', backdrop]);
         if (transparent) entries.push(['transparent', '1']);
-        if (theme === 'light') entries.push(['theme', 'light']);
+        if (theme === 'light' || builderIsThemeCode(theme)) entries.push(['theme', theme]);
         if (builderNorm(accent) !== builderNorm(BUILDER_THEME_DEFAULTS.accent)) entries.push(['accent', accent.trim()]);
         if (builderNorm(surface) !== builderNorm(BUILDER_THEME_DEFAULTS.surface)) entries.push(['surface', surface.trim()]);
         if (builderNorm(text) !== builderNorm(BUILDER_THEME_DEFAULTS.text)) entries.push(['text', text.trim()]);
@@ -1392,7 +1415,7 @@ function BuilderApp({ active } = {}) {
         if (controlsStr) attrs.push(`controls="${controlsStr}"`);
         if (backdrop !== BUILDER_DEFAULTS.backdrop) attrs.push(`backdrop="${backdrop}"`);
         if (transparent) attrs.push('transparent');
-        if (theme === 'light') attrs.push('theme="light"');
+        if (theme === 'light' || builderIsThemeCode(theme)) attrs.push(`theme="${builderEscAttr(theme)}"`);
         if (builderNorm(accent) !== builderNorm(BUILDER_THEME_DEFAULTS.accent)) attrs.push(`accent="${builderEscAttr(accent.trim())}"`);
         if (builderNorm(surface) !== builderNorm(BUILDER_THEME_DEFAULTS.surface)) attrs.push(`surface="${builderEscAttr(surface.trim())}"`);
         if (builderNorm(text) !== builderNorm(BUILDER_THEME_DEFAULTS.text)) attrs.push(`text="${builderEscAttr(text.trim())}"`);
@@ -1668,6 +1691,17 @@ function BuilderApp({ active } = {}) {
         </SectionCard>,
 
         <SectionCard key="look" icon="palette" title="Look" summary={themeSummary} defaultOpen={defaultOpen}>
+            <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium text-fg-muted">Theme</span>
+                <MtlxSelect
+                    value={theme}
+                    options={themeChoice.options.includes(theme) ? themeChoice.options : [...themeChoice.options, theme]}
+                    labels={themeChoice.options.includes(theme) ? themeChoice.labels : { ...themeChoice.labels, [theme]: 'Shared theme' }}
+                    onChange={(v) => patch({ theme: v })}
+                    defValue="dark"
+                    size="sm"
+                />
+            </div>
             <div>
                 <FieldLabel label="Theme preset" />
                 <div className="grid grid-cols-3 gap-2">

@@ -557,6 +557,28 @@
     window.__mtlxThemePersist = function (pref) {
         if (vscodeApi) vscodeApi.postMessage({ type: 'mtlx-set-theme-preference', value: pref });
     };
+    // Custom theme codes (opaque strings) come from the materialxPlayground.customThemes setting; decoding is theme.js's job.
+    try {
+        var rawCodes = JSON.parse(themeAttr('data-custom-themes') || '[]');
+        window.__MTLX_CUSTOM_THEMES__ = Array.isArray(rawCodes) ? rawCodes.filter(function (c) { return typeof c === 'string'; }) : [];
+    } catch (e) { window.__MTLX_CUSTOM_THEMES__ = []; }
+    function customThemeMeta() {
+        var list = window.MtlxTheme && window.MtlxTheme.listCustom ? window.MtlxTheme.listCustom() : [];
+        return list.map(function (s) { return { id: s.id, label: s.label }; });
+    }
+    window.__mtlxCustomThemesPersist = function (codes) {
+        if (vscodeApi) vscodeApi.postMessage({ type: 'mtlx-set-custom-themes', codes: codes, meta: customThemeMeta() });
+    };
+    // Sidebar labels for themes that arrived by Settings Sync: theme.js decodes codes lazily, so the first listCustom()
+    // after load starts it and the labels are reported on mtlx-custom-themes-change.
+    function reportCustomThemeMeta() {
+        var meta = customThemeMeta();
+        if (vscodeApi && meta.length) vscodeApi.postMessage({ type: 'mtlx-custom-theme-meta', meta: meta });
+    }
+    window.addEventListener('mtlx-custom-themes-change', reportCustomThemeMeta);
+    window.addEventListener('load', function () {
+        if (window.__MTLX_CUSTOM_THEMES__.length) reportCustomThemeMeta();
+    });
 
     // ------------------------------------------------------------------
     // Link interception: <base href="${baseUri}"> (webview.html) makes
@@ -1269,6 +1291,14 @@
         if (msg.type === 'mtlx-theme-preference') {
             window.__MTLX_THEME_PREF__ = msg.value;
             if (window.MtlxTheme) window.MtlxTheme.setPreference(msg.value, { persist: false });
+            return;
+        }
+        if (msg.type === 'mtlx-custom-themes') {
+            if (window.MtlxTheme && window.MtlxTheme.setCustomThemes && Array.isArray(msg.codes)) window.MtlxTheme.setCustomThemes(msg.codes, { persist: false });
+            return;
+        }
+        if (msg.type === 'mtlx-open-theme-editor') {
+            window.dispatchEvent(new CustomEvent('mtlx-open-theme-editor'));
             return;
         }
         if (msg.type === 'mtlx-save-result') { handleSaveResult(msg); return; }

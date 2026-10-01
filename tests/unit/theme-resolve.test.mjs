@@ -33,13 +33,15 @@ function load({ storage = makeStorage(), dark = true, globals = {}, body = true,
     body: body ? { classList: { contains: (c) => bodyClasses.has(c) } } : null,
     querySelector: (s) => (s === 'meta[name="theme-color"]' ? meta : null),
     addEventListener: (t, h) => { (docListeners[t] = docListeners[t] || []).push(h); },
-    head: { children: [], appendChild(el) { this.children.push(el); } },
+    // js/shared/theme-custom.js (custom themes) is kept apart in `ext` so preset assertions stay exact; serve() runs it.
+    ext: [],
+    head: { children: [], appendChild(el) { if (/theme-custom.js$/.test(el.src || '')) document.ext.push(el); else this.children.push(el); } },
     createElement: (tag) => ({ tagName: tag, async: tag === 'script' }),
     readyState: parsing ? 'loading' : 'complete',
     currentScript: null,
     written: [],
     log: [],
-    write(html) { this.written.push(html); this.log.push(html); },
+    write(html) { if (/theme-custom.js/.test(html)) this.ext.push({ src: /src="([^"]+)"/.exec(html)[1], async: false }); else { this.written.push(html); this.log.push(html); } },
   };
   class CustomEvent { constructor(type, init) { this.type = type; this.detail = init && init.detail; } }
   class MutationObserver { constructor(cb) { this.cb = cb; observers.push(this); } observe() {} }
@@ -63,8 +65,7 @@ function load({ storage = makeStorage(), dark = true, globals = {}, body = true,
   }
   document.currentScript = null;
   const runPreset = (src, async) => {
-    const id = /themes\/([\w-]+)\.js$/.exec(src)[1];
-    const file = path.join(root, 'js', 'gen', 'themes', id + '.js');
+    const file = path.join(root, src.replace(PAGE, '').replace(/[?#].*$/, ''));
     document.currentScript = { src, async };
     vm.runInContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
     document.currentScript = null;
@@ -85,6 +86,7 @@ function load({ storage = makeStorage(), dark = true, globals = {}, body = true,
     serve() {
       for (let guard = 0; guard < 10; guard++) {
         let progressed = false;
+        while (document.ext.length) { const el = document.ext.shift(); runPreset(el.src, el.async); progressed = true; }
         while (document.written.length) {
           const html = document.written.shift();
           for (const m of html.matchAll(/<script src="([^"]+)"/g)) { runPreset(m[1], false); progressed = true; }

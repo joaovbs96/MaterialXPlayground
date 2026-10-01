@@ -64,7 +64,7 @@ in-page, for reference while you work.
 | `forcetransparency` | boolean | *(off, or the visitor's last Settings choice)* | Renders materials that have opacity or transmission with real alpha blending instead of the default opaque preview. Not the same feature as `transparent` above. See [Force transparency](#force-transparency). |
 | `displacement` | boolean | on | Enables the CPU-side mesh displacement pass; off previews the undisplaced mesh. This tab-only setting never touches the visitor's shared site preference. |
 | `previewsubdivision` | integer `0`-`3` | `2` | Loop subdivision level applied ahead of displacement, capped per-mesh against a triangle budget. This tab-only setting never touches the visitor's shared site preference. |
-| `theme` | `dark`, `light`, `auto`, or a theme id (see Theming) | `dark` | Look of the viewer's own UI, loading screen included. `auto` follows the visitor's OS setting live; an unknown value behaves as `dark`. Never persisted for an embed. See [Theming](#theming). |
+| `theme` | `dark`, `light`, `auto`, a theme id, or a custom theme code (see Theming) | `dark` | Look of the viewer's own UI, loading screen included. `auto` follows the visitor's OS setting live; an unknown value or an invalid code behaves as `dark`. Never persisted for an embed. See [Theming](#theming). |
 | `accent` | CSS color | `#3b82f6` | HUD accent color (active state, focus outline, slider fill). See [Theming](#theming). |
 | `surface` | CSS color | `#1f2937` | HUD button/panel background color. See [Theming](#theming). |
 | `text` | CSS color | `#d1d5db` | HUD text/icon color. See [Theming](#theming). |
@@ -213,7 +213,7 @@ reloads the iframe (a real navigation, with a fresh `ready` handshake).
 | `geometryurl` | `.geometryUrl` | URL string (`.obj`/`.glb`/`.gltf`) | (none) | Yes |
 | `transparent` | `.transparent` | boolean | off | Yes |
 | `forcetransparency` | `.forceTransparency` | boolean | off | Yes |
-| `theme` | `.theme` | `dark`, `light`, `auto`, theme id | `dark` | Yes |
+| `theme` | `.theme` | `dark`, `light`, `auto`, theme id, theme code | `dark` | Yes |
 | `accent` | `.accent` | CSS color | `#3b82f6` | Yes |
 | `surface` | `.surface` | CSS color | `#1f2937` | Yes |
 | `text` | `.text` | CSS color | `#d1d5db` | Yes |
@@ -306,6 +306,21 @@ Theme ids and labels:
 | `hc-light` | High contrast light |
 | `dim` | Dim |
 | `paper` | Paper |
+
+**Custom themes.** `theme` also accepts a custom theme code, the string the Playground's theme editor
+copies when you share a theme. It starts with `mtlx1.`, for example:
+
+```html
+<materialx-viewer src="..." theme="mtlx1.LPbx5ysmICZZyQRzYW5kBFNhbmQA"></materialx-viewer>
+```
+
+The viewer decodes the code, derives the full palette and applies it, keeping every text and control at WCAG AA
+contrast. A code is case-sensitive (keep its letters exactly as copied) and is at most 8192 characters. The
+placeholder reads the theme's base from the code itself (`mtlx1.L...` is light-based, `mtlx1.D...` dark-based),
+so it matches before the viewer loads. A code that cannot be decoded behaves as `dark`; a valid code whose colors
+cannot reach AA contrast shows its base theme (`light` or `dark`). Codes are strictly validated: they carry only
+`#rrggbb` colors for known color roles, a short name and two numeric modifiers, so a code cannot inject CSS,
+markup or URLs into the viewer.
 
 Four params (`accent`, `surface`, `text`, `radius`) map to CSS custom properties consumed by
 `embed/embed-controls.css` (the HUD strip's own stylesheet), which defines them on `:root`

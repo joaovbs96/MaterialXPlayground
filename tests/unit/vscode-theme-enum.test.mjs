@@ -8,7 +8,8 @@ const tokens = require('../../js/shared/theme-tokens.js');
 const pkg = require('../../package.json');
 const { buildThemeChoices } = require('../../vscode_extension/src/themeChoices.js');
 
-const prop = pkg.contributes.configuration.properties['materialxPlayground.theme'];
+const themeProp = pkg.contributes.configuration.properties['materialxPlayground.theme'];
+const prop = { ...themeProp, ...themeProp.anyOf[0] };
 
 test('theme enum is vscode, system, then every other registry id, in order', () => {
   assert.ok(Array.isArray(tokens.registry) && tokens.registry.length >= 4);
@@ -42,4 +43,14 @@ test('sidebar choices carry the registry groups', () => {
   }
   assert.equal(choices[0].id, 'vscode');
   assert.equal(choices[1].id, 'system');
+});
+
+test('theme setting also accepts custom:<slug>, and customThemes is a capped string array', () => {
+  const pattern = new RegExp(themeProp.anyOf[1].pattern);
+  assert.ok(pattern.test('custom:my-theme'));
+  assert.ok(!pattern.test('custom:Bad Slug'));
+  const ct = pkg.contributes.configuration.properties['materialxPlayground.customThemes'];
+  assert.equal(ct.type, 'array');
+  assert.equal(ct.items.type, 'string');
+  assert.deepEqual(ct.default, []);
 });

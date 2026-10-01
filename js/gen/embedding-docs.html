@@ -154,9 +154,9 @@ in-page, for reference while you work.</p>
 </tr>
 <tr>
 <td><code>theme</code></td>
-<td><code>dark</code>, <code>light</code>, <code>auto</code>, or a theme id (see Theming)</td>
+<td><code>dark</code>, <code>light</code>, <code>auto</code>, a theme id, or a custom theme code (see Theming)</td>
 <td><code>dark</code></td>
-<td>Look of the viewer&#39;s own UI, loading screen included. <code>auto</code> follows the visitor&#39;s OS setting live; an unknown value behaves as <code>dark</code>. Never persisted for an embed. See <a href="#theming">Theming</a>.</td>
+<td>Look of the viewer&#39;s own UI, loading screen included. <code>auto</code> follows the visitor&#39;s OS setting live; an unknown value or an invalid code behaves as <code>dark</code>. Never persisted for an embed. See <a href="#theming">Theming</a>.</td>
 </tr>
 <tr>
 <td><code>accent</code></td>
@@ -487,7 +487,7 @@ reloads the iframe (a real navigation, with a fresh <code>ready</code> handshake
 <tr>
 <td><code>theme</code></td>
 <td><code>.theme</code></td>
-<td><code>dark</code>, <code>light</code>, <code>auto</code>, theme id</td>
+<td><code>dark</code>, <code>light</code>, <code>auto</code>, theme id, theme code</td>
 <td><code>dark</code></td>
 <td>Yes</td>
 </tr>
@@ -690,6 +690,17 @@ the viewer itself loads.</p>
 <td>Paper</td>
 </tr>
 </tbody></table>
+<p><strong>Custom themes.</strong> <code>theme</code> also accepts a custom theme code, the string the Playground&#39;s theme editor
+copies when you share a theme. It starts with <code>mtlx1.</code>, for example:</p>
+<pre><code class="language-html">&lt;materialx-viewer src=&quot;...&quot; theme=&quot;mtlx1.LPbx5ysmICZZyQRzYW5kBFNhbmQA&quot;&gt;&lt;/materialx-viewer&gt;
+</code></pre>
+<p>The viewer decodes the code, derives the full palette and applies it, keeping every text and control at WCAG AA
+contrast. A code is case-sensitive (keep its letters exactly as copied) and is at most 8192 characters. The
+placeholder reads the theme&#39;s base from the code itself (<code>mtlx1.L...</code> is light-based, <code>mtlx1.D...</code> dark-based),
+so it matches before the viewer loads. A code that cannot be decoded behaves as <code>dark</code>; a valid code whose colors
+cannot reach AA contrast shows its base theme (<code>light</code> or <code>dark</code>). Codes are strictly validated: they carry only
+<code>#rrggbb</code> colors for known color roles, a short name and two numeric modifiers, so a code cannot inject CSS,
+markup or URLs into the viewer.</p>
 <p>Four params (<code>accent</code>, <code>surface</code>, <code>text</code>, <code>radius</code>) map to CSS custom properties consumed by
 <code>embed/embed-controls.css</code> (the HUD strip&#39;s own stylesheet), which defines them on <code>:root</code>
 with the defaults below as fallbacks:</p>

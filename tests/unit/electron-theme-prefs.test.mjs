@@ -28,3 +28,20 @@ test('themeBase never returns auto; hosts naming electron or web are kept', () =
   assert.deepEqual(P.themePrefs(reg), ['system', 'a', 'b']);
   assert.equal(P.themeBase('a', reg), 'light');
 });
+
+test('custom preferences pass through by id shape; base comes from the renderer', () => {
+  assert.equal(P.normalizeThemePref('custom:my-theme', data.registry), 'custom:my-theme');
+  assert.equal(P.normalizeThemePref('custom:Bad Slug', data.registry), 'system');
+  assert.equal(P.themeSource('custom:x', data.registry, 'light'), 'light');
+  assert.equal(P.themeSource('custom:x', data.registry, undefined), 'system');
+  assert.equal(P.themeSource('system', data.registry), 'system');
+  assert.equal(P.themeSource('paper', data.registry), 'light');
+  assert.equal(P.themeBase('custom:x', data.registry, 'bogus'), 'dark');
+});
+
+test('custom theme codes are string-checked and capped, never interpreted', () => {
+  assert.deepEqual(P.sanitizeCustomThemes('nope'), []);
+  assert.deepEqual(P.sanitizeCustomThemes(['mtlx1.abc', 5, null, '', 'x'.repeat(P.MAX_CUSTOM_CODE_LENGTH + 1)]), ['mtlx1.abc']);
+  const many = Array.from({ length: 80 }, (_, i) => 'c' + i);
+  assert.equal(P.sanitizeCustomThemes(many).length, P.MAX_CUSTOM_THEMES);
+});

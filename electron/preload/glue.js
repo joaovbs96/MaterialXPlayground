@@ -7,6 +7,14 @@
     window.__mtlxGlueInstalled = true;
     if (!window.mtlxDesktop) return;
 
+    // Reports the resolved base of a custom theme so main can set nativeTheme and the titlebar.
+    window.addEventListener('mtlx-theme-change', function (e) {
+        var d = e && e.detail;
+        if (d && typeof d.preference === 'string' && d.preference.indexOf('custom:') === 0 && window.__mtlxThemeReport) {
+            window.__mtlxThemeReport(d.preference, d.base);
+        }
+    });
+
     // Mirrors bootstrap.js's handleOpen('both') exactly, but skips base64:
     // contextBridge/IPC carry Uint8Array/TypedArrays by copy natively, unlike
     // the webview postMessage channel bootstrap.js has to work around.

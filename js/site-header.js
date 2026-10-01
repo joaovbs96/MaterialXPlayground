@@ -125,12 +125,14 @@
         palette: tablerSvg('<path d="M12 21a9 9 0 0 1 0 -18c4.97 0 9 3.582 9 8c0 1.06 -.474 2.078 -1.318 2.828c-.844 .75 -1.989 1.172 -3.182 1.172h-2.5a2 2 0 0 0 -1 3.75a1.3 1.3 0 0 1 -1 2.25" /><path d="M8.5 10.5m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /><path d="M12.5 7.5m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /><path d="M16.5 10.5m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />')
     };
     var ICON_THEME_CHECK = tablerSvg('<path d="M5 12l5 5l10 -10" />').replace('<svg ', '<svg class="mtlx-theme-check" ');
+    // Tabler adjustments: the Customize item that opens the Theme editor panel.
+    var ICON_CUSTOMIZE = tablerSvg('<path d="M4 10a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" /><path d="M6 4v4" /><path d="M6 12v8" /><path d="M10 16a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" /><path d="M12 4v10" /><path d="M12 18v2" /><path d="M16 7a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" /><path d="M18 4v1" /><path d="M18 9v11" />');
     function themeIcon(c) {
         if (THEME_ICONS[c.id]) return THEME_ICONS[c.id];
         return c.group === 'accessibility' ? THEME_ICONS.contrast : THEME_ICONS.palette;
     }
     function escAttr(v) { return String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
-    // System first, then standard, then labeled Accessibility / Presets sections.
+    // System first, then standard, then labeled Accessibility / Presets / My themes sections.
     function themeSections() {
         var list = (window.MtlxTheme && window.MtlxTheme.list && window.MtlxTheme.list()) || [];
         function pick(g) { return list.filter(function (c) { return c.group === g; }); }
@@ -142,13 +144,29 @@
         var more = [];
         if (pick('accessibility').length) more.push({ label: 'Accessibility', items: pick('accessibility') });
         if (pick('presets').length) more.push({ label: 'Presets', items: pick('presets') });
+        if (pick('custom').length) more.push({ label: 'My themes', items: pick('custom') });
         return { top: top, more: more };
     }
+    // The label span is filled by fillThemeLabels (textContent): custom theme labels are user text.
     function themeItemHtml(c) {
         return '<button type="button" role="menuitemradio" aria-checked="false" tabindex="-1"' +
             ' class="mtlx-menu-item mtlx-theme-item" data-theme-choice="' + escAttr(c.id) + '">' +
-            themeIcon(c) + '<span class="mtlx-menu-label">' + escAttr(c.label) + '</span>' + ICON_THEME_CHECK +
+            themeIcon(c) + '<span class="mtlx-menu-label"></span>' + ICON_THEME_CHECK +
             '</button>';
+    }
+    function fillThemeLabels(root) {
+        if (!root) return;
+        var s = themeSections();
+        var byId = {};
+        s.top.concat.apply(s.top, s.more.map(function (g) { return g.items; })).forEach(function (c) { byId[c.id] = c.label; });
+        Array.prototype.forEach.call(root.querySelectorAll('[data-theme-choice]'), function (el) {
+            var span = el.querySelector('.mtlx-menu-label');
+            if (span) span.textContent = String(byId[el.getAttribute('data-theme-choice')] || '');
+        });
+    }
+    function customizeItemHtml() {
+        return '<button type="button" role="menuitem" tabindex="-1" class="mtlx-menu-item mtlx-theme-item mtlx-theme-customize"' +
+            ' data-theme-action="customize">' + ICON_CUSTOMIZE + '<span class="mtlx-menu-label">Customize&hellip;</span></button>';
     }
     function themeMenuHtml() {
         var s = themeSections();
@@ -159,7 +177,7 @@
                 html += '<div class="mtlx-theme-group" role="presentation">' + g.label + '</div>' + g.items.map(themeItemHtml).join('');
             });
         }
-        return html;
+        return html + '<div class="mtlx-theme-sep" role="separator"></div>' + customizeItemHtml();
     }
     function themeRowHtml() {
         var s = themeSections();
@@ -621,6 +639,12 @@
                 '<div class="mtlx-mobile-links">' +
                     '<div id="mtlx-theme-row" class="mtlx-theme-row" role="radiogroup" aria-label="Theme"></div>' +
                     '<div id="mtlx-theme-more" class="mtlx-theme-morewrap"></div>' +
+                    // Opens the Theme editor panel, same event as the desktop popup's Customize item.
+                    '<div class="mtlx-theme-morewrap">' +
+                        '<button type="button" id="mtlx-theme-customize-mobile" class="mtlx-menu-item mtlx-theme-more-btn mtlx-theme-customize">' +
+                            ICON_CUSTOMIZE + '<span class="mtlx-menu-label">Customize&hellip;</span>' +
+                        '</button>' +
+                    '</div>' +
                     // .mtlx-mobile-link-brand adds a flex row (icon + text)
                     // over .mtlx-mobile-link's flat styling, kept separate
                     // from .mtlx-source-mobile (its gap suits a square glyph).
@@ -848,7 +872,8 @@
     })();
 
     // Theme switch: popup menu on desktop, radio row in the mobile panel.
-    // Both call MtlxTheme.setPreference and follow MtlxTheme.onChange.
+    // Both call MtlxTheme.setPreference and follow MtlxTheme.onChange; Customize
+    // dispatches 'mtlx-open-theme-editor' (js/shell.jsx mounts the Theme editor).
     (function initThemeSwitch() {
         var btn = document.getElementById('mtlx-theme-btn');
         var menu = document.getElementById('mtlx-theme-menu');
@@ -860,32 +885,43 @@
         var moreBtn = null;
         var moreList = null;
         var moreItems = [];
-        // Menu is rebuilt on every open so it reflects the live registry.
+        function openEditor(opener) {
+            window.dispatchEvent(new CustomEvent('mtlx-open-theme-editor', { detail: { opener: opener || null } }));
+        }
+        // Menu is rebuilt on every open so it reflects the live registry and custom themes.
         function build() {
             if (!menu) return;
             menu.innerHTML = themeMenuHtml();
-            items = Array.prototype.slice.call(menu.querySelectorAll('[role="menuitemradio"]'));
+            fillThemeLabels(menu);
+            items = Array.prototype.slice.call(menu.querySelectorAll('[role="menuitemradio"], [role="menuitem"]'));
         }
         if (row) {
             row.innerHTML = themeRowHtml();
             radios = Array.prototype.slice.call(row.querySelectorAll('[role="radio"]'));
         }
         var moreWrap = document.getElementById('mtlx-theme-more');
-        if (moreWrap) {
-            moreWrap.innerHTML = themeMoreHtml();
-            moreBtn = moreWrap.querySelector('#mtlx-theme-more-btn');
-            moreList = moreWrap.querySelector('#mtlx-theme-more-list');
-            if (moreList) moreItems = Array.prototype.slice.call(moreList.querySelectorAll('[role="radio"]'));
-        }
         function setMore(on) {
             if (!moreBtn) return;
             moreList.hidden = !on;
             moreBtn.setAttribute('aria-expanded', on ? 'true' : 'false');
         }
+        // Mobile More themes list; rebuilt when custom themes change, keeping its open state.
+        function buildMore() {
+            if (!moreWrap) return;
+            var wasOpen = !!moreList && !moreList.hidden;
+            moreWrap.innerHTML = themeMoreHtml();
+            fillThemeLabels(moreWrap);
+            moreBtn = moreWrap.querySelector('#mtlx-theme-more-btn');
+            moreList = moreWrap.querySelector('#mtlx-theme-more-list');
+            moreItems = moreList ? Array.prototype.slice.call(moreList.querySelectorAll('[role="radio"]')) : [];
+            if (wasOpen) setMore(true);
+        }
+        buildMore();
         build();
         function sync() {
             var pref = T.getPreference();
             items.concat(radios, moreItems).forEach(function (el) {
+                if (!el.hasAttribute('data-theme-choice')) return;
                 el.setAttribute('aria-checked', el.getAttribute('data-theme-choice') === pref ? 'true' : 'false');
             });
             var inMore = moreItems.some(function (el) { return el.getAttribute('aria-checked') === 'true'; });
@@ -927,6 +963,11 @@
                 else if (e.key === 'Tab') close(false);
             });
             menu.addEventListener('click', function (e) {
+                if (e.target.closest && e.target.closest('[data-theme-action="customize"]')) {
+                    close(true);
+                    openEditor(btn);
+                    return;
+                }
                 var it = e.target.closest && e.target.closest('[data-theme-choice]');
                 if (!it) return;
                 T.setPreference(it.getAttribute('data-theme-choice'));
@@ -943,19 +984,24 @@
                 if (it) T.setPreference(it.getAttribute('data-theme-choice'));
             });
         }
-        if (moreBtn) {
-            moreBtn.addEventListener('click', function () { setMore(moreList.hidden); });
-            moreBtn.addEventListener('keydown', function (e) {
-                if (e.key === 'ArrowDown') { e.preventDefault(); setMore(true); moreItems[0].focus(); }
-                else if (e.key === 'ArrowRight' && moreList.hidden) { e.preventDefault(); setMore(true); }
-                else if (e.key === 'ArrowLeft' && !moreList.hidden) { e.preventDefault(); setMore(false); }
-            });
-            moreList.addEventListener('click', function (e) {
-                var it = e.target.closest && e.target.closest('[data-theme-choice]');
+        // Delegated on the stable wrapper, since buildMore replaces its contents.
+        if (moreWrap) {
+            moreWrap.addEventListener('click', function (e) {
+                if (!e.target.closest) return;
+                if (moreBtn && e.target.closest('#mtlx-theme-more-btn')) { setMore(moreList.hidden); return; }
+                var it = e.target.closest('[data-theme-choice]');
                 if (it) T.setPreference(it.getAttribute('data-theme-choice'));
             });
-            moreList.addEventListener('keydown', function (e) {
+            moreWrap.addEventListener('keydown', function (e) {
+                if (!moreBtn) return;
+                if (document.activeElement === moreBtn) {
+                    if (e.key === 'ArrowDown') { e.preventDefault(); setMore(true); moreItems[0].focus(); }
+                    else if (e.key === 'ArrowRight' && moreList.hidden) { e.preventDefault(); setMore(true); }
+                    else if (e.key === 'ArrowLeft' && !moreList.hidden) { e.preventDefault(); setMore(false); }
+                    return;
+                }
                 var idx = moreItems.indexOf(document.activeElement);
+                if (idx < 0) return;
                 if (e.key === 'ArrowDown') { e.preventDefault(); moreItems[(idx + 1) % moreItems.length].focus(); }
                 else if (e.key === 'ArrowUp') {
                     e.preventDefault();
@@ -966,6 +1012,20 @@
                 else if (e.key === 'Escape') { e.preventDefault(); setMore(false); moreBtn.focus(); }
             });
         }
+        // Mobile Customize: the panel is about to close, so focus returns to the hamburger.
+        var customizeMobile = document.getElementById('mtlx-theme-customize-mobile');
+        if (customizeMobile) {
+            customizeMobile.addEventListener('click', function () {
+                closeMobileMenu();
+                if (navToggle) navToggle.focus();
+                openEditor(navToggle);
+            });
+        }
+        window.addEventListener('mtlx-custom-themes-change', function () {
+            if (isOpen()) build();
+            buildMore();
+            sync();
+        });
         sync();
         T.onChange(sync);
     })();
