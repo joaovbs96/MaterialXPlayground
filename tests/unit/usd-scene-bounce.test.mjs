@@ -267,12 +267,12 @@ test('buildSkyBounce returns null unless voxels (with alb+normals), visibility a
 // --- units: no extra 1/pi anywhere in the injected shader term -----------
 
 function loadPatchDiffuseBounceAdd() {
-  const source = fs.readFileSync(path.join(ROOT, 'js', 'mtlx-engine.js'), 'utf8');
+  const source = fs.readFileSync(path.join(ROOT, 'js', 'shared', 'mtlx-gen-core.js'), 'utf8');
   const start = source.indexOf('const patchDiffuseBounceAdd =');
   const end = source.indexOf('const patchSceneThinWalledTransmission =', start);
-  assert.ok(start >= 0 && end > start, 'patchDiffuseBounceAdd is present in mtlx-engine.js');
+  assert.ok(start >= 0 && end > start, 'patchDiffuseBounceAdd is present in mtlx-gen-core.js');
   const context = {};
-  vm.runInNewContext(source.slice(start, end) + '\nthis.patchDiffuseBounceAdd = patchDiffuseBounceAdd;', context, { filename: 'mtlx-engine.js' });
+  vm.runInNewContext(source.slice(start, end) + '\nthis.patchDiffuseBounceAdd = patchDiffuseBounceAdd;', context, { filename: 'mtlx-gen-core.js' });
   return context.patchDiffuseBounceAdd;
 }
 
@@ -280,7 +280,7 @@ function loadPatchDiffuseBounceAdd() {
 // the ordering interaction between them -- not just each in isolation --
 // is under test.
 function loadBothPatches() {
-  const source = fs.readFileSync(path.join(ROOT, 'js', 'mtlx-engine.js'), 'utf8');
+  const source = fs.readFileSync(path.join(ROOT, 'js', 'shared', 'mtlx-gen-core.js'), 'utf8');
   // patchAmbientOcclusion now calls ensureEnvOcclusionGlobal (the local
   // reflections' occlusion-compensation global, see
   // scratchpad/displacement-verified/reflections/design.md section 5.6),
@@ -293,7 +293,7 @@ function loadBothPatches() {
   const context = {};
   vm.runInNewContext(source.slice(helperStart, start) + source.slice(start, end)
     + '\nthis.patchAmbientOcclusion = patchAmbientOcclusion; this.patchDiffuseBounceAdd = patchDiffuseBounceAdd;',
-    context, { filename: 'mtlx-engine.js' });
+    context, { filename: 'mtlx-gen-core.js' });
   return context;
 }
 

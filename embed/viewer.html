@@ -154,6 +154,15 @@
     <!-- Settings store: plain JS, no transform needed. Must precede
          embed/gen/mtlx-engine.js, whose setters route through it. -->
     <script src="js/shared/render-settings.js"></script>
+    <!-- Shader-generation core, compacted by scripts/build-embed.mjs. Must
+         precede embed/gen/mtlx-engine.js, which aliases its names. -->
+    <script src="embed/gen/mtlx-gen-core.js"></script>
+    <!-- three.js side of a material, compacted by scripts/build-embed.mjs.
+         Must precede embed/gen/mtlx-engine.js too. -->
+    <script src="embed/gen/mtlx-three-material.js"></script>
+    <!-- Environment preparation, compacted by scripts/build-embed.mjs. Must
+         precede embed/gen/mtlx-engine.js too. -->
+    <script src="embed/gen/mtlx-scene-assembly.js"></script>
     <!-- Render session: plain JS, no transform needed. Studio backdrop
          helpers are used lazily, at call time, so load order relative
          to the engine below does not matter. -->

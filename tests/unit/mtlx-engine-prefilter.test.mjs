@@ -7,15 +7,15 @@ import { fileURLToPath } from 'node:url';
 
 function loadEnsurePrefilteredEnv() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-  const enginePath = path.join(root, 'js', 'mtlx-engine.js');
+  const enginePath = path.join(root, 'js', 'shared', 'mtlx-scene-assembly.js');
   const source = fs.readFileSync(enginePath, 'utf8');
   const start = source.indexOf('const ensurePrefilteredEnv =');
-  const end = source.indexOf('\n\n// The radiance sampler', start);
+  const end = source.indexOf('\n\n// GPU cosine-convolved diffuse irradiance map', start);
   const context = {
     getSpecularEnvMethod: () => 'prefilter',
     mtlxWarn() {},
     // Declared above the sliced region: false is the default (fix on).
-    legacyPrefilterLatch: false,
+    host: { legacyPrefilterLatch: () => false, perfLog: () => false },
   };
   vm.runInNewContext(source.slice(start, end) + '\nthis.ensurePrefilteredEnv = ensurePrefilteredEnv;', context, {
     filename: enginePath,

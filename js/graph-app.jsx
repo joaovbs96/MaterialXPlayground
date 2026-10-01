@@ -698,6 +698,39 @@
             const previewViewRef = React.useRef(null);
             const scopeRef = React.useRef('');
             scopeRef.current = scope;
+            // ---- Node thumbnails (js/graph/thumb-client.js). One client per mount,
+            // created on first use; it spawns no worker until something is enabled.
+            const previewBusyRef = React.useRef(false);
+            const thumbClientRef = React.useRef(null);
+            const thumbStoreRef = React.useRef(null);
+            const thumbCardsRef = React.useRef([]);
+            const thumbEnterRef = React.useRef(true); // next setScope counts as "entered"
+            const thumbKeepRef = React.useRef(false); // set by undo/redo and external reload
+            const [thumbProgress, setThumbProgress] = React.useState(null);
+            const [, setThumbRev] = React.useState(0);
+            const getThumbs = () => {
+                if (!thumbClientRef.current && window.MtlxThumbClient && window.MtlxThumbScheduler) {
+                    thumbClientRef.current = window.MtlxThumbClient.create({
+                        getPreviewBusy: () => !!((previewViewRef.current && previewViewRef.current.__outdated) || previewBusyRef.current),
+                        getCameraActive: () => !!(previewViewRef.current && previewViewRef.current.isInteracting && previewViewRef.current.isInteracting()),
+                        isViewActive: () => !!activeRef.current,
+                        onProgress: (p) => setThumbProgress(p ? { done: p.done, total: p.total } : null),
+                    });
+                    const c = thumbClientRef.current;
+                    thumbStoreRef.current = { subscribe: (key, fn) => c.subscribe(key, fn), get: (key) => c.get(key) };
+                }
+                return thumbClientRef.current;
+            };
+            React.useEffect(() => () => {
+                if (thumbClientRef.current) { thumbClientRef.current.dispose(); thumbClientRef.current = null; }
+            }, []);
+            // A new document starts with no overrides; its text and files are fed again right away.
+            const resetThumbSession = () => {
+                const c = thumbClientRef.current;
+                if (!c) return;
+                c.resetSession();
+                c.noteFiles(fileMapRef.current);
+            };
             // Set right before setScope('') on scope EXIT (e.g. 'g:' +
             // the nodegraph just left) so the flow-rebuild effect can
             // select/highlight it instead of wiping the selection.
@@ -836,6 +869,7 @@
                 // lockstep with the XML just handed to the VS Code bridge —
                 // same `xml` value, so it's cheap (no extra serialize).
                 noteDocXml(xml);
+                if (thumbClientRef.current) thumbClientRef.current.noteXml(xml);
                 const u = undoStateRef.current;
                 u.stack.length = u.index + 1; // drop any redo branch
                 if (u.savedIndex > u.index) u.savedIndex = -1;
@@ -869,6 +903,7 @@
             };
 
             const markDirty = (undoTag) => {
+                if (thumbClientRef.current) thumbClientRef.current.noteActivity();
                 setDirtyRev((r) => r + 1);
                 pushUndoSnapshot(undoTag || null);
             };
@@ -887,6 +922,7 @@
                     // start fresh, or a same-named node in another file would
                     // silently inherit the previous one's visibility.
                     restorePortModesRef.current = capturePortModes();
+                    thumbKeepRef.current = true;
                     setParsed(p);
                     setScope(nextScope);
                     setDocRev((r) => r + 1);
@@ -894,6 +930,7 @@
                     // swaps doc text WITHOUT flushUndoSnapshot firing
                     // (restoringRef suppresses it), so hand the xml here.
                     noteDocXml(entry.xml);
+                    if (thumbClientRef.current) thumbClientRef.current.noteXml(entry.xml);
                     const u = undoStateRef.current;
                     if (u.index === u.savedIndex) markSaved();
                     else {
@@ -1215,6 +1252,16 @@
             // version badge right away).
             React.useEffect(() => { getMxEnv().catch(() => {}); }, []);
 
+            // Thumbnail feed: the document text the parse used, and the texture files.
+            React.useEffect(() => {
+                const c = getThumbs();
+                if (c && parsed && parsed.sourceText != null) c.noteXml(parsed.sourceText);
+            }, [parsed]);
+            React.useEffect(() => {
+                const c = getThumbs();
+                if (c) c.noteFiles(fileMap);
+            }, [fileMap]);
+
             // Set right before setParsed in externalReload so the two
             // "parsed changed" reset effects each skip one run — an
             // external VS Code reload of the SAME doc keeps the selection/pin.
@@ -1390,6 +1437,7 @@
                     // original .mxsl name.
                     const mxslOrigin = mxslOriginFor(path);
                     p.label = mxslOrigin ? mxslOrigin.filename : path;
+                    resetThumbSession();
                     setParsed(p);
                     // Consume the view-only handoff flag here, the single
                     // point where a newly loaded document actually becomes
@@ -1449,6 +1497,7 @@
                     setDocReadOnlySource('');
                     mxslOriginalsRef.current = {};
                     setMxslOriginal(null);
+                    resetThumbSession();
                     setParsed(p);
                     setScope('');
                     setStatus(null);
@@ -1512,6 +1561,7 @@
                     // below: a stale Original from the OLD session must not
                     // survive into the new one.
                     mxslOriginalsRef.current = mxslOrigins;
+                    resetThumbSession();
                     setParsed(null);
                     setScope('');
                     setFlow({ nodes: [], edges: [] });
@@ -1654,6 +1704,7 @@
                 // SAME doc keeps the current selection/pin, unlike other setParsed sites.
                 softReloadSkipRef.current.preview = true;
                 softReloadSkipRef.current.selection = true;
+                thumbKeepRef.current = true;
 
                 setParsed(p);
                 if (nextScope !== scopeRef.current) setScope(nextScope);
@@ -1991,6 +2042,11 @@
                 }
                 const switchedScope = cameFrom.parsed === parsed
                     && cameFrom.scope !== scope;
+                // Entering = a scope change, a new document or the first build. Undo/redo and
+                // external reload on the same scope keep the previous "more than 50 cards" call.
+                const keepThumbs = thumbKeepRef.current;
+                thumbKeepRef.current = false;
+                thumbEnterRef.current = !(keepThumbs && cameFrom.parsed && cameFrom.scope === scope);
                 // Consume the pending post-scope-exit selection (set by
                 // Backspace/breadcrumb) — mark it .selected on the freshly
                 // built flow, the same way focusNode() does.
@@ -2090,6 +2146,9 @@
                     id: n.id,
                     inputs: (n.data && n.data.inputs) || [],
                     outputs: (n.data && n.data.outputs) || [],
+                    thumb: !!(n.data && n.data.thumb),
+                    thumbSize: n.data && n.data.thumbSize,
+                    value: n.data && n.data.value,
                     pos: null, // ignore stored editor positions: full re-layout
                 }));
                 const posOf = layoutScope(descsLike, flow.edges);
@@ -2104,6 +2163,18 @@
                 };
                 restackByPrefix('i:');
                 restackByPrefix('o:');
+                // The restack swaps y between cards of different heights (thumbnails), so push
+                // down anything that now overlaps the card above it in its column.
+                const columns = {};
+                for (const d of descsLike) if (posOf[d.id]) (columns[posOf[d.id].x] = columns[posOf[d.id].x] || []).push(d);
+                for (const col of Object.values(columns)) {
+                    col.sort((m, k) => posOf[m.id].y - posOf[k.id].y);
+                    let floor = -Infinity;
+                    for (const d of col) {
+                        if (posOf[d.id].y < floor) posOf[d.id] = Object.assign({}, posOf[d.id], { y: floor });
+                        floor = posOf[d.id].y + nodeHeight(d) + 28;
+                    }
+                }
 
                 const c = scopeContainer();
                 if (c && parsed) {
@@ -2565,6 +2636,7 @@
             // uniforms (no rebuild); any non-match falls back to a full
             // rebuild — never wrong-but-fast.
             const tryFastUniformUpdate = (nodeId, inputName, newValue, type) => {
+                if (thumbClientRef.current) thumbClientRef.current.noteActivity();
                 const view = previewViewRef.current;
                 // view.__outdated: an in-place material swap (APPLY path
                 // in graph/preview.jsx) is in flight — bail and let the
@@ -3967,6 +4039,110 @@
             // Silent, since the amber "View only" strip already explains the lock.
             const guardLocked = () => scopeLockedRef.current;
 
+            // ---- Node thumbnails: cards, in-place toggles, visible set ----
+            const thumbMenuKeyRef = React.useRef('');
+            // Registers every card of the scope (the 50-card rule counts all of them) and
+            // decides the enable state before toFlow lays the cards out. Targets are built
+            // exactly like the idle-warm walk's.
+            const prepThumbs = (descs) => {
+                const c = getThumbs();
+                if (!c) return;
+                const sc = scopeRef.current;
+                const origin = scopeOriginRef.current;
+                const hasOrigin = !!(origin && origin.graph === sc);
+                const cards = descs.map((d) => ({
+                    id: d.id, eligible: thumbEligible(d), kind: thumbKind(d) || 'pattern', x: 0, y: 0,
+                    target: { id: d.id, scope: sc, originId: hasOrigin ? origin.id : null, originScope: hasOrigin ? origin.scope : null },
+                }));
+                thumbCardsRef.current = cards;
+                const entered = thumbEnterRef.current;
+                thumbEnterRef.current = false;
+                c.setScope(sc, cards, { entered });
+                const ms = c.menuState(sc);
+                const sm = c.shaderMenuState(sc);
+                const mk = [ms.checked, ms.big, ms.disabled, ms.title, sm.checked, sm.disabled, sm.title].join('|');
+                if (mk !== thumbMenuKeyRef.current) { thumbMenuKeyRef.current = mk; setThumbRev((r) => r + 1); }
+            };
+            const thumbFor = (d) => {
+                const c = thumbClientRef.current;
+                if (!c) return null;
+                const kind = thumbKind(d);
+                const eligible = !!kind;
+                return {
+                    on: c.isEnabled(scopeRef.current, d.id, eligible, kind || 'pattern'), eligible, kind, size: c.sizeOf(scopeRef.current, d.id),
+                    key: c.keyOf(scopeRef.current, d.id), store: thumbStoreRef.current,
+                };
+            };
+            // After a menu or override change: flips data.thumb on the affected cards only.
+            // Positions are kept (no relayout), so a card that grows may sit close to its neighbour.
+            const patchThumbCards = () => {
+                const c = thumbClientRef.current;
+                if (!c) return;
+                const sc = scopeRef.current;
+                setFlow((prev) => {
+                    let changed = false;
+                    const nodes = prev.nodes.map((n) => {
+                        if (!n.data || n.data.thumbElig === undefined) return n;
+                        const on = !!n.data.thumbElig && c.isEnabled(sc, n.id, true, n.data.thumbKind || 'pattern');
+                        const size = c.sizeOf(sc, n.id);
+                        if (on === !!n.data.thumb && size === n.data.thumbSize) return n;
+                        changed = true;
+                        return Object.assign({}, n, { data: Object.assign({}, n.data, { thumb: on, thumbSize: size }) });
+                    });
+                    return changed ? { edges: prev.edges, nodes } : prev;
+                });
+                setThumbRev((r) => r + 1);
+            };
+            // Cards intersecting the viewport render first.
+            const updateThumbVisible = () => {
+                const c = thumbClientRef.current;
+                if (!c) return;
+                const nodes = flowRef.current.nodes;
+                const inst = rfInstRef.current;
+                const host = canvasHostRef.current;
+                if (!inst || !host || typeof inst.getViewport !== 'function') { c.setVisible(nodes.map((n) => n.id)); return; }
+                const vp = inst.getViewport();
+                const x0 = -vp.x / vp.zoom, y0 = -vp.y / vp.zoom;
+                const x1 = x0 + host.clientWidth / vp.zoom, y1 = y0 + host.clientHeight / vp.zoom;
+                c.setVisible(nodes.filter((n) => n.position
+                    && n.position.x + (n.width || NODE_W) > x0 && n.position.x < x1
+                    && n.position.y + (n.height || nodeHeight(n.data)) > y0 && n.position.y < y1).map((n) => n.id));
+            };
+            const toggleThumbSizeMenu = () => {
+                const c = getThumbs();
+                if (!c) return;
+                c.toggleMenuSize();
+                patchThumbCards();
+            };
+            const toggleShaderThumbsMenu = () => {
+                const c = getThumbs();
+                if (!c) return;
+                c.toggleShaderMenu();
+                patchThumbCards();
+            };
+            const toggleThumbsMenu = () => {
+                const c = getThumbs();
+                if (!c) return;
+                c.toggleMenu(scopeRef.current);
+                patchThumbCards();
+            };
+            const thumbActivity = () => { if (thumbClientRef.current) thumbClientRef.current.noteActivity(); };
+            const thumbCanvasIdle = () => {
+                if (thumbClientRef.current) thumbClientRef.current.noteCanvasIdle();
+                updateThumbVisible();
+            };
+            // Keeps the cards' sort positions and the visible set current without a re-registration.
+            React.useEffect(() => {
+                const c = thumbClientRef.current;
+                if (!c || !flow.nodes.some((n) => n.data && n.data.thumb)) return;
+                const byId = new Map(flow.nodes.map((n) => [n.id, n]));
+                for (const card of thumbCardsRef.current) {
+                    const n = byId.get(card.id);
+                    if (n && n.position) { card.x = n.position.x; card.y = n.position.y; }
+                }
+                updateThumbVisible();
+            }, [flow]);
+
             // Shared toFlow() options, built fresh for every rebuild site
             // (7 of them) so a locked (library) scope always renders inert
             // cards: no rename affordance, no port-add popover. Navigation
@@ -3979,6 +4155,8 @@
                     onOpenScope: changeScope,
                     onOpenImpl: openImplGraph,
                     onTogglePorts: (id) => togglePortsRef.current(id),
+                    thumbPrep: prepThumbs,
+                    thumbFor,
                 };
                 if (locked) return base;
                 return Object.assign(base, {
@@ -4801,6 +4979,10 @@
                 if (keptModes[flowId] !== undefined) {
                     keptModes[kind + newName] = keptModes[flowId];
                     delete keptModes[flowId];
+                }
+                if (thumbClientRef.current) {
+                    thumbClientRef.current.remapNode(scope, flowId, kind + newName);
+                    if (kind === 'g:') thumbClientRef.current.remapScope(oldName, newName);
                 }
                 const rebuilt = toFlow(descs, edges, flowOpts(keptModes));
                 setFlow(rebuilt);
@@ -6727,8 +6909,8 @@
                 (nodes || []).forEach((n) => { if (n && n.position) m[n.id] = { x: n.position.x, y: n.position.y }; });
                 return m;
             };
-            const onNodeDragStart = (evt, node, nodes) => { dragStartPosRef.current = dragPositions(nodes && nodes.length ? nodes : [node]); };
-            const onSelectionDragStart = (evt, nodes) => { dragStartPosRef.current = dragPositions(nodes); };
+            const onNodeDragStart = (evt, node, nodes) => { thumbActivity(); dragStartPosRef.current = dragPositions(nodes && nodes.length ? nodes : [node]); };
+            const onSelectionDragStart = (evt, nodes) => { thumbActivity(); dragStartPosRef.current = dragPositions(nodes); };
             const pointerTravel = (evt) => {
                 const down = pointerDownRef.current;
                 const p = evt && evt.changedTouches && evt.changedTouches[0] ? evt.changedTouches[0] : evt;
@@ -6756,6 +6938,7 @@
             };
             const onSelectionDragStopMoved = (evt, nodes) => { if (dragMoved(evt, nodes)) onNodeDragStop(); };
             const onNodeDragStop = () => {
+                thumbActivity();
                 if (scopeLockedRef.current) return;
                 const c = scopeContainer();
                 if (!c || !parsed) return;
@@ -7384,10 +7567,37 @@
                 },
             ];
 
+            const thumbMenu = thumbClientRef.current
+                ? thumbClientRef.current.menuState(scope)
+                : { checked: false, big: false, disabled: false, title: '' };
+            const thumbSizeMenu = thumbClientRef.current
+                ? thumbClientRef.current.sizeMenuState()
+                : { checked: false, disabled: false };
+            const shaderThumbMenu = thumbClientRef.current
+                ? thumbClientRef.current.shaderMenuState(scope)
+                : { checked: false, disabled: true, title: '' };
             const viewMenuItems = [
                 {
                     label: 'Node List', icon: 'list-details', keys: 'L', checked: leftOpen,
                     onSelect: () => setLeftOpen((o) => !o),
+                },
+                {
+                    label: 'Node Thumbnails', icon: 'color-swatch', checked: thumbMenu.checked,
+                    disabled: !parsed || thumbMenu.disabled,
+                    title: thumbMenu.title || 'Show a small preview image on each pattern and data node',
+                    onSelect: toggleThumbsMenu,
+                },
+                {
+                    label: 'Large Thumbnails', icon: 'maximize', checked: thumbSizeMenu.checked,
+                    disabled: !parsed || thumbSizeMenu.disabled || !thumbMenu.checked,
+                    title: thumbMenu.checked ? 'Large (full card width) or small (header corner) previews' : 'Turn on Node Thumbnails first',
+                    onSelect: toggleThumbSizeMenu,
+                },
+                {
+                    label: 'Shader Thumbnails', icon: 'sphere', checked: shaderThumbMenu.checked,
+                    disabled: !parsed || shaderThumbMenu.disabled,
+                    title: shaderThumbMenu.title,
+                    onSelect: toggleShaderThumbsMenu,
                 },
             ];
 
@@ -7418,6 +7628,55 @@
                     .concat([ctxMenu.edgeId])))
                 : [];
 
+            // "Show Thumbnail(s)": one node, or every eligible node of a multi-selection.
+            const ctxThumbRow = (() => {
+                const c = thumbClientRef.current;
+                if (!c) return null;
+                const multi = selectedIds.length > 1;
+                const ids = multi ? selectedIds : (ctxNode ? [ctxNode.id] : []);
+                const elig = ids.filter((id) => {
+                    const n = flow.nodes.find((n2) => n2.id === id);
+                    return !!(n && n.data && n.data.thumbElig);
+                });
+                const label = multi ? 'Show Thumbnails' : 'Show Thumbnail';
+                if (!elig.length) {
+                    return { label, icon: 'color-swatch', disabled: true, title: 'Thumbnails are available for pattern, data, shader and material nodes' };
+                }
+                const kindOf = (id) => ((flow.nodes.find((n2) => n2.id === id) || {}).data || {}).thumbKind || 'pattern';
+                const allOn = elig.every((id) => c.isEnabled(scope, id, true, kindOf(id)));
+                return {
+                    label, icon: 'color-swatch', checked: allOn, disabled: thumbMenu.disabled,
+                    onSelect: () => {
+                        for (const kind of ['pattern', 'shader']) {
+                            const group = elig.filter((id) => kindOf(id) === kind);
+                            if (group.length) c.setOverrides(scope, group, !allOn, kind);
+                        }
+                        patchThumbCards();
+                    },
+                };
+            })();
+
+            // "Large Thumbnail(s)": the size of the shown previews among the selection, session only.
+            const ctxSizeRow = (() => {
+                const c = thumbClientRef.current;
+                if (!c) return null;
+                const multi = selectedIds.length > 1;
+                const ids = (multi ? selectedIds : (ctxNode ? [ctxNode.id] : [])).filter((id) => {
+                    const n = flow.nodes.find((n2) => n2.id === id);
+                    return !!(n && n.data && n.data.thumb);
+                });
+                const label = multi ? 'Large Thumbnails' : 'Large Thumbnail';
+                if (!ids.length) return { label, icon: 'maximize', disabled: true, title: 'Only nodes with a thumbnail have a size' };
+                const allLarge = ids.every((id) => c.sizeOf(scope, id) === 'large');
+                return {
+                    label, icon: 'maximize', checked: allLarge,
+                    onSelect: () => {
+                        c.setSizeOverrides(scope, ids, allLarge ? 'small' : 'large');
+                        patchThumbCards();
+                    },
+                };
+            })();
+
             const ctxRowsForNode = () => (selectedIds.length > 1 ? [
                 { label: 'Copy', icon: 'copy', keys: 'Ctrl+C', disabled: !parsed || !selectedIds.length,
                     onSelect: () => copySelectionRef.current() },
@@ -7431,6 +7690,8 @@
                 { label: 'Group into Nodegraph', icon: 'cube', keys: 'Ctrl+G', disabled: !canGroupSelection || scopeLocked,
                     title: canGroupSelection ? undefined : 'Grouping is only available at the document root',
                     onSelect: encapsulateSelection },
+                ctxThumbRow,
+                ctxSizeRow,
                 { separator: true },
                 { label: 'Frame Selection', icon: 'zoom-in-area',
                     onSelect: () => smartFitView({ nodes: selectedIds.map((id) => ({ id })), duration: 400, padding: 0.3 }) },
@@ -7450,10 +7711,12 @@
                     onSelect: () => pasteClipboard() },
                 { label: 'Delete', icon: 'trash', keys: 'Del', disabled: !canDelete || scopeLocked,
                     onSelect: () => deleteSelectionRef.current() },
-                (ctxHasDefaults || canUngroupSelection) && { separator: true },
+                (ctxHasDefaults || canUngroupSelection || !!ctxThumbRow) && { separator: true },
                 ctxHasDefaults && {
                     label: 'Show All Inputs', icon: 'code', checked: ctxNode.data.portMode === 'all',
                     onSelect: () => togglePortsRef.current(ctxNode.id) },
+                ctxThumbRow,
+                ctxSizeRow,
                 canUngroupSelection && {
                     label: 'Ungroup Nodegraph', icon: 'cube-off', keys: 'Ctrl+Shift+G', disabled: scopeLocked,
                     onSelect: () => ungroupNodegraph(displayNode.data.name) },
@@ -7793,6 +8056,9 @@
                                     onEdgesChange={onEdgesChange}
                                     onSelectionStart={onSelectionStart}
                                     onSelectionEnd={onSelectionEnd}
+                                    onMoveStart={thumbActivity}
+                                    onMove={thumbActivity}
+                                    onMoveEnd={thumbCanvasIdle}
                                     onNodeDragStart={onNodeDragStart}
                                     onSelectionDragStart={onSelectionDragStart}
                                     onNodeDragStop={onNodeDragStopMoved}
@@ -8000,6 +8266,13 @@
                                 above the type-color legend card (or its chip), in
                                 one flex column so it rides up/down with legendShowAll. */}
                             <div className="absolute bottom-2 left-2 z-30 flex flex-col items-start gap-1.5">
+                                {thumbProgress && (
+                                    <div role="status" data-mtlx-thumb-pill
+                                        className="h-6 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-hud-line/50 bg-hud/70 backdrop-blur text-hud-fg whitespace-nowrap pointer-events-none">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-accent-fill animate-pulse" />
+                                        Rendering Thumbnails {thumbProgress.done}/{thumbProgress.total}
+                                    </div>
+                                )}
                                 <div className="flex items-center gap-0.5 bg-control/80 backdrop-blur border border-line-strong rounded-lg p-0.5">
                                     <button
                                         onClick={() => { const inst = rfInstRef.current; if (inst) inst.zoomOut({ duration: 150 }); }}
@@ -8071,7 +8344,7 @@
                             {/* The preview target on a shaderball — same
                                 render pipeline as the docs page. Re-renders
                                 on every committed param edit and target change. */}
-                            <GraphNodePreview parsed={parsed} target={previewTarget} docRev={docRev} fileMap={fileMap} viewRef={previewViewRef} active={active}
+                            <GraphNodePreview parsed={parsed} target={previewTarget} docRev={docRev} fileMap={fileMap} viewRef={previewViewRef} busyRef={previewBusyRef} active={active}
                                 overlay={
                                     <button
                                         onClick={() => setPinnedTarget(pinnedTarget ? null : previewTarget)}

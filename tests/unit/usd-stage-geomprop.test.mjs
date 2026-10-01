@@ -127,9 +127,9 @@ function loadUdimMeshParts() {
 
 function loadBindGeompropAttributes() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-  const source = fs.readFileSync(path.join(root, 'js', 'mtlx-engine.js'), 'utf8');
+  const source = fs.readFileSync(path.join(root, 'js', 'shared', 'mtlx-three-material.js'), 'utf8');
   const start = source.indexOf('const GEOMPROP_ITEM_SIZE =');
-  const end = source.indexOf('\n\n// Center a geometry', start);
+  const end = source.indexOf('\n// Rig lights (fixed)', start);
   class BufferAttribute {
     constructor(array, itemSize) {
       this.array = array;
@@ -144,7 +144,7 @@ function loadBindGeompropAttributes() {
     THREE: { BufferAttribute },
   };
   vm.runInNewContext(source.slice(start, end) + String.fromCharCode(10)
-    + 'this.bindGeompropAttributes = bindGeompropAttributes;', context, { filename: 'mtlx-engine.js' });
+    + 'this.bindGeompropAttributes = bindGeompropAttributes;', context, { filename: 'mtlx-three-material.js' });
   return context.bindGeompropAttributes;
 }
 

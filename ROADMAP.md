@@ -66,6 +66,7 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 - [done] **Autosave and session recovery**: the Graph Editor autosaves and offers a session browser with graph and render previews after a crash.
 - [done] **Interface input editing**: edit ui attributes, default values and colorspace on nodegraph interface inputs.
 - [done] **Texture formats**: TIFF textures, and an option to convert every texture in a zip export to PNG, JPEG or EXR.
+- [in progress] **Node thumbnails**: the Graph Editor shows a flat preview on top of each pattern and data node, rendered in the background so editing stays responsive. Turn it on from the View menu or per node from the right-click menu; it switches itself off when a graph has more than 50 nodes. Shader and material nodes can also show a preview on the shader ball, through a separate View menu setting that is off by default; displacement and Force Transparency are not shown in thumbnails yet. Implemented on a branch, not released yet.
 - [idea] **Recipes for common node tree patterns**: ability to insert commonly used sequences of nodes from a "gallery" of node patterns - e.g. a texcoord, connected to a place2d, connected to an image.
 - [idea] **Support for a ShadingLanguageX (SLX) node**: via SLX WASM bindings, support for a 'scripted' ShadingLanguageX node, which for export/rendering would be compiled down to actual MaterialX syntax
 - [done] **Support for ShadingLanguageX (SLX) import**: open .mxsl files in the Node Graph Editor, compiled to MaterialX and shown as a node graph.

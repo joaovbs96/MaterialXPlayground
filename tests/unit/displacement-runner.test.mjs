@@ -13,7 +13,7 @@ const sceneSource = fs.readFileSync(path.join(root, 'js/usd-scene-renderer.js'),
 const budgetStart = engineSource.indexOf('// Highest triangle count a preview mesh may reach');
 const budgetEnd = engineSource.indexOf('\n// Loop-subdivides `source`', budgetStart);
 assert.ok(budgetStart >= 0 && budgetEnd > budgetStart, 'could not slice createTriangleBudget from js/mtlx-engine.js');
-const engineCtx = {};
+const engineCtx = { createShaderPrewarmer: () => ({ prewarm: async () => 'skipped', clearWarmed: () => {} }) };
 vm.createContext(engineCtx);
 vm.runInContext(
   engineSource.slice(budgetStart, budgetEnd)

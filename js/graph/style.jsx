@@ -22,8 +22,44 @@
             }
             const inputCount = inputsOk ? d.inputs.length : 0;
             const outputCount = outputsOk ? d.outputs.length : 0;
-            return 38 + (inputCount + outputCount) * 22 + 6;
+            // The "= value" line under the ports (node-component.jsx) is a 22px row too.
+            const valueRow = d && d.value !== undefined && d.value !== '' ? 1 : 0;
+            return HEADER_H + 6 + (inputCount + outputCount + valueRow) * 22 + (d && d.thumb ? (d.thumbSize === 'small' ? THUMB_SMALL_DELTA : THUMB_ROW_H) : 0);
         };
+
+        // Square preview on top of the card: the inner card width (NODE_W less the 1px border each
+        // side) plus the 1px separator under it.
+        const THUMB_SIDE = NODE_W - 2;
+        // Header of a card without a preview: 8 padding, an 18 name row, a 13 type row, 1 separator.
+        const HEADER_H = 40;
+        const THUMB_ROW_H = THUMB_SIDE + 1;
+        // Small preview: the header becomes 64px of content plus its 1px separator (65).
+        const THUMB_SMALL = 64;
+        const THUMB_SMALL_DELTA = THUMB_SMALL + 1 - HEADER_H;
+        // Types drawn on the shaderball. Volume, displacement and light shaders are excluded.
+        const SHADER_THUMB_TYPES = ['surfaceshader', 'BSDF', 'EDF', 'VDF', 'material'];
+        // Thumbnail class of a card: 'pattern' (flat preview), 'shader' (shaderball) or null.
+        // The output is picked like pickPreviewOutput: first viewable, else the first.
+        const thumbKind = (d) => {
+            if (!d || typeof d.id !== 'string') return null;
+            const viewable = (t) => window.MtlxGenCore.COLOR_VIEWABLE.indexOf(t) !== -1;
+            const byType = (t) => (viewable(t) ? 'pattern' : SHADER_THUMB_TYPES.indexOf(t) !== -1 ? 'shader' : null);
+            const k = d.id.slice(0, 2);
+            if (k === 'o:' || k === 'i:') return byType(d.type);
+            if (k !== 'n:' && k !== 'g:' && k !== 'd:') return null;
+            const outs = Array.isArray(d.outputs) ? d.outputs : [];
+            if (k === 'n:' && d.kind === 'node') return outs.some((o) => viewable(o.type)) ? 'pattern' : null;
+            if (k === 'n:' && d.kind !== 'shader' && d.kind !== 'material') return null;
+            const pick = outs.find((o) => viewable(o.type)) || outs[0];
+            const kind = byType(pick ? pick.type : d.type);
+            if (kind === 'shader' && d.kind === 'material') {
+                // Needs a connected surfaceshader input, like the click preview.
+                const ok = Array.isArray(d.inputs) && d.inputs.some((i) => i.type === 'surfaceshader' && (i.nodename || i.nodegraph || i.connected));
+                return ok ? 'shader' : null;
+            }
+            return kind;
+        };
+        const thumbEligible = (d) => !!thumbKind(d);
 
         const layoutScope = (descs, edges) => {
             // Two return points (stored-position fast path vs. dagre) each
@@ -121,6 +157,8 @@
 
         const toFlow = (descs, edges, opts) => {
             const o = opts || {};
+            // Thumbnail enable state is decided before layout so card heights are right.
+            if (o.thumbPrep) o.thumbPrep(descs);
             const mode = o.portMode || 'authored';
             // Per-node overrides, id -> 'authored'|'all'. A rebuild caused by
             // a LOCAL action passes the modes the cards already had, so one
@@ -136,7 +174,10 @@
                     connected: connectedIn.has(d.id + '|in:' + inp.name),
                 }));
                 const nodeMode = (modes && modes[d.id]) || mode;
-                return Object.assign({}, d, {
+                const th = o.thumbFor ? o.thumbFor(d) : null;
+                return Object.assign({}, d, th ? {
+                    thumb: th.on, thumbSize: th.size, thumbElig: th.eligible, thumbKind: th.kind, thumbKey: th.key, thumbStore: th.store,
+                } : null, {
                     allInputs: withConn,
                     inputs: visiblePortsFor(withConn, nodeMode),
                     portMode: nodeMode,
@@ -198,6 +239,6 @@
         const CONN_ATTRS = ['interfacename', 'nodegraph', 'nodename', 'output'];
 
 Object.assign(window, {
-    getNodeColor, handleStyle, minimapMaskColor, NODE_W, nodeHeight, layoutScope,
+    getNodeColor, handleStyle, minimapMaskColor, NODE_W, THUMB_SIDE, THUMB_ROW_H, THUMB_SMALL, THUMB_SMALL_DELTA, thumbEligible, thumbKind, SHADER_THUMB_TYPES, nodeHeight, layoutScope,
     visiblePortsFor, toFlow, toRfEdge, CONN_ATTRS,
 });

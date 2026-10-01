@@ -14,7 +14,7 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const enginePath = path.join(ROOT, 'js', 'mtlx-engine.js');
+const enginePath = path.join(ROOT, 'js', 'shared', 'mtlx-gen-core.js');
 const src = fs.readFileSync(enginePath, 'utf8');
 
 const extract = (name) => {

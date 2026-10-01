@@ -450,6 +450,9 @@ const EAGER_EMBED_FILES = [
   "js/shared/mesh-udim.js",
   "js/shared/mtlx-turntable.js",
   "js/shared/render-settings.js",
+  "embed/gen/mtlx-gen-core.js",
+  "embed/gen/mtlx-three-material.js",
+  "embed/gen/mtlx-scene-assembly.js",
   "js/shared/render-environment.js",
   "js/shared/render-session.js",
   "embed/gen/embed-controls.js",
@@ -474,7 +477,11 @@ function checkEmbedConsistency() {
     const remaining = [...remainingMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
     // mtlx-engine.js loads via a separate fetchAndRunInline call, not REMAINING;
     // embed-boot.js is REMAINING's last entry but not a build-embed output.
-    const targetsMinusEngine = targetOutMatches.filter((t) => t !== "embed/gen/mtlx-engine.js");
+    // mtlx-gen-core.js, mtlx-three-material.js and mtlx-scene-assembly.js are plain <script>s before the engine, also not in REMAINING.
+    const targetsMinusEngine = targetOutMatches.filter((t) => t !== "embed/gen/mtlx-engine.js" && t !== "embed/gen/mtlx-gen-core.js" && t !== "embed/gen/mtlx-three-material.js" && t !== "embed/gen/mtlx-scene-assembly.js");
+    if (!viewerHtml.includes('<script src="embed/gen/mtlx-gen-core.js"></script>')) problems.push("embed/viewer.html no longer loads embed/gen/mtlx-gen-core.js before the engine");
+    if (!viewerHtml.includes('<script src="embed/gen/mtlx-three-material.js"></script>')) problems.push("embed/viewer.html no longer loads embed/gen/mtlx-three-material.js before the engine");
+    if (!viewerHtml.includes('<script src="embed/gen/mtlx-scene-assembly.js"></script>')) problems.push("embed/viewer.html no longer loads embed/gen/mtlx-scene-assembly.js before the engine");
     const remainingMinusBoot = remaining.filter((r) => r !== "embed/embed-boot.js");
     const engineInRemaining = viewerHtml.includes("fetchAndRunInline('embed/gen/mtlx-engine.js')");
     if (!engineInRemaining) problems.push("embed/viewer.html no longer eagerly loads embed/gen/mtlx-engine.js via fetchAndRunInline");
@@ -598,6 +605,9 @@ const RENDERER_CREATION_ALLOW = [
   { file: "js/mtlx-engine.js", pattern: "getContext('webgl2'", reason: "warm-compile probe context (getWarmContext)" },
   { file: "js/mtlx-engine.js", pattern: "new THREE.WebGLRenderer(", reason: "KTX2 basis-transcode support probe (getKtx2Loader), throwaway and disposed" },
   { file: "js/mtlx-engine.js", pattern: "toneMappingExposure =", reason: "refreshDisplaySettings live exposure write, not renderer creation; follow-up to fold into a session helper" },
+  { file: "js/shared/mtlx-scene-assembly.js", pattern: "toneMappingExposure =", reason: "applyRendererDisplay, the display lines acquireRenderer delegates to" },
+  { file: "js/graph/thumb-worker.js", pattern: "getContext('webgl2'", reason: "thumbnail worker OffscreenCanvas context, same options as acquireRenderer" },
+  { file: "js/graph/thumb-worker.js", pattern: "new THREE.WebGLRenderer(", reason: "thumbnail worker renderer, released after an idle timeout (10 s, 30 s with the scene resident)" },
   { file: "js/shell.jsx", pattern: "getContext('webgl2'", reason: "startup WebGL2-availability probe" },
   { file: "js/compare-app.jsx", pattern: "getContext('webgl2'", reason: "GPU diff readback context" },
   { file: "js/compare-app.jsx", pattern: "new THREE.WebGLRenderer(", reason: "GPU diff readback renderer, verified compare-app.jsx:402/407" },
@@ -646,7 +656,8 @@ const RESOLVER_DUPLICATION_PENDING = [
 
 function checkResolverDuplicationLedger() {
   const problems = [];
-  const engineText = readFileSync(path.join(REPO_ROOT, "js", "mtlx-engine.js"), "utf8");
+  const engineText = readFileSync(path.join(REPO_ROOT, "js", "mtlx-engine.js"), "utf8")
+    + readFileSync(path.join(REPO_ROOT, "js", "shared", "mtlx-gen-core.js"), "utf8");
   const sceneText = readFileSync(path.join(REPO_ROOT, "js", "usd-scene-renderer.js"), "utf8");
   for (const entry of RESOLVER_DUPLICATION_PENDING) {
     if (!new RegExp(`\\bconst ${entry.engine}\\b`).test(engineText)) {

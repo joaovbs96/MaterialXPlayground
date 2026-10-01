@@ -15,6 +15,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const ENGINE_PATH = path.join(ROOT, 'js', 'mtlx-engine.js');
 const FIXTURE_PATH = path.join(ROOT, 'tests', 'unit', 'fixtures', 'preview-uniforms.json');
 const ENGINE_SOURCE = fs.readFileSync(ENGINE_PATH, 'utf8');
+const CORE_SOURCE = fs.readFileSync(path.join(ROOT, 'js', 'shared', 'mtlx-gen-core.js'), 'utf8');
+const THREE_MATERIAL_SOURCE = fs.readFileSync(path.join(ROOT, 'js', 'shared', 'mtlx-three-material.js'), 'utf8');
 
 // Grabs one top-level `const NAME = ...;` statement verbatim, tracking
 // (){}[] depth so it works for both block- and expression-bodied arrows.
@@ -98,21 +100,21 @@ function summarizeUniforms(uniforms) {
 // ---------------------------------------------------------------------
 function loadSceneUniformsHarness() {
     const combined = [
-        extractStatement(ENGINE_SOURCE, 'parseUniforms'),
-        extractStatement(ENGINE_SOURCE, 'envRadianceForShading'),
-        extractStatement(ENGINE_SOURCE, 'envIrradianceForShading'),
-        extractStatement(ENGINE_SOURCE, 'makeLightEntry'),
-        extractStatement(ENGINE_SOURCE, 'currentLights'),
-        extractStatement(ENGINE_SOURCE, 'activeLightCount'),
-        extractStatement(ENGINE_SOURCE, 'bindEnvironmentSamplers'),
-        extractStatement(ENGINE_SOURCE, 'createMtlxSceneUniforms'),
+        extractStatement(CORE_SOURCE, 'parseUniforms'),
+        extractStatement(THREE_MATERIAL_SOURCE, 'envRadianceForShading'),
+        extractStatement(THREE_MATERIAL_SOURCE, 'envIrradianceForShading'),
+        extractStatement(THREE_MATERIAL_SOURCE, 'makeLightEntry'),
+        extractStatement(THREE_MATERIAL_SOURCE, 'currentLights'),
+        extractStatement(THREE_MATERIAL_SOURCE, 'activeLightCount'),
+        extractStatement(THREE_MATERIAL_SOURCE, 'bindEnvironmentSamplers'),
+        extractStatement(THREE_MATERIAL_SOURCE, 'createMtlxSceneUniforms'),
         'this.createMtlxSceneUniforms = createMtlxSceneUniforms;',
         'this.bindEnvironmentSamplers = bindEnvironmentSamplers;',
     ].join('\n\n');
     const context = {
         console,
         THREE: makeThreeStub(),
-        MTLX_CLOCK: { time: 0, frame: 0 },
+        host: { clock: () => ({ time: 0, frame: 0 }) },
         SHADOW_FACE_SLOTS: 32,
         SHADOW_LIGHT_SLOTS_MAX: 32,
         STAGE_LIGHT_SLOTS: 16,

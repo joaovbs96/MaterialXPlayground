@@ -7,10 +7,11 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const source = fs.readFileSync(path.join(root, 'js/mtlx-engine.js'), 'utf8');
+const coreSource = fs.readFileSync(path.join(root, 'js/shared/mtlx-gen-core.js'), 'utf8');
 
-const displacementStart = source.indexOf('const generateDisplacementSourcesUnlocked =');
-const displacementEnd = source.indexOf('\n// Public entry point:', displacementStart);
-const displacementSource = source.slice(displacementStart, displacementEnd);
+const displacementStart = coreSource.indexOf('const generateDisplacementSourcesUnlocked =');
+const displacementEnd = coreSource.indexOf('\n// Public entry point:', displacementStart);
+const displacementSource = coreSource.slice(displacementStart, displacementEnd);
 
 test('standalone displacement generation inherits surface safety and sampler semantics', () => {
   assert.ok(displacementStart >= 0 && displacementEnd > displacementStart);

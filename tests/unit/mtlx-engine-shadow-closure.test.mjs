@@ -8,12 +8,12 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 function loadShadowPatch() {
-  const source = fs.readFileSync(path.join(root, 'js', 'mtlx-engine.js'), 'utf8');
+  const source = fs.readFileSync(path.join(root, 'js', 'shared', 'mtlx-gen-core.js'), 'utf8');
   const start = source.indexOf('const SHADOW_NORMAL_OFFSET_TEXELS =');
   const end = source.indexOf('const patchLightSourceKindStruct =', start);
   assert.ok(start >= 0 && end > start, 'shadow patch source is present');
   const context = { SHADOW_FACE_SLOTS: 32, SHADOW_LIGHT_SLOTS_MAX: 32 };
-  vm.runInNewContext(source.slice(start, end) + '\nthis.patchShadowLightScope = patchShadowLightScope;', context, { filename: 'mtlx-engine.js' });
+  vm.runInNewContext(source.slice(start, end) + '\nthis.patchShadowLightScope = patchShadowLightScope;', context, { filename: 'mtlx-gen-core.js' });
   return context.patchShadowLightScope;
 }
 

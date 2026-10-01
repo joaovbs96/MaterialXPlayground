@@ -13,8 +13,8 @@ import { Blob } from 'node:buffer';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 function loadCacheKeyHarness() {
-  const source = fs.readFileSync(path.join(root, 'js', 'mtlx-engine.js'), 'utf8');
-  const start = source.indexOf('const TEXTURE_CACHE = new Map();');
+  const source = fs.readFileSync(path.join(root, 'js', 'shared', 'mtlx-gen-core.js'), 'utf8');
+  const start = source.indexOf('const hasBlobIdentity =');
   const end = source.indexOf('// MaterialX image nodes carry sampler address modes', start);
   assert.ok(start >= 0 && end > start, 'texture cache key source is present');
   const context = { console, Promise, WeakMap, Uint8Array, Math };
@@ -22,7 +22,7 @@ function loadCacheKeyHarness() {
     + '\nthis.textureCacheKey = textureCacheKey;'
     + '\nthis.textureCacheKeyAsync = textureCacheKeyAsync;';
   vm.runInNewContext(source.slice(start, end) + exports, context, {
-    filename: path.join(root, 'js', 'mtlx-engine.js'),
+    filename: path.join(root, 'js', 'shared', 'mtlx-gen-core.js'),
   });
   return context;
 }

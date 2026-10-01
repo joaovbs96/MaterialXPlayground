@@ -1,0 +1,267 @@
+// Pure state machine for node thumbnails: enable state, render queue, dispatch
+// gate and X/N progress. No timers or DOM; callers pass `now` in milliseconds.
+// scopeOn = G && (!bigAtEntry || optIn); defaultOn = scopeOn && (kind !== 'shader' || Gs);
+// enabled = eligible && (override || defaultOn). Cards are 'pattern' or 'shader' jobs.
+// Queue priority: visible patterns, other patterns, visible shaders, other shaders.
+(function () {
+  'use strict';
+
+  const SEP = '\u0000';
+  const okey = (scope, id) => scope + SEP + id;
+
+  function createScheduler(options) {
+    const cfg = options || {};
+    const quietMs = cfg.quietMs == null ? 400 : cfg.quietMs;
+    const bigThreshold = cfg.bigThreshold == null ? 50 : cfg.bigThreshold;
+
+    // Enable state.
+    let G = true;
+    let Gs = false; // shader and material nodes on the shaderball, off by default
+    const bigAtEntry = new Map();
+    const optIn = new Set();
+    const overrides = new Map();
+    // Size: global 'small' | 'large' plus session overrides; an override equal to the global is dropped.
+    let sizeG = 'small';
+    const sizeOv = new Map();
+
+    const setGlobal = (on) => { G = !!on; };
+    const getGlobal = () => G;
+    const enterScope = (scope, cardCount) => { bigAtEntry.set(scope, cardCount > bigThreshold); };
+    // Undo and external reload keep the previous evaluation; nothing to recompute.
+    const keepScope = () => {};
+    const isBig = (scope) => bigAtEntry.get(scope) === true;
+    const scopeOn = (scope) => G && (!isBig(scope) || optIn.has(scope));
+
+    const kindOf = (k) => (k === 'shader' ? 'shader' : 'pattern');
+    const defaultOn = (scope, kind) => scopeOn(scope) && (kindOf(kind) !== 'shader' || Gs);
+    const setShaderGlobal = (on) => { Gs = !!on; };
+    const getShaderGlobal = () => Gs;
+    const toggleShaderMenu = () => { Gs = !Gs; return Gs; };
+
+    const toggleMenu = (scope) => {
+      if (scopeOn(scope)) {
+        if (isBig(scope)) optIn.delete(scope);
+        else G = false;
+      } else {
+        if (isBig(scope)) optIn.add(scope);
+        G = true;
+      }
+      return scopeOn(scope);
+    };
+
+    const isEnabled = (scope, id, eligible, kind) => {
+      if (!eligible) return false;
+      const ov = overrides.get(okey(scope, id));
+      if (ov === 'on') return true;
+      if (ov === 'off') return false;
+      return defaultOn(scope, kind);
+    };
+
+    const setOverride = (scope, id, desiredOn, kind) => {
+      const k = okey(scope, id);
+      if (!!desiredOn === defaultOn(scope, kind)) overrides.delete(k);
+      else overrides.set(k, desiredOn ? 'on' : 'off');
+    };
+    const setOverrides = (scope, ids, on, kind) => { for (const id of ids) setOverride(scope, id, on, kind); };
+
+    const norm = (v) => (v === 'small' ? 'small' : 'large');
+    const setGlobalSize = (v) => {
+      sizeG = norm(v);
+      for (const [k, val] of Array.from(sizeOv)) if (val === sizeG) sizeOv.delete(k);
+    };
+    const getGlobalSize = () => sizeG;
+    const sizeOf = (scope, id) => sizeOv.get(okey(scope, id)) || sizeG;
+    const setSizeOverride = (scope, id, v) => {
+      const k = okey(scope, id);
+      if (norm(v) === sizeG) sizeOv.delete(k); else sizeOv.set(k, norm(v));
+    };
+    const setSizeOverrides = (scope, ids, v) => { for (const id of ids) setSizeOverride(scope, id, v); };
+    const toggleMenuSize = () => { sizeG = sizeG === 'large' ? 'small' : 'large'; setGlobalSize(sizeG); return sizeG; };
+
+    // Items are ids (patterns) or { id, kind }.
+    const anyEnabled = (scope, eligibleIds) => {
+      if (!eligibleIds || !eligibleIds.length) return false;
+      for (const item of eligibleIds) {
+        const id = typeof item === 'object' ? item.id : item;
+        const ov = overrides.get(okey(scope, id));
+        if (ov === 'on') return true;
+        if (ov !== 'off' && defaultOn(scope, typeof item === 'object' ? item.kind : 'pattern')) return true;
+      }
+      return false;
+    };
+
+    const remapNode = (scope, oldId, newId) => {
+      if (oldId === newId) return;
+      const a = okey(scope, oldId);
+      if (sizeOv.has(a)) { sizeOv.set(okey(scope, newId), sizeOv.get(a)); sizeOv.delete(a); }
+      if (!overrides.has(a)) return;
+      overrides.set(okey(scope, newId), overrides.get(a));
+      overrides.delete(a);
+    };
+
+    const remapScope = (oldScope, newScope) => {
+      if (oldScope === newScope) return;
+      const prefix = oldScope + SEP;
+      const moved = [];
+      for (const [k, v] of overrides) if (k.startsWith(prefix)) moved.push([k, v]);
+      for (const [k, v] of moved) {
+        overrides.delete(k);
+        overrides.set(newScope + SEP + k.slice(prefix.length), v);
+      }
+      for (const [k, v] of Array.from(sizeOv)) {
+        if (!k.startsWith(prefix)) continue;
+        sizeOv.delete(k);
+        sizeOv.set(newScope + SEP + k.slice(prefix.length), v);
+      }
+      if (optIn.has(oldScope)) { optIn.delete(oldScope); optIn.add(newScope); }
+      if (bigAtEntry.has(oldScope)) { bigAtEntry.set(newScope, bigAtEntry.get(oldScope)); bigAtEntry.delete(oldScope); }
+    };
+
+    const resetSession = () => { overrides.clear(); sizeOv.clear(); optIn.clear(); bigAtEntry.clear(); };
+
+    // Queue. pending: key -> entry (insertion ordered); inFlight: one job or null.
+    const pending = new Map();
+    let inFlight = null;
+    let batchActive = false;
+    let doneCount = 0;
+    let totalCount = 0;
+
+    const maybeEndBatch = () => {
+      if (batchActive && pending.size === 0 && !inFlight) {
+        batchActive = false;
+        doneCount = 0;
+        totalCount = 0;
+      }
+    };
+
+    const dropPending = (key) => {
+      if (pending.delete(key)) totalCount--;
+    };
+
+    const applySignatures = (entries, cacheHas) => {
+      const desired = new Map();
+      for (const e of entries || []) desired.set(e.key, e);
+      for (const [key, p] of Array.from(pending)) {
+        const d = desired.get(key);
+        if (!d || d.sig !== p.sig || (cacheHas && cacheHas(p.imageKey))) dropPending(key);
+      }
+      if (inFlight) {
+        const d = desired.get(inFlight.key);
+        inFlight.stale = !d || d.sig !== inFlight.sig || (inFlight.kind === 'shader' && d.imageKey !== inFlight.imageKey);
+      }
+      for (const e of desired.values()) {
+        if (cacheHas && cacheHas(e.imageKey)) continue;
+        const p = pending.get(e.key);
+        if (p && p.sig === e.sig) { pending.set(e.key, e); continue; }
+        if (inFlight && inFlight.key === e.key && inFlight.sig === e.sig && !inFlight.stale) continue;
+        if (!batchActive) { batchActive = true; doneCount = 0; totalCount = 0; }
+        pending.set(e.key, e);
+        totalCount++;
+      }
+      maybeEndBatch();
+    };
+
+    const isShader = (e) => e.kind === 'shader';
+    const priorityOrder = (visibleKeys, positions) => {
+      const vis = new Set(visibleKeys || []);
+      const pos = positions || {};
+      const classes = [[], [], [], [], []]; // requeued shaders, visible patterns, other patterns, visible shaders, other shaders
+      for (const [key, e] of pending) {
+        const ci = e.requeued ? 0 : (isShader(e) ? 3 : 1) + (vis.has(key) ? 0 : 1);
+        classes[ci].push([key, e]);
+      }
+      const coord = (k, f) => {
+        const p = pos[k];
+        return p && typeof p[f] === 'number' ? p[f] : Infinity;
+      };
+      const byPos = (a, b) => (coord(a[0], 'y') - coord(b[0], 'y')) || (coord(a[0], 'x') - coord(b[0], 'x'));
+      classes[1].sort(byPos);
+      classes[3].sort(byPos);
+      pending.clear();
+      // Patterns run before shaders; a requeued shader leads the shader class.
+      for (const ci of [1, 2, 0, 3, 4]) for (const [k, e] of classes[ci]) pending.set(k, e);
+      return Array.from(pending.keys());
+    };
+
+    // Gate.
+    let lastActivity = -Infinity;
+    const noteActivity = (now) => { if (now > lastActivity) lastActivity = now; };
+    const canDispatch = (g) => {
+      const s = g || {};
+      if (inFlight) return false;
+      if (s.previewBusy || s.cameraActive || s.hidden || !s.active) return false;
+      return s.now - lastActivity >= quietMs;
+    };
+    // Milliseconds until the quiet period is over (0 when already quiet).
+    const quietRemaining = (now) => Math.max(0, lastActivity + quietMs - now);
+
+    // The entry that goes next: the first pattern, else the first shader (pending is priority ordered).
+    const headEntry = () => {
+      let shader = null;
+      for (const [key, e] of pending) {
+        if (!isShader(e)) return [key, e];
+        if (!shader) shader = [key, e];
+      }
+      return shader;
+    };
+    const headKind = () => { const h = headEntry(); return h ? (isShader(h[1]) ? 'shader' : 'pattern') : null; };
+    const shaderGateOpen = (g) => !!(g && g.sceneReady) && g.parallelCompile !== false;
+    // True when the next job is a shader job that only waits for its scene.
+    const wantsScene = (g) => {
+      const h = headEntry();
+      return !!h && isShader(h[1]) && canDispatch(g) && !(g && g.sceneReady) && g.parallelCompile !== false;
+    };
+
+    const nextJob = (gate) => {
+      if (!pending.size || !canDispatch(gate)) return null;
+      const h = headEntry();
+      if (isShader(h[1]) && !shaderGateOpen(gate)) return null;
+      const [key, e] = h;
+      pending.delete(key);
+      inFlight = { key, sig: e.sig, imageKey: e.imageKey, target: e.target, kind: isShader(e) ? 'shader' : 'pattern', stale: false };
+      return { key, sig: e.sig, imageKey: e.imageKey, target: e.target, kind: inFlight.kind };
+    };
+
+    // A shader job is cheap to abandon, so a pattern job that appears while one runs takes over.
+    const wantsPreempt = () => {
+      if (!inFlight || inFlight.kind !== 'shader') return false;
+      for (const e of pending.values()) if (!isShader(e)) return true;
+      return false;
+    };
+
+    // Returns { key, sig, imageKey, stale } for the finished job, or null if it is not the in-flight one.
+    // requeue puts it back at the head of the shader class without counting it done.
+    const complete = (jobKey, o) => {
+      if (!inFlight || inFlight.key !== jobKey) return null;
+      const done = inFlight;
+      inFlight = null;
+      if (o && o.requeue && !done.stale) {
+        const entry = { key: done.key, sig: done.sig, imageKey: done.imageKey, target: done.target, kind: done.kind, requeued: true };
+        const rest = Array.from(pending);
+        pending.clear();
+        pending.set(entry.key, entry);
+        for (const [k, e] of rest) pending.set(k, e);
+      } else {
+        doneCount++;
+        maybeEndBatch();
+      }
+      return { key: done.key, sig: done.sig, imageKey: done.imageKey, stale: done.stale };
+    };
+
+    const progress = () => (batchActive ? { done: doneCount, total: totalCount } : null);
+
+    return {
+      setGlobal, getGlobal, setShaderGlobal, getShaderGlobal, toggleShaderMenu, defaultOn, enterScope, keepScope, isBig, scopeOn, toggleMenu, isEnabled,
+      setOverride, setOverrides, anyEnabled, setGlobalSize, getGlobalSize, sizeOf, setSizeOverride, setSizeOverrides, toggleMenuSize, remapNode, remapScope, resetSession,
+      applySignatures, priorityOrder, noteActivity, canDispatch, quietRemaining, nextJob, complete, progress, wantsPreempt, wantsScene, headKind,
+      pendingKeys: () => Array.from(pending.keys()),
+      inFlightKey: () => (inFlight ? inFlight.key : null),
+      inFlightKind: () => (inFlight ? inFlight.kind : null),
+      isInFlightStale: () => !!(inFlight && inFlight.stale),
+    };
+  }
+
+  const api = { createScheduler };
+  globalThis.MtlxThumbScheduler = api;
+  if (typeof module === 'object' && module && module.exports) module.exports = api;
+})();

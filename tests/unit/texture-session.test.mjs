@@ -59,14 +59,12 @@ function makeThreeStub(onLoad) {
     };
 }
 
+const HOST_API = new Set(['setHost', 'hostSnapshot', 'setHostFromSnapshot', 'createFlat2dCamera']);
+
 function loadEngineTextureSession(onLoad) {
-    const start = ENGINE_SOURCE.indexOf('const normPath =');
-    const end = ENGINE_SOURCE.indexOf('\n// Extracts a plain JS array');
+    const start = ENGINE_SOURCE.indexOf('const listDocRenderables =');
+    const end = ENGINE_SOURCE.indexOf('\n// Center a geometry at the origin');
     assert.ok(start >= 0 && end > start, 'texture session source range is present');
-    // configureLoadedTexture lives just past createTextureSession in the
-    // engine file (design: "right after bindDroppedTextures"); pull it in
-    // verbatim rather than restating its wrap/anisotropy logic here.
-    const configureLoadedTexture = extractStatement(ENGINE_SOURCE, 'configureLoadedTexture', 'mtlx-engine.js');
     const exports = [
         '\nthis.createTextureSession = createTextureSession;',
         '\nthis.TEXTURE_SOURCES = TEXTURE_SOURCES;',
@@ -82,7 +80,14 @@ function loadEngineTextureSession(onLoad) {
         mtlxWarn: () => {},
     };
     vm.createContext(context);
-    vm.runInContext(ENGINE_SOURCE.slice(start, end) + '\n\n' + configureLoadedTexture + exports, context, {
+    // The generation core runs first in this context; its names are aliased as the engine does.
+    vm.runInContext(fs.readFileSync(path.join(ROOT, 'js', 'shared', 'mtlx-gen-core.js'), 'utf8'), context);
+    const coreNames = Object.keys(context.MtlxGenCore).filter((n) => /^[A-Za-z_$][\w$]*$/.test(n) && n !== 'mxRigLightCount');
+    // configureLoadedTexture and readImageDimensions come from the three.js material module.
+    vm.runInContext(fs.readFileSync(path.join(ROOT, 'js', 'shared', 'mtlx-three-material.js'), 'utf8'), context);
+    const threeNames = Object.keys(context.MtlxThreeMaterial).filter((n) => /^[A-Za-z_$][\w$]*$/.test(n) && !HOST_API.has(n));
+    const alias = 'const { ' + coreNames.join(', ') + ' } = MtlxGenCore;\nconst { ' + threeNames.join(', ') + ' } = MtlxThreeMaterial;\n';
+    vm.runInContext(alias + ENGINE_SOURCE.slice(start, end) + exports, context, {
         filename: path.join(ROOT, 'js', 'mtlx-engine.js'),
     });
     return context;

@@ -18,15 +18,15 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 function loadApplyMaterialWorkspaceTransforms() {
-  const source = fs.readFileSync(path.join(root, 'js', 'mtlx-engine.js'), 'utf8');
+  const source = fs.readFileSync(path.join(root, 'js', 'shared', 'mtlx-gen-core.js'), 'utf8');
   const start = source.indexOf('const vecToArray = (v) => {');
-  const end = source.indexOf('// Doc-level renderable scan:', start);
+  const end = source.indexOf('// Drag & drop ingestion, shared by', start);
   assert.ok(start >= 0 && end > start, 'engine slice markers are present');
   const context = { mxWarnIfLocked: () => {} };
   vm.runInNewContext(
     source.slice(start, end) + '\nthis.applyMaterialWorkspaceTransforms = applyMaterialWorkspaceTransforms;',
     context,
-    { filename: 'mtlx-engine.js' },
+    { filename: 'mtlx-gen-core.js' },
   );
   return context.applyMaterialWorkspaceTransforms;
 }

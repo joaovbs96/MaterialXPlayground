@@ -6,14 +6,14 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const source = fs.readFileSync(path.join(root, 'js/mtlx-engine.js'), 'utf8');
+const source = fs.readFileSync(path.join(root, 'js/shared/mtlx-gen-core.js'), 'utf8');
 
 // Isolate patchGeompropVaryings (and its INT_GEOMPROP_TYPES helper) without
 // pulling in the rest of the engine. mtlxWarn is stubbed since it is only
 // called on a malformed-shader warning path this test does not exercise.
 const start = source.indexOf('const INT_GEOMPROP_TYPES =');
 const end = source.indexOf('\n// Finds CALL sites of fnName', start);
-assert.ok(start >= 0 && end > start, 'could not locate patchGeompropVaryings in mtlx-engine.js');
+assert.ok(start >= 0 && end > start, 'could not locate patchGeompropVaryings in mtlx-gen-core.js');
 const context = { mtlxWarn: () => {} };
 vm.createContext(context);
 vm.runInContext(source.slice(start, end) + '\nthis.patchGeompropVaryings = patchGeompropVaryings;', context);

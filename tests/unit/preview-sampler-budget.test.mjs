@@ -11,7 +11,7 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const ENGINE_PATH = path.join(ROOT, 'js', 'mtlx-engine.js');
+const ENGINE_PATH = path.join(ROOT, 'js', 'shared', 'mtlx-gen-core.js');
 const ENGINE_SOURCE = fs.readFileSync(ENGINE_PATH, 'utf8');
 
 function extractStatement(source, name) {
@@ -44,6 +44,8 @@ function loadWithinBudget({ generatePreviewSources, countFragmentSamplers }) {
         'this.SAMPLER_BUDGET_DROP_ORDER = SAMPLER_BUDGET_DROP_ORDER;',
     ].join('\n');
     const context = { window: {}, generatePreviewSources, countFragmentSamplers };
+    // The core reads the override through its host hook; mirror the page's provider.
+    context.host = { samplerBudgetOverride: () => context.window.__mtlxSamplerBudgetOverride };
     vm.runInNewContext(combined, context, { filename: ENGINE_PATH });
     return context;
 }

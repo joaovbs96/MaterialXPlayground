@@ -10,7 +10,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 // Slices the element helpers and the duplicate-image pass out of the engine,
 // the same way mtlx-engine-texture-sampler.test.mjs slices the sampler code.
 function loadMergeHarness() {
-  const source = fs.readFileSync(path.join(root, 'js', 'mtlx-engine.js'), 'utf8');
+  const source = fs.readFileSync(path.join(root, 'js', 'shared', 'mtlx-gen-core.js'), 'utf8');
   const take = (from, to) => {
     const a = source.indexOf(from);
     const b = source.indexOf(to, a);
@@ -24,7 +24,7 @@ function loadMergeHarness() {
   vm.runInNewContext(helpers + '\n' + merge
     + '\nthis.mergeDuplicateImageNodes = mergeDuplicateImageNodes;'
     + '\nthis.mxNodeSignature = mxNodeSignature;', context, {
-    filename: path.join(root, 'js', 'mtlx-engine.js'),
+    filename: path.join(root, 'js', 'shared', 'mtlx-gen-core.js'),
   });
   return context;
 }

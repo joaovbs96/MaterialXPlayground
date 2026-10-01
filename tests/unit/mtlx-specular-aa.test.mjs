@@ -15,12 +15,12 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 function loadPatchSpecularAA() {
-  const source = fs.readFileSync(path.join(ROOT, 'js', 'mtlx-engine.js'), 'utf8');
+  const source = fs.readFileSync(path.join(ROOT, 'js', 'shared', 'mtlx-gen-core.js'), 'utf8');
   const start = source.indexOf('const patchSpecularAA =');
   const end = source.indexOf('const patchAmbientOcclusion =', start);
-  assert.ok(start >= 0 && end > start, 'patchSpecularAA is present in mtlx-engine.js');
+  assert.ok(start >= 0 && end > start, 'patchSpecularAA is present in mtlx-gen-core.js');
   const context = {};
-  vm.runInNewContext(source.slice(start, end) + '\nthis.patchSpecularAA = patchSpecularAA;', context, { filename: 'mtlx-engine.js' });
+  vm.runInNewContext(source.slice(start, end) + '\nthis.patchSpecularAA = patchSpecularAA;', context, { filename: 'mtlx-gen-core.js' });
   return context.patchSpecularAA;
 }
 

@@ -14,6 +14,8 @@ const OUTPUT_ONLY = [
 ].join('\n');
 
 const openGraphWith = async (page, embedURL, xml) => {
+  // With thumbnails the cards grow and the fixed drop point (55%/15% of the pane) lands on a card, not empty canvas.
+  await page.addInitScript(() => { try { localStorage.setItem('mtlxGraphThumbnails', 'false'); } catch (e) { /* storage blocked */ } });
   await page.goto(embedURL + '/index.html#!graph');
   await page.waitForSelector('.gtb-bar', { timeout: WAIT_TIMEOUT });
   await page.waitForFunction(() => typeof window.parseMtlxDocument === 'function', null, { timeout: WAIT_TIMEOUT });

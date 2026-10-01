@@ -75,7 +75,7 @@
     "reason": "three.js render-internal clear colors."
   },
   {
-    "file": "js/mtlx-engine.js",
+    "file": "js/shared/mtlx-scene-assembly.js",
     "match": "/^0x7FFFFF$/",
     "reason": "Float16 mantissa bit mask, not a color."
   },

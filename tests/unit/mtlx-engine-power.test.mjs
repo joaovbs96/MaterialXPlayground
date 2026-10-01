@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 function loadPowerPatch() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-  const enginePath = path.join(root, 'js', 'mtlx-engine.js');
+  const enginePath = path.join(root, 'js', 'shared', 'mtlx-gen-core.js');
   const source = fs.readFileSync(enginePath, 'utf8');
   const start = source.indexOf('const vecToArray =');
   const end = source.indexOf('\nconst mxElHasAttr =', start);

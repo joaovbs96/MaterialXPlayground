@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const ENGINE_SOURCE = fs.readFileSync(path.join(ROOT, 'js', 'mtlx-engine.js'), 'utf8');
+const CORE_SOURCE = fs.readFileSync(path.join(ROOT, 'js', 'shared', 'mtlx-gen-core.js'), 'utf8');
 const SCENE_SOURCE = fs.readFileSync(path.join(ROOT, 'js', 'usd-scene-renderer.js'), 'utf8');
 
 // Grabs one top-level `const NAME = ...;` statement verbatim, tracking
@@ -35,11 +36,11 @@ function makeBlob(text) {
 
 function loadEngineResolvers() {
     const combined = [
-        extractStatement(ENGINE_SOURCE, 'normPath', 'mtlx-engine.js'),
-        extractStatement(ENGINE_SOURCE, 'joinRefPath', 'mtlx-engine.js'),
-        extractStatement(ENGINE_SOURCE, 'findFileForRef', 'mtlx-engine.js'),
-        extractStatement(ENGINE_SOURCE, 'findFilesForRef', 'mtlx-engine.js'),
-        extractStatement(ENGINE_SOURCE, 'preferKtx2Sibling', 'mtlx-engine.js'),
+        extractStatement(CORE_SOURCE, 'normPath', 'mtlx-gen-core.js'),
+        extractStatement(CORE_SOURCE, 'joinRefPath', 'mtlx-gen-core.js'),
+        extractStatement(CORE_SOURCE, 'findFileForRef', 'mtlx-gen-core.js'),
+        extractStatement(CORE_SOURCE, 'findFilesForRef', 'mtlx-gen-core.js'),
+        extractStatement(CORE_SOURCE, 'preferKtx2Sibling', 'mtlx-gen-core.js'),
         extractStatement(ENGINE_SOURCE, 'resolveIncludes', 'mtlx-engine.js'),
         'this.joinRefPath = joinRefPath;',
         'this.findFileForRef = findFileForRef;',

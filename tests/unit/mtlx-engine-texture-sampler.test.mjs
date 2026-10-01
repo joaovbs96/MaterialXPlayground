@@ -7,9 +7,25 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
+// The generation core runs first in the same context; its names are then
+// aliased the way the engine does, so the engine slice below resolves them.
+const aliasCore = (ctx) => {
+  vm.runInNewContext(fs.readFileSync(path.join(root, 'js', 'shared', 'mtlx-gen-core.js'), 'utf8'), ctx);
+  const names = Object.keys(ctx.MtlxGenCore).filter((n) => /^[A-Za-z_$][\w$]*$/.test(n) && n !== 'mxRigLightCount');
+  return 'const { ' + names.join(', ') + ' } = MtlxGenCore;\n';
+};
+
+// The three.js material module runs next in the same context; its names are aliased as the engine does.
+const HOST_API = new Set(['setHost', 'hostSnapshot', 'setHostFromSnapshot', 'createFlat2dCamera']);
+const aliasThree = (ctx) => {
+  vm.runInNewContext(fs.readFileSync(path.join(root, 'js', 'shared', 'mtlx-three-material.js'), 'utf8'), ctx);
+  const names = Object.keys(ctx.MtlxThreeMaterial).filter((n) => /^[A-Za-z_$][\w$]*$/.test(n) && !HOST_API.has(n));
+  return 'const { ' + names.join(', ') + ' } = MtlxThreeMaterial;\n';
+};
+
 function loadSamplerHarness() {
   const source = fs.readFileSync(path.join(root, 'js', 'mtlx-engine.js'), 'utf8');
-  const start = source.indexOf('const vecToArray =');
+  const start = source.indexOf('const listDocRenderables =');
   const end = source.indexOf('\n// ---- Preview geometry ----', start);
   assert.ok(start >= 0 && end > start, 'sampler source is present');
   const context = {
@@ -36,7 +52,8 @@ function loadSamplerHarness() {
     + '\nthis.samplerCacheKey = samplerCacheKey;'
     + '\nthis.configureLoadedTexture = configureLoadedTexture;'
     + '\nthis.bindDroppedTextures = bindDroppedTextures;';
-  vm.runInNewContext(source.slice(start, end) + exports, context, {
+  const alias = aliasCore(context) + aliasThree(context);
+  vm.runInNewContext(alias + source.slice(start, end) + exports, context, {
     filename: path.join(root, 'js', 'mtlx-engine.js'),
   });
   return context;

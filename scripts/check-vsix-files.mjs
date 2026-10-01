@@ -144,6 +144,15 @@ const RUNTIME_ASSETS = [
   "js/usd/gltf-stage-loader.js",
   "js/usd/obj-stage-loader.js",
   "js/usd/mtlx-material-docs.js",
+  // Node thumbnail worker pieces: loaded through Worker URLs and dynamic import().
+  // WP5 must add js/graph/thumb-worker.js once it exists.
+  "js/shared/worker-module-link.js",
+  "js/graph/thumb-worker.js",
+  "js/graph/thumb-signature.js",
+  "js/graph/mtlx-preview-build.js",
+  "js/shared/mtlx-gen-core.js",
+  "js/shared/mtlx-three-material.js",
+  "js/shared/mtlx-scene-assembly.js",
 ];
 
 // Vendored files come from the registry (scripts/vendor-deps.mjs): every manifest

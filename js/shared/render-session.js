@@ -5,7 +5,7 @@
     // Every dependency createMtlxRenderView's engine-side callers must
     // hand to bindEngine below; a missing one throws immediately instead
     // of failing later with a confusing "x is not a function".
-    const ENGINE_DEPS = ['getDisplayTransform', 'applyThreeToneMappingChunk', 'displayExposureScale', 'clockTick'];
+    const ENGINE_DEPS = ['getDisplayTransform', 'displayExposureScale', 'clockTick'];
     let ENGINE = null;
 
     const bindEngine = (deps) => {
@@ -137,14 +137,8 @@
         // its transform in); set here for the ordinary three materials
         // (skybox, backplanes, neutral glTF parts) so both agree.
         const displayMode = ENGINE.getDisplayTransform();
-        // CustomToneMapping carries our own chunk (applyThreeToneMappingChunk),
-        // so these materials run the SAME curve and exposure as the
-        // MaterialX surface instead of only agreeing in 'aces'.
-        const customTone = ENGINE.applyThreeToneMappingChunk(displayMode);
-        if ('outputEncoding' in renderer) renderer.outputEncoding = displayMode === 'lin_rec709' ? THREE.LinearEncoding : THREE.sRGBEncoding;
-        renderer.toneMapping = customTone ? THREE.CustomToneMapping
-            : (displayMode === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping);
-        renderer.toneMappingExposure = ENGINE.displayExposureScale();
+        // Resolved at call time: mtlx-scene-assembly.js loads before any view is built.
+        window.MtlxSceneAssembly.applyRendererDisplay(renderer, { mode: displayMode, exposureScale: ENGINE.displayExposureScale() });
         // Hoisted once the renderer exists: gates u_peelLinear binding,
         // peel-layer/accum half-float storage, and finalMat's shader
         // choice, all from this one extension check (see allocPeel).
@@ -209,11 +203,9 @@
     // content-side hook that runs AFTER this returns.
     const createDefaultCamera = ({ flat2d, width, height, cameraDistance }) => {
         const THREE = window.THREE;
-        const camera = flat2d
-            ? new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10)
-            : new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
-        if (flat2d) camera.position.set(0, 0, 1);
-        else camera.position.set(0, 0.5 * (cameraDistance / 3.6), cameraDistance);
+        if (flat2d) return window.MtlxThreeMaterial.createFlat2dCamera();
+        const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
+        camera.position.set(0, 0.5 * (cameraDistance / 3.6), cameraDistance);
         return camera;
     };
 

@@ -40,7 +40,7 @@
 | You changed... | Run |
 | --- | --- |
 | App code (`js/**.jsx`, CSS, HTML) | nothing, reload the browser |
-| `js/mtlx-engine.js`, `js/viewer-app.jsx`, or `js/shared/mtlx-ui.jsx` | `npm run build:embed` |
+| `js/mtlx-engine.js`, `js/shared/mtlx-gen-core.js`, `js/shared/mtlx-three-material.js`, `js/shared/mtlx-scene-assembly.js`, `js/viewer-app.jsx`, or `js/shared/mtlx-ui.jsx` | `npm run build:embed` |
 | A pinned dependency in `package.json`, or an entry in `scripts/vendor-deps.mjs` | `npm install && npm run build` |
 | Vendored WASM modules (`js/materialx/<version>/JsMaterialX*`) | `npm run build` |
 | Want a non-default MaterialX version locally (Compare) | `npm run vendor:versions` |

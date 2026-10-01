@@ -191,6 +191,11 @@ const VIEW_DEPS = {
             'vendor/three/KTX2Loader.js',
             // Plain JS (no JSX), shared with tests/unit via a direct Node eval.
             'js/graph/zip-export-paths.js',
+            // Document model + preview builder, shared with the thumbnail worker.
+            'js/graph/mtlx-preview-build.js',
+            // Node thumbnail controller and its queue logic (the worker loads on demand).
+            'js/graph/thumb-scheduler.js',
+            'js/graph/thumb-client.js',
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',
@@ -225,6 +230,7 @@ const VIEW_DEPS = {
             'vendor/reactflow/index.js',
             'vendor/dagre/dagre.min.js',
             'embed/mtlx-viewer.js',
+            'js/graph/mtlx-preview-build.js',
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',
@@ -272,6 +278,7 @@ const VIEW_DEPS = {
             'vendor/reactflow/index.js',
             'vendor/dagre/dagre.min.js',
             'embed/mtlx-viewer.js',
+            'js/graph/mtlx-preview-build.js',
         ],
         // The docs implementation panel and the Scene Viewer's material panel
         // load this in the webview, where embed/ is not packaged (see

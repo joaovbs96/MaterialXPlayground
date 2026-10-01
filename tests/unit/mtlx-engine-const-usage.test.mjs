@@ -6,13 +6,13 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const source = fs.readFileSync(path.join(root, 'js/mtlx-engine.js'), 'utf8');
+const source = fs.readFileSync(path.join(root, 'js/shared/mtlx-gen-core.js'), 'utf8');
 
 // Isolate the const-inputs pass (name list, usage rule and the rewriter)
 // without pulling in the rest of the engine.
 const start = source.indexOf('const CONST_INPUT_NAMES =');
 const end = source.indexOf('// Sweep run before every writeToXmlString', start);
-assert.ok(start >= 0 && end > start, 'could not locate constifyInputUniforms in mtlx-engine.js');
+assert.ok(start >= 0 && end > start, 'could not locate constifyInputUniforms in mtlx-gen-core.js');
 const context = { mtlxWarn: () => {} };
 vm.createContext(context);
 vm.runInContext(source.slice(start, end)

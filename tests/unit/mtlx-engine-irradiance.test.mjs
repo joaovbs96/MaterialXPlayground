@@ -17,6 +17,9 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const ENGINE_PATH = path.join(ROOT, 'js', 'mtlx-engine.js');
 const ENGINE_SOURCE = fs.readFileSync(ENGINE_PATH, 'utf8');
+const ASSEMBLY_PATH = path.join(ROOT, 'js', 'shared', 'mtlx-scene-assembly.js');
+const ASSEMBLY_SOURCE = fs.readFileSync(ASSEMBLY_PATH, 'utf8');
+const THREE_MATERIAL_SOURCE = fs.readFileSync(path.join(ROOT, 'js', 'shared', 'mtlx-three-material.js'), 'utf8');
 
 // ---------------------------------------------------------------------
 // Shared coordinate helpers, one per convention. Both are legitimate
@@ -196,17 +199,17 @@ test('the SH l<=2 reconstruction under-represents the chart normal (locks in the
     assert.ok(conv / exact > ratio, 'convolved irradiance should be closer to exact than the SH reconstruction');
 });
 
-test('IRRADIANCE_GLSL in js/mtlx-engine.js matches the CPU reference constants and conventions', () => {
-    const glslStart = ENGINE_SOURCE.indexOf('const IRRADIANCE_GLSL');
-    assert.ok(glslStart !== -1, 'IRRADIANCE_GLSL not found in js/mtlx-engine.js');
-    const glslEnd = ENGINE_SOURCE.indexOf('\n\n// Builds env.irradianceConvolved', glslStart);
+test('IRRADIANCE_GLSL in js/shared/mtlx-scene-assembly.js matches the CPU reference constants and conventions', () => {
+    const glslStart = ASSEMBLY_SOURCE.indexOf('const IRRADIANCE_GLSL');
+    assert.ok(glslStart !== -1, 'IRRADIANCE_GLSL not found in js/shared/mtlx-scene-assembly.js');
+    const glslEnd = ASSEMBLY_SOURCE.indexOf('\n\n// Wraps the 64x32 float readback', glslStart);
     assert.ok(glslEnd !== -1, 'expected end-of-block marker not found after IRRADIANCE_GLSL');
-    const glslBlock = ENGINE_SOURCE.slice(glslStart, glslEnd);
+    const glslBlock = ASSEMBLY_SOURCE.slice(glslStart, glslEnd);
     for (const needle of ['M_PI_INV', 'uSrcLod', 'uv.x + 0.5']) {
         assert.ok(glslBlock.includes(needle), `IRRADIANCE_GLSL missing "${needle}"`);
     }
-    const wMatch = ENGINE_SOURCE.match(/const IRRADIANCE_CONV_W = (\d+);/);
-    const hMatch = ENGINE_SOURCE.match(/const IRRADIANCE_CONV_H = (\d+);/);
+    const wMatch = ASSEMBLY_SOURCE.match(/const IRRADIANCE_CONV_W = (\d+);/);
+    const hMatch = ASSEMBLY_SOURCE.match(/const IRRADIANCE_CONV_H = (\d+);/);
     assert.ok(wMatch && hMatch, 'IRRADIANCE_CONV_W/H constants not found');
     assert.equal(Number(wMatch[1]), IRRADIANCE_CONV_W);
     assert.equal(Number(hMatch[1]), IRRADIANCE_CONV_H);
@@ -221,21 +224,23 @@ test('IRRADIANCE_GLSL in js/mtlx-engine.js matches the CPU reference constants a
 // slice is left untouched.
 // ---------------------------------------------------------------------
 function loadIrradianceModule({ diffuseEnvMethod = 'convolve' } = {}) {
-    const start = ENGINE_SOURCE.indexOf('const IRRADIANCE_CONV_W = 128;');
-    const end = ENGINE_SOURCE.indexOf('\n\nconst buildEnvFromParsedTexture', start);
+    const start = ASSEMBLY_SOURCE.indexOf('const IRRADIANCE_CONV_W = 128;');
+    const end = ASSEMBLY_SOURCE.indexOf('\n\nconst buildEnvFromParsedTexture', start);
     assert.ok(start !== -1 && end !== -1, 'could not locate the irradiance-convolve block markers');
     const context = {
         performance: { now: () => 0 },
-        window: { MTLX_PERF_LOG: false },
+        host: { perfLog: () => false },
         mtlxWarn() {},
         getDiffuseEnvMethod: () => diffuseEnvMethod,
     };
+    const envFnStart = THREE_MATERIAL_SOURCE.indexOf('const envIrradianceForShading = ');
+    const envFnEnd = THREE_MATERIAL_SOURCE.indexOf('\n};', envFnStart) + 3;
     vm.runInNewContext(
-        ENGINE_SOURCE.slice(start, end)
+        ASSEMBLY_SOURCE.slice(start, end) + '\n' + THREE_MATERIAL_SOURCE.slice(envFnStart, envFnEnd)
             + '\nthis.ensureConvolvedIrradiance = ensureConvolvedIrradiance;'
             + '\nthis.envIrradianceForShading = envIrradianceForShading;',
         context,
-        { filename: ENGINE_PATH }
+        { filename: ASSEMBLY_PATH }
     );
     return context;
 }

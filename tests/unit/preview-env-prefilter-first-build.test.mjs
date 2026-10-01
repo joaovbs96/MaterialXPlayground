@@ -16,6 +16,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const ENGINE_PATH = path.join(ROOT, 'js', 'mtlx-engine.js');
 const ENGINE_SOURCE = fs.readFileSync(ENGINE_PATH, 'utf8');
+const ASSEMBLY_PATH = path.join(ROOT, 'js', 'shared', 'mtlx-scene-assembly.js');
+const ASSEMBLY_SOURCE = fs.readFileSync(ASSEMBLY_PATH, 'utf8');
 
 function extractStatement(source, name) {
     const marker = 'const ' + name + ' = ';
@@ -33,7 +35,7 @@ function extractStatement(source, name) {
 
 function loadResolveShadingEnv(log) {
     const combined = [
-        extractStatement(ENGINE_SOURCE, 'resolveShadingEnv'),
+        extractStatement(ASSEMBLY_SOURCE, 'resolveShadingEnv'),
         'this.resolveShadingEnv = resolveShadingEnv;',
     ].join('\n');
     const context = {
@@ -42,7 +44,7 @@ function loadResolveShadingEnv(log) {
         envRadianceForShading: (env) => { log.push('envRadianceForShading'); return env.radiancePrefiltered || env.radiance; },
         envIrradianceForShading: (env) => { log.push('envIrradianceForShading'); return env.irradianceConvolved || env.irradiance; },
     };
-    vm.runInNewContext(combined, context, { filename: ENGINE_PATH });
+    vm.runInNewContext(combined, context, { filename: ASSEMBLY_PATH });
     return context.resolveShadingEnv;
 }
 
@@ -68,8 +70,8 @@ test('resolveShadingEnv is the ONLY caller of ensurePrefilteredEnv/ensureConvolv
     // Both the first-build env fetch and setEnvironment must route through
     // the shared helper; a direct call from either site would let them
     // drift again (the bug this slice fixes).
-    const prefilterCalls = ENGINE_SOURCE.match(/\bensurePrefilteredEnv\(/g) || [];
-    const convolveCalls = ENGINE_SOURCE.match(/\bensureConvolvedIrradiance\(/g) || [];
+    const prefilterCalls = (ENGINE_SOURCE + ASSEMBLY_SOURCE).match(/\bensurePrefilteredEnv\(/g) || [];
+    const convolveCalls = (ENGINE_SOURCE + ASSEMBLY_SOURCE).match(/\bensureConvolvedIrradiance\(/g) || [];
     assert.equal(prefilterCalls.length, 1, 'ensurePrefilteredEnv( should appear exactly once (inside resolveShadingEnv)');
     assert.equal(convolveCalls.length, 1, 'ensureConvolvedIrradiance( should appear exactly once (inside resolveShadingEnv)');
 });

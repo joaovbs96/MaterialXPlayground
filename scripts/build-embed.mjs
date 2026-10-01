@@ -138,7 +138,11 @@ function fail(message) {
 // unwrapped at top level. Getting this backwards changes scoping
 // semantics silently — see js/shell.jsx:70-100.
 const TARGETS = [
-  { src: "js/mtlx-engine.js", out: "embed/gen/mtlx-engine.js", wrap: false },
+  // Plain classic script the engine aliases at load; compacted, comments dropped, so the eager payload stays flat.
+  { src: "js/shared/mtlx-gen-core.js", out: "embed/gen/mtlx-gen-core.js", wrap: false, compact: true, comments: false },
+  { src: "js/shared/mtlx-three-material.js", out: "embed/gen/mtlx-three-material.js", wrap: false, compact: true, comments: false },
+  { src: "js/shared/mtlx-scene-assembly.js", out: "embed/gen/mtlx-scene-assembly.js", wrap: false, compact: true, comments: false },
+  { src: "js/mtlx-engine.js", out: "embed/gen/mtlx-engine.js", wrap: false, compact: true },
   { src: "js/shared/mtlx-ui.jsx", out: "embed/gen/mtlx-ui.js", wrap: true },
   { src: "js/embed-controls.jsx", out: "embed/gen/embed-controls.js", wrap: true },
   { src: "js/viewer-app.jsx", out: "embed/gen/viewer-app.js", wrap: true },
@@ -149,7 +153,7 @@ const TARGETS = [
 // index.html:212-227 documents that preset-env lowers the dynamic
 // import() at js/mtlx-engine.js:68 to require(), which throws "require is
 // not defined" the first time getMxEnv() runs in a browser.
-function transform(src, filename) {
+function transform(src, filename, forceCompact = false, keepComments = true) {
   // Precomputes exactly what compact: "auto" (Babel's default) would
   // compute itself — true once the source string exceeds 500K chars —
   // and passes it explicitly. Output bytes are identical either way; the
@@ -161,7 +165,8 @@ function transform(src, filename) {
     presets: [["react", { runtime: "classic" }]],
     sourceType: "script",
     filename,
-    compact: src.length > 500000,
+    compact: forceCompact || src.length > 500000,
+    comments: keepComments,
   });
   return code;
 }
@@ -176,7 +181,7 @@ async function buildOne(target) {
 
   let code;
   try {
-    code = transform(source, target.src);
+    code = transform(source, target.src, !!target.compact, target.comments !== false);
   } catch (err) {
     fail(`error: Babel transform of ${target.src} failed: ${err.message}`);
   }

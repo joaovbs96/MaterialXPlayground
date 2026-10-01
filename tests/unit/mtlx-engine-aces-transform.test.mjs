@@ -5,7 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const enginePath = path.join(root, 'js', 'mtlx-engine.js');
+const enginePath = path.join(root, 'js', 'shared', 'mtlx-gen-core.js');
 const engineSource = fs.readFileSync(enginePath, 'utf8');
 
 // Karma's own EXR-linear -> PNG-sRGB ground truth for the 6 neutral chart

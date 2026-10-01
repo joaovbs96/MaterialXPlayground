@@ -35,7 +35,6 @@ test('bindEngine accepts a complete deps object', () => {
   const MtlxRender = loadRenderSession();
   assert.doesNotThrow(() => MtlxRender.bindEngine({
     getDisplayTransform: () => 'srgb',
-    applyThreeToneMappingChunk: () => false,
     displayExposureScale: () => 1,
     clockTick: () => {},
   }));
