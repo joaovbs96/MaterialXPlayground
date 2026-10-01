@@ -3005,6 +3005,7 @@ const MXS_SURFACE_BAR_HOVER = 'color-mix(in srgb, ' + MXS_SURFACE_HOVER + ' 80%,
 // fill, so a trigger sitting right under that field reads as one group.
 const MXS_SIDEBAR_SURFACE = 'var(--mx-select-sidebar-surface, rgb(var(--mtlx-surface-sunken, 17 24 39)))';
 const MXS_SIDEBAR_SURFACE_HOVER = 'var(--mx-select-sidebar-surface-hover, rgb(var(--mtlx-hover-subtle, 31 41 55)))';
+const MXS_FUSED_BORDER = 'var(--mx-select-fused-border, rgb(var(--mtlx-line, 55 65 81)))';
 const MXS_SIDEBAR_BORDER = 'var(--mx-select-sidebar-border, rgb(var(--mtlx-line-control, 55 65 81)))';
 
 // theme prop keys -> the custom property each one feeds. Used to stamp
@@ -3060,6 +3061,8 @@ const SELECT_SIZE_CLS = {
     sm: 'h-6 px-2',
     md: 'h-7 px-2',
     lg: 'w-full px-2.5 py-1.5',
+    // Stretches to the row height of a flex items-stretch parent (fused controls).
+    fill: 'self-stretch px-1.5',
 };
 const SELECT_VARIANT_CLS = {
     // backdrop-blur matches BTN_TOOLBAR: a toolbar select shares a strip
@@ -3069,6 +3072,8 @@ const SELECT_VARIANT_CLS = {
     field: 'border',
     sidebar: 'border',
     plain: 'border-0',
+    // Left divider only, for a select fused to the right edge of a search box.
+    fused: 'border-0 border-l',
 };
 
 // Normalizes `options` (string[], unchanged, or object-form entries)
@@ -3411,13 +3416,13 @@ const MtlxSelect = ({
     // chrome. `plain` only drops the border width (via SELECT_VARIANT_CLS);
     // borderColor stays harmless since there's no border to paint it on.
     const defaultChromeStyle = {
-        color: MXS_TEXT, borderRadius: MXS_RADIUS, fontSize: MXS_FONT_SIZE,
+        color: MXS_TEXT, borderRadius: variant === 'fused' ? 0 : MXS_RADIUS, fontSize: MXS_FONT_SIZE,
         background: variant === 'toolbar'
             ? (triggerHover ? MXS_SURFACE_BAR_HOVER : MXS_SURFACE_BAR)
-            : variant === 'sidebar'
+            : (variant === 'sidebar' || variant === 'fused')
                 ? (triggerHover ? MXS_SIDEBAR_SURFACE_HOVER : MXS_SIDEBAR_SURFACE)
                 : (triggerHover ? MXS_SURFACE_HOVER : MXS_CONTROL),
-        borderColor: variant === 'sidebar' ? MXS_SIDEBAR_BORDER : MXS_BORDER,
+        borderColor: variant === 'sidebar' ? MXS_SIDEBAR_BORDER : (variant === 'fused' ? MXS_FUSED_BORDER : MXS_BORDER),
     };
     // Fit-to-text sizing, skipped for `block` triggers (w-full already
     // owns their width) and for callers that already declare their own

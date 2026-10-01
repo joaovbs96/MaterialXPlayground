@@ -8243,28 +8243,29 @@
                                                 className="flex-none text-[9px] text-fg-subtle uppercase tracking-wider"
                                                 title="This category has several signatures (distinct input/output type sets)"
                                             >sig</span>
-                                            <span className="w-2 h-2 rounded-full flex-none"
-                                                style={{ background: typeColor(currentSigGroup ? currentSigGroup.type : '') }} />
-                                            <select
-                                                className="flex-1 min-w-0 h-6 bg-surface-sunken border border-line-strong rounded px-1.5 py-0 text-[10px] font-mono text-fg-soft focus:border-accent-base focus:outline-none"
+                                            <MtlxSelect
+                                                className="flex-1 min-w-0"
+                                                block
+                                                align="left"
+                                                size="sm"
+                                                variant="sidebar"
+                                                font="mono"
+                                                theme={{ fontSize: '10px' }}
+                                                defValue={null}
                                                 title="Switch this node to another signature: inputs keeping their name, type and a customized value survive (wires included); the rest, including untouched defaults, follow the new signature"
                                                 value={currentSigGroup ? currentSigGroup.key : ''}
-                                                onChange={(e) => {
-                                                    const g = panelSigGroups.find((g2) => g2.key === e.target.value);
+                                                onChange={(key) => {
+                                                    const g = panelSigGroups.find((g2) => g2.key === key);
                                                     if (g) applySignature(displayNode.id, g);
                                                 }}
-                                            >
-                                                {!currentSigGroup && (
-                                                    <option value="">(unresolved)</option>
-                                                )}
-                                                {panelSigGroups.map((g) => (
-                                                    <option key={g.key} value={g.key} title={g.full}
-                                                        style={{ color: typeColor(g.type) }}>
-                                                        {(g.outLabel || g.type || '?')
-                                                            + (g.ambiguous && g.inSummary ? ' (' + g.inSummary + ')' : '')}
-                                                    </option>
-                                                ))}
-                                            </select>
+                                                options={(currentSigGroup ? [] : [{ value: '', label: '(unresolved)' }]).concat(panelSigGroups.map((g) => ({
+                                                    value: g.key,
+                                                    label: (g.outLabel || g.type || '?')
+                                                        + (g.ambiguous && g.inSummary ? ' (' + g.inSummary + ')' : ''),
+                                                    title: g.full,
+                                                    dot: typeColor(g.type),
+                                                })))}
+                                            />
                                         </div>
                                     ) : null}
 
@@ -8277,21 +8278,26 @@
                                                 className="flex-none text-[9px] text-fg-subtle uppercase tracking-wider"
                                                 title="This signature has several versions"
                                             >ver</span>
-                                            <select
-                                                className="flex-1 min-w-0 h-6 bg-surface-sunken border border-line-strong rounded px-1.5 py-0 text-[10px] font-mono text-fg-soft focus:border-accent-base focus:outline-none"
+                                            <MtlxSelect
+                                                className="flex-1 min-w-0"
+                                                block
+                                                align="left"
+                                                size="sm"
+                                                variant="sidebar"
+                                                font="mono"
+                                                theme={{ fontSize: '10px' }}
+                                                defValue={null}
                                                 title="Switch this node to another version. Ports are identical, only defaults may differ"
                                                 value={currentDefName}
-                                                onChange={(e) => {
-                                                    const v = currentSigGroup.versions.find((v2) => v2.name === e.target.value);
+                                                onChange={(name) => {
+                                                    const v = currentSigGroup.versions.find((v2) => v2.name === name);
                                                     if (v) applyVersion(displayNode.id, v);
                                                 }}
-                                            >
-                                                {currentSigGroup.versions.map((v) => (
-                                                    <option key={v.name} value={v.name}>
-                                                        {(v.version || '?') + (v.isDefaultVersion ? ' (default)' : '')}
-                                                    </option>
-                                                ))}
-                                            </select>
+                                                options={currentSigGroup.versions.map((v) => ({
+                                                    value: v.name,
+                                                    label: (v.version || '?') + (v.isDefaultVersion ? ' (default)' : ''),
+                                                }))}
+                                            />
                                         </div>
                                     ) : null}
                                 </div>

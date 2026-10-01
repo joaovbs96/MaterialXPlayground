@@ -14,6 +14,7 @@
         const IFACE_VALUE_TYPES = ['boolean', 'color3', 'color4', 'filename', 'float', 'integer',
             'matrix33', 'matrix44', 'string', 'vector2', 'vector3', 'vector4',
             'surfaceshader', 'displacementshader', 'volumeshader', 'BSDF', 'EDF', 'VDF', 'lightshader', 'material'];
+        const DEF_VALUE_TYPES = IFACE_VALUE_TYPES.filter((t) => t !== 'material');
 
         // filterMode/filterType drive the port-dot double-click flow:
         // 'in' matches nodes whose OUTPUT feeds the port, 'out' matches
@@ -172,21 +173,17 @@
                                         spellCheck={false}
                                         onChange={(e) => setIfaceDraft(Object.assign({}, ifaceDraft, { name: e.target.value }))}
                                     />
-                                    <select
-                                        className="w-full bg-surface-sunken border border-line-strong rounded px-2 py-1 text-[12px] font-mono text-fg-soft focus:border-focus focus:outline-none"
+                                    <TypeSelect
+                                        className="w-full"
+                                        size="md"
                                         value={ifaceDraft.type}
-                                        onChange={(e) => {
-                                            const type = e.target.value;
+                                        onChange={(type) => {
                                             const patch = { type };
                                             if (!ifaceNumericType(type)) { patch.uimin = ''; patch.uimax = ''; }
                                             if (!ifaceLiteralType(type)) patch.value = '';
                                             setIfaceDraft(Object.assign({}, ifaceDraft, patch));
                                         }}
-                                    >
-                                        {IFACE_VALUE_TYPES.map((t) => (
-                                            <option key={t} value={t} style={{ color: typeColor(t) }}>{t}</option>
-                                        ))}
-                                    </select>
+                                    />
                                     {ifaceDraft.kind === 'iface-input' && (
                                         <div>
                                             <button
@@ -301,15 +298,13 @@
                                         spellCheck={false}
                                         onChange={(e) => setDefDraft(Object.assign({}, defDraft, { node: e.target.value }))}
                                     />
-                                    <select
-                                        className="w-full bg-surface-sunken border border-line-strong rounded px-2 py-1 text-[12px] font-mono text-fg-soft focus:border-focus focus:outline-none"
+                                    <TypeSelect
+                                        className="w-full"
+                                        size="md"
+                                        types={DEF_VALUE_TYPES}
                                         value={defDraft.type}
-                                        onChange={(e) => setDefDraft(Object.assign({}, defDraft, { type: e.target.value }))}
-                                    >
-                                        {IFACE_VALUE_TYPES.filter((t) => t !== 'material').map((t) => (
-                                            <option key={t} value={t} style={{ color: typeColor(t) }}>{t}</option>
-                                        ))}
-                                    </select>
+                                        onChange={(type) => setDefDraft(Object.assign({}, defDraft, { type }))}
+                                    />
                                     <input
                                         className="w-full bg-surface-sunken border border-line-strong rounded px-2 py-1 text-[12px] font-mono text-fg placeholder-fg-subtle focus:border-focus focus:outline-none"
                                         placeholder="nodegroup (optional)"
@@ -353,20 +348,20 @@
                                 onChange={(e) => setQ(e.target.value)}
                                 onKeyDown={onKeyDown}
                             />
-                            <select
-                                className="flex-none w-24 bg-surface-sunken border-l border-line px-1.5 text-[11px] font-mono text-fg-secondary rounded-none focus:outline-none focus:border-focus disabled:opacity-70"
+                            <TypeSelect
+                                className="flex-none w-24"
+                                size="fill"
+                                variant="fused"
+                                maxWidth={96}
+                                types={typeOptions}
+                                emptyOption="Any type"
                                 value={typeFilter}
                                 title={filterMode
                                     ? ('Locked to the port you double-clicked (' + typeFilter + ')')
                                     : 'Filter by output type'}
                                 disabled={!!filterMode}
-                                onChange={(e) => setTypeFilter(e.target.value)}
-                            >
-                                <option value="">Any type</option>
-                                {typeOptions.map((t) => (
-                                    <option key={t} value={t} style={{ color: typeColor(t) }}>{t}</option>
-                                ))}
-                            </select>
+                                onChange={(v) => { setTypeFilter(v); if (inputRef.current) inputRef.current.focus(); }}
+                            />
                         </div>
                         <div ref={listRef} className="max-h-72 overflow-y-auto custom-scrollbar">
                             {!catalog && !items.length && (
@@ -441,7 +436,7 @@
         // Type-picker dropdown: swatch-dotted, mono-font MtlxSelect over
         // a type list (defaults to IFACE_VALUE_TYPES). Forwards onChange
         // as the plain string value, not an event.
-        function TypeSelect({ value, onChange, disabled, title, className, types, emptyOption }) {
+        function TypeSelect({ value, onChange, disabled, title, className, types, emptyOption, size = 'sm', variant = 'field', maxWidth }) {
             const typeList = types || IFACE_VALUE_TYPES;
             const labels = React.useMemo(() => {
                 const m = {};
@@ -464,8 +459,9 @@
                     disabled={disabled}
                     title={title}
                     emptyOption={emptyOption}
-                    size="sm"
-                    variant="field"
+                    size={size}
+                    variant={variant}
+                    maxWidth={maxWidth}
                     font="mono"
                     align="left"
                     className={className || 'flex-none w-28'}
