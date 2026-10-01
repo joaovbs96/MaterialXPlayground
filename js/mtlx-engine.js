@@ -6301,6 +6301,37 @@ const LIVE_VIEWS = new Set();
 // environment/settings broadcast as createMtlxRenderView's own handles.
 const registerLiveView = (handle) => { if (handle) LIVE_VIEWS.add(handle); };
 const unregisterLiveView = (handle) => { if (handle) LIVE_VIEWS.delete(handle); };
+// Engine-wide WebGL context budget. Chromium keeps 16 live contexts per page and
+// evicts the oldest silently, so past this cap the least recently rendered idle
+// view is suspended (loseContext) and restored by its own render loop on demand.
+const MTLX_GL_CONTEXT_CAP = 12;
+const glCapLog = (msg) => { if (window.MTLX_PERF_LOG) console.log('[mtlx-gl] ' + msg); };
+// Called right before a view takes a context; `incoming` is its canvas, whose own
+// (rebuilt) context is not counted. Never touches active, held or mid-apply views.
+const enforceGlContextCap = (incoming) => {
+    const live = [];
+    LIVE_VIEWS.forEach((v) => {
+        const c = v.glCtx;
+        if (c && c.canvas !== incoming && !c.lost()) live.push(v);
+    });
+    const warm = MTLX_WARM_CTX && MTLX_WARM_CTX.gl && !MTLX_WARM_CTX.gl.isContextLost() ? 1 : 0;
+    let count = live.length + warm + 1;
+    if (count <= MTLX_GL_CONTEXT_CAP) return;
+    const idle = live.filter((v) => v.glCtx.suspendable()).sort((a, b) => a.glCtx.lastRender() - b.glCtx.lastRender());
+    for (const v of idle) {
+        if (count <= MTLX_GL_CONTEXT_CAP) break;
+        if (v.glCtx.suspend()) { count--; glCapLog('suspended ' + v.glCtx.label + ' (live ' + count + ')'); }
+    }
+};
+// Releases whatever context a discarded canvas still holds; a no-op for one without any.
+const releaseGlContext = (canvas) => {
+    try {
+        if (!canvas) return;
+        const gl = canvas.getContext('webgl2');
+        const ext = gl && !gl.isContextLost() && gl.getExtension('WEBGL_lose_context');
+        if (ext) ext.loseContext();
+    } catch (e) { /* canvas has no usable context */ }
+};
 // ---- Environment preparation: OFFICIAL VIEWER PARITY ----
 // Conventions (see also makeBackgroundTexture, shIrradianceFromEquirect,
 // BG_BASE/BG_SIGN): MaterialX latlong has v=0 at +Y (u=atan2(x,-z)/2PI+0.5);
@@ -10522,6 +10553,8 @@ const createMtlxRenderView = async ({
     // TEMPORARY visibility (backgrounded view skips render, keeps looping).
     // isAlive: OPTIONAL, read only by animate() via `aliveFn` below.
     isMounted = () => true, isActive = () => true, isAlive = null, debugKind = '',
+    // OPTIONAL: true keeps this view's context while inactive (compare's diff mode reads its pixels).
+    holdContext = () => false,
     // Opt-out for views whose sliders write uniforms with no regeneration
     // path (the docs node preview); see constifyInputUniforms.
     allowConstInputs = true,
@@ -10568,6 +10601,8 @@ const createMtlxRenderView = async ({
     );
     let reqId = null;
     let renderer = null;
+    // Context budget: suspendedByUs marks a loss WE caused, so real GPU resets keep their own path.
+    let viewGl = null, loseExt = null, suspendedByUs = false, lastRenderAt = 0, applyBusy = 0;
     // Declared here (not inside the try block below) so disposePartial,
     // defined outside that block, can still remove them on every teardown path.
     let onGlLost = null, onGlRestored = null;
@@ -10728,6 +10763,19 @@ const createMtlxRenderView = async ({
             if (wheelHintEl) wheelHintEl.style.opacity = '0';
         }, 1200);
     };
+    const suspendGl = () => {
+        // Kept: a lost context answers getExtension with null, so resume needs the object from now.
+        loseExt = viewGl && !viewGl.isContextLost() && viewGl.getExtension('WEBGL_lose_context');
+        if (!loseExt) return false;
+        suspendedByUs = true;
+        loseExt.loseContext();
+        return true;
+    };
+    const resumeGl = () => {
+        suspendedByUs = false;
+        glCapLog('resumed ' + label);
+        try { if (loseExt) loseExt.restoreContext(); } catch (e) { /* context already gone */ }
+    };
     const disposePartial = () => {
         stopped = true;
         dispToken++;
@@ -10801,7 +10849,7 @@ const createMtlxRenderView = async ({
             canvas.removeEventListener('webglcontextlost', onGlLost);
             canvas.removeEventListener('webglcontextrestored', onGlRestored);
         }
-        // No forceContextLoss() here: this same disposePartial() backs both
+        // No forceContextLoss() here (handle.destroy() does it for discarded canvases): this same disposePartial() backs both
         // the superseded-rebuild bail AND the public handle.dispose(), and
         // every call site (viewer-app.jsx, node-preview.jsx, graph/preview.jsx)
         // disposes the old view then immediately builds a new one on the
@@ -10849,11 +10897,13 @@ const createMtlxRenderView = async ({
                 // Acquire WebGL2 ourselves and pass it via `context`, so
                 // three skips its own getContext('webgl2')-then-'webgl'
                 // fallback: a transient failure throws instead of poisoning this canvas with WebGL1.
+                enforceGlContextCap(canvas);
                 const gl = canvas.getContext('webgl2', { antialias: true, alpha: true, depth: true, stencil: true,
                     premultipliedAlpha: true, preserveDrawingBuffer: false, powerPreference: 'default', failIfMajorPerformanceCaveat: false });
                 if (!gl) {
                     throw new Error('WebGL2 context could not be created for this preview (the browser refused WebGL2). Reload the tab or check the browser GPU settings.');
                 }
+                viewGl = gl;
                 renderer = new THREE.WebGLRenderer({ canvas, context: gl, antialias: true, alpha: true });
                 // A reused canvas still carries GL state left by the prior
                 // renderer, but fresh r128 state caches assume defaults, so
@@ -10862,7 +10912,7 @@ const createMtlxRenderView = async ({
                 // restored re-inits three's GL state but not render-target
                 // contents (PMREM bake, shadow map), so owners of this view
                 // must fully rebuild on restore, not just resume.
-                onGlLost = () => { window.dispatchEvent(new CustomEvent('mtlx-gl-context', { detail: { canvas, state: 'lost' } })); };
+                onGlLost = () => { window.dispatchEvent(new CustomEvent('mtlx-gl-context', { detail: { canvas, state: 'lost', suspended: suspendedByUs } })); };
                 onGlRestored = () => { window.dispatchEvent(new CustomEvent('mtlx-gl-context', { detail: { canvas, state: 'restored' } })); };
                 canvas.addEventListener('webglcontextlost', onGlLost);
                 canvas.addEventListener('webglcontextrestored', onGlRestored);
@@ -12171,6 +12221,7 @@ const createMtlxRenderView = async ({
                 // frame; routes to peelPipeline.render([mesh]) otherwise
                 // (see createPeelPipeline above for the 6-pass graph).
                 const renderFrame = () => {
+                    lastRenderAt = performance.now();
                     const peelActive = FORCE_TRANSPARENCY && viewIsTransparent && !!mesh;
                     // Idempotent transition (syncMeshMaterialMode is the
                     // other call site), flips scene built-ins' toneMapped.
@@ -12205,6 +12256,8 @@ const createMtlxRenderView = async ({
                     }
                     // Paused views must still track camera input (drag/damping);
                     // compare's diff mode reads pixels on demand, not via this render.
+                    // Suspended by the context cap: restore once wanted again, never render meanwhile.
+                    if (suspendedByUs) { if (isActive() || holdContext()) resumeGl(); return; }
                     if (!isActive()) return;
                     if (!controls && fallbackSpin) {
                         // OrbitControls script blocked → old behavior.
@@ -12688,10 +12741,30 @@ const createMtlxRenderView = async ({
                 LIVE_VIEWS.delete(handle);
                 disposePartial();
             },
+            // dispose() while the canvas is still in the page (rebuild on it), destroy() once React detached it.
+            release: () => { if (canvas && canvas.isConnected) handle.dispose(); else handle.destroy(); },
+            // One-way teardown for a canvas that is discarded for good (never rebuilt on it):
+            // dispose, then free the GL context now instead of waiting for GC.
+            destroy: () => {
+                handle.dispose();
+                suspendedByUs = false;
+                try { const ext = viewGl && !viewGl.isContextLost() && viewGl.getExtension('WEBGL_lose_context'); if (ext) ext.loseContext(); } catch (e) { /* already lost */ }
+                viewGl = null; loseExt = null;
+            },
+            // Context budget hooks read by enforceGlContextCap; undefined on foreign LIVE_VIEWS members.
+            glCtx: {
+                canvas, label,
+                lost: () => !viewGl || viewGl.isContextLost(),
+                lastRender: () => lastRenderAt,
+                suspendable: () => !stopped && !suspendedByUs && !applyBusy && !isActive() && !holdContext(),
+                suspend: suspendGl,
+            },
             // Debug hook: raw GPU state for a headed diagnosis harness.
             // Not for production UI code.
             __debug: () => ({ renderer, scene, camera, material: mesh ? mesh.material : material, mesh, geometry }),
         };
+        const applyInner = handle.applyMaterial;
+        handle.applyMaterial = async (...args) => { applyBusy++; try { return await applyInner(...args); } finally { applyBusy--; } };
         LIVE_VIEWS.add(handle);
         return handle;
     } catch (err) {
@@ -12969,7 +13042,7 @@ Object.assign(window, {
     getDummyTexWhite, getDummyTex3DWhite,
     SHADOW_FACE_SLOTS, SHADOW_LIGHT_SLOTS_MAX,
     SHADOW_NORMAL_OFFSET_TEXELS, SHADOW_DEPTH_BIAS_TEXELS,
-    createPeelPipeline, createRgbtPeelPipeline, applyPeelMaterialMode, registerLiveView, unregisterLiveView,
+    createPeelPipeline, createRgbtPeelPipeline, applyPeelMaterialMode, registerLiveView, unregisterLiveView, releaseGlContext,
     tryRefreshRenderView, prewarmPreviewTarget, checkTargetTransparency,
     EXPORT_TARGETS, generateTargetSources,
     fullscreenElement, toggleFullscreen, watchFullscreen,

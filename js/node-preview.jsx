@@ -256,7 +256,7 @@
                     const d = e.detail || {};
                     if (d.canvas !== canvasRef.current && d.canvas !== sourceCanvasRef.current) return;
                     if (d.state === 'lost') {
-                        if (!surfaceHidden()) {
+                        if (!surfaceHidden() && !d.suspended) {
                             setNotice('The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.');
                         }
                     } else if (d.state === 'restored') {
@@ -1188,7 +1188,7 @@
                             }
                         }
                         if (!view) return; // unmounted mid-setup (already disposed)
-                        if (!mounted) { view.dispose(); return; }
+                        if (!mounted) { view.release(); return; }
                         viewHandle = view;
                         viewRef.current = view;
                         setViewEpoch((n) => n + 1);
@@ -1260,7 +1260,7 @@
                                         allowConstInputs: false,
                                     });
                                     if (!sourceView || !mounted) {
-                                        if (sourceView) sourceView.dispose();
+                                        if (sourceView) sourceView.release();
                                     } else {
                                         sourceViewHandle = sourceView;
                                         sourceViewRef.current = sourceView;
@@ -1533,11 +1533,11 @@
                 return () => {
                     mounted = false;
                     if (viewRef.current === viewHandle) viewRef.current = null;
-                    if (viewHandle) viewHandle.dispose();
+                    if (viewHandle) viewHandle.release();
                     // Compare-mode source view: same dispose/clear pattern,
                     // whether superseded mid-effect or unmounted.
                     if (sourceViewRef.current === sourceViewHandle) sourceViewRef.current = null;
-                    if (sourceViewHandle) sourceViewHandle.dispose();
+                    if (sourceViewHandle) sourceViewHandle.release();
                     sourceUniformsRef.current = null;
                     sourceUniformByInputRef.current = null;
                     // Frees this run's export-doc entry under the SAME mutex

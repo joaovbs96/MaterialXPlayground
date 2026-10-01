@@ -253,7 +253,7 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
         if (geom === 'custom' && !(window.getCustomPreviewGeom && window.getCustomPreviewGeom())) return undefined;
         let mounted = true;
         const run = async () => {
-            if (slot.viewRef.current) { slot.viewRef.current.dispose(); slot.viewRef.current = null; }
+            if (slot.viewRef.current) { slot.viewRef.current.release(); slot.viewRef.current = null; }
             slot.setError(null);
             slot.texLoadGenRef.current++;
             slot.setTexReport(null);
@@ -289,10 +289,12 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
                         && !(displayModeRef.current === 'slider' && showDiffRef.current
                             && ((label === 'B' && swipeDiffPosRef.current === 'right')
                                 || (label === 'A' && swipeDiffPosRef.current === 'left'))),
+                    // Diff mode reads this view's pixels while inactive, so it keeps its context.
+                    holdContext: () => activeRef.current,
                     debugKind: 'material',
                 });
                 if (!view) return; // superseded
-                if (!mounted) { view.dispose(); return; }
+                if (!mounted) { view.release(); return; }
                 // Apply current env sliders synchronously so a rebuilt view
                 // never flashes the default rotation/exposure for a frame.
                 if (view.setEnvRotation) view.setEnvRotation(envUIRef.current.rotation * Math.PI / 180);
@@ -335,7 +337,7 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
         run();
         return () => {
             mounted = false;
-            if (slot.viewRef.current) { slot.viewRef.current.dispose(); slot.viewRef.current = null; }
+            if (slot.viewRef.current) { slot.viewRef.current.release(); slot.viewRef.current = null; }
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [slot.renderables, slot.chosenMat, geom, customKey, glEpoch, displayTransform]);
@@ -670,7 +672,7 @@ function MaterialCompareApp({ active = true } = {}) {
             if (!which) return;
             const slot = which === 'A' ? slotA : slotB;
             if (d.state === 'lost') {
-                if (!surfaceHidden()) {
+                if (!surfaceHidden() && !d.suspended) {
                     slot.setError('The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.');
                 }
             } else if (d.state === 'restored') {
@@ -1067,8 +1069,15 @@ function MaterialCompareApp({ active = true } = {}) {
         else setGpuDiffOk(false);
     }, [displayMode, showDiff, gpuDiffOk]);
 
-    React.useEffect(() => () => {
-        if (gpuDiffViewRef.current) { gpuDiffViewRef.current.dispose(); gpuDiffViewRef.current = null; }
+    // Unmount only: the diff canvas is discarded too, so free its GL context after the dispose.
+    React.useEffect(() => {
+        const diffCanvas = gpuDiffCanvasRef.current;
+        return () => {
+            if (!gpuDiffViewRef.current) return;
+            gpuDiffViewRef.current.dispose();
+            gpuDiffViewRef.current = null;
+            window.releaseGlContext(diffCanvas);
+        };
     }, []);
 
     // Side+diff's third pane has no canvas of its own under the

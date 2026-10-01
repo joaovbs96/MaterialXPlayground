@@ -1126,7 +1126,7 @@
                     const d = e.detail || {};
                     if (d.canvas !== canvasRef.current) return;
                     if (d.state === 'lost') {
-                        if (!surfaceHidden()) {
+                        if (!surfaceHidden() && !d.suspended) {
                             setNotice('The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.');
                         }
                     } else if (d.state === 'restored') {
@@ -1225,7 +1225,8 @@
                     // "dead" is seen no later than the tick dispose() runs.
                     shellAliveRef.current = false;
                     if (liveViewRef.current) {
-                        try { liveViewRef.current.dispose(); } catch (e) { /* best-effort */ }
+                        // destroy: the canvas is discarded here, so also free its GL context.
+                        try { liveViewRef.current.destroy(); } catch (e) { /* best-effort */ }
                     }
                     liveViewRef.current = null;
                     liveGeomRef.current = null;
@@ -1484,7 +1485,7 @@
                                 window.mxExclusive(() => built.cleanup());
                             }
                             if (!view) return;
-                            if (!mounted) { view.dispose(); return; }
+                            if (!mounted) { view.release(); return; }
                             liveViewRef.current = view;
                             // Read by graph-app.jsx's tryFastUniformUpdate to
                             // match promoted-uniform paths under the wrapper.

@@ -393,7 +393,7 @@ function MaterialViewerApp({
       const d = e.detail || {};
       if (d.canvas !== canvasRef.current) return;
       if (d.state === 'lost') {
-        if (!surfaceHidden()) {
+        if (!surfaceHidden() && !d.suspended) {
           notify('The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.');
         }
       } else if (d.state === 'restored') {
@@ -1168,7 +1168,7 @@ function MaterialViewerApp({
         });
         if (!view) return; // superseded: the new run drives `busy`
         if (!mounted) {
-          view.dispose();
+          view.release();
           return;
         }
         viewRef.current = view;
@@ -1213,7 +1213,7 @@ function MaterialViewerApp({
     return () => {
       mounted = false;
       if (viewRef.current) {
-        viewRef.current.dispose();
+        viewRef.current.release();
         viewRef.current = null;
         if (onViewRef.current) onViewRef.current(null);
       }
