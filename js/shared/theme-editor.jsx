@@ -790,10 +790,18 @@ function MtlxThemeEditor({ open, openSeq, onClose }) {
                         </div>
                     )}
                 </section>
+            </div>
 
-                <section aria-labelledby={TE_ID + '-share'}>
-                    {micro('Share', TE_ID + '-share')}
-                    <div className="flex flex-wrap gap-2">
+            {/* Fixed footer: status, share tools, then the actions or a pending confirmation. */}
+            <div className="flex-none border-t border-line px-4 py-3 bg-chrome/40 space-y-2">
+                {status && (
+                    status.tone === 'ok' && status.adjusted
+                        ? <TeReport report={{ adjusted: status.adjusted, errors: [] }} labelOf={labelOf} title={status.text + (status.adjusted.length ? ' Adjusted for contrast:' : ' All colors pass.')} />
+                        : <div role={status.tone === 'error' ? 'alert' : 'status'}
+                            className={'text-[11px] ' + (status.tone === 'error' ? 'text-error-text' : status.tone === 'ok' ? 'text-success-text' : 'text-fg-muted')}>{status.text}</div>
+                )}
+                <section role="group" aria-label="Share">
+                    <div className="flex flex-wrap gap-1.5">
                         <button type="button" className={BTN_SECONDARY + ' gap-1.5'} onClick={copyCode} disabled={!apiOk}>
                             <MtlxIcon name="copy" className="w-3.5 h-3.5" />Copy theme code
                         </button>
@@ -815,13 +823,13 @@ function MtlxThemeEditor({ open, openSeq, onClose }) {
                         </div>
                     )}
                     {importOpen && (
-                        <div id={TE_ID + '-import'} className="mt-2 rounded-md border border-dashed border-line-strong p-2.5 space-y-2">
+                        <div id={TE_ID + '-import'} className="mt-2 rounded-md border border-dashed border-line-strong p-2 space-y-1.5">
                             <label htmlFor={TE_ID + '-import-code'} className={TE_MICRO + ' block'}>Theme code</label>
                             <textarea
                                 id={TE_ID + '-import-code'}
                                 value={importText}
                                 maxLength={TE_MAX_CODE_CHARS}
-                                rows={3}
+                                rows={2}
                                 spellCheck={false}
                                 placeholder="mtlx1..."
                                 onChange={(e) => { setImportText(e.target.value); setImportError(''); }}
@@ -833,21 +841,11 @@ function MtlxThemeEditor({ open, openSeq, onClose }) {
                                 <input ref={fileRef} type="file" accept=".json,application/json" className="hidden" tabIndex={-1}
                                     onChange={(e) => { importFile(e.target.files && e.target.files[0]); e.target.value = ''; }} />
                             </div>
-                            <div className="text-[11px] text-fg-subtle">Or drop a theme .json file on this panel. Imports open as a draft and are never saved on their own.</div>
+                            <div className="text-[11px] text-fg-subtle">Or drop a theme .json file on this panel. Imports open as a draft.</div>
                             {importError && <div className="text-[11px] text-error-text" role="alert">{importError}</div>}
                         </div>
                     )}
                 </section>
-            </div>
-
-            {/* Footer: status, then the actions or a pending confirmation. */}
-            <div className="flex-none border-t border-line px-4 py-3 bg-chrome/40 space-y-2">
-                {status && (
-                    status.tone === 'ok' && status.adjusted
-                        ? <TeReport report={{ adjusted: status.adjusted, errors: [] }} labelOf={labelOf} title={status.text + (status.adjusted.length ? ' Adjusted for contrast:' : ' All colors pass.')} />
-                        : <div role={status.tone === 'error' ? 'alert' : 'status'}
-                            className={'text-[11px] ' + (status.tone === 'error' ? 'text-error-text' : status.tone === 'ok' ? 'text-success-text' : 'text-fg-muted')}>{status.text}</div>
-                )}
                 {confirm ? (
                     <div className="flex items-center gap-2" role="alertdialog" aria-label={confirm === 'delete' ? 'Confirm delete' : 'Discard changes'}>
                         <span className="flex-1 text-[11px] text-fg-soft">

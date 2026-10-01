@@ -514,7 +514,7 @@ export const tokens = {
     "brand-accent": {
         "group": "misc",
         "kind": "independent",
-        "derive": "logo blue; does not follow the accent seed",
+        "derive": "equals accent-fg (logo and wordmark follow the accent)",
         "role": "Header brand text, logo crescent."
     },
     "brand-logo-inner": {

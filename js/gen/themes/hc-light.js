@@ -90,7 +90,7 @@
         "scrollbar-track": "#ffffff",
         "scrollbar-thumb": "#525252",
         "brand-mark": "#111827",
-        "brand-accent": "#2563eb",
+        "brand-accent": "#1d4ed8",
         "brand-logo-inner": "#ffffff",
         "code-fg": "#020202",
         "code-muted": "#555555",
