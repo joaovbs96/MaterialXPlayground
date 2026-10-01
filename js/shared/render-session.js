@@ -98,7 +98,7 @@
     // Acquires the WebGL2 context and sets up display transform, in
     // the same order createMtlxRenderView ran inline, so program state
     // and the PMREM bake downstream stay byte-identical.
-    const acquireRenderer = ({ canvas, wantsStudio, maxPixelRatio, width, height }) => {
+    const acquireRenderer = ({ canvas, wantsStudio, maxPixelRatio, width, height, isSuspended = () => false }) => {
         const THREE = window.THREE;
         // Acquire WebGL2 ourselves and pass it via `context`, so three
         // skips its own getContext('webgl2')-then-'webgl' fallback: a
@@ -119,7 +119,7 @@
         // restored re-inits three's GL state but not render-target
         // contents (PMREM bake, shadow map), so owners of this view
         // must fully rebuild on restore, not just resume.
-        const onGlLost = () => { window.dispatchEvent(new CustomEvent('mtlx-gl-context', { detail: { canvas, state: 'lost' } })); };
+        const onGlLost = () => { window.dispatchEvent(new CustomEvent('mtlx-gl-context', { detail: { canvas, state: 'lost', suspended: isSuspended() } })); };
         const onGlRestored = () => { window.dispatchEvent(new CustomEvent('mtlx-gl-context', { detail: { canvas, state: 'restored' } })); };
         canvas.addEventListener('webglcontextlost', onGlLost);
         canvas.addEventListener('webglcontextrestored', onGlRestored);

@@ -1149,7 +1149,7 @@ function MaterialViewerApp({
         });
         if (!view) return; // superseded: the new run drives `busy`
         if (!mounted) {
-          view.dispose();
+          view.release();
           return;
         }
         viewRef.current = view;
@@ -1194,7 +1194,7 @@ function MaterialViewerApp({
     return () => {
       mounted = false;
       if (viewRef.current) {
-        viewRef.current.dispose();
+        viewRef.current.release();
         viewRef.current = null;
         if (onViewRef.current) onViewRef.current(null);
       }

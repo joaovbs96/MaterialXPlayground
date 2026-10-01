@@ -1780,7 +1780,7 @@ const useRenderContextRecovery = ({
       const idx = groupsRef.current.findIndex(refs => refs.some(r => r && r.current === d.canvas));
       if (idx === -1) return;
       if (d.state === 'lost') {
-        if (!isHiddenRef.current() && onLostRef.current) onLostRef.current(idx);
+        if (!isHiddenRef.current() && !d.suspended && onLostRef.current) onLostRef.current(idx);
       } else if (d.state === 'restored') {
         if (isHiddenRef.current()) pendingRef.current.add(idx);else bump(idx);
       }

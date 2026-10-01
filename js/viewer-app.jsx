@@ -1060,7 +1060,7 @@
                             debugKind: 'material',
                         });
                         if (!view) return; // superseded: the new run drives `busy`
-                        if (!mounted) { view.dispose(); return; }
+                        if (!mounted) { view.release(); return; }
                         viewRef.current = view;
                         window.__mtlxViewerHandle = view; // test and console access to the live shaderball handle.
                         if (view.setBackdrop) view.setBackdrop(backdropModeRef.current);
@@ -1103,7 +1103,7 @@
                 return () => {
                     mounted = false;
                     if (viewRef.current) {
-                        viewRef.current.dispose();
+                        viewRef.current.release();
                         viewRef.current = null;
                         if (onViewRef.current) onViewRef.current(null);
                     }
