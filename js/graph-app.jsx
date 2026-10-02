@@ -6253,7 +6253,21 @@
             // createDefinition: promotes an existing INSTANCE nodegraph to
             // a nodedef plus a renamed implementation graph, then replaces
             // the original graph in place with an instance node of it.
-            const promoteNodegraph = (gName, nodeName) => {
+            // The graph's real outputs (types) and input count, as promotion
+            // maps them onto the nodedef. Feeds both the panel and promoteNodegraph.
+            const nodegraphInterface = (g) => ({
+                outputs: vecToArray(mxSafe(() => g.getOutputs(), []))
+                    .filter((o) => mxElName(o).indexOf('__pv_') !== 0)
+                    .map((o) => ({ name: mxElName(o), type: mxElType(o) })),
+                inputCount: vecToArray(mxSafe(() => g.getInputs(), [])).length,
+            });
+            const promotionNamesFor = (doc, g, gName, nodeName) => computePromotionNames({
+                nodeName, gName,
+                outputTypes: nodegraphInterface(g).outputs.map((o) => o.type),
+                childNames: docChildren(doc).map((el) => mxElName(el)),
+            });
+
+            const promoteNodegraph = (gName, nodeName, extra) => {
                 if (!parsed) return;
                 if (scope !== '') {
                     setError('Converting is only available at the document root.');
@@ -6277,9 +6291,8 @@
                         // 1: snapshot everything BEFORE any mutation. The
                         // input elements themselves (`el`) are still read
                         // from below, so they must survive until step 3.
-                        const outputsSnapshot = vecToArray(mxSafe(() => g.getOutputs(), []))
-                            .filter((o) => mxElName(o).indexOf('__pv_') !== 0)
-                            .map((o) => ({ name: mxElName(o), type: mxElType(o) }));
+                        const outputsSnapshot = nodegraphInterface(g).outputs;
+                        const names = promotionNamesFor(doc, g, gName, trimmed);
                         const inputsSnapshot = vecToArray(mxSafe(() => g.getInputs(), [])).map((p) => ({
                             name: mxElName(p), type: mxElType(p), el: p,
                             nodename: mxElAttr(p, 'nodename'), nodegraph: mxElAttr(p, 'nodegraph'),
@@ -6290,12 +6303,13 @@
                         // 2: the nodedef, typed off the first output (or
                         // color3 when the graph has none yet); extra
                         // outputs and a missing default "out" reconcile after.
-                        const outType = outputsSnapshot.length > 1 ? 'multioutput'
-                            : (outputsSnapshot[0] ? outputsSnapshot[0].type : 'color3');
-                        const ndBase = 'ND_' + trimmed + '_' + (outType === 'multioutput' ? 'multi' : outType);
-                        const ndName = mxSafe(() => doc.createValidChildName(ndBase), ndBase);
+                        const { outType, ndName } = names;
                         const def = mxSafe(() => doc.addNodeDef(ndName, outputsSnapshot[0] ? outputsSnapshot[0].type : 'color3', trimmed), null);
                         if (!def) { setError('Could not create the node definition.'); return; }
+                        const ndGroup = extra && extra.nodegroup ? String(extra.nodegroup) : '';
+                        const ndDoc = extra && extra.doc ? String(extra.doc).trim() : '';
+                        if (ndGroup) mxSafe(() => { def.setNodeGroup(ndGroup); return true; }, false);
+                        if (ndDoc) mxSetAttr(def, 'doc', ndDoc);
                         for (const o of outputsSnapshot) {
                             const existing = mxSafe(() => def.getOutput(o.name), null);
                             if (existing) {
@@ -6329,15 +6343,13 @@
                             mxSafe(() => { g.removeInput(inp.name); return true; }, false);
                         }
                         mxSafe(() => { g.setNodeDefString(ndName); return true; }, false);
-                        const ngBase = 'NG_' + trimmed + '_' + (outType === 'multioutput' ? 'multi' : outType);
-                        const newGName = mxSafe(() => doc.createValidChildName(ngBase), ngBase);
-                        mxSafe(() => { g.setName(newGName); return true; }, false);
+                        mxSafe(() => { g.setName(names.ngName); return true; }, false);
 
                         // 5: a root instance takes the OLD graph name (now
                         // free) and its xpos/ypos, then re-authors every
                         // connection the graph's boundary inputs used to carry.
-                        const instName = mxSafe(() => doc.createValidChildName(gName), gName);
-                        const inst = mxSafe(() => doc.addNode(trimmed, instName, outType), null);
+                        const instName = names.instName;
+                        const inst =mxSafe(() => doc.addNode(trimmed, instName, outType), null);
                         if (!inst) { setError('Could not create the instance node.'); return; }
                         mxSafe(() => { inst.setNodeDefString(ndName); return true; }, false);
                         const gxpos = mxElAttr(g, 'xpos');
@@ -7303,6 +7315,59 @@
             React.useEffect(() => {
                 if (displayNode) setPromoteNameDraft(defaultDefinitionNodeName(displayNode.data.name));
             }, [displayNode && displayNode.id]);
+            // Convert to Node Def panel: closed until the button is pressed.
+            const [promoteOpen, setPromoteOpen] = React.useState(false);
+            const [promoteGroup, setPromoteGroup] = React.useState('');
+            const [promoteDocText, setPromoteDocText] = React.useState('');
+            const [promoteLib, setPromoteLib] = React.useState(null);
+            const promoteBtnRef = React.useRef(null);
+            const promoteNameRef = React.useRef(null);
+            React.useEffect(() => {
+                setPromoteOpen(false); setPromoteGroup(''); setPromoteDocText('');
+            }, [displayNode && displayNode.id]);
+            // Library node names and node groups, from the memoized stdlib catalog.
+            React.useEffect(() => {
+                if (!promoteOpen || promoteLib) return;
+                let live = true;
+                buildNodeCatalog().then((cat) => {
+                    if (!live) return;
+                    const groups = [];
+                    cat.forEach((c) => { if (c.group && groups.indexOf(c.group) === -1) groups.push(c.group); });
+                    setPromoteLib({ nodes: new Set(cat.map((c) => c.category)), groups: groups.sort() });
+                }).catch(() => {});
+                return () => { live = false; };
+            }, [promoteOpen, promoteLib]);
+            React.useEffect(() => {
+                if (!promoteOpen || !promoteNameRef.current) return;
+                promoteNameRef.current.focus();
+                promoteNameRef.current.select();
+                const panel = promoteNameRef.current.closest('[data-testid="promote-panel"]');
+                if (panel && panel.scrollIntoView) panel.scrollIntoView({ block: 'nearest' });
+            }, [promoteOpen]);
+            const promoteInfo = React.useMemo(() => {
+                if (!promoteOpen || !parsed || !displayNode) return null;
+                const g = docChild(parsed.doc, displayNode.data.name);
+                if (!g) return null;
+                const iface = nodegraphInterface(g);
+                const name = promoteNameDraft.trim();
+                const error = promoteNameError(name, isValidMtlxName, describeInvalidMtlxName);
+                const localNodes = new Set((docCatalog || []).map((c) => c.category));
+                return {
+                    error,
+                    warning: error ? '' : promoteShadowWarning(name, promoteLib && promoteLib.nodes, localNodes),
+                    names: error ? null : promotionNamesFor(parsed.doc, g, displayNode.data.name, name),
+                    summary: promoteInterfaceSummary(iface.inputCount, iface.outputs.map((o) => o.type)),
+                };
+            }, [promoteOpen, promoteNameDraft, promoteLib, parsed, docRev, docCatalog, displayNode && displayNode.id]);
+            const closePromote = (refocus) => {
+                setPromoteOpen(false);
+                if (refocus) setTimeout(() => { if (promoteBtnRef.current) promoteBtnRef.current.focus(); }, 0);
+            };
+            const confirmPromote = () => {
+                if (!promoteInfo || promoteInfo.error || !displayNode) return;
+                promoteNodegraph(displayNode.data.name, promoteNameDraft, { nodegroup: promoteGroup, doc: promoteDocText });
+                setPromoteOpen(false);
+            };
             // Edges leaving the displayed element — feeds the Downstream
             // Connections group. Empty for o: pseudo-nodes (no outputs)
             // and unconnected nodes, which hides the group entirely.
@@ -8613,29 +8678,107 @@
                                     // root, same gate as the keybind.
                                     canUngroupSelection && (
                                         <div key="ungroup" className="py-1.5 space-y-1.5">
-                                            <button
-                                                onClick={() => ungroupNodegraph(displayNode.data.name)}
-                                                title="Dissolve this nodegraph back into its nodes, keeping every connection"
-                                                className="h-7 text-[11px] px-2 rounded border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors"
-                                            >
-                                                Ungroup (Ctrl+Shift+G)
-                                            </button>
                                             <div className="flex items-center gap-1.5">
-                                                <input
-                                                    className="flex-1 min-w-0 px-1.5 py-0.5 placeholder-fg-faint bg-surface-sunken border border-line-strong rounded text-[11px] font-mono text-fg-soft focus:border-accent-base focus:outline-none"
-                                                    value={promoteNameDraft}
-                                                    placeholder="node name"
-                                                    spellCheck={false}
-                                                    onChange={(e) => setPromoteNameDraft(e.target.value)}
-                                                />
                                                 <button
-                                                    onClick={() => promoteNodegraph(displayNode.data.name, promoteNameDraft)}
-                                                    title="Turn this nodegraph into a nodedef plus implementation graph and replace it with an instance"
-                                                    className="h-7 flex-none text-[11px] px-2 rounded border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors"
+                                                    onClick={() => ungroupNodegraph(displayNode.data.name)}
+                                                    title="Dissolve this nodegraph back into its nodes, keeping every connection"
+                                                    className="flex-1 basis-0 min-w-0 h-7 text-[11px] px-1 whitespace-nowrap rounded border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors"
                                                 >
-                                                    Convert to Definition
+                                                    Ungroup (Ctrl+Shift+G)
+                                                </button>
+                                                <button
+                                                    ref={promoteBtnRef}
+                                                    aria-pressed={promoteOpen}
+                                                    aria-expanded={promoteOpen}
+                                                    onClick={() => (promoteOpen ? closePromote(false) : setPromoteOpen(true))}
+                                                    title="Turn this nodegraph into a nodedef plus implementation graph and replace it with an instance"
+                                                    className={'flex-1 basis-0 min-w-0 h-7 text-[11px] px-1 whitespace-nowrap rounded border transition-colors '
+                                                        + (promoteOpen
+                                                            ? 'bg-accent-fill/80 border-accent-base text-on-accent-soft'
+                                                            : 'bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80')}
+                                                >
+                                                    Convert to Node Def
                                                 </button>
                                             </div>
+                                            {promoteOpen && promoteInfo && (
+                                                <div data-testid="promote-panel" className="rounded border border-line-strong bg-surface-sunken/60 p-2 space-y-2">
+                                                    <div className="space-y-1">
+                                                        <label htmlFor="promote-name" className="block text-[10px] uppercase tracking-wider text-fg-subtle">Node name</label>
+                                                        <input
+                                                            id="promote-name"
+                                                            ref={promoteNameRef}
+                                                            className={'w-full min-w-0 px-1.5 py-0.5 placeholder-fg-faint bg-surface-sunken border rounded text-[11px] font-mono text-fg-soft focus:outline-none '
+                                                                + (promoteInfo.error ? 'border-error-hue/60 focus:border-error-hue' : 'border-line-strong focus:border-accent-base')}
+                                                            value={promoteNameDraft}
+                                                            placeholder="node name"
+                                                            spellCheck={false}
+                                                            aria-invalid={!!promoteInfo.error}
+                                                            onChange={(e) => setPromoteNameDraft(e.target.value)}
+                                                            onKeyDown={(e) => {
+                                                                if (e.key === 'Enter') { e.preventDefault(); confirmPromote(); }
+                                                                else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePromote(true); }
+                                                            }}
+                                                        />
+                                                        {promoteInfo.error && (
+                                                            <div data-testid="promote-error" className="text-[10px] leading-snug text-error-text">{promoteInfo.error}</div>
+                                                        )}
+                                                        {promoteInfo.warning && (
+                                                            <div data-testid="promote-warning" className="text-[10px] leading-snug text-warning-text">{promoteInfo.warning}</div>
+                                                        )}
+                                                    </div>
+                                                    {promoteInfo.names && (
+                                                        <div data-testid="promote-preview" className="rounded border border-line bg-surface-raised px-1.5 py-1 space-y-0.5 text-[10px] font-mono">
+                                                            <div className="text-[9px] uppercase tracking-wider text-fg-subtle font-sans">Will create</div>
+                                                            <div className="flex gap-1.5"><span className="flex-none w-10 text-fg-subtle">def</span><span data-testid="promote-nd" className="min-w-0 break-all text-fg-soft">{promoteInfo.names.ndName}</span></div>
+                                                            <div className="flex gap-1.5"><span className="flex-none w-10 text-fg-subtle">graph</span><span data-testid="promote-ng" className="min-w-0 break-all text-fg-soft">{promoteInfo.names.ngName}</span></div>
+                                                            <div className="flex gap-1.5"><span className="flex-none w-10 text-fg-subtle">node</span><span data-testid="promote-inst" className="min-w-0 break-all text-fg-soft">{promoteInfo.names.instName}</span></div>
+                                                        </div>
+                                                    )}
+                                                    <div className="space-y-1">
+                                                        <div className="text-[10px] uppercase tracking-wider text-fg-subtle">Node group (optional)</div>
+                                                        <MtlxSelect
+                                                            block
+                                                            align="left"
+                                                            size="sm"
+                                                            variant="sidebar"
+                                                            font="mono"
+                                                            theme={{ fontSize: '10px' }}
+                                                            defValue=""
+                                                            ariaLabel="Node group"
+                                                            value={promoteGroup}
+                                                            onChange={setPromoteGroup}
+                                                            options={[{ value: '', label: 'None' }].concat(((promoteLib && promoteLib.groups) || []).map((gr) => ({ value: gr, label: gr })))}
+                                                        />
+                                                    </div>
+                                                    <div className="space-y-1">
+                                                        <label htmlFor="promote-doc" className="block text-[10px] uppercase tracking-wider text-fg-subtle">Description (optional)</label>
+                                                        <textarea
+                                                            id="promote-doc"
+                                                            rows={2}
+                                                            className="block w-full px-1.5 py-0.5 placeholder-fg-faint bg-surface-sunken border border-line-strong rounded text-[11px] font-mono text-fg-soft focus:border-accent-base focus:outline-none resize-none custom-scrollbar"
+                                                            value={promoteDocText}
+                                                            placeholder="What does this node do?"
+                                                            spellCheck={false}
+                                                            onChange={(e) => setPromoteDocText(e.target.value)}
+                                                            onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePromote(true); } }}
+                                                        />
+                                                    </div>
+                                                    <div data-testid="promote-summary" className="text-[10px] text-fg-muted">{promoteInfo.summary}</div>
+                                                    <div className="flex items-center gap-2">
+                                                        <button
+                                                            data-testid="promote-confirm"
+                                                            onClick={confirmPromote}
+                                                            disabled={!!promoteInfo.error}
+                                                            className="h-7 text-[11px] px-2.5 rounded border bg-accent-fill/80 border-accent-base text-on-accent-soft hover:bg-accent-fill transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                                        >Convert</button>
+                                                        <button
+                                                            data-testid="promote-cancel"
+                                                            onClick={() => closePromote(true)}
+                                                            className="h-7 text-[11px] px-2.5 rounded border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors"
+                                                        >Cancel</button>
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
                                     ),
                                     // Interface metadata: an order row for both 'i:' and 'o:'

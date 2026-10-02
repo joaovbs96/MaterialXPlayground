@@ -11,7 +11,7 @@ import { chromium } from '@playwright/test';
 import { startServer } from '../embed/lib/server.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const HELP = 'Usage: node tests/perf/thumb-ui-capture.mjs [--out <dir>] [--software] [--variants-only] [--sequence-only] [--shader-only]';
+const HELP = 'Usage: node tests/perf/thumb-ui-capture.mjs [--out <dir>] [--software] [--variants-only] [--sequence-only] [--shader-only] [--hover-only] [--offon-only]';
 const PILL = '[data-mtlx-thumb-pill]';
 
 function parseArgs(argv) {
@@ -21,7 +21,7 @@ function parseArgs(argv) {
     if (a === '--help' || a === '-h') { console.log(HELP); process.exit(0); }
     else if (a === '--out') { if (argv[++i] == null) throw new Error('--out requires a value'); out.out = path.resolve(argv[i]); }
     else if (a === '--software') out.software = true;
-    else if (a === '--variants-only' || a === '--sequence-only' || a === '--shader-only') continue;
+    else if (a === '--variants-only' || a === '--sequence-only' || a === '--shader-only' || a === '--hover-only' || a === '--offon-only') continue;
     else throw new Error(`Unknown argument: ${a}`);
   }
   return out;
@@ -46,6 +46,7 @@ const SHOWCASE = [
   '    <input name="bg" type="color3" value="0.1, 0.1, 0.1" />',
   '    <input name="mix" type="float" nodename="a_very_long_fractal_noise_pattern_node_name" />',
   '  </mix>',
+  '  <tint name="use_tint" type="color3"><input name="amount" type="float" value="0.7" /></tint>',
   '  <nodegraph name="NG_wrapper">',
   '    <input name="tint_in" type="color3" value="0.5, 0.5, 0.5" />',
   '    <multiply name="m" type="color3"><input name="in1" type="color3" interfacename="tint_in" /><input name="in2" type="float" value="0.5" /></multiply>',
@@ -258,7 +259,13 @@ async function frameAndShoot(page, id, file) {
   await page.getByText('Frame Node', { exact: true }).click();
   await page.waitForTimeout(900);
   await page.mouse.click(1200, 150);
-  await card.screenshot({ path: file });
+  await shootCard(page, card, file, 0);
+}
+
+// The action chips sit on the card's right edge, so the picture is padded; extraRight leaves room for a pill.
+async function shootCard(page, card, file, extraRight) {
+  const bb = await card.boundingBox();
+  await page.screenshot({ path: file, clip: { x: Math.max(0, bb.x - 12), y: Math.max(0, bb.y - 14), width: bb.width + 24 + extraRight, height: bb.height + 28 } });
 }
 
 async function captureVariants(browser, baseURL, theme, outDir) {
@@ -311,6 +318,98 @@ async function captureVariants(browser, baseURL, theme, outDir) {
   await page.screenshot({ path: path.join(outDir, `variants-${theme}.png`) });
   await page.context().close();
   fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// Hover states: the + toggle and the pencil / eye grow into labelled pills. A nodegraph card and a library-backed node.
+const HOVER_CARDS = ['n:use_tint', 'g:NG_tint', 'n:a_very_long_fractal_noise_pattern_node_name', 'g:NG_wrapper'];
+async function captureHover(browser, baseURL, theme, size, outDir) {
+  const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 }, deviceScaleFactor: 2 });
+  await ctx.addInitScript(([t, sz]) => {
+    try { localStorage.setItem('mtlxTheme', t); localStorage.setItem('mtlxGraphThumbnailSize', sz); localStorage.removeItem('mtlxGraphThumbnails'); } catch (e) { /* storage blocked */ }
+  }, [theme, size]);
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => console.error('[pageerror]', e.message));
+  const names = [];
+  try {
+    await page.goto(`${baseURL}/index.html#!graph`);
+    await page.waitForSelector('.react-flow__node', { timeout: 120000 });
+    await waitSettled(page);
+    await page.evaluate((x) => window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: { xml: x, name: 'showcase' } })), SHOWCASE);
+    await page.waitForSelector('.react-flow__node[data-id="n:mix_the_two"]', { timeout: 60000 });
+    await waitSettled(page);
+    for (const id of HOVER_CARDS) {
+      const card = page.locator(`.react-flow__node[data-id="${id}"]`);
+      await fit(page);
+      await frameAndShoot(page, id, path.join(outDir, 'hover-tmp.png'));
+      const chips = card.locator('.mtlx-node-act');
+      const n = await chips.count();
+      const short = id.replace(/[^a-z0-9]/gi, '_').slice(0, 12);
+      for (let i = 0; i < n; i += 1) {
+        const label = (await chips.nth(i).getAttribute('aria-label')).replace(/\W+/g, '_');
+        await chips.nth(i).hover();
+        await page.waitForTimeout(500);
+        const name = `hover-${short}-${label}-${size}-${theme}`;
+        await shootCard(page, card, path.join(outDir, name + '.png'), 150);
+        names.push(name);
+        await checkOverlap(page, `${size}-${theme} hover ${id} ${label}`);
+      }
+      await page.mouse.move(1200, 150);
+      await page.waitForTimeout(300);
+      const name = `hover-${short}-rest-${size}-${theme}`;
+      await shootCard(page, card, path.join(outDir, name + '.png'), 150);
+      names.push(name);
+      await checkOverlap(page, `${size}-${theme} rest ${id}`);
+    }
+  } finally {
+    await ctx.close().catch(() => {});
+  }
+  fs.rmSync(path.join(outDir, 'hover-tmp.png'), { force: true });
+  return names;
+}
+
+// Off then on again, on the default marble document (root and inside NG_marble1) and per node.
+async function captureOffOn(browser, baseURL, theme, outDir) {
+  const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 } });
+  await ctx.addInitScript(([t]) => { try { localStorage.setItem('mtlxTheme', t); localStorage.setItem('mtlxGraphThumbnailSize', 'large'); localStorage.removeItem('mtlxGraphThumbnails'); } catch (e) { /* storage blocked */ } }, [theme]);
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => console.error('[pageerror]', e.message));
+  await page.goto(`${baseURL}/index.html#!graph`);
+  await waitSettled(page);
+  const view = page.locator('[role="menubar"] button', { hasText: /^View$/ }).first();
+  const toggleMenu = async () => { await view.click(); await page.getByText('Node Thumbnails', { exact: true }).click(); };
+  const states = () => page.evaluate(() => { const c = {}; document.querySelectorAll('[data-mtlx-thumb]').forEach((e) => { const k = e.getAttribute('data-mtlx-thumb'); c[k] = (c[k] || 0) + 1; }); return JSON.stringify(c); });
+  const names = [];
+  const step = async (scope, label, card) => {
+    const name = `offon-${scope}-${label}-${theme}`;
+    await shootCard(page, card, path.join(outDir, name + '.png'), 0);
+    names.push(name);
+    console.log(`[offon ${theme}] ${scope} ${label}: ${await states()}`);
+  };
+  let card = page.locator('.react-flow__node[data-id="g:NG_marble1"]');
+  await step('root', '1-before', card);
+  await toggleMenu(); await page.waitForTimeout(1200);
+  await step('root', '2-off', card);
+  await toggleMenu(); await waitSettled(page);
+  await step('root', '3-on', card);
+  await card.dblclick({ position: { x: 30, y: 30 } });
+  await page.waitForSelector('.react-flow__node[data-id^="n:"]', { timeout: 60000 });
+  await waitSettled(page);
+  await fit(page);
+  card = page.locator('.react-flow__node:has([data-mtlx-thumb])').nth(3);
+  const id = await card.getAttribute('data-id');
+  card = page.locator(`.react-flow__node[data-id="${id}"]`);
+  await step('inside', '1-before', card);
+  await toggleMenu(); await page.waitForTimeout(1200);
+  await step('inside', '2-off', card);
+  await toggleMenu(); await waitSettled(page);
+  await step('inside', '3-on', card);
+  const ctxToggle = async () => { const bb = await card.boundingBox(); await page.mouse.click(bb.x + 10, bb.y + 4, { button: 'right' }); await page.waitForTimeout(300); await page.getByText('Show Thumbnail', { exact: true }).click(); };
+  await ctxToggle(); await page.waitForTimeout(1000);
+  await step('node', '2-off', card);
+  await ctxToggle(); await waitSettled(page);
+  await step('node', '3-on', card);
+  await ctx.close();
+  return names;
 }
 
 // The NG_marble1 card goes large -> small -> large (after the worker has been idle long enough to
@@ -443,6 +542,21 @@ async function main() {
       }
       const shots = await runShader(browser, server.baseURL, 'dark', 'large', args.out, 'pending');
       await composite(browser, args.out, 'shader-pending', shots.map((n) => n + '-large-dark'));
+      return;
+    }
+    if (process.argv.includes('--hover-only')) {
+      const all = [];
+      for (const theme of ['dark', 'light']) for (const size of ['small', 'large']) all.push(...await captureHover(browser, server.baseURL, theme, size, args.out));
+      for (const theme of ['dark', 'light']) {
+        for (const size of ['small', 'large']) await composite(browser, args.out, `hover-${size}-${theme}`, all.filter((n) => n.endsWith(`-${size}-${theme}`)));
+      }
+      return;
+    }
+    if (process.argv.includes('--offon-only')) {
+      for (const theme of ['dark', 'light']) {
+        const names = await captureOffOn(browser, server.baseURL, theme, args.out);
+        for (const sc of ['root', 'inside', 'node']) await composite(browser, args.out, `offon-${sc}-${theme}`, names.filter((n) => n.startsWith(`offon-${sc}-`)));
+      }
       return;
     }
     if (process.argv.includes('--sequence-only')) {

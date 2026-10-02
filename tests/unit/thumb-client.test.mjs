@@ -976,3 +976,169 @@ test('early scene: setScene goes out with the gate open once every pattern job i
   assert.equal(w.posted.filter((m) => m.type === 'setScene').length, 1, 'the scene does not wait for the shader job to reach the head');
   client.dispose();
 });
+
+test('off then on while the worker is still starting: the new worker gets init and the document', async () => {
+  const env = makeEnv();
+  const client = env.Client.create({});
+  const A = keyOf('n:a');
+  client.noteXml('<materialx v="1"/>');
+  client.setScope('', [card('n:a')], { entered: true });
+  await env.advance(0);
+  const w0 = env.workers[0];
+  deepEq(w0.types(), ['init']);
+  assert.equal(client.toggleMenu(''), false);
+  await env.settle();
+  assert.equal(w0.terminated, true);
+  assert.equal(client.toggleMenu(''), true);
+  await env.advance(300);
+  const w1 = env.workers[env.workers.length - 1];
+  assert.notEqual(w1, w0);
+  w1.emit({ type: 'ready', capabilities: {} });
+  await env.advance(300);
+  deepEq(w1.types().slice(0, 2), ['init', 'setDocument']);
+  answerSigs(w1, () => 'S1');
+  await env.advance(0);
+  assert.equal(renders(w1).length, 1);
+  const bm = bitmap();
+  w1.emit({ type: 'result', jobId: renders(w1)[0].jobId, key: A, sig: 'S1', bitmap: bm, notices: [], approx: false });
+  await env.settle();
+  assert.equal(client.get(A).state, 'ready');
+  // Repeating the toggle while it starts, several times, still ends with a worker that has the document.
+  for (let i = 0; i < 3; i++) {
+    client.toggleMenu('');
+    await env.settle();
+    client.toggleMenu('');
+    await env.advance(0);
+    client.toggleMenu('');
+    await env.settle();
+    client.toggleMenu('');
+    await env.advance(300);
+    const w = env.workers[env.workers.length - 1];
+    w.emit({ type: 'ready', capabilities: {} });
+    await env.advance(300);
+    assert.ok(w.types().includes('setDocument'), 'round ' + i);
+  }
+  client.dispose();
+});
+
+test('off then on re-posts the document to a fresh worker and restores entries from the image cache', async () => {
+  const env = makeEnv();
+  const client = env.Client.create({});
+  const A = keyOf('n:a');
+  const B = keyOf('n:b');
+  const w0 = await boot(env, client, [card('n:a'), card('n:b')]);
+  answerSigs(w0, (k) => (k === A ? 'SA' : 'SB'));
+  await env.advance(0);
+  const bms = { SA: bitmap(), SB: bitmap() };
+  for (const r of renders(w0)) w0.emit({ type: 'result', jobId: r.jobId, key: r.key, sig: r.sig, bitmap: bms[r.sig], notices: [], approx: false });
+  await env.settle();
+  assert.equal(client.get(A).bitmap, bms.SA);
+
+  // Off: entries gone, bitmaps kept in the cache (not closed).
+  client.toggleMenu('');
+  await env.settle();
+  assert.equal(client.get(A).state, 'off');
+  assert.equal(bms.SA.closed, false);
+
+  // An edit while off, then on: new worker, the edited XML, only the changed node renders.
+  client.noteXml('<materialx v="2"/>');
+  client.toggleMenu('');
+  assert.equal(client.get(A).state, 'pending');
+  await env.advance(300);
+  const w1 = env.workers[1];
+  assert.ok(w1 && w1 !== w0);
+  w1.emit({ type: 'ready', capabilities: {} });
+  await env.advance(300);
+  deepEq(w1.types(), ['init', 'setDocument']);
+  assert.equal(w1.posted[1].xml, '<materialx v="2"/>');
+  answerSigs(w1, (k) => (k === A ? 'SA' : 'SB2'));
+  await env.advance(0);
+  assert.equal(client.get(A).state, 'ready');
+  assert.equal(client.get(A).bitmap, bms.SA, 'unchanged signature comes from the cache');
+  deepEq(renders(w1).map((r) => r.key), [B]);
+  assert.equal(renders(w1)[0].sig, 'SB2');
+  w1.emit({ type: 'result', jobId: renders(w1)[0].jobId, key: B, sig: 'SB2', bitmap: bitmap(), notices: [], approx: false });
+  await env.settle();
+
+  // Size toggles and a scope change while off leave nothing broken either.
+  client.toggleMenu('');
+  await env.settle();
+  const size0 = client.sizeOf('', 'n:a');
+  client.toggleMenuSize();
+  client.setScope('g', [card('n:a', { target: { id: 'n:a', scope: 'g' } })], { entered: true });
+  client.setScope('', [card('n:a'), card('n:b')], { entered: true });
+  client.toggleMenu('');
+  await env.advance(300);
+  const w2 = env.workers[env.workers.length - 1];
+  assert.notEqual(w2, w1);
+  w2.emit({ type: 'ready', capabilities: {} });
+  await env.advance(300);
+  assert.ok(w2.types().includes('setDocument'));
+  answerSigs(w2, (k) => (k === A ? 'SA' : 'SB2'));
+  await env.advance(0);
+  assert.equal(client.get(A).state, 'ready');
+  assert.equal(client.get(A).bitmap, bms.SA);
+  assert.notEqual(client.get(A).size, size0);
+  assert.equal(client.get(A).size, client.sizeOf('', 'n:a'));
+  assert.equal(renders(w2).length, 0, 'everything came from the cache');
+  client.dispose();
+});
+
+test('per-node off then on keeps the image and posts only a signature request', async () => {
+  const env = makeEnv();
+  const client = env.Client.create({});
+  const A = keyOf('n:a');
+  const w = await boot(env, client, [card('n:a'), card('n:b')]);
+  answerSigs(w, (k) => (k === A ? 'SA' : 'SB'));
+  await env.advance(0);
+  const bm = bitmap();
+  const ra = renders(w).find((r) => r.key === A);
+  w.emit({ type: 'result', jobId: ra.jobId, key: A, sig: 'SA', bitmap: bm, notices: [], approx: false });
+  await env.settle();
+  client.setOverride('', 'n:a', false);
+  await env.settle();
+  assert.equal(client.get(A).state, 'off');
+  client.setOverride('', 'n:a', true);
+  await env.advance(300);
+  answerSigs(w, (k) => (k === A ? 'SA' : 'SB'));
+  await env.advance(0);
+  assert.equal(client.get(A).state, 'ready');
+  assert.equal(client.get(A).bitmap, bm);
+  assert.equal(renders(w).filter((r) => r.key === A).length, 1);
+  client.dispose();
+});
+
+test('a worker bitmap is copied into a page-owned canvas and closed, so killing the worker cannot blank the cache', async () => {
+  const env = makeEnv();
+  const drawn = [];
+  env.sandbox.document.createElement = (tag) => ({
+    tag, width: 0, height: 0, close: undefined,
+    getContext: () => ({ drawImage: (src) => drawn.push(src) }),
+  });
+  const client = env.Client.create({});
+  const A = keyOf('n:a');
+  const w = await boot(env, client, [card('n:a')]);
+  answerSigs(w, () => 'S1');
+  await env.advance(0);
+  const bm = bitmap();
+  w.emit({ type: 'result', jobId: renders(w)[0].jobId, key: A, sig: 'S1', bitmap: bm, notices: [], approx: false });
+  await env.settle();
+  const shown = client.get(A).bitmap;
+  assert.equal(shown.tag, 'canvas');
+  assert.equal(shown.width, 238);
+  assert.equal(drawn[0], bm);
+  assert.equal(bm.closed, true, 'the worker-backed original is released');
+  // Off then on shows the same page-owned copy again, without a render.
+  client.toggleMenu('');
+  await env.settle();
+  client.toggleMenu('');
+  await env.advance(300);
+  const w1 = env.workers[1];
+  w1.emit({ type: 'ready', capabilities: {} });
+  await env.advance(300);
+  answerSigs(w1, () => 'S1');
+  await env.advance(0);
+  assert.equal(client.get(A).bitmap, shown);
+  assert.equal(renders(w1).length, 0);
+  client.dispose();
+});

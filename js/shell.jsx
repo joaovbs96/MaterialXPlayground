@@ -191,6 +191,8 @@ const VIEW_DEPS = {
             'vendor/three/KTX2Loader.js',
             // Plain JS (no JSX), shared with tests/unit via a direct Node eval.
             'js/graph/zip-export-paths.js',
+            // Convert to Node Def naming and validation rules, also unit-tested in Node.
+            'js/graph/promote-names.js',
             // Document model + preview builder, shared with the thumbnail worker.
             'js/graph/mtlx-preview-build.js',
             // Node thumbnail controller and its queue logic (the worker loads on demand).

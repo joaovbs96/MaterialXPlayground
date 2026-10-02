@@ -172,6 +172,11 @@
             // Only offered when the node actually has some.
             const hasDefaults = (data.allInputs || []).some((i) => i.authored === false);
             const expanded = data.portMode === 'all';
+            const showToggle = hasDefaults && !!data.onTogglePorts;
+            const showEdit = data.kind === 'nodegraph' && !!data.onOpen;
+            const showImpl = !!data.onOpenImpl;
+            const toggleLabel = expanded ? 'Hide default inputs' : 'Show all inputs';
+            const actionCls = 'mtlx-node-act mtlx-node-open border text-[10px] leading-none bg-chip border-accent-wash text-accent-fg-strong hover:bg-hover-strong hover:text-accent-fg-bright';
             const hasThumb = !!(data.thumb && data.thumbStore);
             const smallThumb = hasThumb && data.thumbSize === 'small';
             const dotEl = isIface ? (
@@ -198,34 +203,10 @@
                     {data.name}
                 </span>
             );
-            // Icon-only actions at the far right of the name row. data.onOpen / onOpenImpl being
-            // absent is what keeps a read-only render inert; mtlx-node-open is a CSS hook for it.
-            const iconBtn = 'mtlx-node-open flex-none ml-auto inline-flex items-center justify-center w-[18px] h-[18px] rounded border border-accent-wash/40 text-accent-fg-strong/90 hover:bg-accent-wash/20 hover:text-accent-fg-bright transition-colors';
-            const actionEls = (
-                <React.Fragment>
-                    {data.kind === 'nodegraph' && data.onOpen && (
-                        <button
-                            onClick={openScope}
-                            onDoubleClick={openScope}
-                            title="Open this nodegraph"
-                            className={iconBtn}
-                        ><MtlxIcon name="pencil" className="w-2.5 h-2.5" /></button>
-                    )}
-                    {data.onOpenImpl && (
-                        <button
-                            onClick={(e) => { e.stopPropagation(); data.onOpenImpl(); }}
-                            onDoubleClick={(e) => { e.stopPropagation(); data.onOpenImpl(); }}
-                            title="Explore the implementation nodegraph (view only)"
-                            className={iconBtn}
-                        ><MtlxIcon name="eye" className="w-2.5 h-2.5" /></button>
-                    )}
-                </React.Fragment>
-            );
             const nameRow = (
                 <div className="flex items-center gap-1.5 min-w-0" style={{ height: 18 }}>
                     {dotEl}
                     {nameEl}
-                    {actionEls}
                 </div>
             );
             // DEFINITION / INTERFACE / OUTPUT, right-aligned on the type row.
@@ -246,16 +227,51 @@
                         + (selected ? 'border-graph-node-selected ring-1 ring-graph-node-selected/50'
                                     : ((isIface || isDef) ? 'border-graph-node-line-iface' : 'border-graph-node-line'))}
                     style={{ width: NODE_W }}>
-                    {hasDefaults && data.onTogglePorts && (
-                        <button
-                            onClick={(e) => { e.stopPropagation(); data.onTogglePorts(); }}
-                            onDoubleClick={(e) => e.stopPropagation()}
-                            title={expanded ? 'Hide the inputs left at their defaults' : 'Show all inputs (defaults included)'}
-                            className={'absolute -top-2 -right-2 z-10 w-4 h-4 rounded-full border text-[10px] leading-none flex items-center justify-center transition-colors '
-                                + (expanded
-                                    ? 'bg-accent-fill border-accent-fg text-on-accent hover:bg-accent-fill-hover'
-                                    : 'bg-chip border-graph-node-line-iface text-fg-secondary hover:bg-hover-strong hover:text-fg')}
-                        >{expanded ? '\u2212' : '+'}</button>
+                    {(showToggle || showEdit || showImpl) && (
+                        // Round chips on the right edge, stacked; each grows to the right into a labelled pill
+                        // on hover or keyboard focus (CSS in graph-preview.css). The open chips keep
+                        // mtlx-node-open so read-only previews stay inert except for them.
+                        <div className="mtlx-node-acts absolute -top-2 left-full -ml-2 z-10 flex flex-col items-start gap-1 w-max">
+                            {showToggle && (
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); data.onTogglePorts(); }}
+                                    onDoubleClick={(e) => e.stopPropagation()}
+                                    title={toggleLabel}
+                                    aria-label={toggleLabel}
+                                    className={'mtlx-node-act border text-[10px] leading-none '
+                                        + (expanded
+                                            ? 'bg-accent-fill border-accent-fg text-on-accent hover:bg-accent-fill-hover'
+                                            : 'bg-chip border-graph-node-line-iface text-fg-secondary hover:bg-hover-strong hover:text-fg')}
+                                >
+                                    <span className="mtlx-node-act-icon">{expanded ? '−' : '+'}</span>
+                                    <span className="mtlx-node-act-label">{toggleLabel}</span>
+                                </button>
+                            )}
+                            {showEdit && (
+                                <button
+                                    onClick={openScope}
+                                    onDoubleClick={openScope}
+                                    title="Open this nodegraph"
+                                    aria-label="Edit nodegraph"
+                                    className={actionCls}
+                                >
+                                    <span className="mtlx-node-act-icon"><MtlxIcon name="pencil" className="w-2.5 h-2.5" /></span>
+                                    <span className="mtlx-node-act-label">Edit nodegraph</span>
+                                </button>
+                            )}
+                            {showImpl && (
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); data.onOpenImpl(); }}
+                                    onDoubleClick={(e) => { e.stopPropagation(); data.onOpenImpl(); }}
+                                    title="Explore the implementation nodegraph (view only)"
+                                    aria-label="View implementation"
+                                    className={actionCls}
+                                >
+                                    <span className="mtlx-node-act-icon"><MtlxIcon name="eye" className="w-2.5 h-2.5" /></span>
+                                    <span className="mtlx-node-act-label">View implementation</span>
+                                </button>
+                            )}
+                        </div>
                     )}
                     {hasThumb && !smallThumb && <NodeThumb thumbKey={data.thumbKey} store={data.thumbStore} isIface={isIface} />}
                     {smallThumb ? (

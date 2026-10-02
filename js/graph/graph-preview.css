@@ -15,3 +15,16 @@
    none on every node wrapper (elementsSelectable is false again then).
    Re-enable just the drill-in chip, not the whole card. */
 .mtlx-graph-preview .mtlx-node-open { pointer-events: auto; }
+
+/* Node card action chips (js/graph/node-component.jsx): 16px circles that grow to the right into a
+   labelled pill on hover or keyboard focus. The card is raised so the pill covers its neighbours. */
+.mtlx-node-act {
+  display: inline-flex; align-items: center; height: 16px; max-width: 16px; overflow: hidden;
+  border-radius: 9999px; white-space: nowrap; cursor: pointer;
+  transition: max-width 160ms ease, background-color 120ms ease, color 120ms ease;
+}
+.mtlx-node-act:hover, .mtlx-node-act:focus-visible { max-width: 12rem; }
+.mtlx-node-act-icon { display: flex; flex: none; align-items: center; justify-content: center; width: 14px; height: 14px; }
+.mtlx-node-act-label { padding: 0 8px 0 2px; font-size: 10px; line-height: 14px; }
+.react-flow__node:has(.mtlx-node-act:hover, .mtlx-node-act:focus-visible) { z-index: 2000 !important; }
+@media (prefers-reduced-motion: reduce) { .mtlx-node-act { transition: none; } }

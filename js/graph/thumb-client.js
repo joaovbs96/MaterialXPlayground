@@ -146,6 +146,20 @@
       if (opts.onProgress) { try { opts.onProgress(p); } catch (e) { /* host error */ } }
     };
 
+    // A bitmap from the worker is backed by the worker's GPU resources and goes blank once that worker is
+    // terminated (off, idle release), so the cache keeps a page-owned canvas copy and closes the original.
+    const adopt = (bm) => {
+      try {
+        const doc = G.document;
+        if (!bm || !doc || typeof doc.createElement !== 'function') return bm;
+        const cv = doc.createElement('canvas');
+        cv.width = bm.width; cv.height = bm.height;
+        cv.getContext('2d').drawImage(bm, 0, 0);
+        try { if (bm.close) bm.close(); } catch (e) { /* already closed */ }
+        return cv;
+      } catch (e) { return bm; }
+    };
+    const closeImage = (bm) => { try { if (bm && bm.close) bm.close(); } catch (e) { /* already closed */ } };
     const cacheTouch = (ik) => {
       const hit = cache.get(ik);
       if (hit) { cache.delete(ik); cache.set(ik, hit); }
@@ -165,7 +179,7 @@
         cache.delete(ik);
         total -= bytesOf(v);
         for (const [key, e] of Array.from(entries)) if (e.bitmap === v.bitmap) setEntry(key, { state: 'off' });
-        try { v.bitmap.close(); } catch (e) { /* already closed */ }
+        closeImage(v.bitmap);
       }
     };
 
@@ -269,7 +283,11 @@
       wEpoch++;
       clearTimeout(idleTimer); idleTimer = 0;
       if (worker) {
+        // Settle what the dead worker's start-up and scene calls await, or doSync stays busy forever.
+        const gone = new Error('Thumbnail worker stopped');
         if (worker.__clear) worker.__clear();
+        if (worker.__onFail) worker.__onFail(gone);
+        if (worker.__onScene) { const cb = worker.__onScene; worker.__onScene = null; cb.reject(gone); }
         try { worker.terminate(); } catch (e) { /* already gone */ }
       }
       worker = null;
@@ -558,6 +576,7 @@
       inflightJobs.delete(job.jobId);
       sched.complete(job.key);
       if (m.bitmap) {
+        m.bitmap = adopt(m.bitmap);
         const title = (m.notices && m.notices.length) ? m.notices.join('\n') : '';
         cache.delete(job.imageKey);
         cache.set(job.imageKey, { bitmap: m.bitmap, approx: !!m.approx, title });
@@ -780,6 +799,7 @@
           if (!running || !anyOn()) break;
           if (latestXml == null) { dirty = false; break; }
           const w = await ensureWorker();
+          if (!w && syncAgain && running && anyOn()) continue; // stopped and restarted while waiting
           if (!w || !running || !anyOn()) break;
           postSync(w);
         } while (syncAgain);
@@ -1089,7 +1109,7 @@
       disposed = true;
       stopRunning();
       clearTimers();
-      for (const v of cache.values()) { try { v.bitmap.close(); } catch (e) { /* already closed */ } }
+      for (const v of cache.values()) closeImage(v.bitmap);
       cache.clear();
       entries.clear();
       listeners.clear();
