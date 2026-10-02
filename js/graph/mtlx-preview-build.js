@@ -1200,6 +1200,14 @@ const {
         const previewNeedsFreshContext = (parsed, target, compoundRoot) =>
             !!(parsed && (parsed.hasDefinitions || (target && target.scope) || compoundRoot));
 
+        // Worker only: true when the document holds no nodedef, implementation or functional
+        // graph right now (transients included), so every cached compound is a library one.
+        const previewCanShareContext = (parsed, compoundRoot) => !!(parsed && !compoundRoot && !parsed.hasDefinitions
+            && !docChildren(parsed.doc).some((el) => {
+                const cat = mxElCat(el);
+                return cat === 'nodedef' || cat === 'implementation' || (cat === 'nodegraph' && !!mxElAttr(el, 'nodedef'));
+            }));
+
 globalThis.MtlxPreviewBuild = {
     parseMtlxDocumentWith,
     computeImplGraphByNodedef,
@@ -1221,5 +1229,6 @@ globalThis.MtlxPreviewBuild = {
     upstreamAllBuffer2d,
     buildPreviewRenderable,
     previewNeedsFreshContext,
+    previewCanShareContext,
 };
 })();

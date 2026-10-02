@@ -2,7 +2,8 @@
 // scheduler, the worker (js/graph/thumb-worker.js), the ImageBitmap cache and a per-key store.
 // Zero cost when off: no worker, fetch, post, signature request or timer while nothing is enabled.
 //
-// Feed: noteXml(xml), noteFiles({path: Blob}), noteActivity(), noteCanvasIdle().
+// Feed: noteXml(xml), noteEdit(getXml), noteFiles({path: Blob}), noteActivity(), noteCanvasIdle().
+// noteEdit reads the document when the edit settles (EDIT_SYNC_MS) instead of waiting for the undo snapshot.
 // Scope: setScope(scope, cards, { entered }), setVisible(ids). A card is
 // { id, eligible, kind?: 'pattern' | 'shader', target: { id, scope, originId?, originScope? }, x, y };
 // pass every card of the scope.
@@ -17,9 +18,12 @@
 // Progress: onProgress({ done, total } | null). Also: dispose().
 //
 // Protocol (v: 1). To the worker: init, setDocument, requestSignatures, render, setHost, setDisplay,
-// setScene, cancel, trim, releaseScene. From the worker: ready, signatures, result, error, stale,
-// stage, sceneReady, fatal. The scene (GLB and environment bytes) is sent lazily, only when the next
-// job is a shader job. The page owns the queue; the
+// setScene, prepare, cancel, trim, releaseScene. From the worker: ready, signatures, result, error, stale,
+// stage, sceneReady, prepared, windowOff, fatal. While the gate is closed the worker generates the
+// sources of the head pattern jobs ahead (prepare, no GL work); a render then hits its cache.
+// Pattern jobs run up to PATTERN_WINDOW at a time (the worker links them in parallel); windowOff from
+// the worker or a crash with several jobs in flight drops to one. The scene (GLB and environment bytes)
+// is sent when only shader jobs are left and the gate is open. The page owns the queue; the
 // gate (quiet period, preview idle, camera still, visible tab, active view) is polled only while
 // jobs are pending and the gate is closed.
 (function () {
@@ -34,6 +38,12 @@
   const SIDE = { small: 64, large: 238 }; // CSS sides; large is NODE_W less the card border (js/graph/style.jsx)
   const IDLE_TERMINATE_MS = 120000;
   const POLL_MS = 150;
+  const EDIT_SYNC_MS = 120; // an edit is read and synced this long after the last one; renders still wait for the quiet period
+  const EDIT_RETRY_MS = 100;
+  const EDIT_TRIES_MAX = 10;
+  const PREPARE_BATCH = 8;
+  const PREPARE_MAX = 32;
+  const PATTERN_WINDOW = 8;
   const INIT_TIMEOUT_MS = 90000;
   const CRASH_WINDOW_MS = 5 * 60000;
   const CRASH_LIMIT = 3;
@@ -117,7 +127,7 @@
       const size = next.state === 'off' ? undefined : sizeOfKey(key);
       const shader = next.state !== 'off' && kindOfKey(key) === 'shader';
       let phase;
-      if (shader && next.state === 'pending') phase = next.phase || (inflight && inflight.key === key && inflight.phase) || 'queued';
+      if (shader && next.state === 'pending') phase = next.phase || (jobByKey(key) || OFF).phase || 'queued';
       if (prev.state === next.state && prev.bitmap === next.bitmap && prev.title === next.title && prev.size === size && prev.phase === phase && (prev.kind === 'shader') === shader) return;
       const obj = { state: next.state };
       if (shader) obj.kind = 'shader';
@@ -217,7 +227,13 @@
     let postedSettingsKey = null;
     let sigQueue = [];
     let sigDocSeq = 0;
-    let inflight = null;
+    let xmlProvider = null; // () => xml, set by noteEdit until the document is read
+    let lastEditAt = -Infinity;
+    let editTries = 0;
+    let prepareBusy = false;
+    const preparedSigs = new Set();
+    const inflightJobs = new Map(); // jobId -> { jobId, key, sig, imageKey, kind, phase?, cancelling?, requeue? }
+    let windowOff = false; // session flag, set when parallel links stop paying off
     let jobSeq = 0;
     let curSceneKey = ''; // scene key the queued shader jobs want ('' while none is enabled)
     let workerSceneKey = null; // scene key the worker reported ready
@@ -237,6 +253,10 @@
     const crashes = [];
     const ctxLosses = [];
     let listenersOn = false;
+
+    const jobByKey = (key) => { for (const j of inflightJobs.values()) if (j.key === key) return j; return null; };
+    const shaderJob = () => { for (const j of inflightJobs.values()) if (j.kind === 'shader') return j; return null; };
+    const windowNow = () => (parallelCompile !== false && !windowOff ? PATTERN_WINDOW : 1);
 
     const clearTimers = () => {
       clearTimeout(syncTimer); syncTimer = 0;
@@ -258,13 +278,16 @@
       sigQueue = [];
       postedXml = null;
       postedSettingsKey = null;
+      prepareBusy = false;
+      preparedSigs.clear();
       workerFiles = new Map();
       workerSceneKey = null;
       workerEnvTag = '';
       glbPosted = false;
       sceneBusy = false;
       clearTimeout(watchTimer); watchTimer = 0;
-      if (inflight) { sched.complete(inflight.key); inflight = null; }
+      for (const j of inflightJobs.values()) sched.complete(j.key);
+      inflightJobs.clear();
     }
 
     const enabledCards = () => {
@@ -370,6 +393,11 @@
       return p;
     }
 
+    // Boots the worker as soon as something is enabled, so it overlaps the document load and the quiet period.
+    function warmWorker() {
+      if (!worker && !starting && running && !disposed) ensureWorker();
+    }
+
     function disableSession(reason) {
       disabledReason = reason;
       stopRunning();
@@ -381,10 +409,11 @@
       const t = now();
       crashes.push(t);
       while (crashes.length && t - crashes[0] > CRASH_WINDOW_MS) crashes.shift();
-      const lost = inflight;
-      if (lost) {
+      // One job lost is the culprit; with several in flight run one at a time so the next crash names it.
+      if (inflightJobs.size === 1) {
+        const lost = inflightJobs.values().next().value;
         errors.set(lost.key, { sig: lost.sig, message: 'Renderer crashed on this node' });
-      }
+      } else if (inflightJobs.size > 1) windowOff = true;
       const failed = w && w.__onFail;
       killWorker();
       if (failed) failed(new Error(message));
@@ -406,13 +435,17 @@
         case 'sceneReady':
           if (w.__onScene) { const cb = w.__onScene; w.__onScene = null; cb.resolve(m); }
           break;
-        case 'stage':
-          if (inflight && inflight.jobId === m.jobId && inflight.phase !== m.stage) {
-            inflight.phase = m.stage;
-            const prev = entries.get(inflight.key);
-            if (desiredSig.get(inflight.key) === inflight.sig) setEntry(inflight.key, { state: 'pending', bitmap: prev && prev.bitmap, phase: m.stage });
+        case 'stage': {
+          const j = inflightJobs.get(m.jobId);
+          if (j && j.phase !== m.stage) {
+            j.phase = m.stage;
+            const prev = entries.get(j.key);
+            if (desiredSig.get(j.key) === j.sig) setEntry(j.key, { state: 'pending', bitmap: prev && prev.bitmap, phase: m.stage });
           }
           break;
+        }
+        case 'windowOff': windowOff = true; break;
+        case 'prepared': prepareBusy = false; pump(); break;
         case 'signatures': {
           const snap = sigQueue.shift();
           if (!snap || sigQueue.length) break;
@@ -433,16 +466,16 @@
           } else onJobError(m);
           break;
         case 'stale': {
-          const mine = inflight && inflight.jobId === m.jobId ? inflight : null;
+          const mine = inflightJobs.get(m.jobId) || null;
           if (mine && mine.requeue && m.reason === 'cancelled') {
             sched.complete(mine.key, { requeue: true });
-            inflight = null;
+            inflightJobs.delete(mine.jobId);
             setEntry(mine.key, { state: 'pending', bitmap: (entries.get(mine.key) || OFF).bitmap });
             emitProgress();
             pump();
             break;
           }
-          if (mine) { sched.complete(mine.key); inflight = null; }
+          if (mine) { sched.complete(mine.key); inflightJobs.delete(mine.jobId); }
           dirty = true;
           emitProgress();
           armQuiet();
@@ -497,30 +530,32 @@
 
     // A shader job gives way to a changed scene or document, a pending pattern job or a busy preview.
     function checkInflight() {
-      if (!inflight || inflight.kind !== 'shader' || inflight.cancelling) return;
-      if (sched.isInFlightStale()) { cancelInflight(false); return; }
+      const sj = shaderJob();
+      if (!sj || sj.cancelling) return;
+      if (sched.isStale(sj.key)) { cancelInflight(false); return; }
       if (sched.wantsPreempt() || (opts.getPreviewBusy && opts.getPreviewBusy())) cancelInflight(true);
     }
     function cancelInflight(requeue) {
-      if (!inflight || inflight.cancelling || !worker) return;
-      inflight.cancelling = true;
-      inflight.requeue = requeue;
-      worker.postMessage({ v: 1, type: 'cancel', jobId: inflight.jobId });
+      const sj = shaderJob();
+      if (!sj || sj.cancelling || !worker) return;
+      sj.cancelling = true;
+      sj.requeue = requeue;
+      worker.postMessage({ v: 1, type: 'cancel', jobId: sj.jobId });
     }
     function armWatch() {
       clearTimeout(watchTimer);
       watchTimer = setTimeout(() => {
         watchTimer = 0;
-        if (!inflight || inflight.kind !== 'shader') return;
+        if (!shaderJob()) return;
         checkInflight();
         armWatch();
       }, POLL_MS);
     }
 
     function onResult(m) {
-      const job = inflight;
-      if (!job || job.jobId !== m.jobId) { if (m.bitmap && m.bitmap.close) m.bitmap.close(); return; }
-      inflight = null;
+      const job = inflightJobs.get(m.jobId);
+      if (!job) { if (m.bitmap && m.bitmap.close) m.bitmap.close(); return; }
+      inflightJobs.delete(job.jobId);
       sched.complete(job.key);
       if (m.bitmap) {
         const title = (m.notices && m.notices.length) ? m.notices.join('\n') : '';
@@ -536,9 +571,9 @@
     }
 
     function onJobError(m) {
-      const job = inflight;
-      if (!job || job.jobId !== m.jobId) return;
-      inflight = null;
+      const job = inflightJobs.get(m.jobId);
+      if (!job) return;
+      inflightJobs.delete(job.jobId);
       sched.complete(job.key);
       if (m.kind === 'context') {
         const t = now();
@@ -623,13 +658,13 @@
 
     function armIdle() {
       clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => { idleTimer = 0; if (!inflight && !dirty && !sched.pendingKeys().length) killWorker(); }, IDLE_TERMINATE_MS);
+      idleTimer = setTimeout(() => { idleTimer = 0; if (!inflightJobs.size && !dirty && !sched.pendingKeys().length) killWorker(); }, IDLE_TERMINATE_MS);
     }
 
     // Returns true when a job was posted.
     function pump() {
       clearTimeout(pumpTimer); pumpTimer = 0;
-      if (!running || dirty || inflight) return false;
+      if (!running || dirty) return false;
       if (!worker && !starting) {
         // Work is pending but the worker was released: bring it back through a sync.
         if (sched.pendingKeys().length) { dirty = true; armQuiet(); }
@@ -654,29 +689,49 @@
         active: opts.isViewActive ? !!opts.isViewActive() : true,
         sceneReady: workerSceneKey !== null && workerSceneKey === curSceneKey,
         parallelCompile: parallelCompile !== false,
+        patternWindow: windowNow(),
       };
       if (sched.wantsScene(gate)) { ensureScene(); return false; }
-      const job = sched.nextJob(gate);
-      if (job) {
+      let posted = false;
+      for (let job = sched.nextJob(gate); job; job = sched.nextJob(gate)) {
         clearTimeout(idleTimer); idleTimer = 0;
         const display = displayOf(job.imageKey);
-        inflight = { jobId: ++jobSeq, key: job.key, sig: job.sig, imageKey: job.imageKey, kind: job.kind };
+        const rec = { jobId: ++jobSeq, key: job.key, sig: job.sig, imageKey: job.imageKey, kind: job.kind };
+        inflightJobs.set(rec.jobId, rec);
         const msg = {
-          v: 1, type: 'render', jobId: inflight.jobId, docSeq: sigDocSeq,
+          v: 1, type: 'render', jobId: rec.jobId, docSeq: sigDocSeq,
           key: job.key, sig: job.sig, target: job.target, display, size: display.px, kind: job.kind,
         };
         if (job.kind === 'shader') msg.sceneKey = workerSceneKey;
+        else if (gate.patternWindow > 1) msg.parallel = true;
         worker.postMessage(msg);
         if (job.kind === 'shader') {
           setEntry(job.key, { state: 'pending', bitmap: (entries.get(job.key) || OFF).bitmap, phase: 'queued' });
           armWatch();
         }
-        emitProgress();
-        return true;
+        posted = true;
       }
-      if (sched.pendingKeys().length) schedulePump(Math.max((G.document && G.document.hidden) ? 1000 : POLL_MS, sched.quietRemaining(t)));
+      // Only shader jobs left and the gate open: build their scene now, behind the pattern jobs just posted.
+      if (sched.wantsSceneEarly(gate)) ensureScene();
+      if (posted) { emitProgress(); return true; }
+      // Results re-pump, so nothing polls while jobs are in flight.
+      if (inflightJobs.size) return false;
+      if (sched.pendingKeys().length) {
+        maybePrepare(gate);
+        schedulePump(Math.max((G.document && G.document.hidden) ? 1000 : POLL_MS, sched.quietRemaining(t)));
+      }
       else { emitProgress(); armIdle(); }
       return false;
+    }
+
+    // Asks the worker to generate the head pattern jobs while the gate is closed (one batch at a time).
+    function maybePrepare(gate) {
+      if (prepareBusy || preparedSigs.size >= PREPARE_MAX || !worker || !workerReady || !sched.canPrepare(gate)) return;
+      const jobs = sched.prepareCandidates(PREPARE_BATCH, (sig) => preparedSigs.has(sig));
+      if (!jobs.length) return;
+      for (const j of jobs) preparedSigs.add(j.sig);
+      prepareBusy = true;
+      worker.postMessage({ v: 1, type: 'prepare', docSeq: sigDocSeq, jobs: jobs.map((j) => ({ sig: j.sig, target: j.target })) });
     }
 
     // imageKey is sig|transform|exposureEV|hostKey|px, plus |sceneKey for shader jobs.
@@ -686,15 +741,33 @@
     }
 
     // Debounce: one timer, pushed out by activity.
+    const editRemaining = () => Math.max(0, lastEditAt + EDIT_SYNC_MS - now());
     function armQuiet() {
       if (!running) return;
       clearTimeout(syncTimer);
-      syncTimer = setTimeout(onQuiet, sched.quietRemaining(now()));
+      syncTimer = setTimeout(onQuiet, xmlProvider ? editRemaining() : sched.quietRemaining(now()));
+    }
+    // Reads the edited document. A throw (transient preview nodes) retries; after EDIT_TRIES_MAX the
+    // undo snapshot's noteXml is left to deliver it.
+    function pullEdit() {
+      try {
+        const x = xmlProvider();
+        xmlProvider = null; editTries = 0;
+        if (typeof x === 'string') latestXml = x;
+        return true;
+      } catch (e) {
+        if (++editTries < EDIT_TRIES_MAX) return false;
+        xmlProvider = null; editTries = 0;
+        return true;
+      }
     }
     function onQuiet() {
       syncTimer = 0;
       if (!running || !dirty) return;
-      if (sched.quietRemaining(now()) > 0) { armQuiet(); return; }
+      if (xmlProvider) {
+        if (editRemaining() > 0) { armQuiet(); return; }
+        if (!pullEdit()) { syncTimer = setTimeout(onQuiet, EDIT_RETRY_MS); return; }
+      } else if (sched.quietRemaining(now()) > 0) { armQuiet(); return; }
       doSync();
     }
 
@@ -735,8 +808,9 @@
       const docChanged = latestXml !== postedXml || files.changed || settingsKey !== postedSettingsKey;
       clearTimeout(idleTimer); idleTimer = 0;
       // The worker runs messages in order; a long shader job would hold the new document back.
-      if (docChanged && inflight && inflight.kind === 'shader') cancelInflight(true);
+      if (docChanged && shaderJob()) cancelInflight(true);
       if (docChanged) {
+        preparedSigs.clear();
         w.postMessage({ v: 1, type: 'setDocument', docSeq: ++docSeq, xml: latestXml, files: { add: files.add, remove: files.remove }, settings, display, keys });
         postedXml = latestXml;
         postedSettingsKey = settingsKey;
@@ -773,6 +847,7 @@
       detachListeners();
       killWorker();
       dirty = false;
+      xmlProvider = null; editTries = 0;
       sched.applySignatures([], cacheHas);
       desiredSig.clear();
       desiredImageKey.clear();
@@ -794,6 +869,7 @@
       startRunning();
       dirty = true;
       armQuiet();
+      warmWorker();
     }
 
     // Display and settings listeners, attached only while something is enabled.
@@ -853,8 +929,19 @@
     const noteXml = (xml) => {
       if (xml === latestXml) return;
       latestXml = xml;
+      xmlProvider = null; editTries = 0;
       if (!running) return;
       sched.noteActivity(now());
+      dirty = true;
+      armQuiet();
+    };
+
+    // An edit happened: getXml() returns the document text (it may throw while preview nodes exist).
+    const noteEdit = (getXml) => {
+      if (!running || typeof getXml !== 'function') return;
+      xmlProvider = getXml;
+      lastEditAt = now();
+      sched.noteActivity(lastEditAt);
       dirty = true;
       armQuiet();
     };
@@ -893,7 +980,7 @@
       if (!nowOn) { syncStates(); stopRunning(); return; }
       syncStates();
       startRunning();
-      if (changed) { dirty = true; armQuiet(); }
+      if (changed) { dirty = true; armQuiet(); warmWorker(); }
     };
 
     const setVisible = (ids) => {
@@ -982,6 +1069,7 @@
       cur.enabledSig = '';
       latestXml = null;
       latestFiles = {};
+      xmlProvider = null;
       stopRunning();
     };
 
@@ -1008,7 +1096,7 @@
     };
 
     return {
-      noteXml, noteFiles, noteActivity, noteCanvasIdle: noteActivity,
+      noteXml, noteEdit, noteFiles, noteActivity, noteCanvasIdle: noteActivity,
       setScope, setVisible,
       menuState, toggleMenu, shaderMenuState, toggleShaderMenu, sizeMenuState, toggleMenuSize, sizeOf, setSizeOverride, setSizeOverrides, isEnabled, setOverride, setOverrides, remapNode, remapScope, resetSession,
       subscribe, get, keyOf, dispose,

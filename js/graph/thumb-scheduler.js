@@ -119,15 +119,16 @@
 
     const resetSession = () => { overrides.clear(); sizeOv.clear(); optIn.clear(); bigAtEntry.clear(); };
 
-    // Queue. pending: key -> entry (insertion ordered); inFlight: one job or null.
+    // Queue. pending: key -> entry (insertion ordered); inFlight: key -> job (one shader job, or up to
+    // the gate's patternWindow pattern jobs).
     const pending = new Map();
-    let inFlight = null;
+    const inFlight = new Map();
     let batchActive = false;
     let doneCount = 0;
     let totalCount = 0;
 
     const maybeEndBatch = () => {
-      if (batchActive && pending.size === 0 && !inFlight) {
+      if (batchActive && pending.size === 0 && inFlight.size === 0) {
         batchActive = false;
         doneCount = 0;
         totalCount = 0;
@@ -145,15 +146,16 @@
         const d = desired.get(key);
         if (!d || d.sig !== p.sig || (cacheHas && cacheHas(p.imageKey))) dropPending(key);
       }
-      if (inFlight) {
-        const d = desired.get(inFlight.key);
-        inFlight.stale = !d || d.sig !== inFlight.sig || (inFlight.kind === 'shader' && d.imageKey !== inFlight.imageKey);
+      for (const job of inFlight.values()) {
+        const d = desired.get(job.key);
+        job.stale = !d || d.sig !== job.sig || (job.kind === 'shader' && d.imageKey !== job.imageKey);
       }
       for (const e of desired.values()) {
         if (cacheHas && cacheHas(e.imageKey)) continue;
         const p = pending.get(e.key);
         if (p && p.sig === e.sig) { pending.set(e.key, e); continue; }
-        if (inFlight && inFlight.key === e.key && inFlight.sig === e.sig && !inFlight.stale) continue;
+        const fl = inFlight.get(e.key);
+        if (fl && fl.sig === e.sig && !fl.stale) continue;
         if (!batchActive) { batchActive = true; doneCount = 0; totalCount = 0; }
         pending.set(e.key, e);
         totalCount++;
@@ -186,23 +188,26 @@
     // Gate.
     let lastActivity = -Infinity;
     const noteActivity = (now) => { if (now > lastActivity) lastActivity = now; };
+    const windowOf = (g) => Math.max(1, ((g && g.patternWindow) | 0) || 1);
+    const shaderInFlight = () => { for (const j of inFlight.values()) if (j.kind === 'shader') return true; return false; };
     const canDispatch = (g) => {
       const s = g || {};
-      if (inFlight) return false;
+      if (inFlight.size >= windowOf(s) || shaderInFlight()) return false;
       if (s.previewBusy || s.cameraActive || s.hidden || !s.active) return false;
       return s.now - lastActivity >= quietMs;
     };
     // Milliseconds until the quiet period is over (0 when already quiet).
     const quietRemaining = (now) => Math.max(0, lastActivity + quietMs - now);
 
-    // The entry that goes next: the first pattern, else the first shader (pending is priority ordered).
+    // The entry that goes next: the first pattern not already in flight, else the first shader (pending is
+    // priority ordered). A shader only goes when nothing else is in flight.
     const headEntry = () => {
       let shader = null;
       for (const [key, e] of pending) {
-        if (!isShader(e)) return [key, e];
+        if (!isShader(e)) { if (!inFlight.has(key)) return [key, e]; continue; }
         if (!shader) shader = [key, e];
       }
-      return shader;
+      return shader && inFlight.size === 0 ? shader : null;
     };
     const headKind = () => { const h = headEntry(); return h ? (isShader(h[1]) ? 'shader' : 'pattern') : null; };
     const shaderGateOpen = (g) => !!(g && g.sceneReady) && g.parallelCompile !== false;
@@ -212,19 +217,50 @@
       return !!h && isShader(h[1]) && canDispatch(g) && !(g && g.sceneReady) && g.parallelCompile !== false;
     };
 
+    // The gate is closed for a reason that needs no GL (busy preview, camera, quiet period) and only
+    // pattern jobs wait: the worker may generate their sources ahead.
+    const canPrepare = (g) => {
+      const s = g || {};
+      if (inFlight.size) return false;
+      if (!(s.previewBusy || s.cameraActive || s.now - lastActivity < quietMs)) return false;
+      for (const e of pending.values()) if (!isShader(e)) return true;
+      return false;
+    };
+    // Head pattern jobs in queue order; skip(sig) leaves out the ones already prepared.
+    const prepareCandidates = (n, skip) => {
+      const out = [];
+      for (const [key, e] of pending) {
+        if (out.length >= n) break;
+        if (isShader(e) || (skip && skip(e.sig))) continue;
+        out.push({ key, sig: e.sig, target: e.target });
+      }
+      return out;
+    };
+    // True when only shader jobs are left to post and the gate is open: their scene can be built now.
+    const wantsSceneEarly = (g) => {
+      const s = g || {};
+      if (s.sceneReady || s.parallelCompile === false || s.previewBusy || s.cameraActive || s.hidden || !s.active) return false;
+      if (s.now - lastActivity < quietMs || shaderInFlight()) return false;
+      let shader = false;
+      for (const e of pending.values()) { if (!isShader(e)) return false; shader = true; }
+      return shader;
+    };
+
     const nextJob = (gate) => {
       if (!pending.size || !canDispatch(gate)) return null;
       const h = headEntry();
+      if (!h) return null;
       if (isShader(h[1]) && !shaderGateOpen(gate)) return null;
       const [key, e] = h;
       pending.delete(key);
-      inFlight = { key, sig: e.sig, imageKey: e.imageKey, target: e.target, kind: isShader(e) ? 'shader' : 'pattern', stale: false };
-      return { key, sig: e.sig, imageKey: e.imageKey, target: e.target, kind: inFlight.kind };
+      const kind = isShader(e) ? 'shader' : 'pattern';
+      inFlight.set(key, { key, sig: e.sig, imageKey: e.imageKey, target: e.target, kind, stale: false });
+      return { key, sig: e.sig, imageKey: e.imageKey, target: e.target, kind };
     };
 
     // A shader job is cheap to abandon, so a pattern job that appears while one runs takes over.
     const wantsPreempt = () => {
-      if (!inFlight || inFlight.kind !== 'shader') return false;
+      if (!shaderInFlight()) return false;
       for (const e of pending.values()) if (!isShader(e)) return true;
       return false;
     };
@@ -232,9 +268,9 @@
     // Returns { key, sig, imageKey, stale } for the finished job, or null if it is not the in-flight one.
     // requeue puts it back at the head of the shader class without counting it done.
     const complete = (jobKey, o) => {
-      if (!inFlight || inFlight.key !== jobKey) return null;
-      const done = inFlight;
-      inFlight = null;
+      const done = inFlight.get(jobKey);
+      if (!done) return null;
+      inFlight.delete(jobKey);
       if (o && o.requeue && !done.stale) {
         const entry = { key: done.key, sig: done.sig, imageKey: done.imageKey, target: done.target, kind: done.kind, requeued: true };
         const rest = Array.from(pending);
@@ -253,11 +289,14 @@
     return {
       setGlobal, getGlobal, setShaderGlobal, getShaderGlobal, toggleShaderMenu, defaultOn, enterScope, keepScope, isBig, scopeOn, toggleMenu, isEnabled,
       setOverride, setOverrides, anyEnabled, setGlobalSize, getGlobalSize, sizeOf, setSizeOverride, setSizeOverrides, toggleMenuSize, remapNode, remapScope, resetSession,
-      applySignatures, priorityOrder, noteActivity, canDispatch, quietRemaining, nextJob, complete, progress, wantsPreempt, wantsScene, headKind,
+      applySignatures, priorityOrder, noteActivity, canDispatch, quietRemaining, nextJob, complete, progress, wantsPreempt, wantsScene, wantsSceneEarly, canPrepare, prepareCandidates, headKind,
       pendingKeys: () => Array.from(pending.keys()),
-      inFlightKey: () => (inFlight ? inFlight.key : null),
-      inFlightKind: () => (inFlight ? inFlight.kind : null),
-      isInFlightStale: () => !!(inFlight && inFlight.stale),
+      inFlightKey: () => { for (const j of inFlight.values()) return j.key; return null; },
+      inFlightKind: () => { for (const j of inFlight.values()) return j.kind; return null; },
+      isInFlightStale: () => { for (const j of inFlight.values()) return j.stale; return false; },
+      inFlightKeys: () => Array.from(inFlight.keys()),
+      inFlightCount: () => inFlight.size,
+      isStale: (key) => { const j = inFlight.get(key); return !!(j && j.stale); },
     };
   }
 

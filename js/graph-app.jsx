@@ -903,7 +903,8 @@
             };
 
             const markDirty = (undoTag) => {
-                if (thumbClientRef.current) thumbClientRef.current.noteActivity();
+                // Thumbnails read the document themselves once the edit settles, ahead of the undo snapshot.
+                if (thumbClientRef.current) thumbClientRef.current.noteEdit(() => serializeDocXml(parsedRef.current));
                 setDirtyRev((r) => r + 1);
                 pushUndoSnapshot(undoTag || null);
             };

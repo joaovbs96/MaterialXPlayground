@@ -74,6 +74,10 @@ async function main() {
     }));
     const bad = on.states.filter((s) => s !== 'ready' && s !== 'approx');
     console.log(`cards=${on.states.length} canvases=${on.canvases} workers=${on.workers} ms=${Date.now() - t0}`);
+    // The worker generates ahead while the sidebar preview compiles (informational).
+    const posts = await page.evaluate(() => window.__posts.slice());
+    const nPrep = posts.filter((t) => t === 'prepare').length;
+    console.log('prepare posts:', nPrep);
     if (!on.states.length) { failed = true; console.log('no thumbnail cards found'); }
     if (bad.length) { failed = true; console.log('not ready:', JSON.stringify(bad)); }
     if (on.canvases !== on.states.length) { failed = true; console.log('canvas count does not match card count'); }

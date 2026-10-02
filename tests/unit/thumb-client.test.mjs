@@ -534,7 +534,7 @@ test('shader thumbnails off: no scene message, no GLB or environment fetch, no s
   assert.match(init.scene.renderSession, /render-session/);
 });
 
-test('shader thumbnails on: patterns first, then setScene before the first shader render', async () => {
+test('shader thumbnails on: patterns first, setScene behind them and before the first shader render', async () => {
   const env = makeEnv({ shader: 'true' });
   const client = env.Client.create({});
   const w = await bootShader(env, client, [shaderCard('s:m'), card('n:a')]);
@@ -542,7 +542,7 @@ test('shader thumbnails on: patterns first, then setScene before the first shade
   await env.advance(1000);
   assert.equal(renders(w).length, 1);
   assert.equal(renders(w)[0].key, keyOf('n:a'));
-  assert.equal(setScenes(w).length, 0, 'the scene waits for the pattern job');
+  assert.equal(setScenes(w).length, 1, 'the scene is built while the last pattern job runs');
   resultOf(w, renders(w)[0]);
   await env.advance(1000);
   const sc = setScenes(w);
@@ -685,4 +685,294 @@ test('turning shader thumbnails off releases the scene when no shader override r
   assert.equal(client.toggleShaderMenu(), false);
   assert.equal(w.posted.filter((p) => p.type === 'releaseScene').length, 1);
   assert.equal(env.store.get('mtlxGraphShaderThumbnails'), 'false');
+});
+
+const manyCards = (n) => Array.from({ length: n }, (_, i) => card('n:' + i));
+const okResult = (job) => ({ type: 'result', jobId: job.jobId, key: job.key, sig: job.sig, bitmap: bitmap(), notices: [], approx: false });
+
+test('pattern jobs go out in a window of eight with the parallel flag, refilled as results land', async () => {
+  const env = makeEnv();
+  const client = env.Client.create({});
+  const w = await boot(env, client, manyCards(12));
+  answerSigs(w, (k) => 'S' + k.slice(-1) + k.length);
+  await env.advance(0);
+  assert.equal(renders(w).length, 8);
+  assert.ok(renders(w).every((r) => r.parallel === true && r.kind === 'pattern'));
+  // Results may come back in any order; each one frees one slot.
+  const first = renders(w).slice();
+  w.emit(okResult(first[5]));
+  await env.settle();
+  assert.equal(renders(w).length, 9);
+  w.emit(okResult(first[0]));
+  w.emit(okResult(first[7]));
+  await env.settle();
+  assert.equal(renders(w).length, 11);
+  client.dispose();
+});
+
+test('without parallel compile the window is one and jobs carry no parallel flag', async () => {
+  const env = makeEnv();
+  const client = env.Client.create({});
+  client.noteXml('<materialx v="1"/>');
+  client.setScope('', manyCards(3), { entered: true });
+  await env.advance(0);
+  const w = env.workers[0];
+  w.emit({ type: 'ready', capabilities: { parallelCompile: false } });
+  await env.settle();
+  answerSigs(w, (k) => 'S' + k.length + k.slice(-1));
+  await env.advance(0);
+  assert.equal(renders(w).length, 1);
+  assert.equal(renders(w)[0].parallel, undefined);
+  w.emit(okResult(renders(w)[0]));
+  await env.settle();
+  assert.equal(renders(w).length, 2);
+  client.dispose();
+});
+
+test('windowOff from the worker drops to one job at a time without touching the ones in flight', async () => {
+  const env = makeEnv();
+  const client = env.Client.create({});
+  const w = await boot(env, client, manyCards(12));
+  answerSigs(w, (k) => 'S' + k.length + k.slice(-1));
+  await env.advance(0);
+  assert.equal(renders(w).length, 8);
+  w.emit({ type: 'windowOff', reason: 'program cache miss' });
+  const flight = renders(w).slice();
+  for (let i = 0; i < 7; i++) { w.emit(okResult(flight[i])); await env.settle(); }
+  assert.equal(renders(w).length, 8, 'nothing new until the window drains to zero');
+  w.emit(okResult(flight[7]));
+  await env.settle();
+  assert.equal(renders(w).length, 9);
+  assert.equal(renders(w)[8].parallel, undefined);
+  client.dispose();
+});
+
+test('a stale result inside the window is cached but not shown; the other jobs are unaffected', async () => {
+  const env = makeEnv();
+  const client = env.Client.create({});
+  const w = await boot(env, client, manyCards(3));
+  answerSigs(w, (k) => 'S1' + k.slice(-1));
+  await env.advance(0);
+  assert.equal(renders(w).length, 3);
+  const [a, b, c] = renders(w);
+  client.noteXml('<materialx v="2"/>');
+  await env.advance(500);
+  answerSigs(w, (k) => (k.endsWith('n:0') ? 'S2' : 'S1' + k.slice(-1)));
+  await env.settle();
+  w.emit(okResult(b));
+  w.emit(okResult(a));
+  await env.settle();
+  assert.equal(client.get(a.key).state, 'pending', 'the stale image is not displayed');
+  assert.equal(client.get(b.key).state, 'ready');
+  w.emit(okResult(c));
+  await env.advance(1000);
+  const again = renders(w).filter((r) => r.key === a.key);
+  assert.equal(again.length, 2);
+  assert.equal(again[1].sig, 'S2');
+  client.dispose();
+});
+
+test('a crash with several jobs in flight blames none of them and runs one at a time afterwards', async () => {
+  const env = makeEnv();
+  const client = env.Client.create({});
+  let w = await boot(env, client, manyCards(4));
+  answerSigs(w, (k) => 'S' + k.length + k.slice(-1));
+  await env.advance(0);
+  assert.equal(renders(w).length, 4);
+  w.emit({ type: 'fatal', message: 'wasm abort' });
+  await env.advance(500);
+  assert.equal(env.workers.length, 2);
+  for (let i = 0; i < 4; i++) assert.notEqual(client.get(keyOf('n:' + i)).state, 'error');
+  w = env.workers[1];
+  w.emit({ type: 'ready', capabilities: {} });
+  await env.settle();
+  answerSigs(w, (k) => 'S' + k.length + k.slice(-1));
+  await env.advance(0);
+  assert.equal(renders(w).length, 1);
+  client.dispose();
+});
+
+test('the worker starts with the scope, not after the quiet period, and only when something is enabled', async () => {
+  const env = makeEnv();
+  const client = env.Client.create({});
+  client.noteXml('<materialx/>');
+  client.setScope('', [card('n:a')], { entered: true });
+  client.noteActivity();
+  await env.advance(0);
+  assert.equal(env.workers.length, 1, 'booting overlaps the quiet period');
+  deepEq(env.workers[0].types(), ['init']);
+  env.workers[0].emit({ type: 'ready', capabilities: {} });
+  await env.advance(500);
+  deepEq(env.workers[0].types(), ['init', 'setDocument']);
+  client.dispose();
+
+  // Off: a global opt-out, an unopted big scope and a scope without eligible cards start nothing.
+  const off = makeEnv({ stored: 'false' });
+  const c1 = off.Client.create({});
+  c1.setScope('', [card('n:a')], { entered: true });
+  const big = makeEnv();
+  const c2 = big.Client.create({});
+  c2.setScope('', Array.from({ length: 51 }, (_, i) => card('n:' + i)), { entered: true });
+  const none = makeEnv();
+  const c3 = none.Client.create({});
+  c3.setScope('', [card('n:a', { eligible: false })], { entered: true });
+  for (const e of [off, big, none]) {
+    await e.advance(5000);
+    assert.equal(e.workers.length, 0);
+    assert.equal(e.fetchCalls.length, 0);
+    assert.equal(e.timers.size, 0);
+  }
+  // Opting in from the menu starts it at once, turning it off again releases it.
+  c2.toggleMenu('');
+  await big.advance(0);
+  assert.equal(big.workers.length, 1);
+  c2.toggleMenu('');
+  assert.equal(big.workers[0].terminated, true);
+  for (const c of [c1, c2, c3]) c.dispose();
+});
+
+test('prepare: generation runs ahead while the gate is closed, in batches of eight, never for shader jobs', async () => {
+  const env = makeEnv({ shader: 'true' });
+  let busy = true;
+  const client = env.Client.create({ getPreviewBusy: () => busy });
+  const cards = manyCards(10).concat([card('s:1', { kind: 'shader' })]);
+  const w = await boot(env, client, cards);
+  const doc = w.posted.find((m) => m.type === 'setDocument');
+  answerSigs(w, (k) => 'S' + k.length + k.slice(2));
+  await env.advance(200);
+  const prep = () => w.posted.filter((m) => m.type === 'prepare');
+  assert.equal(renders(w).length, 0, 'the preview is busy');
+  assert.equal(prep().length, 1);
+  assert.equal(prep()[0].docSeq, doc.docSeq);
+  assert.equal(prep()[0].jobs.length, 8);
+  deepEq(Object.keys(prep()[0].jobs[0]).sort(), ['sig', 'target']);
+  assert.ok(prep()[0].jobs.every((j) => typeof j.sig === 'string' && j.target && !/^s:/.test(j.target.id)));
+  await env.advance(1000);
+  assert.equal(prep().length, 1, 'the next batch waits for the worker to finish this one');
+  w.emit({ type: 'prepared', docSeq: doc.docSeq, n: 8 });
+  await env.advance(200);
+  assert.equal(prep().length, 2);
+  assert.equal(prep()[1].jobs.length, 2, 'only the pattern jobs not yet prepared');
+  w.emit({ type: 'prepared', docSeq: doc.docSeq, n: 2 });
+  await env.advance(1000);
+  assert.equal(prep().length, 2, 'nothing left to prepare, and a shader job never is');
+  assert.equal(w.posted.filter((m) => m.type === 'setScene').length, 0, 'no scene work while the preview is busy');
+  busy = false;
+  await env.advance(300);
+  assert.equal(renders(w).filter((r) => r.kind !== 'shader').length, 8);
+  client.dispose();
+});
+
+test('prepare: a new document starts a fresh set and an open gate prepares nothing', async () => {
+  const env = makeEnv();
+  let busy = true;
+  const client = env.Client.create({ getPreviewBusy: () => busy });
+  const w = await boot(env, client, manyCards(3));
+  answerSigs(w, (k) => 'A' + k.slice(-1));
+  await env.advance(200);
+  const prep = () => w.posted.filter((m) => m.type === 'prepare');
+  assert.equal(prep().length, 1);
+  w.emit({ type: 'prepared', docSeq: prep()[0].docSeq, n: 3 });
+  client.noteXml('<materialx v="2"/>');
+  await env.advance(500);
+  const docs = w.posted.filter((m) => m.type === 'setDocument');
+  assert.equal(docs.length, 2);
+  answerSigs(w, (k) => 'B' + k.slice(-1));
+  await env.advance(200);
+  assert.equal(prep().length, 2);
+  assert.equal(prep()[1].docSeq, docs[1].docSeq, 'the new docSeq, so a late batch for the old one is dropped by the worker');
+  assert.ok(prep()[1].jobs.every((j) => /^B/.test(j.sig)));
+  busy = false;
+  w.emit({ type: 'prepared', docSeq: docs[1].docSeq, n: 3 });
+  await env.advance(300);
+  assert.equal(renders(w).length, 3);
+  const before = prep().length;
+  client.noteXml('<materialx v="3"/>');
+  await env.advance(500);
+  answerSigs(w, (k) => 'C' + k.slice(-1));
+  await env.advance(200);
+  assert.equal(prep().length, before, 'an open gate prepares nothing');
+  client.dispose();
+});
+
+test('a crash drops the prepare bookkeeping with the worker', async () => {
+  const env = makeEnv();
+  const client = env.Client.create({ getPreviewBusy: () => true });
+  let w = await boot(env, client, manyCards(2));
+  answerSigs(w, (k) => 'A' + k.slice(-1));
+  await env.advance(200);
+  assert.equal(w.posted.filter((m) => m.type === 'prepare').length, 1);
+  w.emit({ type: 'fatal', message: 'wasm abort' });
+  await env.advance(500);
+  w = env.workers[1];
+  w.emit({ type: 'ready', capabilities: {} });
+  await env.settle();
+  answerSigs(w, (k) => 'A' + k.slice(-1));
+  await env.advance(200);
+  assert.equal(w.posted.filter((m) => m.type === 'prepare').length, 1, 'the new worker is told again');
+  client.dispose();
+});
+
+test('edit latency: the document is read at the edit settle time, retried on transients, and a drag posts nothing', async () => {
+  const env = makeEnv();
+  const client = env.Client.create({});
+  const w = await boot(env, client, [card('n:a')]);
+  answerSigs(w, () => 'S1');
+  await env.advance(1000);
+  const docs = () => w.posted.filter((m) => m.type === 'setDocument');
+  assert.equal(docs().length, 1);
+
+  client.noteEdit(() => '<materialx v="2"/>');
+  await env.advance(100);
+  assert.equal(docs().length, 1);
+  await env.advance(60);
+  assert.equal(docs().length, 2, 'posted well inside 500 ms, without waiting for the undo snapshot');
+  assert.equal(docs()[1].xml, '<materialx v="2"/>');
+  // The undo snapshot later hands over the same text: nothing more is posted.
+  client.noteXml('<materialx v="2"/>');
+  await env.advance(1500);
+  assert.equal(docs().length, 2);
+
+  // A transient serialize failure retries, then succeeds.
+  let calls = 0;
+  client.noteEdit(() => { if (++calls < 3) { const e = new Error('transient'); e.transient = true; throw e; } return '<materialx v="3"/>'; });
+  await env.advance(1000);
+  assert.equal(calls, 3);
+  assert.equal(docs().length, 3);
+  assert.equal(docs()[2].xml, '<materialx v="3"/>');
+
+  // A stream of edits and activity (a drag) posts nothing until it stops.
+  for (let i = 0; i < 30; i++) {
+    client.noteEdit(() => '<materialx v="d' + i + '"/>');
+    client.noteActivity();
+    await env.advance(50);
+  }
+  assert.equal(docs().length, 3);
+  await env.advance(200);
+  assert.equal(docs().length, 4);
+  assert.equal(docs()[3].xml, '<materialx v="d29"/>');
+
+  // A provider that never succeeds gives up; the explicit text still wins.
+  client.noteEdit(() => { throw new Error('transient'); });
+  await env.advance(3000);
+  client.noteXml('<materialx v="z"/>');
+  await env.advance(500);
+  assert.equal(docs().length, 5);
+  assert.equal(docs()[4].xml, '<materialx v="z"/>');
+  client.dispose();
+});
+
+test('early scene: setScene goes out with the gate open once every pattern job is posted, never while the preview is busy', async () => {
+  const env = makeEnv({ shader: 'true' });
+  let busy = true;
+  const client = env.Client.create({ getPreviewBusy: () => busy });
+  const w = await boot(env, client, [card('n:a'), card('s:1', { kind: 'shader' })]);
+  answerSigs(w, (k) => 'S' + k.slice(-1));
+  await env.advance(1000);
+  assert.equal(w.posted.filter((m) => m.type === 'setScene').length, 0);
+  busy = false;
+  await env.advance(200);
+  assert.equal(renders(w).length, 1, 'the pattern job goes first');
+  assert.equal(w.posted.filter((m) => m.type === 'setScene').length, 1, 'the scene does not wait for the shader job to reach the head');
+  client.dispose();
 });

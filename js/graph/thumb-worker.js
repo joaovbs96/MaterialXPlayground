@@ -19,6 +19,9 @@ const SOURCE_CACHE_MAX = 64;
 const PROGRAM_CACHE_MAX = 32;
 const TEXTURE_BYTES_MAX = 128 * 1024 * 1024;
 const TEXTURE_MAX_SIZE = 1024;
+const LINK_TIMEOUT_MS = 15000;
+const MISS_DRAW_MS = 30; // a draw slower than this after a prewarm means the program was linked again
+const MISS_LIMIT = 3;
 
 const post = (msg, transfer) => G.postMessage(Object.assign({ v: V }, msg), transfer || []);
 
@@ -176,12 +179,16 @@ const buildSources = async (target, kind) => {
     }
     const compoundRoot = !!settings.compoundRoot;
     const needsFresh = MtlxPreviewBuild.previewNeedsFreshContext(parsed, target, compoundRoot);
-    const freshCtx = needsFresh && typeof env.createGenContext === 'function' ? env.createGenContext() : null;
-    const genContext = freshCtx || env.genContext;
+    let freshCtx = null;
     let built = null;
     try {
         built = await MtlxGenCore.mxExclusive(() => MtlxPreviewBuild.buildPreviewRenderable(parsed, target, { compoundRoot }));
         if (!built.renderable) throw new JobError('unsupported', built.notice || 'Nothing to preview.');
+        // Transients now exist in the document: with no nodedef or functional graph, only library compounds can be cached.
+        if (needsFresh && typeof env.createGenContext === 'function' && !MtlxPreviewBuild.previewCanShareContext(parsed, compoundRoot)) {
+            freshCtx = env.createGenContext();
+        }
+        const genContext = freshCtx || env.genContext;
         const srcs = await MtlxGenCore.generatePreviewSourcesWithinBudget({
             mx, gen: env.gen, genContext, renderable: built.renderable, label: built.label || 'thumbnail',
             materialName: built.materialName || null, isMounted: () => true,
@@ -196,6 +203,14 @@ const buildSources = async (target, kind) => {
     }
 };
 
+const generateEntry = async (target, kind) => {
+    try { return { srcs: await buildSources(target, kind) }; } catch (e) {
+        if (e instanceof JobError) return { error: { kind: e.kind, message: e.message } };
+        if (isAbort(e)) throw e;
+        return { error: { kind: 'generate', message: describe(e) } };
+    }
+};
+
 const remember = (sig, entry) => {
     srcCache.delete(sig);
     srcCache.set(sig, entry);
@@ -206,7 +221,7 @@ const remember = (sig, entry) => {
 let idleTimer = 0;
 const armIdle = () => {
     clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => releaseGl(false), thumbScene.hasScene() ? IDLE_SCENE_MS : IDLE_MS);
+    idleTimer = setTimeout(() => { if (outstanding.size) armIdle(); else releaseGl(false); }, thumbScene.hasScene() ? IDLE_SCENE_MS : IDLE_MS);
 };
 
 const textureCache = new Map();
@@ -348,9 +363,10 @@ const bindTextures = async (srcs, uniforms, inUse, notices, topts) => {
 };
 
 // ---- Render ----
+const progKeyOf = (srcs) => MtlxGenCore.fnv1aHex(srcs.vs) + MtlxGenCore.fnv1aHex(srcs.fs) + srcs.fs.length;
 const retainProgram = (srcs, material) => {
     // The first material of a program stays alive so later jobs reuse it.
-    const progKey = MtlxGenCore.fnv1aHex(srcs.vs) + MtlxGenCore.fnv1aHex(srcs.fs) + srcs.fs.length;
+    const progKey = progKeyOf(srcs);
     if (programKeepers.has(progKey)) material.dispose();
     else {
         material.uniforms = {};
@@ -393,7 +409,9 @@ const renderTarget = async (srcs, display, size) => {
         TM.updateTransformUniforms(uniforms, mesh, camera);
         renderer.setClearColor(0, 0);
         renderer.clear();
+        const tDraw = performance.now();
         renderer.render(scene, camera);
+        const drawMs = performance.now() - tDraw;
         scene.remove(mesh);
         if (state.lost || state.ctx.isContextLost()) throw new JobError('context', 'The WebGL context was lost.');
         const bad = (renderer.info.programs || []).find((p) => p.diagnostics && p.diagnostics.runnable === false);
@@ -411,10 +429,106 @@ const renderTarget = async (srcs, display, size) => {
         const bitmap = copy.transferToImageBitmap();
         retainProgram(srcs, material);
         material = null;
-        return { bitmap, notices, approx, reasons };
+        return { bitmap, notices, approx, reasons, drawMs };
     } finally {
         if (material) { try { material.dispose(); } catch (_) { /* best-effort */ } }
         geometry.dispose();
+    }
+};
+
+// ---- Parallel pattern links ----
+// A pattern job submits its program through KHR_parallel_shader_compile right after generation and
+// renders when the link is done, so up to a window of links overlap. Renders stay serial (one canvas).
+const outstanding = new Set();
+const linkJobs = new Map();
+let renderTail = Promise.resolve();
+let parallelOk = false;
+let misses = 0;
+
+const serialRender = (fn) => {
+    const run = renderTail.then(fn);
+    renderTail = run.catch(() => {});
+    return run;
+};
+const glFor = (size) => ((gl && !gl.lost && !gl.ctx.isContextLost()) ? gl : ensureGl(size));
+
+// Returns a shared link record, or null when three.js will find the program already (kept or unsupported).
+const acquireLink = (srcs, size) => {
+    const key = progKeyOf(srcs);
+    if (programKeepers.has(key)) return null;
+    let L = linkJobs.get(key);
+    if (L && L.st !== gl) { linkJobs.delete(key); L = null; }
+    if (!L) {
+        const st = glFor(size);
+        const g = st.ctx;
+        const ext = g.getExtension('KHR_parallel_shader_compile');
+        if (!ext) return null;
+        const vs = g.createShader(g.VERTEX_SHADER);
+        g.shaderSource(vs, '#version 300 es\n' + srcs.vs);
+        g.compileShader(vs);
+        const fsh = g.createShader(g.FRAGMENT_SHADER);
+        g.shaderSource(fsh, '#version 300 es\n' + srcs.fs);
+        g.compileShader(fsh);
+        const prog = g.createProgram();
+        g.attachShader(prog, vs);
+        g.attachShader(prog, fsh);
+        g.linkProgram(prog);
+        L = { key, st, g, ext, vs, fsh, prog, refs: 0 };
+        linkJobs.set(key, L);
+    }
+    L.refs++;
+    return L;
+};
+const releaseLink = (L) => {
+    if (--L.refs > 0) return;
+    if (linkJobs.get(L.key) === L) linkJobs.delete(L.key);
+    try { L.g.deleteProgram(L.prog); L.g.deleteShader(L.vs); L.g.deleteShader(L.fsh); } catch (_) { /* context gone */ }
+};
+const linkDone = (L) => {
+    try {
+        if (L.g.isContextLost() || !L.g.isProgram(L.prog)) return true;
+        const v = L.g.getProgramParameter(L.prog, L.ext.COMPLETION_STATUS_KHR);
+        return v === null ? true : !!v;
+    } catch (_) { return true; }
+};
+const waitLink = async (L) => {
+    const t0 = performance.now();
+    while (!linkDone(L) && performance.now() - t0 < LINK_TIMEOUT_MS) await new Promise((r) => setTimeout(r, 2));
+};
+
+const noteDraw = (warmed, drawMs) => {
+    if (!warmed || drawMs <= MISS_DRAW_MS || !parallelOk) return;
+    if (++misses >= MISS_LIMIT) {
+        parallelOk = false;
+        post({ type: 'windowOff', reason: 'program cache miss' });
+    }
+};
+
+const finishParallel = async (m, entry, link, genMs, t0, size, display) => {
+    const jobId = m.jobId;
+    const fail = (kind, message) => post({ type: 'error', jobId, key: m.key, sig: m.sig, kind, message });
+    try {
+        const tLink = performance.now();
+        if (link) await waitLink(link);
+        const linkMs = performance.now() - tLink;
+        if (cancelled.has(jobId)) throw new JobCancelled();
+        const tRender = performance.now();
+        const out = await serialRender(() => {
+            if (cancelled.has(jobId)) throw new JobCancelled();
+            return renderTarget(entry.srcs, display, size);
+        });
+        noteDraw(!!link, out.drawMs);
+        post({
+            type: 'result', jobId, key: m.key, sig: m.sig, bitmap: out.bitmap, ms: performance.now() - t0, notices: out.notices, approx: out.approx,
+            approxReasons: out.reasons, timings: { genMs, linkMs, renderMs: performance.now() - tRender, drawMs: out.drawMs },
+        }, [out.bitmap]);
+    } catch (e) {
+        if (e instanceof JobCancelled) post({ type: 'stale', jobId, reason: 'cancelled' });
+        else if (e instanceof JobError) fail(e.kind, e.message);
+        else if (isAbort(e)) { dead = true; post({ type: 'fatal', message: describe(e) }); } else fail('generate', describe(e));
+    } finally {
+        if (link) releaseLink(link);
+        cancelled.delete(jobId);
     }
 };
 
@@ -427,6 +541,7 @@ const handleRender = async (m) => {
     const fail = (kind, message) => post({ type: 'error', jobId, key: m.key, sig: m.sig, kind, message });
     const check = () => { if (cancelled.has(jobId)) throw new JobCancelled(); };
     const stage = (name) => { if (shader) post({ type: 'stage', jobId, stage: name }); };
+    let deferred = false;
     try {
         if (shader && (!thumbScene.hasScene() || m.sceneKey !== thumbScene.key())) {
             fail('scene', 'The thumbnail scene is not ready for this render.');
@@ -440,11 +555,7 @@ const handleRender = async (m) => {
         if (!entry) {
             stage('generate');
             const tGen = performance.now();
-            try { entry = { srcs: await buildSources(m.target || {}, shader ? 'shader' : 'pattern') }; } catch (e) {
-                if (e instanceof JobError) entry = { error: { kind: e.kind, message: e.message } };
-                else if (isAbort(e)) throw e;
-                else entry = { error: { kind: 'generate', message: describe(e) } };
-            }
+            entry = await generateEntry(m.target || {}, shader ? 'shader' : 'pattern');
             genMs = performance.now() - tGen;
             if (cacheable) remember(m.sig, entry);
         }
@@ -454,6 +565,18 @@ const handleRender = async (m) => {
         check();
         const size = Math.max(16, Math.min(512, Math.round(Number(m.size) || 238)));
         const display = m.display || defaultDisplay;
+        if (!shader && m.parallel && parallelOk) {
+            // The link and the render finish off the message chain so the next job can generate meanwhile.
+            let link = null;
+            try { link = acquireLink(entry.srcs, size); } catch (_) { link = null; }
+            const run = finishParallel(m, entry, link, genMs, t0, size, display).finally(() => {
+                outstanding.delete(run);
+                if (!outstanding.size) armIdle();
+            });
+            outstanding.add(run);
+            deferred = true;
+            return;
+        }
         if (shader) {
             const notices = (entry.srcs.notices || []).slice();
             const out = await thumbScene.renderShader(entry.srcs, display, size, { check, isCancelled: () => cancelled.has(jobId), stage }, notices);
@@ -475,9 +598,25 @@ const handleRender = async (m) => {
         else if (isAbort(e)) throw e;
         else fail('generate', describe(e));
     } finally {
-        cancelled.delete(jobId);
-        armIdle();
+        if (!deferred) {
+            cancelled.delete(jobId);
+            if (!outstanding.size) armIdle();
+        }
     }
+};
+
+// Fills the source cache for pattern jobs the page cannot render yet (CPU only, no GL). It yields to
+// any queued message between jobs, and a batch for an older document does nothing.
+const handlePrepare = async (m) => {
+    let n = 0;
+    for (const j of Array.isArray(m.jobs) ? m.jobs : []) {
+        if (m.docSeq !== curDocSeq || !parsed || dead || queued > 1) break;
+        if (!j || typeof j.sig !== 'string' || !j.sig || srcCache.has(j.sig)) continue;
+        remember(j.sig, await generateEntry(j.target || {}, 'pattern'));
+        n++;
+        await new Promise((r) => setTimeout(r, 0));
+    }
+    post({ type: 'prepared', docSeq: m.docSeq, n });
 };
 
 const handleSetScene = async (m) => {
@@ -566,9 +705,10 @@ const handleInit = async (m) => {
     thumbScene.init(m.scene, rig);
     appVersion = String((m.mtlx && m.mtlx.version) || (mx.getVersionString && mx.getVersionString()) || '');
     buildId = String(m.buildId || '');
+    parallelOk = probeParallelCompile();
     post({
         type: 'ready',
-        capabilities: { viewableTypes: MtlxGenCore.COLOR_VIEWABLE.slice(), loaders: loaderStatus, parallelCompile: probeParallelCompile() },
+        capabilities: { viewableTypes: MtlxGenCore.COLOR_VIEWABLE.slice(), loaders: loaderStatus, parallelCompile: parallelOk },
     });
 };
 
@@ -598,6 +738,8 @@ const handleSetDocument = async (m) => {
 
 const handle = async (m) => {
     if (!m || m.v !== V || dead) return;
+    // Everything but a parallel pattern render waits until the jobs still linking have posted.
+    if (outstanding.size && !(m.type === 'render' && m.parallel && m.kind !== 'shader')) await Promise.all(Array.from(outstanding));
     switch (m.type) {
         case 'init': await handleInit(m); break;
         case 'setDocument': await handleSetDocument(m); break;
@@ -608,6 +750,7 @@ const handle = async (m) => {
             break;
         }
         case 'render': await handleRender(m); break;
+        case 'prepare': await handlePrepare(m); break;
         case 'setHost':
             if (m.gen) MtlxGenCore.setHostFromSnapshot(m.gen);
             if (m.three) MtlxThreeMaterial.setHostFromSnapshot(m.three);
@@ -624,11 +767,13 @@ const handle = async (m) => {
 
 // Messages run one at a time so a new document never frees the one a job is using.
 let chain = Promise.resolve();
+let queued = 0; // messages received and not yet handled; a running prepare stops when another waits
 G.onmessage = (ev) => {
     const msg = ev.data;
     if (msg && msg.v === V && msg.type === 'cancel') { noteCancel(msg.jobId); return; }
+    queued++;
     chain = chain.then(() => handle(ev.data)).catch((e) => {
         dead = true;
         post({ type: 'fatal', message: describe(e) });
-    });
+    }).then(() => { queued--; });
 };

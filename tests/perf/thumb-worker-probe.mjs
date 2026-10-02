@@ -10,13 +10,13 @@ import { chromium } from '@playwright/test';
 import { startServer } from '../embed/lib/server.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const HELP = 'Usage: node tests/perf/thumb-worker-probe.mjs [--out <dir>] [--fixtures <dir>] [--size 128] [--max-per-fixture 40] [--software] [--shader [--parity] [--goldens <dir>] [--no-prefiltered]]';
+const HELP = 'Usage: node tests/perf/thumb-worker-probe.mjs [--out <dir>] [--fixtures <dir>] [--size 128] [--max-per-fixture 40] [--software] [--parallel] [--shader [--parity] [--goldens <dir>] [--no-prefiltered]]';
 
 function parseArgs(argv) {
   const out = {
     out: path.join(ROOT, 'scratchpad/thumbs/wp5/out'),
     fixtures: path.join(ROOT, 'scratchpad/thumbs/fixtures'),
-    size: 128, maxPerFixture: 40, software: false,
+    size: 128, maxPerFixture: 40, software: false, parallel: false,
     shader: false, parity: false, prefiltered: true, goldens: path.join(ROOT, 'scratchpad/thumbs/scene-goldens-s0'),
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -28,6 +28,7 @@ function parseArgs(argv) {
     else if (a === '--size') out.size = Number(next());
     else if (a === '--max-per-fixture') out.maxPerFixture = Number(next());
     else if (a === '--software') out.software = true;
+    else if (a === '--parallel') out.parallel = true;
     else if (a === '--shader') out.shader = true;
     else if (a === '--parity') out.parity = true;
     else if (a === '--no-prefiltered') out.prefiltered = false;
@@ -38,7 +39,7 @@ function parseArgs(argv) {
 }
 
 // Runs in the page (serialized by toString).
-async function probeFixture(xml, fileNames, size, maxTargets, docSeq) {
+async function probeFixture(xml, fileNames, size, maxTargets, docSeq, parallel) {
   const win = window;
   const need = ['parseMtlxDocument', 'getMxEnv', 'mxExclusive', 'buildScope', 'docChildren', 'mxElName', 'mxElCat',
     'buildPreviewRenderable', 'createMtlxRenderView', 'bindDroppedTextures'];
@@ -147,12 +148,18 @@ async function probeFixture(xml, fileNames, size, maxTargets, docSeq) {
   const compoundRoot = (() => { try { return !!win.MtlxRenderSettings.get('graphCompoundCompile', { surface: 'graph' }); } catch (e) { return false; } })();
   const results = [];
   let jobId = 0;
+  // --parallel posts every render up front with the window flag, so the links overlap.
+  if (parallel) {
+    for (let i = 0; i < picked.length; i++) {
+      worker.postMessage({ v: 1, type: 'render', jobId: i + 1, docSeq, key: keys[i].key, sig: sigMsg.sigs[keys[i].key], target: picked[i], display, size, kind: 'pattern', parallel: true });
+    }
+  }
   for (let i = 0; i < picked.length; i++) {
     const target = picked[i];
     const rec = { id: target.id, scope: target.scope };
     try {
       jobId += 1;
-      worker.postMessage({ v: 1, type: 'render', jobId, docSeq, key: keys[i].key, sig: sigMsg.sigs[keys[i].key], target, display, size });
+      if (!parallel) worker.postMessage({ v: 1, type: 'render', jobId, docSeq, key: keys[i].key, sig: sigMsg.sigs[keys[i].key], target, display, size });
       const res = await take((m) => (m.type === 'result' || m.type === 'error' || m.type === 'stale') && m.jobId === jobId);
       if (res.type !== 'result') { rec.workerError = res.kind ? res.kind + ': ' + res.message : res.type; results.push(rec); continue; }
       rec.ms = res.ms; rec.approx = !!res.approx; rec.notices = res.notices;
@@ -801,7 +808,7 @@ async function main() {
         names.add(v.replace('<UDIM>', '1001'));
       }
       docSeq += 1;
-      const r = await page.evaluate(`(${probeFixture.toString()})(${JSON.stringify(xml)}, ${JSON.stringify([...names])}, ${args.size}, ${args.maxPerFixture}, ${docSeq})`);
+      const r = await page.evaluate(`(${probeFixture.toString()})(${JSON.stringify(xml)}, ${JSON.stringify([...names])}, ${args.size}, ${args.maxPerFixture}, ${docSeq}, ${args.parallel})`);
       const dir = path.join(args.out, f.replace(/\.mtlx$/, ''));
       fs.mkdirSync(dir, { recursive: true });
       let ok = 0, ident = 0, worst = null;
