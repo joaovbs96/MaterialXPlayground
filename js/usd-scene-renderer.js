@@ -719,6 +719,10 @@ const sceneFileMap = (files, stage) => {
     return map;
 };
 
+// USD prints an asset value as @path@ (@@@path@@@ when it holds an @); only the
+// delimiters go, never path characters.
+const sceneStripAssetDelimiters = (value) => String(value == null ? '' : value).trim()
+    .replace(/^@@@([\s\S]*)@@@$/, '$1').replace(/^@([\s\S]*)@$/, '$1').replace(/^@+/, '').replace(/@+$/, '').trim();
 const sceneNormPath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\//, '');
 const sceneDir = (value) => {
     const p = sceneNormPath(value);
@@ -2741,8 +2745,7 @@ const createMtlxSceneView = async ({
     const convertUsdOverrideValue = (rawText, declaredType, baseDirs) => {
         const raw = String(rawText || '').trim();
         if (declaredType === 'filename' || declaredType === 'asset') {
-            const match = raw.match(/^@(.*)@$/);
-            const ref = match ? match[1] : raw;
+            const ref = sceneStripAssetDelimiters(raw);
             // USD resolves the asset against the layer that authored the
             // override; that layer normally sits beside the .mtlx, so try the
             // material's directory first and the stage root as a fallback.
@@ -2991,12 +2994,51 @@ const sceneInsertConverts = (xml, index) => {
     return { xml: out, count: inserts.length };
 };
 
+// Autodesk LookdevX converters (adsk_converter_<in>) are plain type casts that
+// stdlib lacks: use ND_convert_<in>_<out> when it exists, else bypass the node.
+const sceneRepairAdskConverters = (xml, index) => {
+    const elements = sceneScanMtlxElements(xml);
+    const converters = elements.filter((el) => /^adsk_converter/.test(el.tag) && el.a.name);
+    if (!converters.length) return { xml, count: 0 };
+    const edits = [];
+    let count = 0;
+    for (const el of converters) {
+        const src = el.children.find((child) => child.tag === 'input' && child.a.name === 'in');
+        const inType = src && src.a.type;
+        const outType = el.a.type;
+        if (inType && outType && index.byName.has('ND_convert_' + inType + '_' + outType)) {
+            edits.push([el.tagStart, el.tagEnd, 'convert']);
+            if (el.closeStart) edits.push([el.closeStart, el.closeEnd, 'convert']);
+            count += 1;
+            continue;
+        }
+        if (!src || !src.a.nodename || el.end < 0) continue;
+        for (const consumer of elements) {
+            if (consumer === el || consumer.tag !== 'input' || consumer.a.nodename !== el.a.name) continue;
+            const range = sceneAttrValueRange(consumer, 'nodename');
+            if (!range) continue;
+            edits.push([range[0], range[1], src.a.nodename]);
+            if (src.a.output && !consumer.a.output) edits.push([range[1] + 1, range[1] + 1, ' output="' + src.a.output + '"']);
+        }
+        edits.push([el.start, el.end, '']);
+        count += 1;
+    }
+    if (!count) return { xml, count: 0 };
+    edits.sort((a, b) => b[0] - a[0] || b[1] - a[1]);
+    let out = xml;
+    for (const [from, to, text] of edits) out = out.slice(0, from) + text + out.slice(to);
+    return { xml: out, count };
+};
+
 // Repairs one inline MaterialX document from the USD runtime and reports how
 // many edits were needed. Unknown shapes are left untouched.
 const sceneRepairInlineMaterialX = (xml, stdlib) => {
     const index = sceneNodeDefs(stdlib);
     let out = String(xml || '');
     let repairs = 0;
+    const adsk = sceneRepairAdskConverters(out, index);
+    out = adsk.xml;
+    repairs += adsk.count;
     // A node's type, once required by a consumer, is remembered across
     // passes so a later pass never flips it back.
     const consumerDecided = new Map();
@@ -3725,7 +3767,7 @@ const scenePruneUnreachableNodes = (xml) => {
                 if (u.type !== 'filename' || u.data == null) continue;
                 if (/<UDIM>/i.test(String(u.data))) {
                     const tiles = sceneUdimTiles(u.data, fileMap);
-                    if (!tiles.size) missingFiles.add(String(u.data));
+                    if (!tiles.size) missingFiles.add(sceneStripAssetDelimiters(u.data));
                     tiles.forEach((tile) => { if (tile.substituted) textureStats.ktx2Substituted += 1; });
                     udimRefs.push({ uniform: u, tiles });
                     continue;
@@ -3735,7 +3777,7 @@ const scenePruneUnreachableNodes = (xml) => {
                 // basename or parent prefix: that can bind a duplicate file
                 // from an unrelated layer.
                 const hit = sceneExactFile(fileMap, u.data, '');
-                if (!hit) { warnings.push('Texture file unavailable for ' + label + ': ' + u.data); missingFiles.add(String(u.data)); continue; }
+                if (!hit) { warnings.push('Texture file unavailable for ' + label + ': ' + u.data); missingFiles.add(sceneStripAssetDelimiters(u.data)); continue; }
                 if (hit.substituted) textureStats.ktx2Substituted += 1;
                 const extension = String(hit.path).split('.').pop().toLowerCase();
                 if (UNBOUNDED_TEXTURE_EXTENSIONS.includes(extension)) {
@@ -3960,7 +4002,7 @@ const scenePruneUnreachableNodes = (xml) => {
             }
             const tileHits = info.udimRefs.map((entry) => entry.tiles.get(code) || null);
             if (tileHits.some((hit) => !hit)) {
-                info.udimRefs.forEach((entry, index) => { if (!tileHits[index]) missingFiles.add(String(entry.uniform.data)); });
+                info.udimRefs.forEach((entry, index) => { if (!tileHits[index]) missingFiles.add(sceneStripAssetDelimiters(entry.uniform.data)); });
                 const warning = 'Missing UDIM tile ' + code + ' for ' + label;
                 if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
                 const fallback = sceneNeutralMaterial(label + ' missing UDIM ' + code);

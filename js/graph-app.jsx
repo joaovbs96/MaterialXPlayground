@@ -345,6 +345,9 @@
             const n = isFinite(w) ? w : LEFT_SIDEBAR_DEFAULT_WIDTH;
             return Math.min(max, Math.max(LEFT_SIDEBAR_MIN_WIDTH, n));
         };
+        // The code view's open state (its width is kept by
+        // js/graph/code-view.jsx itself).
+        const CODE_VIEW_OPEN_STORAGE_KEY = 'mtlxGraphCodeViewOpen';
 
         // Relative-age copy for the crash-recovery modal (item 14),
         // e.g. "5 min ago", "2 h ago", "yesterday". No component state
@@ -387,16 +390,17 @@
             const docReadOnlyRef = React.useRef(false);
             docReadOnlyRef.current = docReadOnly;
             // .mxsl provenance for the file map: {compiledMtlxKey: {source,
-            // filename}}, populated by expandMxsl() in ingest() (see
+            // filename, files}}, populated by expandMxsl() in ingest() (see
             // mxslc-engine.js). filename is the as-dropped .mxsl path
             // (before it was re-keyed to compiledMtlxKey). mxslOriginFor()
             // looks one path up; mxslOriginal mirrors it for the CURRENTLY
             // loaded document (set only at loadDocument()'s choke point),
-            // which the ShadingLanguageX export target's "Original" reads.
+            // which the ShadingLanguageX export target's "Original" and
+            // the code view read.
             const mxslOriginalsRef = React.useRef({});
             const mxslOriginFor = (path) => (path && Object.prototype.hasOwnProperty.call(mxslOriginalsRef.current, path)
                 ? { path, ...mxslOriginalsRef.current[path] } : null);
-            const [mxslOriginal, setMxslOriginal] = React.useState(null); // { path, source, filename } | null
+            const [mxslOriginal, setMxslOriginal] = React.useState(null); // { path, source, filename, files } | null
             const [scope, setScope] = React.useState('');     // '' = document root
             const [flow, setFlow] = React.useState({ nodes: [], edges: [] });
             // Live mirror, so a rebuild triggered from a ref-held handler
@@ -496,6 +500,57 @@
             React.useEffect(() => {
                 try { window.localStorage.setItem(LEFT_SIDEBAR_OPEN_STORAGE_KEY, String(leftOpen)); } catch (e) { /* private mode */ }
             }, [leftOpen]);
+            // ShadingLanguageX code view (js/graph/code-view.jsx), docked at
+            // the far left, before the node list. Browser-only like the
+            // rest of the .mxsl support: vendor/mxslc/ isn't packaged in
+            // the .vsix (see .vscodeignore). Open state persists like
+            // leftOpen's; the panel persists its own width.
+            const CODE_VIEW_ON = !IN_VSCODE;
+            const [codeViewOpen, setCodeViewOpen] = React.useState(() => {
+                try { return window.localStorage.getItem(CODE_VIEW_OPEN_STORAGE_KEY) === 'true'; } catch (e) { return false; }
+            });
+            React.useEffect(() => {
+                try { window.localStorage.setItem(CODE_VIEW_OPEN_STORAGE_KEY, String(codeViewOpen)); } catch (e) { /* private mode */ }
+            }, [codeViewOpen]);
+            // The code lives here, not in the panel, so hiding the panel
+            // never loses an uncompiled edit. null = not decompiled yet for
+            // the current document (the auto-decompile effect fills it in).
+            const [slxCode, setSlxCode] = React.useState(null);
+            // The text as of the last successful compile/decompile: the
+            // panel flags "modified" while slxCode differs from it.
+            const [slxBaseline, setSlxBaseline] = React.useState(null);
+            const [slxBusy, setSlxBusy] = React.useState(null); // 'compile' | 'decompile' | null
+            const [slxMessage, setSlxMessage] = React.useState(null); // { kind: 'ok' | 'error', text, source? } | null (see SlxCodeView)
+            // Monotonic run id: a compile/decompile resolving after a newer
+            // one started (or after a different document loaded) is dropped.
+            const slxRunRef = React.useRef(0);
+            // The latest code and baseline, for decompileToCodeView's
+            // async tail.
+            const slxStateRef = React.useRef(null);
+            slxStateRef.current = { code: slxCode, baseline: slxBaseline };
+            // The code view editor's API (SlxCodeEditor's apiRef).
+            const slxEditorRef = React.useRef(null);
+            // What the last Decompile replaced, while it can still be undone
+            // in the editor: { before, beforeBaseline, after }. Undoing it
+            // (or redoing it) brings the matching baseline back too, so
+            // "modified" reads as it did. A compile makes it stale.
+            const slxDecompileRef = React.useRef(null);
+            // Called when a DIFFERENT document loads (loadDocument,
+            // newDocument): the old code no longer describes the graph, so
+            // it's dropped and re-decompiled. Compile and undo/redo keep it.
+            // `origin`: the document's .mxsl provenance (mxslOriginFor),
+            // whose as-authored source is shown instead of a decompile.
+            const resetCodeView = (origin) => {
+                slxRunRef.current++;
+                slxDecompileRef.current = null;
+                // The textarea turns CRLF into LF anyway; the baseline
+                // must match what it reports back.
+                const source = origin ? origin.source.replace(/\r\n?/g, '\n') : null;
+                setSlxCode(source);
+                setSlxBaseline(source);
+                setSlxBusy(null);
+                setSlxMessage(origin ? { kind: 'ok', text: 'Loaded from ' + origin.filename + '.' } : null);
+            };
             // Node list (left sidebar) filter/sort state.
             const [scopeListQuery, setScopeListQuery] = React.useState('');
             const [scopeListType, setScopeListType] = React.useState('');
@@ -685,6 +740,9 @@
             // on mount and by the narrow-mode stash effect below.
             const leftOpenRef = React.useRef(leftOpen);
             leftOpenRef.current = leftOpen;
+            // Same idiom, for the narrow-mode stash effect below.
+            const codeViewOpenRef = React.useRef(codeViewOpen);
+            codeViewOpenRef.current = codeViewOpen;
             const narrowRef = React.useRef(narrow);
             narrowRef.current = narrow;
             // Lets background work (render loop, keydown/drag-drop) pause
@@ -700,12 +758,18 @@
             scopeRef.current = scope;
             // Set right before setScope('') on scope EXIT (e.g. 'g:' +
             // the nodegraph just left) so the flow-rebuild effect can
-            // select/highlight it instead of wiping the selection.
+            // select/highlight it instead of wiping the selection. A code
+            // view compile sets it too, to keep the selected node.
             const pendingScopeSelectRef = React.useRef(null);
             // Set alongside pendingScopeSelectRef when a specific node (not
             // just a selection) should be framed once the rebuilt flow has
             // measured it, the library-implementation-graph return path.
             const pendingFrameRef = React.useRef(null);
+            // Set when `parsed` is replaced by a document whose graph may
+            // look nothing like the old one (a code view Compile) but the
+            // ReactFlow instance is kept: the rebuild effect then fits the
+            // whole scope once, as for a scope change.
+            const pendingFitRef = React.useRef(false);
             // Set by handleImport for a docs-page implOf handoff: { nodedef,
             // fromId }. Consumed once parsed settles, right after the
             // imported node itself is selected in root scope.
@@ -1196,18 +1260,21 @@
             // collapses params/legend to chips; narrow->wide restores the
             // stash. A manual re-open while narrow sticks until next crossing.
             const prevNarrowRef = React.useRef(narrow);
-            const preNarrowOpenRef = React.useRef({ params: true, legend: true, left: true });
+            // (`code` starts as it was saved: a page that first lays out
+            // narrow would otherwise close a code view left open.)
+            const preNarrowOpenRef = React.useRef({ params: true, legend: true, left: true, code: codeViewOpen });
             React.useEffect(() => {
                 const was = prevNarrowRef.current;
                 prevNarrowRef.current = narrow;
                 if (narrow === was) return;
                 if (narrow) {
-                    preNarrowOpenRef.current = { params: paramsOpenRef.current, legend: legendOpenRef.current, left: leftOpenRef.current };
-                    setParamsOpen(false); setLegendOpen(false); setLeftOpen(false);
+                    preNarrowOpenRef.current = { params: paramsOpenRef.current, legend: legendOpenRef.current, left: leftOpenRef.current, code: codeViewOpenRef.current };
+                    setParamsOpen(false); setLegendOpen(false); setLeftOpen(false); setCodeViewOpen(false);
                 } else {
                     setParamsOpen(preNarrowOpenRef.current.params);
                     setLegendOpen(preNarrowOpenRef.current.legend);
                     setLeftOpen(preNarrowOpenRef.current.left);
+                    setCodeViewOpen(preNarrowOpenRef.current.code);
                 }
             }, [narrow]);
 
@@ -1400,6 +1467,7 @@
                     setDocReadOnly(!!ro);
                     setDocReadOnlySource(ro ? ro.source : '');
                     setMxslOriginal(mxslOrigin);
+                    resetCodeView(mxslOrigin);
                     setScope('');
                     // Same default-target reset as opening a document fresh:
                     // a stale selection/pin from a PREVIOUS document (multi-
@@ -1449,6 +1517,7 @@
                     setDocReadOnlySource('');
                     mxslOriginalsRef.current = {};
                     setMxslOriginal(null);
+                    resetCodeView();
                     setParsed(p);
                     setScope('');
                     setStatus(null);
@@ -2000,6 +2069,8 @@
                 // real load or scope change builds fresh from the global.
                 const restoredModes = restorePortModesRef.current;
                 restorePortModesRef.current = null;
+                const fitRequested = pendingFitRef.current;
+                pendingFitRef.current = false;
                 try {
                     const { descs, edges } = buildScope(parsed, scope);
                     const built = toFlow(descs, edges, flowOpts(restoredModes || undefined));
@@ -2018,7 +2089,7 @@
                     if (frameId && built.nodes.some((n) => n.id === frameId)) {
                         focusNode(frameId, false);
                         scheduleViewSettle(() => fitViewSoon({ nodes: [{ id: frameId }], duration: 400, padding: 0.4, maxZoom: 1.2 }));
-                    } else if (switchedScope) {
+                    } else if (switchedScope || fitRequested) {
                         scheduleViewSettle(() => fitViewSoon({ padding: 0.15, duration: 350 }));
                     }
                     // Docs "View implementation" handoff: jump into the
@@ -3858,6 +3929,150 @@
                 if (xml == null) throw new Error('Could not build the document XML: ' + error);
                 return slxExportStages(xml, mxslOriginal && mxslOriginal.source);
             };
+
+            // Code view "Decompile": replace the code with the CURRENT
+            // document decompiled to SLX (same serializer and decompiler as
+            // the export target above). Also fills a freshly opened panel.
+            const decompileToCodeView = async () => {
+                const id = ++slxRunRef.current;
+                setSlxBusy('decompile');
+                setSlxMessage(null);
+                try {
+                    const { xml, error } = await resolveDocXml();
+                    if (xml == null) throw new Error('Could not build the document XML: ' + error);
+                    // Resolves { code, ms } (it runs in js/mxslc-worker.js).
+                    // No abort signal: aborting terminates the one decompile
+                    // worker, which the export dialog may be using too; a
+                    // superseded run is just dropped below.
+                    const { code } = await decompileMtlxToSlx(xml);
+                    if (slxRunRef.current !== id) return;
+                    // Replacing code that's there goes through the editor,
+                    // as one step in its own undo history: Ctrl+Z in the
+                    // code (or Undo on the message) puts the old code back.
+                    // The first fill, or with the panel closed meanwhile,
+                    // just sets it.
+                    const { code: before, baseline: beforeBaseline } = slxStateRef.current;
+                    const editor = slxEditorRef.current;
+                    let undoable = false;
+                    if (before != null && before !== code && editor) {
+                        slxDecompileRef.current = { before, beforeBaseline, after: code };
+                        undoable = editor.replaceText(code);
+                        if (!undoable) slxDecompileRef.current = null;
+                    }
+                    if (!undoable) setSlxCode(code);
+                    setSlxBaseline(code);
+                    setSlxMessage({ kind: 'ok', text: 'Decompiled from the current node graph.', undoable });
+                } catch (e) {
+                    if (slxRunRef.current !== id) return;
+                    // '' rather than null, so the auto-decompile effect
+                    // doesn't retry in a loop; Decompile retries by hand.
+                    setSlxCode((c) => (c == null ? '' : c));
+                    setSlxMessage({ kind: 'error', text: errMsg(e) });
+                } finally {
+                    if (slxRunRef.current === id) setSlxBusy(null);
+                }
+            };
+
+            // Whether card id `id` ('n:name', 'g:', 'i:', 'o:', 'd:') still
+            // names an element of document `p` in `scope` ('' = the root).
+            const scopeHasElement = (p, scope, id) => {
+                const doc = p.doc;
+                const name = id.slice(2);
+                const graph = scope ? (docChild(doc, scope) || mxSafe(() => doc.getNodeGraph(scope), null)) : null;
+                if (scope && !graph) return false;
+                if (mxSafe(() => (graph || doc).getChild(name), null)) return true;
+                // A functional graph's interface pins are its nodedef's inputs.
+                if (graph && id.indexOf('i:') === 0) {
+                    const nd = mxSafe(() => doc.getNodeDef(mxElAttr(graph, 'nodedef')), null);
+                    return !!(nd && mxSafe(() => nd.getChild(name), null));
+                }
+                return false;
+            };
+
+            // Code view "Compile": compile the code to MaterialX and swap it
+            // in as the document. An ordinary undoable edit, not a document
+            // load: the label (and so the ReactFlow instance) is kept, the
+            // scope is kept if it still exists, as are the selected,
+            // previewed and pinned nodes (by name), and Ctrl+Z restores the
+            // graph as it was right before the compile.
+            const compileFromCodeView = async () => {
+                if (!parsedRef.current || slxCode == null) return;
+                const source = slxCode;
+                const id = ++slxRunRef.current;
+                setSlxBusy('compile');
+                setSlxMessage(null);
+                let compiled = false;
+                try {
+                    // A .mxsl document's sibling files stay available to
+                    // its #include/#library directives.
+                    const xml = await compileMxslcSource(source, mxslOriginal && mxslOriginal.files, 'the code view');
+                    compiled = true;
+                    const p = await parseMtlxDocument(xml);
+                    if (slxRunRef.current !== id) return;
+                    // Land a still-debounced earlier edit as its own undo
+                    // step first (same as undoDoc), so it isn't folded into
+                    // the compile's step.
+                    if (snapshotTimerRef.current) {
+                        clearTimeout(snapshotTimerRef.current);
+                        snapshotTimerRef.current = null;
+                        flushUndoSnapshot(null);
+                    }
+                    p.label = parsedRef.current ? parsedRef.current.label : 'untitled.mtlx';
+                    const scopeValid = !scopeRef.current
+                        || (p.nodegraphs && p.nodegraphs.indexOf(scopeRef.current) !== -1)
+                        || (p.functionalGraphs && p.functionalGraphs.indexOf(scopeRef.current) !== -1);
+                    // Recompiling mustn't throw the selection and preview
+                    // back to the defaults: whatever still exists stays,
+                    // the rest resets as it would on a load.
+                    const kept = (t) => !!t && scopeHasElement(p, t.scope, t.id);
+                    const sel = selectedIdRef.current;
+                    if (sel && kept({ scope: scopeValid ? scopeRef.current : '', id: sel })) pendingScopeSelectRef.current = sel;
+                    softReloadSkipRef.current.preview = true;
+                    setPreviewSel((t) => (kept(t) ? t : null));
+                    setPinnedTarget((t) => (kept(t) ? t : null));
+                    pendingFitRef.current = true;
+                    setParsed(p);
+                    if (!scopeValid) setScope('');
+                    setDocRev((r) => r + 1);
+                    markDirty();
+                    slxDecompileRef.current = null;
+                    setSlxBaseline(source);
+                    setSlxMessage({ kind: 'ok', text: 'Compiled into the node graph.' });
+                } catch (e) {
+                    if (slxRunRef.current !== id) return;
+                    // mxslc's own errors carry line numbers into `source`,
+                    // which the code view squiggles; later ones don't.
+                    setSlxMessage({ kind: 'error', text: errMsg(e), source: compiled ? null : source });
+                } finally {
+                    if (slxRunRef.current === id) setSlxBusy(null);
+                }
+            };
+
+            const onSlxCodeChange = (code) => {
+                setSlxCode(code);
+                const d = slxDecompileRef.current;
+                if (d && code === d.before) setSlxBaseline(d.beforeBaseline);
+                else if (d && code === d.after) setSlxBaseline(d.after);
+                // A stale "Compiled"/"Decompiled" note would misdescribe
+                // the edited text; an error stays up while it's being fixed.
+                setSlxMessage((m) => (m && m.kind === 'ok' ? null : m));
+            };
+
+            // Fill the code view the first time it's shown for a document.
+            React.useEffect(() => {
+                if (!CODE_VIEW_ON || !codeViewOpen || !parsed || slxCode != null) return;
+                decompileToCodeView();
+                // eslint-disable-next-line react-hooks/exhaustive-deps
+            }, [codeViewOpen, parsed, slxCode]);
+
+            // The code view's function library (underlines, completion,
+            // parameter hints, hover), built from the node catalog the Tab
+            // palette also uses and the node docs; loaded once it's opened.
+            const [slxLibrary, setSlxLibrary] = React.useState(null);
+            React.useEffect(() => {
+                if (!CODE_VIEW_ON || !codeViewOpen || slxLibrary) return;
+                loadSlxLibrary().then(setSlxLibrary).catch(() => { /* no assists; the palette reports catalog load errors */ });
+            }, [codeViewOpen, slxLibrary]);
 
             // Export dialog's onExport: routes to .mtlx/.zip through the
             // same exportBusyRef-guarded wrappers as the toolbar. Errors
@@ -6778,7 +6993,9 @@
             };
 
             // The document-default preview target: the surface shader, else
-            // the material itself, else the first node in the current view.
+            // the material itself, else the end of a chain in the current
+            // view (the last node, then nodegraph, feeding no other one;
+            // feeding an output is fine), else the first node.
             const defaultPreviewId = React.useMemo(() => {
                 if (!parsed) return null;
                 if (!scope) {
@@ -6788,9 +7005,18 @@
                         .find((n) => mxElType(n) === 'material');
                     if (mat) return 'n:' + mxElName(mat);
                 }
-                const first = flow.nodes.find((n) => n.id.indexOf('n:') === 0)
-                    || flow.nodes.find((n) => n.id.indexOf('g:') === 0);
-                return first ? first.id : null;
+                const nodes = flow.nodes.filter((n) => n.id.indexOf('n:') === 0);
+                const graphs = flow.nodes.filter((n) => n.id.indexOf('g:') === 0);
+                const feeding = new Set();
+                for (const e of flow.edges) {
+                    if (e.source !== e.target && (e.target.indexOf('n:') === 0 || e.target.indexOf('g:') === 0)) feeding.add(e.source);
+                }
+                const lastEnd = (list) => {
+                    for (let i = list.length - 1; i >= 0; i--) if (!feeding.has(list[i].id)) return list[i];
+                    return null;
+                };
+                const pick = lastEnd(nodes) || lastEnd(graphs) || nodes[0] || graphs[0];
+                return pick ? pick.id : null;
             }, [parsed, scope, flow]);
 
             // What the ALWAYS-ON preview renders: the selection, else the
@@ -7206,13 +7432,16 @@
                 }
                 const full = nodeDocsUrl(displayNode.data)
                     + (params.length ? '?' + params.join('&') : '');
-                setDocsDialog({
-                    hash: full.slice(full.indexOf('#')),
-                    fullUrl: full,
-                    label: displayNode.data.category,
-                });
+                showDocsDialog(full, displayNode.data.category);
+            };
+            const showDocsDialog = (full, label) => {
+                setDocsDialog({ hash: full.slice(full.indexOf('#')), fullUrl: full, label });
                 setDocsDialogOpen(true);
             };
+            // The same dialog for a node category alone (the code view's
+            // Ctrl/Cmd+click on a standard library call): a name-only link,
+            // which the docs resolve preferring the standard library.
+            const openCategoryDocs = (category) => showDocsDialog(nodeDocsUrl({ category }), category);
 
             // Header name editing — only real document elements (nodes,
             // nodegraphs, interface inputs, outputs) can be renamed.
@@ -7389,6 +7618,11 @@
                     label: 'Node List', icon: 'list-details', keys: 'L', checked: leftOpen,
                     onSelect: () => setLeftOpen((o) => !o),
                 },
+                ...(CODE_VIEW_ON ? [{
+                    label: 'ShadingLanguageX', icon: 'code', checked: codeViewOpen,
+                    onSelect: () => setCodeViewOpen((o) => !o),
+                    title: 'The document as ShadingLanguageX code, editable and compilable back into the graph',
+                }] : []),
             ];
 
             // ---- Context-menu contents ---------------------------------
@@ -7726,6 +7960,22 @@
                         </div>
                     </div>
                     <div className="relative flex-1 min-h-0 flex">
+                        {parsed && CODE_VIEW_ON && codeViewOpen && (
+                            <SlxCodeView
+                                code={slxCode}
+                                modified={slxCode != null && slxBaseline != null && slxCode !== slxBaseline}
+                                busy={slxBusy}
+                                message={slxMessage}
+                                library={slxLibrary}
+                                onCodeChange={onSlxCodeChange}
+                                onCompile={compileFromCodeView}
+                                onDecompile={decompileToCodeView}
+                                onCollapse={() => setCodeViewOpen(false)}
+                                onOpenNodeDocs={openCategoryDocs}
+                                canvasRef={canvasHostRef}
+                                editorRef={slxEditorRef}
+                            />
+                        )}
                         {parsed && leftOpen && (
                         <React.Fragment>
                             <aside
@@ -7931,9 +8181,10 @@
 
                             {/* Top-left HUD, one anchored column: the scope select
                                 and the Leave pill share the first row (Leave wraps
-                                under the select when narrow), Explore beneath; it
-                                stops short of the top-right Preview Panel pill. */}
-                            {parsed && (!leftOpen || scopeOptions.length > 0 || scope) && (
+                                under the select when narrow), Explore beneath, then
+                                the collapsed code view's pill; it stops short of
+                                the top-right Preview Panel pill. */}
+                            {parsed && (!leftOpen || scopeOptions.length > 0 || scope || (CODE_VIEW_ON && !codeViewOpen)) && (
                                 <div className={'absolute left-2 z-30 flex flex-col items-start gap-1.5 ' + (paramsOpen ? 'max-w-[calc(100%_-_1rem)]' : 'max-w-[calc(100%_-_9rem)]')} style={{ top: hudTop }}>
                                     {(scopeOptions.length > 0 || scope) && (
                                     <div className="flex flex-wrap items-center gap-1.5 max-w-full min-w-0">
@@ -7983,6 +8234,16 @@
                                             className={HUD_PILL}
                                         >
                                             <span>Explore Nodegraph</span>
+                                            <MtlxIcon name="chevrons-right" className="w-3.5 h-3.5" />
+                                        </button>
+                                    )}
+                                    {CODE_VIEW_ON && !codeViewOpen && (
+                                        <button
+                                            onClick={() => setCodeViewOpen(true)}
+                                            title="Show the ShadingLanguageX code view"
+                                            className={HUD_PILL}
+                                        >
+                                            <span>ShadingLanguageX</span>
                                             <MtlxIcon name="chevrons-right" className="w-3.5 h-3.5" />
                                         </button>
                                     )}

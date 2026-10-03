@@ -422,8 +422,9 @@ function checkRenderFeaturesDoc() {
 // embed/gen/mtlx-engine.js) adds the refcounted-source/wrapper/idle-LRU
 // texture pipeline and the exact:true resolvers.
 // Raised for the light theme: palette and runtime (js/shared/theme*.js, js/gen/theme-tokens.css), embed theme handling.
+// Raised for the code-syntax-* theme tokens (+2.7 KB in theme-tokens.js and theme-tokens.css).
 // Raise deliberately (with a comment on why) if the payload grows further.
-const EMBED_PAYLOAD_BUDGET = 2375000;
+const EMBED_PAYLOAD_BUDGET = 2378000;
 
 const EAGER_EMBED_FILES = [
   "vendor/react/react.production.min.js",

@@ -161,6 +161,19 @@ const DISPLAY_COLOR_MATERIAL_NAME = "M_displayColor";
 // renderer-specific texture caches no loader on either side decodes.
 const VFS_SKIP_EXTENSIONS = new Set([".vdb", ".rat", ".tx"]);
 
+// Image files get a zero-length MEMFS placeholder: the native side then still
+// resolves texture paths but never copies GBs of pixels into the wasm heap.
+// The renderer binds the real bytes from the user's uploads.
+const VFS_PLACEHOLDER_EXTENSIONS = new Set([
+  ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".exr", ".hdr", ".ktx2",
+]);
+
+function isVfsPlaceholderPath(path) {
+  const lower = String(path ?? "").toLowerCase();
+  const dot = lower.lastIndexOf(".");
+  return dot >= 0 && VFS_PLACEHOLDER_EXTENSIONS.has(lower.slice(dot));
+}
+
 function shouldSkipVfsUpload(path) {
   const lower = String(path ?? "").toLowerCase();
   const dot = lower.lastIndexOf(".");
@@ -439,7 +452,7 @@ function copyTexture(texture, assets) {
     path: normalizePath(texture.path),
     mimeType: text(texture.mimeType) ?? "application/octet-stream",
   };
-  if (data) {
+  if (data && data.length) {
     result.data = data;
     const key = result.path;
     if (key && !assets.has(key)) assets.set(key, data);
@@ -1520,7 +1533,7 @@ function anchorAssetPath(layerPath, assetValue) {
 
 function formatShadeValue(rawValue, usdType) {
   let value = String(rawValue ?? "").trim();
-  if (usdType === "asset") return value.replace(/^@/, "").replace(/@$/, "").trim();
+  if (usdType === "asset") return value.replace(/^@{1,3}/, "").replace(/@{1,3}$/, "").trim();
   if ((usdType === "token" || usdType === "string") && value.length > 1
     && value.startsWith('"') && value.endsWith('"')) return value.slice(1, -1);
   if (value.startsWith("(") && value.endsWith(")")) value = value.slice(1, -1).trim();
@@ -2939,6 +2952,18 @@ async function load(request) {
       // Never read or copy these bytes at all: no reader on either side of
       // the worker ever opens them (see VFS_SKIP_EXTENSIONS above).
       uploadedPaths.add(normalizedPath);
+      loadedFiles++;
+      postMessage({ id: request.id, type: "progress", value: {
+        phase: "worker", done: loadedFiles, total: fileTotal,
+        fraction: 0.05 + 0.2 * (loadedFiles / Math.max(1, fileTotal)),
+        message: "Reading input files",
+      } });
+      continue;
+    }
+    if (isVfsPlaceholderPath(normalizedPath)) {
+      // Never read the File: an empty file is enough for path resolution.
+      uploadedPaths.add(normalizedPath);
+      writeStageFile(api, normalizedPath, new Uint8Array(0), false);
       loadedFiles++;
       postMessage({ id: request.id, type: "progress", value: {
         phase: "worker", done: loadedFiles, total: fileTotal,

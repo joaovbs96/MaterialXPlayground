@@ -571,6 +571,96 @@ export const tokens = {
         "derive": "background OKLCH L -3",
         "role": "Code block ground (VS Code page)."
     },
+    "code-syntax-text": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "Syntax base text (equals Dark+ text); light is follows the foreground seed (near black)",
+        "role": "Code editor base text (the highlighted layer) and the stdlib underline at 50%."
+    },
+    "code-syntax-comment": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "green (Dark+ / Light+ comment)",
+        "role": "Syntax comments."
+    },
+    "code-syntax-string": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "orange-brown (Dark+) / dark red (Light+)",
+        "role": "Syntax strings."
+    },
+    "code-syntax-number": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "pale green (Dark+) / teal green (Light+)",
+        "role": "Syntax numbers and the true, false and null constants."
+    },
+    "code-syntax-keyword": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "blue (Dark+ / Light+)",
+        "role": "Syntax keywords and keyword completion badges."
+    },
+    "code-syntax-type": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "teal (Dark+ / Light+)",
+        "role": "Syntax types, type names in signatures and type badges."
+    },
+    "code-syntax-directive": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "purple (Dark+ / Light+)",
+        "role": "Syntax directives (#include style)."
+    },
+    "code-syntax-function": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "pale yellow (Dark+) / brown (Light+)",
+        "role": "Syntax attributes, function names in signatures and function badges."
+    },
+    "code-syntax-param": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "light blue (Dark+) / navy (Light+)",
+        "role": "Parameter names in assist popups and variable badges."
+    },
+    "code-syntax-link": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "blue (Dark+ / Light+ link)",
+        "role": "Standard library call under Ctrl/Cmd (documentation link)."
+    },
+    "code-syntax-error": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "red (Dark+ / Light+ error)",
+        "role": "Compile error squiggles in the code editor."
+    },
+    "code-syntax-caret": {
+        "group": "code",
+        "kind": "derivable",
+        "derive": "mix toward foreground (Dark+ caret)",
+        "role": "Code editor text caret."
+    },
+    "code-syntax-selection": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "deep blue (Dark+) / pale blue (Light+) selection ground",
+        "role": "Code editor selection ground."
+    },
+    "code-syntax-highlight": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "bright blue (Dark+) / strong blue (Light+)",
+        "role": "Active parameter and matched characters in assist popups (bold)."
+    },
+    "code-syntax-assist-selected": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "deep blue (Dark+) / pale blue (Light+) row ground",
+        "role": "Selected row ground in the assist completion list."
+    },
     "graph-canvas": {
         "group": "graph",
         "kind": "derivable",
@@ -868,6 +958,14 @@ export const tokens = {
         "drift": true,
         "mergeInto": "error-text"
     },
+    "success-text-strong": {
+        "group": "drift",
+        "kind": "independent",
+        "derive": "green",
+        "role": "Hover text on success messages (green-200 recipe).",
+        "drift": true,
+        "mergeInto": "success-text"
+    },
     "error-bg-strong": {
         "group": "drift",
         "kind": "independent",
@@ -1134,6 +1232,81 @@ export const contrast = [
     },
     {
         "fg": "code-string",
+        "bg": "surface-raised",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-text",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-comment",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-string",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-number",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-keyword",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-type",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-directive",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-function",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-param",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-link",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-error",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-highlight",
+        "bg": "code-syntax-assist-selected",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-highlight",
+        "bg": "surface-raised",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-function",
+        "bg": "surface-raised",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-param",
         "bg": "surface-raised",
         "kind": "text"
     },
@@ -1732,6 +1905,21 @@ export const labels = {
     "code-inline-bg": "Inline code background",
     "code-inline-fg": "Inline code values",
     "code-block-bg": "Code block background",
+    "code-syntax-text": "Syntax text",
+    "code-syntax-comment": "Syntax comments",
+    "code-syntax-string": "Syntax strings",
+    "code-syntax-number": "Syntax numbers",
+    "code-syntax-keyword": "Syntax keywords",
+    "code-syntax-type": "Syntax types",
+    "code-syntax-directive": "Syntax directives",
+    "code-syntax-function": "Syntax functions",
+    "code-syntax-param": "Syntax parameters",
+    "code-syntax-link": "Syntax link",
+    "code-syntax-error": "Syntax errors",
+    "code-syntax-caret": "Code caret",
+    "code-syntax-selection": "Code selection",
+    "code-syntax-highlight": "Assist highlight",
+    "code-syntax-assist-selected": "Assist selected row",
     "graph-canvas": "Canvas",
     "graph-grid": "Grid",
     "builder-stage": "Embed Builder stage",
@@ -1757,6 +1945,7 @@ export const labels = {
     "warning-bg-strong": "Warning action button",
     "warning-border-alt": "Warning toast border",
     "error-text-strong": "Error toast text",
+    "success-text-strong": "Success message hover",
     "error-bg-strong": "Error box background",
     "error-border-strong": "Error box border",
     "info-border-alt": "Info badge border",
