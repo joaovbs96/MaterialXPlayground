@@ -515,8 +515,8 @@ function checkEmbedConsistency() {
 // ---------------------------------------------------------------------
 // (g) handle-contract guard (P3-DESIGN.md section 4 S5, "guard (c)"):
 // an unambiguous HANDLE_CONTRACT name must not reappear as an
-// object-literal key/shorthand in js/mtlx-engine.js outside the
-// session/content objects that feed MtlxRender.buildHandle. dispose,
+// object-literal key/shorthand in js/mtlx-engine.js outside the preview
+// content object that feeds MtlxRender.buildHandle. dispose,
 // resize and snapshot are too generic (unrelated literals reuse them,
 // e.g. the peel pipeline's `{render, dispose}`) so they are excluded;
 // the unit test covers those instead. Scene files are PENDING.
@@ -532,15 +532,14 @@ function loadHandleContract() {
   return sandbox.window.MtlxRender.HANDLE_CONTRACT;
 }
 
-// Finds the char range of `const <name> = {` through its own closing
-// `};` line (8-space indented, matching this file's object literals);
-// returns null when the block is not present.
+// Finds the char range of `const <name> = {` through the `};` line at the
+// same indentation; returns null when the block is not present.
 function findObjectLiteralRange(text, constName) {
-  const startRe = new RegExp(`const ${constName} = \\{`);
+  const startRe = new RegExp(`\\n( *)const ${constName} = \\{`);
   const m = startRe.exec(text);
   if (!m) return null;
-  const closeRe = /\n {8}\};/g;
-  closeRe.lastIndex = m.index;
+  const closeRe = new RegExp(`\\n${m[1]}\\};`, "g");
+  closeRe.lastIndex = m.index + m[0].length;
   const close = closeRe.exec(text);
   if (!close) return null;
   return [m.index, close.index + close[0].length];
@@ -555,7 +554,10 @@ function checkHandleContractGuard() {
   const names = loadHandleContract().filter((n) => !HANDLE_GUARD_GENERIC_NAMES.has(n) && n !== "__debug");
   const file = "js/mtlx-engine.js";
   const text = readFileSync(path.join(REPO_ROOT, file), "utf8");
-  const allowedRanges = [findObjectLiteralRange(text, "session"), findObjectLiteralRange(text, "content")].filter(Boolean);
+  // createPreviewContent's `content` literal (P6 S1) is the only place the
+  // engine may define core handle names (its refreshDisplacement).
+  const allowedRanges = [findObjectLiteralRange(text, "content")].filter(Boolean);
+  if (!allowedRanges.length) problems.push(`no \`const content = {\` literal found in ${file}; update this guard`);
   const inAllowedRange = (idx) => allowedRanges.some(([s, e]) => idx >= s && idx < e);
   for (const name of names) {
     const keyRe = new RegExp(`(?:^|[{,]\\s*)${name}\\s*:`, "gm");
@@ -563,7 +565,7 @@ function checkHandleContractGuard() {
     while ((m = keyRe.exec(text))) {
       const idx = m.index + m[0].indexOf(name);
       if (inAllowedRange(idx)) continue;
-      problems.push(`handle-contract name "${name}" defined as an object-literal key in ${file} (outside the session/content passed to buildHandle)`);
+      problems.push(`handle-contract name "${name}" defined as an object-literal key in ${file} (outside the content passed to buildHandle)`);
     }
   }
   if (problems.length) {
@@ -590,7 +592,6 @@ const RENDERER_CREATION_PENDING_FILES = ["js/usd-scene-renderer.js", "js/usd-sce
 const RENDERER_CREATION_ALLOW = [
   { file: "js/mtlx-engine.js", pattern: "getContext('webgl2'", reason: "warm-compile probe context (getWarmContext)" },
   { file: "js/mtlx-engine.js", pattern: "new THREE.WebGLRenderer(", reason: "KTX2 basis-transcode support probe (getKtx2Loader), throwaway and disposed" },
-  { file: "js/mtlx-engine.js", pattern: "toneMappingExposure =", reason: "refreshDisplaySettings live exposure write, not renderer creation; follow-up to fold into a session helper" },
   { file: "js/shell.jsx", pattern: "getContext('webgl2'", reason: "startup WebGL2-availability probe" },
   { file: "js/compare-app.jsx", pattern: "getContext('webgl2'", reason: "GPU diff readback context" },
   { file: "js/compare-app.jsx", pattern: "new THREE.WebGLRenderer(", reason: "GPU diff readback renderer, verified compare-app.jsx:402/407" },

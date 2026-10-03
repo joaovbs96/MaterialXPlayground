@@ -33,12 +33,18 @@ test('bindEngine rejects a deps object missing a required function', () => {
 
 test('bindEngine accepts a complete deps object', () => {
   const MtlxRender = loadRenderSession();
-  assert.doesNotThrow(() => MtlxRender.bindEngine({
+  const deps = {
     getDisplayTransform: () => 'srgb',
     applyThreeToneMappingChunk: () => false,
     displayExposureScale: () => 1,
     clockTick: () => {},
-  }));
+  };
+  // createRenderSession's engine helpers (P6 S1), stubbed by name.
+  ['createPeelPipeline', 'getForceTransparency', 'getEnvironment', 'getEnvOverride', 'resolveShadingEnv',
+    'makeEnvTexture', 'makeBackgroundTexture', 'parseEnvBuffer', 'buildEnvFromParsedTexture',
+    'displayTransformId', 'fullscreenElement', 'registerLiveView', 'unregisterLiveView',
+    'compileFilteringDriverNoise'].forEach((k) => { deps[k] = () => {}; });
+  assert.doesNotThrow(() => MtlxRender.bindEngine(deps));
 });
 
 test('createSizer.setResizeSuspended(false) resyncs only on a true-to-false transition', () => {
