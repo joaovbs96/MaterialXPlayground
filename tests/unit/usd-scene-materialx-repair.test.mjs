@@ -216,3 +216,46 @@ test('a tag missing its second type suffix pins the longer nodedef its inputs fi
   assert.doesNotMatch(fixed, /_convert/);
   assert.equal(repair(fixed), fixed);
 });
+
+const CONVERT_DEFS = [
+  nodeDef('ND_convert_color3_vector3', 'convert', 'vector3', [input('in', 'color3')]),
+  nodeDef('ND_normalmap', 'normalmap', 'vector3', [input('in', 'vector3')]),
+];
+const ADSK_XML = `<materialx version="1.38">
+  <constant name="img" type="color3"><input name="value" type="color3" value="0.5, 0.5, 1" /></constant>
+  <adsk_converter_color3 name="conv1" type="vector3">
+    <input name="in" type="color3" nodename="img" />
+  </adsk_converter_color3>
+  <normalmap name="nm1" type="vector3">
+    <input name="in" type="vector3" nodename="conv1" />
+  </normalmap>
+</materialx>`;
+
+test('an adsk_converter element becomes a convert node when stdlib has the pair', () => {
+  const repair = loadRepair(CONVERT_DEFS);
+  const fixed = repair(ADSK_XML);
+  assert.match(fixed, /<convert[^>]*name="conv1" type="vector3">/);
+  assert.match(fixed, /<\/convert>/);
+  assert.doesNotMatch(fixed, /adsk_converter/);
+});
+
+test('an adsk_converter element without a convert nodedef is bypassed', () => {
+  const repair = loadRepair([CONVERT_DEFS[1]]);
+  const fixed = repair(ADSK_XML);
+  assert.doesNotMatch(fixed, /adsk_converter/);
+  assert.doesNotMatch(fixed, /conv1/);
+  assert.match(fixed, /<input name="in" type="vector3" nodename="img"/);
+});
+
+test('USD asset delimiters are stripped from override and missing-file paths', () => {
+  const start = source.indexOf('const sceneStripAssetDelimiters');
+  const end = source.indexOf('const sceneNormPath', start);
+  assert.ok(start >= 0 && end > start, 'delimiter helper is present');
+  const context = {};
+  vm.runInNewContext(source.slice(start, end) + '\nthis.strip = sceneStripAssetDelimiters;', context);
+  assert.equal(context.strip('@tex/a.png@'), 'tex/a.png');
+  assert.equal(context.strip('@@@tex/a@b.png@@@'), 'tex/a@b.png');
+  assert.equal(context.strip('@C:/elsewhere/tex/a.png'), 'C:/elsewhere/tex/a.png');
+  assert.equal(context.strip('tex/a.png'), 'tex/a.png');
+  assert.equal(context.strip(null), '');
+});

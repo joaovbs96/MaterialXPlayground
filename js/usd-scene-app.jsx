@@ -53,6 +53,131 @@
         });
         return out.join('/');
     };
+    // Root ranking by resolvable references. A reference counts when it names
+    // a known layer/texture/mtlx file; "resolved" means a picked file sits at
+    // that path relative to the referencing layer's directory.
+    const RANK_REF_EXTENSIONS = ['.usd', '.usda', '.usdc', '.usdz', '.mtlx', '.png', '.jpg', '.jpeg', '.webp',
+        '.gif', '.bmp', '.tif', '.tiff', '.exr', '.hdr', '.ktx2'];
+    const CRATE_TOKEN_MAX_BYTES = 64 * 1024 * 1024;
+    const CRATE_TOKEN_MAX_LENGTH = 1024;
+    const cleanRankRef = (raw) => {
+        let ref = String(raw || '').replace(/:SDF_FORMAT_ARGS:.*$/, '').trim().replace(/^@+|@+$/g, '').trim();
+        if (!ref || ref.length > CRATE_TOKEN_MAX_LENGTH || /[\n\r\0]/.test(ref)) return '';
+        if (ref.indexOf('anon:') === 0 || /^data:/i.test(ref) || /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(ref)) return '';
+        ref = ref.replace(/\\/g, '/').split(/[?#]/)[0];
+        return RANK_REF_EXTENSIONS.indexOf(ext(ref)) >= 0 ? ref : '';
+    };
+    // Rankable references of an ASCII layer's text (its @asset@ tokens).
+    const textRankRefs = (text) => {
+        const out = new Set();
+        const tokenPattern = /@([^@\n]+)@/g;
+        let match;
+        while ((match = tokenPattern.exec(String(text || '')))) {
+            const ref = cleanRankRef(match[1]);
+            if (ref) out.add(ref);
+        }
+        return Array.from(out);
+    };
+    // One LZ4 block (TfFastCompression chunk) into out at start; returns the end offset.
+    const lz4DecodeBlock = (src, out, start) => {
+        let s = 0, d = start;
+        const fail = () => { throw new Error('malformed LZ4 block'); };
+        while (s < src.length) {
+            const token = src[s++];
+            let literals = token >> 4;
+            if (literals === 15) { let b; do { if (s >= src.length) fail(); b = src[s++]; literals += b; } while (b === 255); }
+            if (s + literals > src.length || d + literals > out.length) fail();
+            out.set(src.subarray(s, s + literals), d);
+            s += literals; d += literals;
+            if (s >= src.length) break;
+            if (s + 2 > src.length) fail();
+            const offset = src[s] | (src[s + 1] << 8);
+            s += 2;
+            let match = token & 15;
+            if (match === 15) { let b; do { if (s >= src.length) fail(); b = src[s++]; match += b; } while (b === 255); }
+            match += 4;
+            if (!offset || offset > d - start || d + match > out.length) fail();
+            for (let i = 0; i < match; i++, d++) out[d] = out[d - offset];
+        }
+        return d;
+    };
+    const tfDecompress = (src, size) => {
+        const out = new Uint8Array(size);
+        const chunks = src[0];
+        if (!chunks) { lz4DecodeBlock(src.subarray(1), out, 0); return out; }
+        const view = new DataView(src.buffer, src.byteOffset, src.byteLength);
+        let s = 1, d = 0;
+        for (let i = 0; i < chunks; i++) {
+            if (s + 4 > src.length) throw new Error('malformed compressed tokens');
+            const len = view.getInt32(s, true);
+            s += 4;
+            if (len < 0 || s + len > src.length) throw new Error('malformed compressed tokens');
+            d = lz4DecodeBlock(src.subarray(s, s + len), out, d);
+            s += len;
+        }
+        return out;
+    };
+    // Rankable references of a USD crate, from its TOKENS section only (header
+    // and TOC are read by range, never the whole file). [] when not a crate.
+    const crateRankRefs = async (blob, maxBytes) => {
+        const cap = maxBytes || CRATE_TOKEN_MAX_BYTES;
+        const range = async (offset, length) => new Uint8Array(await blob.slice(offset, offset + length).arrayBuffer());
+        const ascii = (bytes) => String.fromCharCode.apply(null, bytes);
+        const header = await range(0, 24);
+        if (header.length < 24 || ascii(header.subarray(0, 8)) !== 'PXR-USDC') return [];
+        const hv = new DataView(header.buffer, header.byteOffset, header.byteLength);
+        const oldTokens = header[8] === 0 && header[9] < 4; // before 0.4.0 tokens are stored uncompressed
+        const tocOffset = Number(hv.getBigInt64(16, true));
+        const countBuf = await range(tocOffset, 8);
+        if (countBuf.length < 8) return [];
+        const sections = Number(new DataView(countBuf.buffer, countBuf.byteOffset, 8).getBigUint64(0, true));
+        if (sections > 64) return [];
+        const toc = await range(tocOffset + 8, sections * 32);
+        const tv = new DataView(toc.buffer, toc.byteOffset, toc.byteLength);
+        for (let i = 0; (i + 1) * 32 <= toc.length; i++) {
+            const o = i * 32;
+            if (ascii(toc.subarray(o, o + 16)).replace(/\0[\s\S]*$/, '') !== 'TOKENS') continue;
+            const start = Number(tv.getBigInt64(o + 16, true));
+            const size = Number(tv.getBigInt64(o + 24, true));
+            if (size > cap || size < 24) return [];
+            const section = await range(start, size);
+            const sv = new DataView(section.buffer, section.byteOffset, section.byteLength);
+            let chars;
+            if (oldTokens) {
+                chars = section.subarray(16, 16 + Number(sv.getBigUint64(8, true)));
+            } else {
+                const uncompressed = Number(sv.getBigUint64(8, true));
+                const compressed = Number(sv.getBigUint64(16, true));
+                if (uncompressed > cap || 24 + compressed > section.length) return [];
+                chars = tfDecompress(section.subarray(24, 24 + compressed), uncompressed);
+            }
+            const out = new Set();
+            new TextDecoder().decode(chars).split('\0').forEach((token) => {
+                const ref = cleanRankRef(token);
+                if (ref) out.add(ref);
+            });
+            return Array.from(out);
+        }
+        return [];
+    };
+    // { resolved, unresolved } for a layer at layerPath: refs that land on a
+    // picked file (lowercase normalized path set) versus those that do not.
+    const resolveRankRefs = (layerPath, refs, pickedKeys) => {
+        const dir = dirOf(String(layerPath).replace(/\\/g, '/'));
+        let resolved = 0, unresolved = 0;
+        new Set(refs || []).forEach((raw) => {
+            const ref = String(raw).replace(/\\/g, '/');
+            const full = ref.charAt(0) === '/' ? normalizeRelativePath(ref) : normalizeRelativePath(dir ? dir + '/' + ref : ref);
+            if (pickedKeys.has(full.toLowerCase())) resolved++; else unresolved++;
+        });
+        return { resolved, unresolved };
+    };
+    // Comparator: more resolved references first, then fewer unresolved.
+    const compareRefScores = (a, b) => {
+        const resolvedDiff = (b ? b.resolved : 0) - (a ? a.resolved : 0);
+        if (resolvedDiff !== 0) return resolvedDiff;
+        return (a ? a.unresolved : 0) - (b ? b.unresolved : 0);
+    };
     // Pure: given each candidate layer's own text (ASCII USD or glTF JSON,
     // read by the caller so this needs no Blob/File API), returns the set of
     // normalized lowercase paths any of them references: a USD `@asset@`
@@ -234,7 +359,7 @@
             const path = pickDefaultModelRoot(modelCandidates);
             return { path, ignoredModelRoots: [], topLevelPaths: topLevelRootPaths(candidatePaths, gltfReferenced) };
         }
-        const { path, referenced } = await pickDefaultUsdRootLayer(usdCandidates);
+        const { path, referenced } = await pickDefaultUsdRootLayer(usdCandidates, files.map((f) => f.path));
         gltfReferenced.forEach((r) => referenced.add(r));
         return {
             path,
@@ -242,7 +367,7 @@
             topLevelPaths: topLevelRootPaths(candidatePaths, referenced),
         };
     }
-    async function pickDefaultUsdRootLayer(candidates) {
+    async function pickDefaultUsdRootLayer(candidates, allPaths) {
         const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
         if (candidates.length === 0) return { path: '', referenced: new Set() };
         if (candidates.length === 1) return { path: candidates[0].path, referenced: new Set() };
@@ -250,7 +375,7 @@
             const size = f && f.data && typeof f.data.size === 'number' ? f.data.size : -1;
             const modified = f && f.data && typeof f.data.lastModified === 'number' ? f.data.lastModified : -1;
             return String(f.path) + '|' + size + '|' + modified;
-        }).sort().join(',');
+        }).sort().join(',') + '#' + (allPaths ? allPaths.length : 0);
         if (rootLayerCache.has(cacheKey)) {
             const elapsedMs = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt;
             console.debug('pickDefaultRootLayer: scanned', candidates.length, 'candidates in', elapsedMs.toFixed(1) + 'ms (cached)');
@@ -263,15 +388,22 @@
         // layer's own normalized path. Used to prefer composition roots
         // (layers that pull in other candidates) over standalone leaves.
         const outgoing = new Map();
+        // Rankable references per candidate (ASCII @..@ tokens or crate tokens).
+        const rankRefs = new Map();
         for (const file of candidates) {
             const selfKey = String(file.path).replace(/\\/g, '/').toLowerCase();
             const blob = blobOfCandidate(file);
-            if (!blob || !(await isAsciiUsdBlob(blob))) continue;
+            if (!blob) continue;
+            if (!(await isAsciiUsdBlob(blob))) {
+                try { rankRefs.set(selfKey, await crateRankRefs(blob)); } catch (e) { /* unreadable crate: no refs */ }
+                continue;
+            }
             const size = typeof blob.size === 'number' ? blob.size : 0;
             if (size > ASCII_SCAN_SKIP_BYTES) { console.info('pickDefaultRootLayer: skipping oversized USD layer', file.path, size); continue; }
             let text;
             try { text = await blob.text(); } catch (e) { continue; }
             if (text.length > ASCII_SCAN_MAX_CHARS) text = text.slice(0, ASCII_SCAN_MAX_CHARS);
+            rankRefs.set(selfKey, textRankRefs(text));
             const dir = dirOf(file.path);
             const tokenPattern = /@([^@\n]+)@/g;
             let match;
@@ -298,11 +430,17 @@
         }
         const isComposition = (f) => outgoing.has(String(f.path).replace(/\\/g, '/').toLowerCase());
         const isNamedRoot = (f) => rootNamePattern.test(f.path);
+        const pickedKeys = new Set((allPaths || candidates.map((f) => f.path))
+            .map((p) => normalizeRelativePath(String(p).replace(/\\/g, '/')).toLowerCase()));
+        const refScores = new Map(topLevel.map((f) => [f.path,
+            resolveRankRefs(f.path, rankRefs.get(String(f.path).replace(/\\/g, '/').toLowerCase()), pickedKeys)]));
         topLevel.sort((a, b) => {
             const compDiff = (isComposition(b) ? 1 : 0) - (isComposition(a) ? 1 : 0);
             if (compDiff !== 0) return compDiff;
             const namedDiff = (isNamedRoot(b) ? 1 : 0) - (isNamedRoot(a) ? 1 : 0);
             if (namedDiff !== 0) return namedDiff;
+            const refDiff = compareRefScores(refScores.get(a.path), refScores.get(b.path));
+            if (refDiff !== 0) return refDiff;
             const depthDiff = String(a.path).split('/').length - String(b.path).split('/').length;
             if (depthDiff !== 0) return depthDiff;
             const lenDiff = String(a.path).length - String(b.path).length;

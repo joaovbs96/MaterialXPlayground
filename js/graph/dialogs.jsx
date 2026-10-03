@@ -29,6 +29,7 @@
             { keys: 'Double-click a definition card', desc: 'Open its implementation graph; the sidebar edits the nodedef interface', group: 'mouse' },
             { keys: '+ / − badge on a node', desc: "Show or hide that node's default-valued inputs", group: 'mouse' },
             { keys: 'Drag & drop files', desc: 'Import a .mtlx / .zip / companion files anywhere on the page', group: 'mouse', browserOnly: true },
+            { keys: 'Ctrl/Cmd + Click a function', desc: 'In the ShadingLanguageX view: open the documentation for an underlined standard library function', group: 'mouse', browserOnly: true },
             // Keyboard
             { keys: 'Delete', desc: 'Delete the selected node(s) and disconnect the selected edge(s)', group: 'keyboard' },
             { keys: 'Backspace', desc: 'Exit the current nodegraph scope (step up to its parent / document root)', group: 'keyboard' },
@@ -44,6 +45,9 @@
             { keys: 'Ctrl/Cmd + Shift + G', desc: 'Ungroup the selected nodegraph (dissolve it, keeping connections) (with a nodegraph selected)', group: 'keyboard' },
             { keys: 'Ctrl/Cmd + Z', desc: 'Undo the last document edit', group: 'keyboard' },
             { keys: 'Ctrl/Cmd + Shift + Z (or Ctrl/Cmd + Y)', desc: 'Redo', group: 'keyboard' },
+            { keys: 'Ctrl/Cmd + Enter', desc: 'In the ShadingLanguageX view: compile the code into the node graph', group: 'keyboard', browserOnly: true },
+            { keys: 'Ctrl + Space', desc: 'In the ShadingLanguageX view: show suggestions (they also appear as you type; Enter or Tab inserts one)', group: 'keyboard', browserOnly: true },
+            { keys: 'Ctrl + Shift + Space', desc: 'In the ShadingLanguageX view: show parameter hints for the call around the cursor (Up/Down steps through its signatures)', group: 'keyboard', browserOnly: true },
             { keys: 'Ctrl/Cmd + S', desc: 'Save the document back to the open .mtlx file', group: 'keyboard', vscodeOnly: true },
         ];
 
