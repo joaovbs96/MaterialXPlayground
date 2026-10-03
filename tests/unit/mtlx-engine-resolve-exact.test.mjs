@@ -11,7 +11,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const ENGINE_SOURCE = fs.readFileSync(path.join(ROOT, 'js', 'mtlx-engine.js'), 'utf8');
-const SCENE_SOURCE = fs.readFileSync(path.join(ROOT, 'js', 'usd-scene-renderer.js'), 'utf8');
+// The Scene's own copies were deleted in P6 S4; their frozen pre-P6 text is the oracle.
+const SCENE_SOURCE = fs.readFileSync(path.join(ROOT, 'tests', 'unit', 'fixtures', 'scene-legacy-p5.js'), 'utf8');
 
 // Grabs one top-level `const NAME = ...;` statement verbatim, tracking
 // (){}[] depth so it works for both block- and expression-bodied arrows.

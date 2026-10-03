@@ -76,8 +76,10 @@ const { sceneGeometry, sceneObjectCastsShadow } = loadSceneGeometry();
 function loadUdimMeshParts() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
   const source = fs.readFileSync(path.join(root, 'js', 'usd-scene-renderer.js'), 'utf8');
-  const udimStart = source.indexOf('const sceneUdimCode =');
-  const udimEnd = source.indexOf('const sceneUdimRefs =', udimStart);
+  // meshParts classifies UDIM triangles with the shared helper (P6 S4).
+  const udimSandbox = { window: {} };
+  vm.createContext(udimSandbox);
+  vm.runInContext(fs.readFileSync(path.join(root, 'js', 'shared', 'mesh-udim.js'), 'utf8'), udimSandbox);
   const meshStart = source.indexOf('const meshParts =');
   const meshEnd = source.indexOf('\n        // A stage dome seeds', meshStart);
   class BufferAttribute {
@@ -116,10 +118,9 @@ function loadUdimMeshParts() {
     udimMaterial: () => material,
     udimWarnings: new Set(),
     warnings: [],
-    window: { prepGeometry() {}, bindGeompropAttributes() {} },
+    window: { prepGeometry() {}, bindGeompropAttributes() {}, MtlxMeshUdim: udimSandbox.MtlxMeshUdim },
   };
-  const sourceText = source.slice(udimStart, udimEnd) + String.fromCharCode(10)
-    + source.slice(meshStart, meshEnd) + String.fromCharCode(10)
+  const sourceText = source.slice(meshStart, meshEnd) + String.fromCharCode(10)
     + 'this.meshParts = meshParts;';
   vm.runInNewContext(sourceText, context, { filename: 'usd-scene-renderer.js' });
   return context.meshParts;

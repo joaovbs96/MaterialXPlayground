@@ -5,64 +5,77 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
+// P6 S4: the Scene's EXR/HDR/TIF/KTX2 and bitmap textures go through its
+// texture session (acquireSceneTexture / bindSceneTexture); a stub session
+// records each acquire so sampler modes, tiers and the KTX2 fallback are checked.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-function loadUnboundedDecoder() {
+function loadSceneTextureGlue(acquireImpl) {
   const source = fs.readFileSync(path.join(root, 'js', 'usd-scene-renderer.js'), 'utf8');
-  const start = source.indexOf('const decodeUnboundedSceneTexture = async');
-  const end = source.indexOf('const udimWarnings =', start);
-  assert.ok(start >= 0 && end > start, 'unbounded decoder source is present');
-  const configured = [];
+  const start = source.indexOf('    const sceneTextureBytes = (tex, ext) => {');
+  const end = source.indexOf('    const udimWarnings = new Set();', start);
+  assert.ok(start >= 0 && end > start, 'Scene texture glue source is present');
+  const calls = [];
   const context = {
     console,
-    UNBOUNDED_TEXTURE_EXTENSIONS: ['ktx2', 'exr', 'hdr', 'tif', 'tiff'],
     plannedTextureSize: 64,
+    stopped: false,
+    isMounted: () => true,
     warnings: [],
     udimWarnings: new Set(),
-    configured,
-    window: {
-      loadExrTexture: async () => ({ image: { width: 8, height: 4 } }),
-      loadHdrTexture: async () => ({ image: { width: 8, height: 4 } }),
-      loadTifTexture: async () => ({ image: { width: 8, height: 4 } }),
-      loadKtx2Texture: async () => { throw { ktx2InvalidBaseLevel: true }; },
-      capKtx2MipLevels: () => 32,
-      boundDecodedTexture: async (texture) => texture,
-      loadBoundedBitmapTexture: async () => ({ image: { width: 4, height: 4 } }),
-      configureLoadedTexture: (texture, modes) => {
-        configured.push(modes);
-        texture.wrapS = modes?.u === 'clamp' ? 1001 : 1000;
-        texture.wrapT = modes?.v === 'mirror' ? 1002 : 1000;
-      },
-    },
+    calls,
+    textureSession: { acquire: (hit, opts) => { calls.push({ hit, opts }); return acquireImpl(hit, opts); } },
   };
   vm.runInNewContext(
-    source.slice(start, end) + '\nthis.decodeUnboundedSceneTexture = decodeUnboundedSceneTexture;',
+    source.slice(start, end)
+      + '\nthis.acquireSceneTexture = acquireSceneTexture; this.bindSceneTexture = bindSceneTexture; this.sceneTextureBytes = sceneTextureBytes;',
     context,
     { filename: path.join(root, 'js', 'usd-scene-renderer.js') },
   );
-  return { decode: context.decodeUnboundedSceneTexture, configured };
+  return context;
 }
 
-test('unbounded EXR scene decoding applies filename sampler modes', async () => {
-  const { decode, configured } = loadUnboundedDecoder();
+test('unbounded EXR scene textures acquire with their sampler modes at the planned tier', async () => {
+  const texture = { image: { width: 8, height: 4 }, generateMipmaps: false };
+  const ctx = loadSceneTextureGlue(async () => ({ texture }));
   const modes = { u: 'clamp', v: 'mirror' };
-  const result = await decode({}, 'exr', 'textures/gold.exr', null, modes);
-  assert.equal(result.tex.wrapS, 1001);
-  assert.equal(result.tex.wrapT, 1002);
-  assert.equal(configured.length, 1);
-  assert.equal(configured[0], modes);
+  const result = await ctx.acquireSceneTexture({ path: 'textures/gold.exr', blob: {} }, 'exr', null, modes);
+  assert.equal(result.tex, texture);
+  assert.equal(result.bytes, 8 * 4 * 16);
+  assert.equal(ctx.calls.length, 1);
+  assert.equal(ctx.calls[0].opts.samplerModes, modes);
+  assert.equal(ctx.calls[0].opts.tier, 64);
+  assert.equal(ctx.calls[0].opts.fastPathSamplerQuirk, undefined);
 });
 
-test('KTX fallback preserves sampler modes through recursive unbounded decode', async () => {
-  const { decode, configured } = loadUnboundedDecoder();
+test('an invalid KTX2 base level falls back to the original file with the same sampler modes', async () => {
+  const fallbackTexture = { image: { width: 4, height: 4 }, generateMipmaps: true };
+  const ctx = loadSceneTextureGlue(async (hit) => {
+    if (hit.key.endsWith('.ktx2')) { const e = new Error('bad base'); e.ktx2InvalidBaseLevel = true; throw e; }
+    return { texture: fallbackTexture };
+  });
   const modes = { u: 'clamp', v: 'periodic' };
-  const context = loadUnboundedDecoder();
-  context.configured.length = 0;
-  const result = await context.decode({}, 'ktx2', 'textures/gold.ktx2', {
-    blob: {},
-    path: 'textures/gold.exr',
-  }, modes);
-  assert.ok(result.tex);
-  assert.equal(context.configured.length, 1);
-  assert.equal(context.configured[0], modes);
+  const result = await ctx.acquireSceneTexture({ path: 'textures/gold.ktx2', blob: {} }, 'ktx2', { path: 'textures/gold.png', blob: {} }, modes);
+  assert.equal(result.tex, fallbackTexture);
+  assert.equal(result.bytes, Math.ceil(4 * 4 * 4 * 4 / 3));
+  assert.deepEqual(ctx.calls.map((c) => c.hit.key), ['textures/gold.ktx2', 'textures/gold.png']);
+  assert.ok(ctx.calls.every((c) => c.opts.samplerModes === modes));
+  assert.ok(ctx.warnings.some((w) => w.includes('falling back to textures/gold.png')));
+});
+
+test('KTX2 bytes are the sum of the kept mip levels', () => {
+  const ctx = loadSceneTextureGlue(async () => null);
+  const tex = { image: { width: 64, height: 64 }, mipmaps: [{ data: new Uint8Array(100) }, { data: new Uint8Array(25) }] };
+  assert.equal(ctx.sceneTextureBytes(tex, 'ktx2'), 125);
+});
+
+test('bitmap textures bind through the session with the legacy fast-path sampler behaviour', async () => {
+  const texture = { image: { width: 4, height: 4 } };
+  const ctx = loadSceneTextureGlue(() => Promise.resolve({ texture }));
+  const uniforms = { u_tex: { value: null } };
+  const job = ctx.bindSceneTexture(uniforms, 'u_tex', { path: 'a.png', blob: {} }, null);
+  await job;
+  assert.equal(uniforms.u_tex.value, texture);
+  assert.equal(ctx.calls[0].opts.fastPathSamplerQuirk, true);
+  assert.equal(ctx.calls[0].opts.tier, 64);
 });

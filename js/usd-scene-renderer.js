@@ -446,26 +446,14 @@ const sceneDir = (value) => {
     const i = p.lastIndexOf('/');
     return i < 0 ? '' : p.slice(0, i);
 };
-const sceneJoinPath = (base, value) => sceneNormPath((base ? base + '/' : '') + String(value || ''))
-    .split('/').reduce((out, part) => {
-        if (!part || part === '.') return out;
-        if (part === '..') { out.pop(); return out; }
-        out.push(part); return out;
-    }, []).join('/');
-// Given a resolved map path, prefer a sibling "<stem>.ktx2" in the same
-// directory when one exists, and never touch the original file.
-const sceneKtx2SiblingPath = (map, path) => {
-    if (/\.ktx2$/i.test(path) || /\.mtlx$/i.test(path)) return path; // documents, not textures
-    const dot = path.lastIndexOf('.');
-    if (dot < 0) return path;
-    const ktx2Path = path.slice(0, dot) + '.ktx2';
-    return map[ktx2Path] ? ktx2Path : path;
-};
+// Exact resolution through the engine (joinRefPath, findFileForRef exact,
+// preferKtx2Sibling), returned in the shape the Scene binds with: the
+// substituted .ktx2 sibling plus the original file for a decode fallback.
 const sceneExactFile = (map, ref, fromDir) => {
-    const want = sceneJoinPath(fromDir, ref);
-    if (!map[want]) return null;
-    const path = sceneKtx2SiblingPath(map, want);
-    return { path, blob: map[path], substituted: path !== want, originalPath: want, originalBlob: map[want] };
+    const hit = window.findFileForRef(map, ref, { exact: true, fromDir });
+    if (!hit) return null;
+    const sibling = window.preferKtx2Sibling(map, hit);
+    return { path: sibling.key, blob: map[sibling.key], substituted: sibling.key !== hit.key, originalPath: hit.key, originalBlob: map[hit.key] };
 };
 
 // A dome light's texture is authored relative to the layer that declares it,
@@ -486,7 +474,7 @@ const sceneResolveDomeTexture = (fileMap, stage, rawRef) => {
     const ref = sceneNormPath(match ? match[1] : rawRef);
     if (!ref) return { path: null, reason: 'empty' };
     for (const dir of sceneDomeTextureCandidates(fileMap, stage)) {
-        const candidate = sceneJoinPath(dir, ref);
+        const candidate = window.joinRefPath(dir, ref);
         if (fileMap[candidate]) return { path: candidate, ref };
     }
     const base = ref.split('/').pop().toLowerCase();
@@ -997,61 +985,18 @@ const sceneRootMatrix = (stage) => {
     return m;
 };
 
-const sceneUdimCode = (u, v) => 1001 + u + v * 10;
-const sceneUdimTile = (u, v) => {
-    if (!Number.isFinite(u) || !Number.isFinite(v) || u < 0 || v < 0) return null;
-    const epsilon = 1e-7;
-    const tu = Math.floor(u + epsilon);
-    const tv = Math.floor(v + epsilon);
-    // UDIM numbers reserve the first decimal digit for U coordinates 0..9.
-    // Treating U=10 as 1011 would alias the V=1,U=0 tile 1011.
-    if (tu > 9) return null;
-    return { u: tu, v: tv, code: sceneUdimCode(tu, tv) };
-};
-const sceneUdimTriangle = (uvs, tri) => {
-    if (!uvs) return null;
-    const values = tri.map((index) => [Number(uvs[index * 2]), Number(uvs[index * 2 + 1])]);
-    if (values.some(([u, v]) => !Number.isFinite(u) || !Number.isFinite(v) || u < 0 || v < 0)) return null;
-    const center = values.reduce((sum, value) => [sum[0] + value[0], sum[1] + value[1]], [0, 0]);
-    const tile = sceneUdimTile(center[0] / 3, center[1] / 3);
-    if (!tile) return null;
-    const epsilon = 1e-6;
-    if (values.some(([u, v]) => u < tile.u - epsilon || u > tile.u + 1 + epsilon
-        || v < tile.v - epsilon || v > tile.v + 1 + epsilon)) return { crossing: true };
-    return tile;
-};
-const sceneUdimRefs = (compiled) => (compiled && compiled.introspected || [])
-    .filter((u) => u.type === 'filename' && typeof u.data === 'string' && /<UDIM>/i.test(u.data));
+// UDIM tile set of a filename ref through the engine's exact tile resolver
+// (case-insensitive <UDIM>, 4 digits, code >= 1001), keyed by tile code,
+// each tile with its .ktx2 sibling substitution and original file.
 const sceneUdimTiles = (ref, map) => {
-    const marker = /<UDIM>/i;
-    const parts = String(ref).split(marker);
-    if (parts.length !== 2) return new Map();
-    const prefix = parts[0], suffix = parts[1];
     const tiles = new Map();
-    for (const [path, blob] of Object.entries(map)) {
-        if (!path.startsWith(prefix) || !path.endsWith(suffix)) continue;
-        const end = suffix.length ? path.length - suffix.length : path.length;
-        const codeText = path.slice(prefix.length, end);
-        if (!/^\d{4}$/.test(codeText)) continue;
-        const code = Number(codeText);
-        if (code < 1001) continue;
-        const offset = code - 1001;
-        const u = offset % 10, v = Math.floor(offset / 10);
-        const ktx2Path = sceneKtx2SiblingPath(map, path);
-        tiles.set(code, { path: ktx2Path, blob: map[ktx2Path], u, v, substituted: ktx2Path !== path, originalPath: path, originalBlob: map[path] });
+    for (const hit of window.findFilesForRef(map, ref, { exact: true })) {
+        const sibling = window.preferKtx2Sibling(map, hit);
+        tiles.set(hit.code, { path: sibling.key, blob: map[sibling.key], u: hit.u, v: hit.v,
+            substituted: sibling.key !== hit.key, originalPath: hit.key, originalBlob: map[hit.key] });
     }
     return tiles;
 };
-
-const sceneCloneUniforms = (source) => Object.fromEntries(Object.entries(source || {}).map(([name, slot]) => {
-    const value = slot && slot.value;
-    // Texture objects are GPU resources. Share them between variants and
-    // clone only value objects, avoiding duplicate uploads/disposal hazards.
-    let cloned = value;
-    if (value && !value.isTexture && typeof value.clone === 'function') cloned = value.clone();
-    else if (Array.isArray(value)) cloned = value.slice();
-    return [name, Object.assign({}, slot, { value: cloned })];
-}));
 
 // MaterialX filename inputs are interpreted relative to the document that
 // declares them and its fileprefix. Canonicalize those values while each
@@ -1074,7 +1019,7 @@ const canonicalizeSceneFilenameInputs = (xml, declaringPath, map, finalize = fal
         // Concatenate first, then normalize dot segments once. Normalizing
         // `../Texture` before adding the declaring directory loses the
         // document anchor and resolves Teapot/Looks/../Texture incorrectly.
-        const rooted = sceneJoinPath(base, String(prefix || '') + '/' + ref);
+        const rooted = window.joinRefPath(base, String(prefix || '') + '/' + ref);
         return attr + '=' + quote + SCENE_CANONICAL_MARKER + rooted + quote;
     }));
     // Once references are canonical, remove the active document prefix so
@@ -1086,30 +1031,6 @@ const canonicalizeSceneFilenameInputs = (xml, declaringPath, map, finalize = fal
 // MaterialX includes are resolved here rather than through the viewer's
 // basename fallback. A composed USD scene can contain duplicate names, so a
 // missing exact path must remain missing.
-const resolveSceneIncludes = async (xml, fromDir, map, visited = new Set(), warnings = []) => {
-    const re = /<xi:include\b[^>]*?href\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*?\/?>(?:\s*<\/xi:include>)?/g;
-    let out = '', last = 0, match;
-    while ((match = re.exec(xml)) !== null) {
-        out += xml.slice(last, match.index);
-        last = re.lastIndex;
-        const href = match[1] || match[2] || '';
-        const hit = sceneExactFile(map, href, fromDir);
-        if (!hit) {
-            out += '<!-- unresolved include: ' + href.replace(/--/g, '- -') + ' -->';
-            warnings.push('Unresolved MaterialX include ' + href + ' from ' + (fromDir || '.'));
-            continue;
-        }
-        if (visited.has(hit.path)) continue; // already in this document closure
-        visited.add(hit.path);
-        let child = await hit.blob.text();
-        child = await resolveSceneIncludes(child, sceneDir(hit.path), map, visited, warnings);
-        child = canonicalizeSceneFilenameInputs(child, hit.path, map);
-        child = child.replace(/<\?xml[^>]*\?>/, '')
-            .replace(/<materialx\b[^>]*>/, '').replace(/<\/materialx>\s*$/, '');
-        out += child;
-    }
-    return out + xml.slice(last);
-};
 
 const sceneFilePrefix = (xml) => {
     const m = /<materialx\b[^>]*\bfileprefix\s*=\s*(?:"([^"]*)"|'([^']*)')/.exec(xml);
@@ -1744,6 +1665,13 @@ const createMtlxSceneView = async ({
     const textureFastPath = window.sceneTextureFastPathEnabled ? window.sceneTextureFastPathEnabled() : true;
     const TEXTURE_DECODE_CONCURRENCY = textureFastPath ? 5 : 1;
     const textureQueue = { tails: Array.from({ length: TEXTURE_DECODE_CONCURRENCY }, () => Promise.resolve()), next: 0 };
+    // Material textures go through this view's texture session (shared
+    // engine decoders at the Scene's bounded tiers, decoded once per file and
+    // tier, every GPU copy freed with the session); textureCache/textureQueue
+    // above now serve only displacement evaluation (moved in P6 S5).
+    const newSceneTextureSession = () => window.createTextureSession({ exact: true, concurrency: TEXTURE_DECODE_CONCURRENCY,
+        renderer: null, isAlive: () => !stopped, anisotropy: 8, boundedDecode: true });
+    let textureSession = newSceneTextureSession();
     const documents = new Set();
     const prims = [];
     // Outliner state keyed by userData.primPath: hidden prims (object.visible,
@@ -2232,53 +2160,31 @@ const createMtlxSceneView = async ({
     // bound, and again by setTextureMaxSize/setTextureBudgetBytes before
     // their display rebuild.
     const planTextureSize = async (compiledList) => {
-        const entries = new Map(); // path -> { blob, ext, mipmapped }
+        const refs = [];
         for (const compiled of compiledList) {
             if (!compiled) continue;
             const uniformSets = [compiled.introspected, compiled.displacement && compiled.displacement.introspected];
             for (const uniforms of uniformSets) for (const u of Array.isArray(uniforms) ? uniforms : []) {
-                if (u.type !== 'filename' || u.data == null) continue;
-                if (/<UDIM>/i.test(String(u.data))) {
-                    const tiles = sceneUdimTiles(u.data, fileMap);
-                    tiles.forEach((hit) => { if (hit && !entries.has(hit.path)) entries.set(hit.path, hit.blob); });
-                    continue;
-                }
-                const hit = sceneExactFile(fileMap, u.data, '');
-                if (hit && !entries.has(hit.path)) entries.set(hit.path, hit.blob);
+                if (u.type === 'filename' && u.data != null) refs.push(u.data);
             }
         }
-        const dims = await Promise.all(Array.from(entries.entries()).map(async ([path, blob]) => {
-            const ext = String(path).split('.').pop().toLowerCase();
-            let dimensions = null;
-            try { dimensions = window.readImageDimensions ? await window.readImageDimensions(blob) : null; } catch (e) { dimensions = null; }
-            const w = (dimensions && dimensions.width) || 4096;
-            const h = (dimensions && dimensions.height) || 4096;
-            const isFloat = ext === 'exr' || ext === 'hdr';
-            const mipmapped = !isFloat; // 8-bit formats get mips; float unbounded formats do not
-            // KTX2 (UASTC, our cook script's only mode) already carries its own
-            // mip chain at ~1 byte/pixel; the 4/3 factor below still applies.
-            const bytesPerPixel = ext === 'ktx2' ? 1 : (isFloat ? 16 : 4);
-            return { w, h, bytesPerPixel, mipmapped };
-        }));
-        const textureCount = dims.length;
+        // The shared ladder/estimate (createTextureSession.plan), with this
+        // view's current cap and budget; planning holds no textures.
+        const planner = (maxSize) => window.createTextureSession({ maxSize, budgetBytes: sceneOptions.textureMaxBytes,
+            tiers: [4096, 2048, 1024, 512], exact: true });
         const requested = Number.isFinite(sceneOptions.textureMaxSize) ? sceneOptions.textureMaxSize : Infinity;
-        const ladder = Array.from(new Set([requested, 4096, 2048, 1024, 512]
-            .filter((value) => value <= requested))).sort((a, b) => b - a);
-        if (!ladder.length) ladder.push(512);
-        const estimateAt = (tier) => dims.reduce((total, d) => {
-            const w = Math.min(d.w, tier), h = Math.min(d.h, tier);
-            return total + w * h * d.bytesPerPixel * (d.mipmapped ? 4 / 3 : 1);
-        }, 0);
-        fullBytes = estimateAt(requested === Infinity ? Math.max(4096, ...dims.map((d) => Math.max(d.w, d.h)), 1) : requested);
-        let chosen = 512;
-        for (const tier of ladder) {
-            const estimate = estimateAt(tier);
-            if (estimate <= sceneOptions.textureMaxBytes) { chosen = tier; plannedBytes = estimate; break; }
-            plannedBytes = estimate;
+        const plan = await planner(requested).plan(refs, fileMap);
+        const textureCount = plan.textureCount;
+        const udimTileCount = plan.udimTileCount;
+        fullBytes = plan.fullBytes;
+        let chosen = plan.tier;
+        plannedBytes = plan.plannedBytes;
+        // Legacy rule kept: a cap below 512 that never fits loads at 512.
+        if (chosen < 512 && plannedBytes > sceneOptions.textureMaxBytes) {
+            chosen = 512;
+            plannedBytes = (await planner(512).plan(refs, fileMap)).plannedBytes;
         }
-        if (!ladder.includes(chosen)) { chosen = 512; plannedBytes = estimateAt(512); }
         plannedTextureSize = chosen;
-        const udimTileCount = dims.length ? Array.from(entries.keys()).filter((path) => /\.(\d{4})\./.test(path) || /1[0-9]{3}/.test(path)).length : 0;
         if (chosen < requested) {
             const requestedLabel = requested === Infinity ? 'their original size' : requested + ' px';
             const counted = textureCount + ' textures' + (udimTileCount ? ' (' + udimTileCount + ' UDIM tiles)' : '');
@@ -2305,66 +2211,55 @@ const createMtlxSceneView = async ({
         textureStats.bytesReserved += estimate;
         return true;
     };
-    // EXR/HDR/TIF are not resized by createImageBitmap (the bounded PNG/JPEG
-    // path), so they are decoded then explicitly bounded to the planned tier
-    // via boundDecodedTexture before their real bytes are known/reserved.
-    const decodeUnboundedSceneTexture = async (blob, ext, path, fallback, samplerModes) => {
-        let tex = null;
+    // Bytes the Scene's budget charges for one decoded texture: KTX2 is the
+    // sum of its kept mip levels, float formats carry no mip chain.
+    const sceneTextureBytes = (tex, ext) => {
+        if (ext === 'ktx2') {
+            return tex.mipmaps && tex.mipmaps.length
+                ? tex.mipmaps.reduce((sum, m) => sum + (m.data ? m.data.byteLength : 0), 0)
+                : (tex.image.width || 0) * (tex.image.height || 0);
+        }
+        const isFloat = ext === 'exr' || ext === 'hdr';
+        const mipFactor = (!isFloat && tex.generateMipmaps) ? 4 / 3 : 1;
+        return Math.ceil((tex.image.width || 0) * (tex.image.height || 0) * (isFloat ? 16 : 4) * mipFactor);
+    };
+    // EXR/HDR/TIF/KTX2 through this view's texture session (decoded once per
+    // file and tier, bounded to the planned tier, freed with the session);
+    // an invalid KTX2 base level falls back to the original file.
+    const acquireSceneTexture = async (hit, ext, fallback, samplerModes) => {
+        let result = null;
         try {
-            // Through the engine's heavy-decode limiter: these parsers are
-            // synchronous main-thread work, so the scene's wider texture
-            // queue must not run more than two of them at once.
-            if (ext === 'ktx2') tex = await window.loadKtx2Texture(blob, null, path);
-            else {
-                const startDecode = () => (ext === 'exr' ? window.loadExrTexture(blob)
-                    : ext === 'hdr' ? window.loadHdrTexture(blob)
-                    : window.loadTifTexture(blob, path));
-                tex = await (window.runHeavyTextureDecode ? window.runHeavyTextureDecode(startDecode) : startDecode());
-            }
+            result = await textureSession.acquire({ key: hit.path, blob: hit.blob }, { samplerModes, tier: plannedTextureSize });
         } catch (error) {
-            if (ext === 'ktx2' && error && error.ktx2InvalidBaseLevel && fallback && fallback.blob && fallback.path !== path) {
-                const notice = 'KTX2 texture ' + path + ' is not a multiple of 4; falling back to ' + fallback.path;
+            if (ext === 'ktx2' && error && error.ktx2InvalidBaseLevel && fallback && fallback.blob && fallback.path !== hit.path) {
+                const notice = 'KTX2 texture ' + hit.path + ' is not a multiple of 4; falling back to ' + fallback.path;
                 if (!udimWarnings.has(notice)) { udimWarnings.add(notice); warnings.push(notice); }
                 const fallbackExt = String(fallback.path).split('.').pop().toLowerCase();
-                if (UNBOUNDED_TEXTURE_EXTENSIONS.includes(fallbackExt)) {
-                    return decodeUnboundedSceneTexture(fallback.blob, fallbackExt, fallback.path, null, samplerModes);
-                }
-                // Ordinary 8-bit source (png/jpg): bound it the same way the
-                // regular (non-unbounded) texture path does.
-                try {
-                    const boundedTex = await window.loadBoundedBitmapTexture(fallback.blob, plannedTextureSize, samplerModes);
-                    if (!boundedTex) return null;
-                    window.configureLoadedTexture(boundedTex, samplerModes);
-                    const bytes = Math.ceil((boundedTex.image.width || 0) * (boundedTex.image.height || 0) * 4 * 4 / 3);
-                    return { tex: boundedTex, bytes };
-                } catch (e) { return null; }
+                try { return await acquireSceneTexture(fallback, fallbackExt, null, samplerModes); } catch (e) { return null; }
             }
-            const warning = (error && error.message) || ('MaterialX texture decode failed for ' + (path || '(unknown)'));
+            const warning = (error && error.message) || ('MaterialX texture decode failed for ' + (hit.path || '(unknown)'));
             if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
             return null;
         }
-        if (!tex || !tex.image) {
-            const warning = 'MaterialX texture decode failed for ' + (path || '(unknown)');
+        if (!result || !result.texture || !result.texture.image) {
+            const warning = 'MaterialX texture decode failed for ' + (hit.path || '(unknown)');
             if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
             return null;
         }
-        if (ext === 'ktx2') {
-            // Already GPU block data with its own mip chain: cap by dropping
-            // the largest levels instead of resampling, then bytes are the
-            // exact sum of the kept levels (no 4/3 mip-factor estimate).
-            const bytes = window.capKtx2MipLevels(tex, plannedTextureSize);
-            window.configureLoadedTexture(tex, samplerModes);
-            return { tex, bytes };
-        }
-        try {
-            tex = await window.boundDecodedTexture(tex, plannedTextureSize);
-        } catch (e) { /* keep the undecimated texture rather than fail the material */ }
-        const isFloat = ext === 'exr' || ext === 'hdr';
-        const bytesPerPixel = isFloat ? 16 : 4;
-        const mipFactor = (!isFloat && tex.generateMipmaps) ? 4 / 3 : 1;
-        const bytes = Math.ceil((tex.image.width || 0) * (tex.image.height || 0) * bytesPerPixel * mipFactor);
-        window.configureLoadedTexture(tex, samplerModes);
-        return { tex, bytes };
+        return { tex: result.texture, bytes: sceneTextureBytes(result.texture, ext) };
+    };
+    // PNG/JPG (and other bitmap formats) through the same session at the
+    // planned tier; the legacy fast-path address-mode behaviour is kept.
+    const bindSceneTexture = (uniforms, name, hit, samplerModes) => {
+        const apply = (result) => {
+            if (!result || stopped || !isMounted()) return;
+            if (uniforms[name]) uniforms[name].value = result.texture;
+        };
+        const acquired = textureSession.acquire({ key: hit.path, blob: hit.blob },
+            { samplerModes, tier: plannedTextureSize, fastPathSamplerQuirk: true });
+        if (acquired && typeof acquired.then === 'function') return acquired.then(apply, (error) => ({ error }));
+        apply(acquired);
+        return null;
     };
     const udimWarnings = new Set();
     const compiledByPath = new Map();
@@ -2463,7 +2358,7 @@ const createMtlxSceneView = async ({
             // USD resolves the asset against the layer that authored the
             // override; that layer normally sits beside the .mtlx, so try the
             // material's directory first and the stage root as a fallback.
-            const candidates = baseDirs.map((dir) => sceneJoinPath(dir, ref));
+            const candidates = baseDirs.map((dir) => window.joinRefPath(dir, ref));
             const hit = candidates.find((candidate) => fileMap[candidate]);
             if (hit) return hit;
             // An inline payload declares no directory, so an asset stored
@@ -3054,7 +2949,12 @@ const scenePruneUnreachableNodes = (xml) => {
             }
         }
         const resolved = canonicalizeSceneFilenameInputs(
-            await resolveSceneIncludes(raw, sceneDir(source), fileMap, new Set([source]), warnings),
+            // The engine's exact include resolution, canonicalizing each child
+            // against its own declaring document.
+            await window.resolveIncludes(raw, fileMap, sceneDir(source), new Set([source]), {
+                exact: true, warnings,
+                transformChild: (child, key) => canonicalizeSceneFilenameInputs(child, key, fileMap),
+            }),
             source,
             fileMap,
             true,
@@ -3500,12 +3400,12 @@ const scenePruneUnreachableNodes = (xml) => {
                     // override so a rebuild does not double count.
                     const fallbackHit = hit.substituted && hit.originalBlob
                         ? { path: hit.originalPath, blob: hit.originalBlob } : null;
-                    pendingTextures.push(decodeUnboundedSceneTexture(hit.blob, extension, hit.path, fallbackHit, u.samplerModes).then((result) => {
+                    pendingTextures.push(acquireSceneTexture(hit, extension, fallbackHit, u.samplerModes).then((result) => {
                         if (!result) return;
                         const { tex, bytes } = result;
                         if (!reserveTexture(hit.path, false, bytes)) {
                             warnings.push('Texture memory full: skipped ' + hit.path + ' (its input uses the default value)');
-                            tex.dispose && tex.dispose();
+                            textureSession.release(tex);
                             return;
                         }
                         if (uniforms[u.name]) uniforms[u.name].value = tex;
@@ -3513,15 +3413,8 @@ const scenePruneUnreachableNodes = (xml) => {
                     continue;
                 }
                 if (!reserveTexture(hit.path)) { warnings.push('Texture memory full: skipped ' + hit.path + ' (its input uses the default value)'); continue; }
-                const binding = window.bindDroppedTextures({
-                uniforms,
-                introspected: [u],
-                textureCache,
-                textureQueue,
-                maxTextureSize: plannedTextureSize,
-                isAlive: () => !stopped && isMounted(),
-                }, { [hit.path]: hit.blob });
-                pendingTextures.push(...(binding && binding.pending || []));
+                const job = bindSceneTexture(uniforms, u.name, hit, u.samplerModes || null);
+                if (job) pendingTextures.push(job);
             }
         }
         return { material, compiled, pendingTextures, udimRefs, cacheKey,
@@ -3741,7 +3634,7 @@ const scenePruneUnreachableNodes = (xml) => {
                 udimVariantByMaterial.set(key, fallback);
                 return fallback;
             }
-            const uniforms = sceneCloneUniforms(info.material.uniforms);
+            const uniforms = window.createUdimVariantUniforms(info.material.uniforms, {}, { shareSlots: false });
             const material = new THREE.RawShaderMaterial({
                 vertexShader: info.compiled.vs,
                 fragmentShader: info.compiled.fs,
@@ -3787,29 +3680,21 @@ const scenePruneUnreachableNodes = (xml) => {
                 if (UNBOUNDED_TEXTURE_EXTENSIONS.includes(ext)) {
                     const fallbackHit = hit.substituted && hit.originalBlob
                         ? { path: hit.originalPath, blob: hit.originalBlob } : null;
-                    pending.push(decodeUnboundedSceneTexture(hit.blob, ext, hit.path, fallbackHit, entry.uniform.samplerModes).then((result) => {
+                    pending.push(acquireSceneTexture(hit, ext, fallbackHit, entry.uniform.samplerModes).then((result) => {
                         if (!result) return;
                         const { tex, bytes } = result;
                         if (!reserveTexture(hit.path, true, bytes)) {
                             const warning = 'Texture memory full: ' + label + ' UDIM tile ' + code + ' shows neutral grey';
                             if (!udimWarnings.has(warning)) { udimWarnings.add(warning); warnings.push(warning); }
-                            tex.dispose && tex.dispose();
+                            textureSession.release(tex);
                             return;
                         }
                         if (uniforms[entry.uniform.name]) uniforms[entry.uniform.name].value = tex;
                     }, (error) => ({ error })));
                     return;
                 }
-                const bindingUniform = Object.assign({}, entry.uniform, { data: hit.path });
-                const binding = window.bindDroppedTextures({
-                    uniforms,
-                    introspected: [bindingUniform],
-                    textureCache,
-                    textureQueue,
-                    maxTextureSize: plannedTextureSize,
-                    isAlive: () => !stopped && isMounted(),
-                }, { [hit.path]: hit.blob });
-                pending.push(...(binding && binding.pending || []));
+                const job = bindSceneTexture(uniforms, entry.uniform.name, hit, entry.uniform.samplerModes || null);
+                if (job) pending.push(job);
             });
             material.userData.mtlxScenePendingTextures = pending;
             udimVariantByMaterial.set(key, material);
@@ -3829,7 +3714,7 @@ const scenePruneUnreachableNodes = (xml) => {
             if (!baseUniform || !info.material.uniforms[baseUniform.name]) return info.material;
             const key = rgb.map((c) => c.toFixed(4)).join(',');
             if (displayColorVariantByColor.has(key)) return displayColorVariantByColor.get(key);
-            const uniforms = sceneCloneUniforms(info.material.uniforms);
+            const uniforms = window.createUdimVariantUniforms(info.material.uniforms, {}, { shareSlots: false });
             const slot = uniforms[baseUniform.name];
             if (slot.value && typeof slot.value.set === 'function') slot.value.set(rgb[0], rgb[1], rgb[2]);
             else slot.value = new THREE.Vector3(rgb[0], rgb[1], rgb[2]);
@@ -3920,7 +3805,7 @@ const scenePruneUnreachableNodes = (xml) => {
                     if (udimRefs.length) {
                         if (!uvs || uvs.length < (positions.length / 3) * 2) crossing = true;
                         else {
-                            const classification = sceneUdimTriangle(uvs, tri);
+                            const classification = window.MtlxMeshUdim.classifyTriangle(uvs, tri[0], tri[1], tri[2]);
                             crossing = !classification || classification.crossing === true;
                             if (!crossing) tile = classification;
                         }
@@ -7021,6 +6906,8 @@ const scenePruneUnreachableNodes = (xml) => {
                 try { texture.image && texture.image.close && texture.image.close(); } catch (e) {}
             });
             textureCache.clear();
+            try { textureSession.dispose(); } catch (e) {}
+            textureSession = newSceneTextureSession();
             textureReservations.clear();
             textureStats.bytesReserved = 0;
             textureStats.ordinaryBytes = 0;
@@ -8450,6 +8337,7 @@ const scenePruneUnreachableNodes = (xml) => {
                     try { t.image && t.image.close && t.image.close(); } catch (e) {}
                 });
                 textureCache.clear();
+                try { textureSession.dispose(); } catch (e) {}
                 if (presentationPipeline) { try { presentationPipeline.dispose(); } catch (e) {} }
                 if (peelPipeline) { try { peelPipeline.dispose(); } catch (e) {} }
                 if (window.unregisterLiveView) window.unregisterLiveView(handle);
@@ -9228,6 +9116,7 @@ const scenePruneUnreachableNodes = (xml) => {
             try { t.image && t.image.close && t.image.close(); } catch (err) {}
         });
         textureCache.clear();
+        try { textureSession.dispose(); } catch (err) {}
         geometries.forEach((g) => { try { g.dispose(); } catch (err) {} });
         if (presentationPipeline) { try { presentationPipeline.dispose(); } catch (err) {} }
         if (peelPipeline) { try { peelPipeline.dispose(); } catch (err) {} }

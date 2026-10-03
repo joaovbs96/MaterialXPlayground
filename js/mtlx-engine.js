@@ -3817,7 +3817,7 @@ const findFileForRef = (fileMap, ref, opts) => {
 const findFilesForRef = (fileMap, ref, opts) => {
     if (opts && opts.exact) {
         const raw = String(ref || '');
-        const splitParts = raw.split(/<UDIM>/);
+        const splitParts = raw.split(/<UDIM>/i);
         if (splitParts.length !== 2) return [];
         const prefix = splitParts[0], suffix = splitParts[1];
         const hits = [];
@@ -3829,7 +3829,7 @@ const findFilesForRef = (fileMap, ref, opts) => {
             const code = Number(codeText);
             if (code < 1001) continue;
             const offset = code - 1001;
-            hits.push({ key, how: 'exact', ref: raw.replace(/<UDIM>/, codeText), code, u: offset % 10, v: Math.floor(offset / 10) });
+            hits.push({ key, how: 'exact', ref: raw.replace(/<UDIM>/i, codeText), code, u: offset % 10, v: Math.floor(offset / 10) });
         }
         return hits.sort((a, b) => a.code - b.code);
     }
@@ -4519,6 +4519,9 @@ const loadBoundedBitmapTexture = async (blob, maxSize, samplerModes) => {
                 addTexturePerf(needsResize ? 'resizeMs' : 'decodeMs', performance.now() - t0);
                 const texture = new THREE.Texture(image);
                 configureLoadedTexture(texture);
+                // This path ignores samplerModes; the Scene's legacy binds kept that.
+                // (r128 textures carry no userData of their own.)
+                texture.userData = Object.assign(texture.userData || {}, { mtlxBoundedFastPath: true });
                 return texture;
             }
             // Header parsed but the sized decode failed; fall through to the
@@ -4994,7 +4997,10 @@ const acquireTextureSourceRef = (cache, key) => {
 // with capKtx2MipLevels; exr/hdr/tif through the shared heavy-decode
 // limiter, then boundDecodedTexture when a finite tier is requested; else
 // (png/jpg at a finite tier) the bounded ImageBitmap path.
-const decodeTextureSource = async (blob, ext, path, tier, renderer) => {
+// bounded (the Scene): the bounded decoders at every tier, Infinity included
+// (TIF gets mipmaps, PNG/JPG go through createImageBitmap), and a failed
+// boundDecodedTexture keeps the undecimated texture.
+const decodeTextureSource = async (blob, ext, path, tier, renderer, bounded) => {
     if (ext === 'ktx2') {
         const tex = await loadKtx2Texture(blob, renderer ? { renderer } : null, path);
         if (tex && Number.isFinite(tier)) capKtx2MipLevels(tex, tier);
@@ -5003,10 +5009,12 @@ const decodeTextureSource = async (blob, ext, path, tier, renderer) => {
     if (ext === 'exr' || ext === 'hdr' || ext === 'tif' || ext === 'tiff') {
         const startDecode = () => (ext === 'exr' ? loadExrTexture(blob) : ext === 'hdr' ? loadHdrTexture(blob) : loadTifTexture(blob, path));
         let tex = await runHeavyTextureDecode(startDecode);
-        if (tex && Number.isFinite(tier)) tex = await boundDecodedTexture(tex, tier);
+        if (tex && bounded) {
+            try { tex = await boundDecodedTexture(tex, tier); } catch (e) { /* keep the undecimated texture */ }
+        } else if (tex && Number.isFinite(tier)) tex = await boundDecodedTexture(tex, tier);
         return tex;
     }
-    if (Number.isFinite(tier) && typeof createImageBitmap === 'function') {
+    if ((bounded || Number.isFinite(tier)) && typeof createImageBitmap === 'function') {
         return loadBoundedBitmapTexture(blob, tier, null);
     }
     const url = URL.createObjectURL(blob);
@@ -5076,6 +5084,7 @@ const createTextureSession = (opts) => {
     const concurrency = options.concurrency || 5;
     const renderer = options.renderer || null;
     const isAlive = typeof options.isAlive === 'function' ? options.isAlive : () => true;
+    const boundedDecode = !!options.boundedDecode;
 
     const sourceRefs = new Map(); // sourceKey -> ref count this session holds
     const wrappers = new Map(); // wrapperKey -> { texture, sourceKey }
@@ -5116,9 +5125,12 @@ const createTextureSession = (opts) => {
         const options2 = opts2 || {};
         const samplerModes = options2.samplerModes || null;
         const tier = options2.tier != null ? options2.tier : maxSize;
+        // fastPathSamplerQuirk: a proto from the bounded fast path keeps the
+        // default address modes, as the Scene's legacy ordinary binds did.
+        const quirk = !!options2.fastPathSamplerQuirk;
         const ext = String(hit.key).split('.').pop().toLowerCase();
         const sourceKey = rawKey + '|' + (Number.isFinite(tier) ? tier : 'orig');
-        const wrapperKey = sourceKey + '|' + samplerCacheKey('', samplerModes);
+        const wrapperKey = sourceKey + '|' + samplerCacheKey('', samplerModes) + (quirk ? '|q' : '');
 
         const existingWrapper = wrappers.get(wrapperKey);
         if (existingWrapper) return { texture: existingWrapper.texture };
@@ -5131,7 +5143,8 @@ const createTextureSession = (opts) => {
             const already = wrappers.get(wrapperKey);
             if (already) return already.texture;
             const texture = proto.clone();
-            configureLoadedTexture(texture, samplerModes, anisotropy);
+            const fastPath = quirk && proto.userData && proto.userData.mtlxBoundedFastPath;
+            configureLoadedTexture(texture, fastPath ? null : samplerModes, anisotropy);
             wrappers.set(wrapperKey, { texture, sourceKey });
             return texture;
         };
@@ -5156,7 +5169,7 @@ const createTextureSession = (opts) => {
             });
         }
 
-        const decodePromise = enqueue(() => decodeTextureSource(hit.blob, ext, hit.key, Number.isFinite(tier) ? tier : Infinity, renderer))
+        const decodePromise = enqueue(() => decodeTextureSource(hit.blob, ext, hit.key, Number.isFinite(tier) ? tier : Infinity, renderer, boundedDecode))
             .then((proto) => {
                 if (!proto) return null;
                 if (disposed || !isAlive()) { proto.dispose && proto.dispose(); return null; }
@@ -5213,6 +5226,20 @@ const createTextureSession = (opts) => {
         bind: (target, fileMap, onBound) => {
             target.textureSession = api;
             return bindDroppedTextures(target, fileMap, onBound);
+        },
+        // Drops one wrapper this session handed out (e.g. a texture the
+        // caller's budget then refused) and releases its source reference.
+        release: (texture) => {
+            for (const [key, w] of wrappers) {
+                if (w.texture !== texture) continue;
+                wrappers.delete(key);
+                if (texture.dispose) texture.dispose();
+                const count = sourceRefs.get(w.sourceKey) || 0;
+                if (count > 1) sourceRefs.set(w.sourceKey, count - 1); else sourceRefs.delete(w.sourceKey);
+                if (count > 0) releaseTextureSource(cache, w.sourceKey);
+                return true;
+            }
+            return false;
         },
         setAnisotropy: (value) => {
             anisotropy = value;
@@ -12193,7 +12220,7 @@ Object.assign(window, {
     listDocRenderables,
     normPath, joinRefPath, readDroppedItems, expandZips, isHiddenSideFile, findFileForRef, findFilesForRef, preferKtx2Sibling, resolveIncludes, readMtlxText, readMtlxXml,
     isExportAttribution, splitXmlEnvelope, withXmlEnvelope, preserveSourceFormatting,
-    TEXTURE_CACHE, TEXTURE_SOURCES, textureCacheKey, textureCacheKeyAsync, hasBlobIdentity, samplerCacheKey, normalizeSamplerAddressMode, collectImageSamplerModes, annotateFilenameSamplerModes, bindDroppedTextures, createTextureSession,
+    TEXTURE_CACHE, TEXTURE_SOURCES, textureCacheKey, textureCacheKeyAsync, hasBlobIdentity, samplerCacheKey, normalizeSamplerAddressMode, collectImageSamplerModes, annotateFilenameSamplerModes, bindDroppedTextures, createTextureSession, createUdimVariantUniforms,
     loadExrTexture, loadHdrTexture, loadTifTexture, loadKtx2Texture, capKtx2MipLevels,
     runHeavyTextureDecode,
     loadBoundedBitmapTexture,
