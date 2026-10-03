@@ -143,8 +143,8 @@ function checkManifestShape() {
 // (b) storage key literal scan
 // ---------------------------------------------------------------------
 // Files where guarded storage keys are still read/written directly
-// (Track B empties this).
-const PENDING_FILES = ["js/usd-scene-renderer.js", "js/usd-scene-app.jsx"];
+// (empty since P5: the Scene routes through the store).
+const PENDING_FILES = [];
 
 // { key, file, reason }: legitimate non-manifest uses of an 'mtlx*' key.
 const ALLOW = [
@@ -169,6 +169,7 @@ const ALLOW = [
   { key: "mtlx_scene_texture_fast", file: "js/mtlx-engine.js", reason: "debug kill switch" },
   { key: "mtlx_texture_decode_limit", file: "js/mtlx-engine.js", reason: "debug kill switch" },
   { key: "mtlx_scene_prefilter_fix", file: "js/mtlx-engine.js", reason: "debug kill switch" },
+  { key: "mtlx_feature_gated_shaders", file: "js/usd-scene-renderer.js", reason: "debug kill switch, not a user-facing setting" },
   { key: "mtlx_show_previews", file: "js/docs-app.jsx", reason: "docs-only UI preference, out of scope for the P1 manifest" },
   { key: "mtlxDisplacementNormalEps", file: "js/shared/mesh-displacement.js", reason: "debug tuning epsilon, out of scope for the P1 manifest" },
 ];
@@ -243,7 +244,7 @@ function checkStorageKeyScan() {
 // (c) option-list ratchet: literal display-transform or backdrop option
 // arrays only in js/shared/render-settings.js; elsewhere use row.options.
 // ---------------------------------------------------------------------
-const OPTION_LIST_PENDING_FILES = ["js/usd-scene-app.jsx", "js/usd-scene-renderer.js"];
+const OPTION_LIST_PENDING_FILES = [];
 
 // Known second copies not yet folded into the manifest: real gaps, kept
 // visible here (not silently ignored) rather than allowed forever.

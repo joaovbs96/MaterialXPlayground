@@ -7457,9 +7457,10 @@ const IRRADIANCE_GLSL = [
 // that has a WebGL2 renderer with a float color-buffer extension. Fail-soft
 // at every step: env.irradiance (the SH map) is never touched here, so any
 // guard failure or thrown error leaves diffuse shading exactly as it was.
-const ensureConvolvedIrradiance = (renderer, env) => {
+// `method` lets the Scene (its own stage setting) override the shared one.
+const ensureConvolvedIrradiance = (renderer, env, method) => {
     if (!env || !env.radiance || env.irradianceTried) return env;
-    if (getDiffuseEnvMethod() !== 'convolve') return env;
+    if ((method || getDiffuseEnvMethod()) !== 'convolve') return env;
     if (!renderer || !renderer.capabilities || !renderer.capabilities.isWebGL2) return env;
     env.irradianceTried = true;
     if (!renderer.extensions.get('EXT_color_buffer_float')) {
@@ -7540,9 +7541,9 @@ const ensureConvolvedIrradiance = (renderer, env) => {
 // map) always exists and is the fallback; env.irradianceConvolved only
 // exists once ensureConvolvedIrradiance has succeeded on a WebGL2 renderer
 // with the 'convolve' switch active.
-const envIrradianceForShading = (env) => {
+const envIrradianceForShading = (env, method) => {
     if (!env) return null;
-    if (getDiffuseEnvMethod() === 'convolve' && env.irradianceConvolved) return env.irradianceConvolved;
+    if ((method || getDiffuseEnvMethod()) === 'convolve' && env.irradianceConvolved) return env.irradianceConvolved;
     return env.irradiance;
 };
 
@@ -7555,11 +7556,13 @@ const resolveShadingEnv = (renderer, env) => {
     return { radiance: envRadianceForShading(env), irradiance: envIrradianceForShading(env) };
 };
 
-const buildEnvFromParsedTexture = (raw) => {
+const buildEnvFromParsedTexture = (raw, keyOn = keyLightEnabled, source = null) => {
+    // keyOn overrides the global switch for one build (the Scene's own key
+    // light); source keeps the pristine bytes for such rebuilds.
     // Extraction mutates raw's pixels (clamps the sun) BEFORE mips/SH/
     // background are built below, so it disappears from all three,
     // matching official "split" env assets.
-    const keyLight = keyLightEnabled ? extractKeyLight(raw) : null;
+    const keyLight = keyOn ? extractKeyLight(raw) : null;
     // extractKeyLight only mutates raw on a SUCCESSFUL extraction (both
     // its null-return paths run before the clamp), so raw is still
     // pristine here whenever the soft fallback is actually needed.
@@ -7572,7 +7575,26 @@ const buildEnvFromParsedTexture = (raw) => {
     // Correctly-oriented copy for the visible skybox mesh, see
     // makeBackgroundTexture and the env-prep header above.
     const background = makeBackgroundTexture(radiance);
-    return { radiance, irradiance, irradianceConvolved: null, mips, background, prefilteredIrr: false, keyLight, softKeyDir };
+    return { radiance, irradiance, irradianceConvolved: null, mips, background, prefilteredIrr: false, keyLight, softKeyDir, keyLightBuilt: !!keyOn, envSource: source };
+};
+
+// The same environment built with key light extraction on or off, without
+// touching the global switch (the Scene keeps its own). Environments with no
+// remembered source (stage dome lights, flat colours) come back unchanged.
+const envWithKeyLight = (env, on) => {
+    if (!env) return env;
+    const base = env.keyOrigin || env;
+    const want = !!on;
+    if (!base.envSource || base.keyLightBuilt === want) return base;
+    base.keyVariants = base.keyVariants || {};
+    if (!base.keyVariants[want]) {
+        const raw = parseEnvBuffer(base.envSource.buf, base.envSource.ext);
+        if (!raw || !raw.image || !raw.image.data) return base;
+        const variant = buildEnvFromParsedTexture(raw, want, base.envSource);
+        variant.keyOrigin = base;
+        base.keyVariants[want] = variant;
+    }
+    return base.keyVariants[want];
 };
 const getEnvironment = () => {
     if (!envPromise) {
@@ -7588,7 +7610,7 @@ const getEnvironment = () => {
                 const raw = parseEnvBuffer(buf, ext);
                 if (!raw || !raw.image || !raw.image.data) return null; // parse failed → synthesized sky
                 defaultEnvSource = { buf, ext }; // pristine bytes, for the key-light toggle rebuild
-                const built = buildEnvFromParsedTexture(raw);
+                const built = buildEnvFromParsedTexture(raw, keyLightEnabled, defaultEnvSource);
                 return built;
             });
     }
@@ -7618,7 +7640,7 @@ const loadEnvironmentFromBuffer = async (buf, ext, label, remember = true) => {
         throw new Error('Failed to parse the environment image "' + label + '".');
     }
     if (remember) overrideEnvSource = { buf, ext: lower };
-    return buildEnvFromParsedTexture(raw);
+    return buildEnvFromParsedTexture(raw, keyLightEnabled, remember ? overrideEnvSource : null);
 };
 
 // Constant-colour environment in the same shape, for a USD dome light that
@@ -7685,7 +7707,7 @@ const setKeyLightEnabled = (on) => {
     if (!src) return; // nothing loaded yet; the next load already honors the flag
     const raw = parseEnvBuffer(src.buf, src.ext);
     if (!raw || !raw.image || !raw.image.data) return;
-    const rebuilt = buildEnvFromParsedTexture(raw);
+    const rebuilt = buildEnvFromParsedTexture(raw, keyLightEnabled, src);
     if (envOverride) {
         setEnvOverride(rebuilt); // re-broadcasts via each view's setEnvironment()
     } else {
@@ -8773,10 +8795,10 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
 // Binds env radiance/irradiance to every declared sampler matching env
 // naming; skips u_localEnv* (bound separately, gated by strength). Shared
 // by createMtlxSceneUniforms and the Material Viewer's setEnvironment.
-const bindEnvironmentSamplers = (uniforms, declared, env) => {
+const bindEnvironmentSamplers = (uniforms, declared, env, diffuseMethod) => {
     const has = (name) => declared.some((u) => u.name === name);
     const radiance = envRadianceForShading(env) || getDummyTex();
-    const irradiance = envIrradianceForShading(env) || radiance;
+    const irradiance = envIrradianceForShading(env, diffuseMethod) || radiance;
     if (has('u_envRadiance')) uniforms.u_envRadiance = { value: radiance };
     if (has('u_envIrradiance')) uniforms.u_envIrradiance = { value: irradiance };
     for (const u of declared) {
@@ -8792,7 +8814,7 @@ const bindEnvironmentSamplers = (uniforms, declared, env) => {
 const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, sceneRadius = 1, envTilt = null, envRotationRad = 0, envExposure = 1, environmentIndirectScale = 1, environmentKeyScale = 1, lightScales = null, shadowDiagnosticVisibilityScale = 1, displayTransform = null, shadowAtlas = null, shadowMatrices = null, shadowTiles = null, shadowDepthPlanes = null, shadowDepthRanges = null, shadowSourceRadii = null, shadowTexelSizes = null, shadowFaceOrigins = null, shadowFaceValid = null, shadowFaceBasisX = null, shadowFaceBasisY = null, shadowFaceBasisZ = null, shadowSlotFace = null, shadowSlotFaceCount = null, shadowTransmittance = null, shadowRecordCells = null, skyVisMap = null, skyVisMin = null, skyVisSize = null, skyVisStrength = 1, skyVisCell = 0,
     aoVolumeMap = null, aoVolumeMin = null, aoVolumeSize = null, aoVolumeStrength = 1, aoVolumeCell = 0,
     skyBounceMap = null, skyBounceMin = null, skyBounceSize = null, skyBounceStrength = 0, skyBounceCell = 0, bounceScale = 0, bounceTint = null,
-    localEnvMap = null, localEnvMips = 1, localEnvStrength = 0, localEnvProbe = null, localEnvBoxMin = null, localEnvBoxMax = null, localEnvParallax = 0 }) => {
+    localEnvMap = null, localEnvMips = 1, localEnvStrength = 0, localEnvProbe = null, localEnvBoxMin = null, localEnvBoxMax = null, localEnvParallax = 0, diffuseEnvMethod = null, displayExposureScaleOverride = null }) => {
     if (!compiled) throw new Error('Cannot create scene uniforms without compiled MaterialX source.');
     const uniforms = {
         u_worldMatrix: { value: new THREE.Matrix4() },
@@ -8808,7 +8830,7 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
         // introspection and cannot be gated on has() like the rest. The
         // transform defaults to the caller's, letting the Scene run a filmic
         // curve while the Material Viewer stays on plain sRGB for parity.
-        u_displayExposure: { value: displayExposureScale() },
+        u_displayExposure: { value: displayExposureScaleOverride != null ? displayExposureScaleOverride : displayExposureScale() },
         u_displayTransform: { value: displayTransformId(displayTransform || getDisplayTransform()) },
     };
     // A feature this source never generated declares no uniform for it, so
@@ -8915,7 +8937,7 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
     const mips = env && env.mips != null ? env.mips : 1;
     if (has('u_time')) uniforms.u_time = { value: MTLX_CLOCK.time };
     if (has('u_frame')) uniforms.u_frame = { value: MTLX_CLOCK.frame };
-    bindEnvironmentSamplers(uniforms, declaredList, env);
+    bindEnvironmentSamplers(uniforms, declaredList, env, diffuseEnvMethod);
     // envTilt carries a dome light's non-vertical orientation. The rotation
     // slider stays a pure yaw, so the dome's yaw is decomposed out of the tilt
     // and re-applied here: with the slider at the dome's own yaw this
@@ -12934,7 +12956,7 @@ Object.assign(window, {
     makeEnvTexture, getEnvironment, COLORSPACES,
     loadEnvironmentFromFile, loadEnvironmentFromBuffer, makeFlatEnvironment,
     setEnvOverride, getEnvOverride,
-    getKeyLightEnabled, setKeyLightEnabled, prewarmShaderCompile,
+    getKeyLightEnabled, setKeyLightEnabled, envWithKeyLight, prewarmShaderCompile,
     createMtlxRenderView, compileMtlxSceneMaterial, createMtlxSceneUniforms, bindEnvironmentSamplers, createLightTransportUniforms,
     generatePreviewSources, generatePreviewSourcesWithinBudget,
     evaluateDisplacement, generateDisplacementSourcesUnlocked, detectDisplacementMode,

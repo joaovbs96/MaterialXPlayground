@@ -4,9 +4,6 @@
 // composition and produces typed mesh data; this module owns one Three.js
 // renderer, per-object transforms, and MaterialX material instances.
 
-// Ordinary (non-UDIM) scene texture resolution cap, persisted separately
-// from the UDIM tile size (which stays fixed per scene). Mirrors the
-// engine's getDisplayTransform persistence idiom (js/mtlx-engine.js:1601-1629).
 // Formats the engine's exr/hdr/tif loaders decode whole (never resized by
 // createImageBitmap, unlike the bounded PNG/JPEG path). Single source of
 // truth: js/shared/texture-formats.js. Guarded so this file still evaluates
@@ -14,261 +11,63 @@
 const UNBOUNDED_TEXTURE_EXTENSIONS = (typeof window !== 'undefined' && window.MTLX_DEDICATED_DECODER_EXTS)
     || (typeof require === 'function' && require('./shared/texture-formats.js').MTLX_DEDICATED_DECODER_EXTS) || [];
 
-const SCENE_TEXTURE_MAX_SIZE_KEY = 'mtlx_scene_texture_size';
-// Original is unbounded (Infinity internally); persisted as the string
-// "original" since Infinity does not round-trip through localStorage.
-const SCENE_TEXTURE_MAX_SIZE_VALUES = [512, 1024, 2048, 4096, Infinity];
-const SCENE_TEXTURE_MAX_SIZE_DEFAULT = 2048;
-
-const storedSceneTextureMaxSize = () => {
-    if (window.top !== window) return SCENE_TEXTURE_MAX_SIZE_DEFAULT;
-    try {
-        const raw = localStorage.getItem(SCENE_TEXTURE_MAX_SIZE_KEY);
-        if (raw === 'original') return Infinity;
-        const stored = Number(raw);
-        return SCENE_TEXTURE_MAX_SIZE_VALUES.includes(stored) ? stored : SCENE_TEXTURE_MAX_SIZE_DEFAULT;
-    } catch (e) { return SCENE_TEXTURE_MAX_SIZE_DEFAULT; /* privacy mode */ }
+// Every Scene setting lives in the shared store (js/shared/render-settings.js,
+// stage profile): defaults are the manifest's levels.default, spellings are
+// the codecs'. Only functions here, so this file still evaluates under Node.
+const sceneSetting = (key) => window.MtlxRenderSettings.get(key, { profile: 'stage' });
+const sceneSettingWrite = (key, value, options) => window.MtlxRenderSettings.set(key, value, Object.assign({ profile: 'stage' }, options));
+const sceneSettingOptions = (key) => {
+    const row = window.MtlxRenderSettings.ROWS.find((entry) => entry.key === key);
+    return (row && row.options) || [];
 };
+const GIB = 1024 * 1024 * 1024;
 
-// Analytic lights imported from the stage. USD intensity units and our
-// environment units share no calibration, so the multiplier lets the user
-// match a reference by eye instead of us hardcoding a factor.
-const SCENE_STAGE_LIGHTS_KEY = 'mtlx_scene_stage_lights';
-const SCENE_STAGE_LIGHTS_EV_KEY = 'mtlx_scene_stage_lights_ev';
-const SCENE_STAGE_LIGHTS_DEFAULT = true;
-const SCENE_STAGE_LIGHTS_EV_DEFAULT = 0;
+const storedSceneTextureMaxSize = () => sceneSetting('textureMaxSize');
+// Exposure, diffuse method and displacement are the Scene's own values, so a
+// Material Viewer change never reaches the stage (and the reverse).
+const sceneExposureScale = () => Math.pow(2, sceneSetting('displayExposure'));
+const sceneDiffuseEnvMethod = () => sceneSetting('diffuseEnv');
+const sceneDisplacementEnabled = () => !!sceneSetting('displacement');
+// The Scene's own key light: it rebuilds its environment, never the global switch.
+const sceneKeyEnv = (next) => (window.envWithKeyLight ? window.envWithKeyLight(next, sceneSetting('keyLight')) : next);
+
+// SSR and local reflections are parked behind these switches.
+const SCENE_SSR_PARKED = true;
+const SCENE_LOCAL_ENV_PARKED = false;
 // Analytic stage-light slots, must match STAGE_LIGHT_SLOTS in js/mtlx-engine.js.
 const SCENE_STAGE_LIGHT_LIMIT = 16;
-const SCENE_SHADOWS_KEY = 'mtlx_scene_shadows';
 
-// The Scene keeps its own view transform. A whole stage is a photographic
-// image, so a hard clip at 1.0 blows every highlight and shifts its hue; the
-// Material Viewer keeps plain sRGB because that is MaterialXView parity for
-// judging one material. Falls back to the shared setting when unset.
-const SCENE_DISPLAY_TRANSFORM_KEY = 'mtlx_scene_display_transform';
-const SCENE_DISPLAY_TRANSFORM_DEFAULT = 'neutral';
-const storedSceneDisplayTransform = () => {
-    if (window.top !== window) return SCENE_DISPLAY_TRANSFORM_DEFAULT;
-    try {
-        const raw = localStorage.getItem(SCENE_DISPLAY_TRANSFORM_KEY);
-        const allowed = (window.getDisplayTransformValues && window.getDisplayTransformValues()) || [];
-        return allowed.includes(raw) ? raw : SCENE_DISPLAY_TRANSFORM_DEFAULT;
-    } catch (e) { return SCENE_DISPLAY_TRANSFORM_DEFAULT; }
-};
+const storedSceneStageLights = () => !!sceneSetting('stageLightsOn');
+const storedSceneStageLightsEv = () => sceneSetting('stageLightsEv');
+// The Scene keeps its own view transform; the Material Viewer stays sRGB.
+const storedSceneDisplayTransform = () => sceneSetting('displayTransform');
+// Karma reads untagged colours as ACEScg, this viewer as Rec.709 (Scene only).
+const storedSceneMaterialWorkspace = () => sceneSetting('materialWorkspace');
+const storedSceneSpecularAA = () => !!sceneSetting('specularAA');
+const storedSceneSkyVis = () => !!sceneSetting('skyVis');
+const storedSceneSkyVisStrength = () => sceneSetting('skyVisStrength');
+const storedSceneAo = () => !!sceneSetting('ao');
+const storedSceneAoStrength = () => sceneSetting('aoStrength');
+const storedSceneBounce = () => !!sceneSetting('bounce');
+const storedSceneBounceStrength = () => sceneSetting('bounceStrength');
+const storedSceneSsr = () => !SCENE_SSR_PARKED && !!sceneSetting('ssrOn');
+const storedSceneSsrStrength = () => sceneSetting('ssrStrength');
+const storedSceneSsrMaxRoughness = () => sceneSetting('ssrMaxRoughness');
+const storedSceneLocalReflections = () => !SCENE_LOCAL_ENV_PARKED && !!sceneSetting('localReflections');
+const storedSceneLocalReflectionStrength = () => sceneSetting('localEnvStrength');
+const storedSceneShadows = () => !!sceneSetting('shadows');
 
-// "Material working space": Karma reads untagged colour constants and the
-// displayColor primvar as ACEScg (Houdini's own scene-linear space), while
-// this viewer treats the same numbers as linear Rec.709. Default stays
-// Rec.709 (matches every other tool's assumption); switching to ACEScg
-// converts every untagged colour with the same cmlib leg used for tagged
-// ACEScg textures. Scene-only, off in iframes, never touches the Viewer,
-// Compare, Builder, Graph previews or embeds.
-const SCENE_MATERIAL_WORKSPACE_KEY = 'mtlx_scene_material_workspace';
-const SCENE_MATERIAL_WORKSPACE_VALUES = ['rec709', 'acescg'];
-const SCENE_MATERIAL_WORKSPACE_DEFAULT = 'rec709';
-const storedSceneMaterialWorkspace = () => {
-    if (window.top !== window) return SCENE_MATERIAL_WORKSPACE_DEFAULT;
-    try {
-        const raw = localStorage.getItem(SCENE_MATERIAL_WORKSPACE_KEY);
-        return SCENE_MATERIAL_WORKSPACE_VALUES.includes(raw) ? raw : SCENE_MATERIAL_WORKSPACE_DEFAULT;
-    } catch (e) { return SCENE_MATERIAL_WORKSPACE_DEFAULT; }
-};
-
-// Geometric specular anti-aliasing (see patchSpecularAA in mtlx-engine.js):
-// widens the anisotropic GGX alpha pair by the screen-space variance of the
-// shading normal and of the roughness input, stopping specular fireflies on
-// materials whose roughness is itself a fine procedural noise field (e.g.
-// egg_brushed_steel). Default on for the Scene; never on in an embed
-// (window.top !== window), same guard shape as the other Scene-only shading
-// settings above. Requires a shader recompile (see setSceneSpecularAA), not
-// a uniform flip, because it changes generated GLSL text.
-const SCENE_SPECULAR_AA_KEY = 'mtlx_scene_specular_aa';
-const storedSceneSpecularAA = () => {
-    if (window.top !== window) return false;
-    try { return localStorage.getItem(SCENE_SPECULAR_AA_KEY) !== '0'; } catch (e) { return true; }
-};
-
-// Baked sky visibility: the room-scale half of the same missing visibility
-// term. Screen space AO handles contacts, this handles walls. Off by
-// default (2026-09-22): the Default quality level starts with it off.
-const SCENE_SKYVIS_KEY = 'mtlx_scene_skyvis';
-const SCENE_SKYVIS_STRENGTH_KEY = 'mtlx_scene_skyvis_strength';
-const SCENE_SKYVIS_STRENGTH_DEFAULT = 1;
-const storedSceneSkyVis = () => {
-    if (window.top !== window) return false;
-    try { return localStorage.getItem(SCENE_SKYVIS_KEY) === '1'; } catch (e) { return false; }
-};
-const storedSceneSkyVisStrength = () => {
-    if (window.top !== window) return 1;
-    try {
-        const raw = localStorage.getItem(SCENE_SKYVIS_STRENGTH_KEY);
-        if (raw == null || raw === '') return 1;
-        const value = Number(raw);
-        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1;
-    } catch (e) { return 1; }
-};
-
-// Screen-space ambient occlusion: the visibility term MaterialX's IBL lacks.
-const SCENE_AO_KEY = 'mtlx_scene_ao';
-const SCENE_AO_STRENGTH_KEY = 'mtlx_scene_ao_strength';
-const SCENE_AO_STRENGTH_DEFAULT = 0.85;
-
-// Off by default (2026-09-22): the Default quality level starts with it
-// off, same as shadows and sky visibility.
-const storedSceneAo = () => {
-    if (window.top !== window) return false;
-    try { return localStorage.getItem(SCENE_AO_KEY) === '1'; } catch (e) { return false; }
-};
-// Default 0.7 rather than full strength: the term multiplies the WHOLE
-// environment contribution in one flat multiply (MaterialX has no per-lobe
-// occlusion), so 1.0 reads as the picture getting dimmer rather than as
-// contact shading.
-const storedSceneAoStrength = () => {
-    if (window.top !== window) return 0.85;
-    try {
-        // getItem returns null when unset and Number(null) is 0, which is a
-        // finite number, so the fallback has to test the raw string first or
-        // an untouched setting reads as zero strength.
-        const raw = localStorage.getItem(SCENE_AO_STRENGTH_KEY);
-        if (raw == null || raw === '') return 0.85;
-        const value = Number(raw);
-        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0.85;
-    } catch (e) { return 0.7; }
-};
-
-// Baked ONE-BOUNCE diffuse irradiance (v3, 2026-09-20): per-cell scalar SH1
-// of the blockers' OWN outgoing radiance (albedo_b * the engine's own
-// convolved irradiance at the blocker's normal, key-light gated by the
-// blocker's own sky visibility), on the sky bake's grid, ADDED to the
-// shaded colour as an extra Lambertian contribution
-// (patchDiffuseBounceAdd in js/mtlx-engine.js), not folded into the
-// "occlusion" scalar: canonical.md (2026-09-20) found the analytic key
-// light supplies most of a point's diffuse irradiance and sits entirely
-// outside occlusion's reach, so scaling only the small residual it does
-// multiply cannot recover a Karma-sized indirect share. Replaces the
-// v2 whole-scene-mean reference irradiance (computeBounceERef, eecd3a3/
-// 75ee6b4/fa73f24): see scratchpad/displacement-verified/color-parity/
-// bounce/v3-design.md for the four factors (units, whole-sphere mean,
-// self-hit co-location, no outgoing direction) that made v2 measure only
-// +1.4 percent of beauty against Karma's 18.8 percent indirect share.
-// Bounded by the [0,1] baked mean/moment reconstruction, the [0,1]
-// strength clamp, a non-negative scale and the near-field AO gate, so it
-// can only add light, never remove it or invert sign; default-on is safe.
-const SCENE_BOUNCE_KEY = 'mtlx_scene_bounce';
-const SCENE_BOUNCE_STRENGTH_KEY = 'mtlx_scene_bounce_strength';
-const SCENE_BOUNCE_STRENGTH_DEFAULT = 1;
-const storedSceneBounce = () => {
-    if (window.top !== window) return false;
-    try { return localStorage.getItem(SCENE_BOUNCE_KEY) !== '0'; } catch (e) { return true; }
-};
-// Default 1.0 (v3, 2026-09-20): v3-design.md section 9's chart prediction
-// lands inside Karma's target band at strength 1.0 (about 0.13 at the old
-// v2 default of 0.8), unlike v2 where 0.8 was chosen only because the whole
-// term was small everywhere.
-const storedSceneBounceStrength = () => {
-    if (window.top !== window) return 1;
-    try {
-        const raw = localStorage.getItem(SCENE_BOUNCE_STRENGTH_KEY);
-        if (raw == null || raw === '') return 1;
-        const value = Number(raw);
-        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1;
-    } catch (e) { return 1; }
-};
-
-// Screen-space reflections: a history-reprojected trace for opaque
-// surfaces, image based (IBL) as the fallback. Parked while its artefacts
-// are investigated: forced off, setters kept; flip SCENE_SSR_PARKED to restore.
-const SCENE_SSR_PARKED = true;
-const SCENE_SSR_KEY = 'mtlx_scene_ssr';
-const SCENE_SSR_STRENGTH_KEY = 'mtlx_scene_ssr_strength';
-const SCENE_SSR_MAX_ROUGHNESS_KEY = 'mtlx_scene_ssr_max_roughness';
-const SCENE_SSR_DEFAULT = false;
-const SCENE_SSR_STRENGTH_DEFAULT = 1;
-const SCENE_SSR_MAX_ROUGHNESS_DEFAULT = 0.5;
-const storedSceneSsr = () => {
-    if (SCENE_SSR_PARKED || window.top !== window) return false;
-    try { return localStorage.getItem(SCENE_SSR_KEY) !== '0'; } catch (e) { return true; }
-};
-const storedSceneSsrStrength = () => {
-    if (window.top !== window) return 1;
-    try {
-        const raw = localStorage.getItem(SCENE_SSR_STRENGTH_KEY);
-        if (raw == null || raw === '') return 1;
-        const value = Number(raw);
-        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1;
-    } catch (e) { return 1; }
-};
-const storedSceneSsrMaxRoughness = () => {
-    if (window.top !== window) return 0.5;
-    try {
-        const raw = localStorage.getItem(SCENE_SSR_MAX_ROUGHNESS_KEY);
-        if (raw == null || raw === '') return 0.5;
-        const value = Number(raw);
-        return Number.isFinite(value) ? Math.max(0.05, Math.min(1, value)) : 0.5;
-    } catch (e) { return 0.5; }
-};
-
-// Local environment reflections: a static per-stage cubemap capture (see
-// js/usd-scene-localenv.js and scratchpad/displacement-verified/reflections/
-// design.md) substituted into the generated environment radiance lookup, so
-// a reflective surface sees the studio set it is actually sitting in
-// (floor, walls) rather than only the dome. Off by default until the
-// verification captures land; flip the '===' to '!==' to default it on.
-// Never on in an embed, same guard shape as SSR/bounce/sky-vis above.
-const SCENE_LOCAL_ENV_PARKED = false;
-const SCENE_LOCAL_ENV_KEY = 'mtlx_scene_local_reflections';
-const SCENE_LOCAL_ENV_STRENGTH_KEY = 'mtlx_scene_local_reflections_strength';
-const SCENE_LOCAL_ENV_STRENGTH_DEFAULT = 1;
-const storedSceneLocalReflections = () => {
-    if (SCENE_LOCAL_ENV_PARKED || window.top !== window) return false;
-    try { return localStorage.getItem(SCENE_LOCAL_ENV_KEY) === '1'; } catch (e) { return false; }
-};
-const storedSceneLocalReflectionStrength = () => {
-    if (window.top !== window) return 1;
-    try {
-        const raw = localStorage.getItem(SCENE_LOCAL_ENV_STRENGTH_KEY);
-        if (raw == null || raw === '') return 1;
-        const value = Number(raw);
-        return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1;
-    } catch (e) { return 1; }
-};
-
-// Off by default (2026-09-22): the Default quality level starts with it
-// off, same as AO and sky visibility.
-const storedSceneShadows = () => {
-    if (window.top !== window) return false;
-    try { return localStorage.getItem(SCENE_SHADOWS_KEY) === '1'; } catch (e) { return false; }
-};
-
-// Scene transparency is independent from the shared Material Viewer Force
-// Transparency setting. An explicit legacy value is migrated once; a fresh
-// Scene profile opts into authored opacity/transmission.
-const SCENE_TRANSPARENCY_KEY = 'mtlxUsdSceneTransparency';
-let USD_SCENE_TRANSPARENCY = (() => {
-    try {
-        const stored = localStorage.getItem(SCENE_TRANSPARENCY_KEY);
-        if (stored === '0') return false;
-        if (stored === '1') return true;
-        const legacy = localStorage.getItem('mtlxForceTransparency');
-        if (legacy === '0' || legacy === '1') {
-            localStorage.setItem(SCENE_TRANSPARENCY_KEY, legacy);
-            return legacy === '1';
-        }
-    } catch (e) { /* privacy mode, use the documented default */ }
-    return true;
-})();
-const getUsdSceneTransparency = () => USD_SCENE_TRANSPARENCY;
+// Scene transparency is independent from the Material Viewer's Force
+// Transparency; the store migrates an explicit legacy value once.
+const getUsdSceneTransparency = () => !!sceneSetting('transparency');
 const setUsdSceneTransparency = (value, { persist = true } = {}) => {
-    USD_SCENE_TRANSPARENCY = !!value;
-    if (persist) {
-        try { localStorage.setItem(SCENE_TRANSPARENCY_KEY, USD_SCENE_TRANSPARENCY ? '1' : '0'); } catch (e) { /* best-effort */ }
-    }
+    const next = !!sceneSettingWrite('transparency', !!value, { persist });
     try {
         window.dispatchEvent(new CustomEvent('mtlx-usd-scene-transparency', {
-            detail: { value: USD_SCENE_TRANSPARENCY },
+            detail: { value: next },
         }));
     } catch (e) { /* non-browser embed */ }
-    return USD_SCENE_TRANSPARENCY;
+    return next;
 };
 const sceneTransparencyEnabled = () => (typeof window.getUsdSceneTransparency === 'function'
     ? !!window.getUsdSceneTransparency() : true);
@@ -464,46 +263,18 @@ const sceneMaterialIsStaticTransmitter = (material) => {
     return thinWalled.reason === 'constant-thin' || thinWalled.reason === 'constant-solid' || thinWalled.reason === 'default-solid';
 };
 
-const storedSceneStageLights = () => {
-    if (window.top !== window) return true;
-    try { return localStorage.getItem(SCENE_STAGE_LIGHTS_KEY) !== '0'; } catch (e) { return true; }
-};
-const storedSceneStageLightsEv = () => {
-    if (window.top !== window) return 0;
-    try {
-        const value = Number(localStorage.getItem(SCENE_STAGE_LIGHTS_EV_KEY));
-        return Number.isFinite(value) ? Math.max(-8, Math.min(8, value)) : 0;
-    } catch (e) { return 0; }
-};
-
-// Texture memory budget: caps the total decoded bytes the planner will
-// allow across every ordinary and UDIM texture combined. Persisted at the
-// top realm only, like the size tier above.
-const SCENE_TEXTURE_BUDGET_KEY = 'mtlx_scene_texture_budget';
-const SCENE_TEXTURE_BUDGET_VALUES = [1, 2, 4]; // GiB
-const SCENE_TEXTURE_BUDGET_DEFAULT_GIB = 1;
-const GIB = 1024 * 1024 * 1024;
-
-const storedSceneTextureBudgetBytes = () => {
-    if (window.top !== window) return SCENE_TEXTURE_BUDGET_DEFAULT_GIB * GIB;
-    try {
-        const stored = Number(localStorage.getItem(SCENE_TEXTURE_BUDGET_KEY));
-        return (SCENE_TEXTURE_BUDGET_VALUES.includes(stored) ? stored : SCENE_TEXTURE_BUDGET_DEFAULT_GIB) * GIB;
-    } catch (e) { return SCENE_TEXTURE_BUDGET_DEFAULT_GIB * GIB; /* privacy mode */ }
-};
+const storedSceneTextureBudgetBytes = () => sceneSetting('textureBudgetGib') * GIB;
 
 const setStoredSceneTextureMaxSize = (value) => {
-    if (window.top !== window) return;
     const next = value === Infinity || String(value).toLowerCase() === 'original' ? Infinity : Math.round(Number(value));
-    if (!SCENE_TEXTURE_MAX_SIZE_VALUES.includes(next)) return;
-    try { localStorage.setItem(SCENE_TEXTURE_MAX_SIZE_KEY, next === Infinity ? 'original' : String(next)); } catch (e) { /* privacy mode */ }
+    if (!sceneSettingOptions('textureMaxSize').includes(next)) return;
+    sceneSettingWrite('textureMaxSize', next);
 };
 
 const setStoredSceneTextureBudgetBytes = (bytes) => {
-    if (window.top !== window) return;
     const gib = Number(bytes) / GIB;
-    if (!SCENE_TEXTURE_BUDGET_VALUES.includes(gib)) return;
-    try { localStorage.setItem(SCENE_TEXTURE_BUDGET_KEY, String(gib)); } catch (e) { /* privacy mode */ }
+    if (!sceneSettingOptions('textureBudgetGib').includes(gib)) return;
+    sceneSettingWrite('textureBudgetGib', gib);
 };
 
 const formatGB = (bytes) => (bytes / GIB).toFixed(2) + ' GB';
@@ -511,74 +282,17 @@ const formatMB = (bytes) => Math.round(bytes / (1024 * 1024)) + ' MB';
 // MB below 1 GB, GB above, so small scenes and limits never print as 0.00 GB.
 const formatSize = (bytes) => (bytes >= GIB ? formatGB(bytes) : formatMB(bytes));
 
-// Loop subdivision level for catmullClark/loop meshes, persisted the same
-// way as the texture size cap above.
-const SCENE_SUBDIVISION_KEY = 'mtlx_scene_subdivision';
-const SCENE_SUBDIVISION_VALUES = [0, 1, 2];
-const SCENE_SUBDIVISION_DEFAULT = 0;
-
-const storedSceneSubdivisionLevel = () => {
-    if (window.top !== window) return SCENE_SUBDIVISION_DEFAULT;
-    try {
-        const raw = localStorage.getItem(SCENE_SUBDIVISION_KEY);
-        // Number(null) is 0, so read the raw string: an unset or blank
-        // preference takes the default (off), and an explicit stored level
-        // still wins.
-        if (raw === null || raw.trim() === '') return SCENE_SUBDIVISION_DEFAULT;
-        const stored = Number(raw);
-        return SCENE_SUBDIVISION_VALUES.includes(stored) ? stored : SCENE_SUBDIVISION_DEFAULT;
-    } catch (e) { return SCENE_SUBDIVISION_DEFAULT; /* privacy mode */ }
-};
-
-const setStoredSceneSubdivisionLevel = (level) => {
-    if (window.top === window) {
-        try { localStorage.setItem(SCENE_SUBDIVISION_KEY, String(level)); } catch (e) { /* privacy mode */ }
-    }
-};
+const storedSceneSubdivisionLevel = () => sceneSetting('subdivision');
+const setStoredSceneSubdivisionLevel = (level) => { sceneSettingWrite('subdivision', level); };
 
 // Displacement subdivision override: 'follow' reuses the worker's mesh (or
-// the authored one), a number re-subdivides the pre-subdivision cage at
-// that level, independent of the plain Subdivision setting above.
-const SCENE_DISPLACEMENT_SUBDIVISION_KEY = 'mtlx_scene_displacement_subdivision';
-const SCENE_DISPLACEMENT_SUBDIVISION_VALUES = ['follow', 0, 1, 2, 3];
-const SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT = 'follow';
+// the authored one), a number re-subdivides the pre-subdivision cage.
+const storedSceneDisplacementSubdivision = () => sceneSetting('displacementSubdivision');
+const setStoredSceneDisplacementSubdivision = (value) => { sceneSettingWrite('displacementSubdivision', value); };
 
-const storedSceneDisplacementSubdivision = () => {
-    if (window.top !== window) return SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT;
-    try {
-        const raw = localStorage.getItem(SCENE_DISPLACEMENT_SUBDIVISION_KEY);
-        if (raw === null || raw.trim() === '') return SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT;
-        if (raw === 'follow') return 'follow';
-        const stored = Number(raw);
-        return SCENE_DISPLACEMENT_SUBDIVISION_VALUES.includes(stored) ? stored : SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT;
-    } catch (e) { return SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT; /* privacy mode */ }
-};
-
-const setStoredSceneDisplacementSubdivision = (value) => {
-    if (window.top === window) {
-        try { localStorage.setItem(SCENE_DISPLACEMENT_SUBDIVISION_KEY, String(value)); } catch (e) { /* privacy mode */ }
-    }
-};
-
-// Whether the per-mesh/per-stage triangle budgets below are enforced at all,
-// persisted the same way as the settings above. Default ON (limits apply).
-const SCENE_TRIANGLE_LIMITS_KEY = 'mtlx_scene_triangle_limits';
-const SCENE_TRIANGLE_LIMITS_DEFAULT = true;
-
-const storedSceneTriangleLimits = () => {
-    if (window.top !== window) return SCENE_TRIANGLE_LIMITS_DEFAULT;
-    try {
-        const raw = localStorage.getItem(SCENE_TRIANGLE_LIMITS_KEY);
-        if (raw === null || raw.trim() === '') return SCENE_TRIANGLE_LIMITS_DEFAULT;
-        return raw !== 'false';
-    } catch (e) { return SCENE_TRIANGLE_LIMITS_DEFAULT; /* privacy mode */ }
-};
-
-const setStoredSceneTriangleLimits = (value) => {
-    if (window.top === window) {
-        try { localStorage.setItem(SCENE_TRIANGLE_LIMITS_KEY, String(value !== false)); } catch (e) { /* privacy mode */ }
-    }
-};
+// Whether the per-mesh/per-stage triangle budgets are enforced at all.
+const storedSceneTriangleLimits = () => !!sceneSetting('triangleLimits');
+const setStoredSceneTriangleLimits = (value) => { sceneSettingWrite('triangleLimits', value !== false); };
 
 // Governed quality-preset keys needing a full worker reparse (subdivision
 // has no live setter; triangleLimits' worker budgets need the same reparse).
@@ -2492,7 +2206,7 @@ const createMtlxSceneView = async ({
     };
     // 'follow' reuses the worker-subdivided mesh; a number re-subdivides the
     // pre-subdivision cage at that level, only for displaced materials.
-    let displacementSubdivisionOverride = SCENE_DISPLACEMENT_SUBDIVISION_VALUES.includes(displacementSubdivision)
+    let displacementSubdivisionOverride = sceneSettingOptions('displacementSubdivision').includes(displacementSubdivision)
         ? displacementSubdivision : storedSceneDisplacementSubdivision();
     // When off, the displacement triangle budgets below never cap or disallow.
     let triangleLimitsEnabled = typeof triangleLimits === 'boolean' ? triangleLimits : storedSceneTriangleLimits();
@@ -3698,10 +3412,10 @@ const scenePruneUnreachableNodes = (xml) => {
         // uniform builder below picks it over the FIS chain when the
         // shaders were generated for the prefilter path.
         if (window.ensurePrefilteredEnv) window.ensurePrefilteredEnv(renderer, env);
-        if (window.ensureConvolvedIrradiance) window.ensureConvolvedIrradiance(renderer, env);
+        if (window.ensureConvolvedIrradiance) window.ensureConvolvedIrradiance(renderer, env, sceneDiffuseEnvMethod());
         const diagnosticSlots = diagnosticShadowSlots();
         const uniforms = window.createMtlxSceneUniforms({
-            compiled, env, lightData: mxEnv.lightData || [], stageLights: diagnosticStageLights(), displayTransform: sceneDisplayTransform,
+            diffuseEnvMethod: sceneDiffuseEnvMethod(), displayExposureScaleOverride: sceneExposureScale(), compiled, env, lightData: mxEnv.lightData || [], stageLights: diagnosticStageLights(), displayTransform: sceneDisplayTransform,
             shadowAtlas: shadowsEnabled && shadowTarget ? shadowTarget.texture : null,
             shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowTexelSizes: shadowCasterTexelSizes(), shadowFaceOrigins: shadowCasterFaceOrigins(), shadowFaceValid: shadowCasterFaceValid(), shadowFaceBasisX: shadowCasterFaceBasisX(), shadowFaceBasisY: shadowCasterFaceBasisY(), shadowFaceBasisZ: shadowCasterFaceBasisZ(), shadowSlotFace: diagnosticSlots.shadowSlotFace, shadowSlotFaceCount: diagnosticSlots.shadowSlotFaceCount,
             shadowTransmittance: shadowsEnabled && shadowTransmittanceTarget ? shadowTransmittanceTarget.texture : null, shadowRecordCells: shadowCasterRecordCells(),
@@ -3818,7 +3532,7 @@ const scenePruneUnreachableNodes = (xml) => {
         report({ phase: 'renderer', status: 'start' });
         mxEnv = await window.getMxEnv(version);
         const userEnv = await window.getEnvOverride();
-        env = userEnv || await window.getEnvironment();
+        env = sceneKeyEnv(userEnv || await window.getEnvironment());
         // A stage's own dome light is its authored lighting, so apply it
         // unless the user already imported an environment this session.
         if (!userEnv) {
@@ -6437,7 +6151,7 @@ const scenePruneUnreachableNodes = (xml) => {
             // no error) on every fresh Scene load -- caught only by a
             // headed on/off capture pair coming back byte-identical, not by
             // any source-text check. Ensure it here too.
-            if (window.ensureConvolvedIrradiance) window.ensureConvolvedIrradiance(renderer, env);
+            if (window.ensureConvolvedIrradiance) window.ensureConvolvedIrradiance(renderer, env, sceneDiffuseEnvMethod());
             const exposure = typeof envExposure !== 'undefined' ? envExposure : (domeLight ? domeLight.exposure : 1);
             const rotRad = typeof envRotationRad !== 'undefined' ? envRotationRad : 0;
             const envMatrix = new THREE.Matrix4().makeRotationY(Math.PI / 2 + rotRad);
@@ -6736,7 +6450,7 @@ const scenePruneUnreachableNodes = (xml) => {
         };
         const applyMaterialEnvironment = () => {
             if (window.ensurePrefilteredEnv) window.ensurePrefilteredEnv(renderer, env);
-            if (window.ensureConvolvedIrradiance) window.ensureConvolvedIrradiance(renderer, env);
+            if (window.ensureConvolvedIrradiance) window.ensureConvolvedIrradiance(renderer, env, sceneDiffuseEnvMethod());
             const radiance = env && env.radiance;
             if (radiance && radiance.isTexture && (radiance.minFilter !== THREE.LinearMipmapLinearFilter || !radiance.generateMipmaps)) {
                 console.warn('usd-scene-renderer: env.radiance lost its mip chain (minFilter or generateMipmaps reset), restoring it.');
@@ -6749,7 +6463,7 @@ const scenePruneUnreachableNodes = (xml) => {
                 if (!compiled || !window.createMtlxSceneUniforms) continue;
                 const diagnosticSlots = diagnosticShadowSlots();
                 const next = window.createMtlxSceneUniforms({
-                    compiled, env, lightData: mxEnv.lightData || [], stageLights: diagnosticStageLights(), displayTransform: sceneDisplayTransform,
+                    diffuseEnvMethod: sceneDiffuseEnvMethod(), displayExposureScaleOverride: sceneExposureScale(), compiled, env, lightData: mxEnv.lightData || [], stageLights: diagnosticStageLights(), displayTransform: sceneDisplayTransform,
             shadowAtlas: shadowsEnabled && shadowTarget ? shadowTarget.texture : null,
             shadowMatrices: shadowCasterMatrices(), shadowTiles: shadowCasterTiles(), shadowDepthPlanes: shadowCasterDepthPlanes(), shadowDepthRanges: shadowCasterDepthRanges(), shadowSourceRadii: shadowCasterSourceRadii(), shadowTexelSizes: shadowCasterTexelSizes(), shadowFaceOrigins: shadowCasterFaceOrigins(), shadowFaceValid: shadowCasterFaceValid(), shadowFaceBasisX: shadowCasterFaceBasisX(), shadowFaceBasisY: shadowCasterFaceBasisY(), shadowFaceBasisZ: shadowCasterFaceBasisZ(), shadowSlotFace: diagnosticSlots.shadowSlotFace, shadowSlotFaceCount: diagnosticSlots.shadowSlotFaceCount,
             shadowTransmittance: shadowsEnabled && shadowTransmittanceTarget ? shadowTransmittanceTarget.texture : null, shadowRecordCells: shadowCasterRecordCells(),
@@ -6785,7 +6499,7 @@ const scenePruneUnreachableNodes = (xml) => {
         // per material instead of regenerating every shader in the stage.
         // Exposure is shared with the other tools; the curve is scene-local.
         const pushDisplaySettings = () => {
-            const scale = window.displayExposureScale ? window.displayExposureScale() : 1;
+            const scale = sceneExposureScale();
             const id = window.displayTransformId ? window.displayTransformId(sceneDisplayTransform) : 0;
             materials.forEach((material) => {
                 const u = material.uniforms;
@@ -6802,7 +6516,7 @@ const scenePruneUnreachableNodes = (xml) => {
             if ('toneMapping' in renderer) {
                 renderer.toneMapping = custom ? THREE.CustomToneMapping
                     : (mode === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping);
-                renderer.toneMappingExposure = window.displayExposureScale ? window.displayExposureScale() : 1;
+                renderer.toneMappingExposure = sceneExposureScale();
             }
             // The chunk is a compile-time include, so a mode change needs the
             // built-ins recompiled; three r128's needsProgramChange never fires
@@ -6939,7 +6653,7 @@ const scenePruneUnreachableNodes = (xml) => {
         };
         peelPipeline = window.createPeelPipeline ? window.createPeelPipeline(renderer, {
             getDisplayTransform: () => sceneDisplayTransform,
-            getDisplayExposure: () => (window.displayExposureScale ? window.displayExposureScale() : 1),
+            getDisplayExposure: () => (sceneExposureScale()),
             linearComposite: true, sceneRgbt: true,
             opaqueOutput: true,
         }) : null;
@@ -7039,7 +6753,7 @@ const scenePruneUnreachableNodes = (xml) => {
                 }
                 if (record.instanceMatrices != null && !instanceMatrices.length) continue;
                 const displacedPaths = recordDisplacedPaths(record);
-                const displacementOn = displacedPaths.size && window.getDisplacementEnabled && window.getDisplacementEnabled();
+                const displacementOn = displacedPaths.size && sceneDisplacementEnabled();
                 let displacementAllowed = true;
                 let effectiveRecord = record;
                 if (displacementOn && displacementSubdivisionOverride !== 'follow') {
@@ -8099,7 +7813,7 @@ const scenePruneUnreachableNodes = (xml) => {
         if (window.UsdScenePost) {
             presentationPipeline = window.UsdScenePost.create(renderer, {
                 getDisplayTransform: () => sceneDisplayTransform,
-                getExposure: () => window.displayExposureScale ? window.displayExposureScale() : 1,
+                getExposure: () => sceneExposureScale(),
                 onDiagnostic: (message) => {
                     const warning = '[info] Scene presentation: ' + message;
                     if (!warnings.includes(warning)) warnings.push(warning);
@@ -8110,8 +7824,8 @@ const scenePruneUnreachableNodes = (xml) => {
         startLoop();
         const setEnvironment = (next) => {
             if (!next || stopped) return false;
-            env = next;
-            if (environmentBridge && environmentBridge.setEnvironment) environmentBridge.setEnvironment(next);
+            env = sceneKeyEnv(next);
+            if (environmentBridge && environmentBridge.setEnvironment) environmentBridge.setEnvironment(env);
             applyMaterialEnvironment();
             reshadeSkyBounce(); applySkyBounce();
             markLocalEnvDirty();
@@ -8144,7 +7858,7 @@ const scenePruneUnreachableNodes = (xml) => {
         };
         const setShadowsEnabled = (on) => {
             shadowsEnabled = !!on;
-            try { if (window.top === window) localStorage.setItem(SCENE_SHADOWS_KEY, shadowsEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            sceneSettingWrite('shadows', shadowsEnabled);
             regenerateForFeatures();
             updateShadowMap();
             applyShadowMatrix();
@@ -8194,9 +7908,7 @@ const scenePruneUnreachableNodes = (xml) => {
             const allowed = (window.getDisplayTransformValues && window.getDisplayTransformValues()) || [];
             if (!allowed.includes(mode) || mode === sceneDisplayTransform) return sceneDisplayTransform;
             sceneDisplayTransform = mode;
-            try {
-                if (window.top === window) localStorage.setItem(SCENE_DISPLAY_TRANSFORM_KEY, mode);
-            } catch (e) { /* privacy mode */ }
+            sceneSettingWrite('displayTransform', mode);
             pushDisplaySettings();
             renderFrame();
             return sceneDisplayTransform;
@@ -8206,11 +7918,9 @@ const scenePruneUnreachableNodes = (xml) => {
         // sees, unlike the display transform's plain uniform swap.
         const getSceneMaterialWorkspace = () => materialWorkspace;
         const setSceneMaterialWorkspace = (space) => {
-            if (!SCENE_MATERIAL_WORKSPACE_VALUES.includes(space) || space === materialWorkspace) return materialWorkspace;
+            if (!sceneSettingOptions('materialWorkspace').includes(space) || space === materialWorkspace) return materialWorkspace;
             materialWorkspace = space;
-            try {
-                if (window.top === window) localStorage.setItem(SCENE_MATERIAL_WORKSPACE_KEY, materialWorkspace);
-            } catch (e) { /* privacy mode */ }
+            sceneSettingWrite('materialWorkspace', materialWorkspace);
             displayDirty = true;
             displayRevision += 1;
             if (queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
@@ -8224,9 +7934,7 @@ const scenePruneUnreachableNodes = (xml) => {
             const next = !!on;
             if (next === specularAAEnabled) return specularAAEnabled;
             specularAAEnabled = next;
-            try {
-                if (window.top === window) localStorage.setItem(SCENE_SPECULAR_AA_KEY, specularAAEnabled ? '1' : '0');
-            } catch (e) { /* privacy mode */ }
+            sceneSettingWrite('specularAA', specularAAEnabled);
             displayDirty = true;
             displayRevision += 1;
             if (queueDisplayRebuild && active && !stopped) queueDisplayRebuild();
@@ -8236,7 +7944,7 @@ const scenePruneUnreachableNodes = (xml) => {
             const next = !!on;
             if (next === skyVisEnabled) return skyVisEnabled;
             skyVisEnabled = next;
-            try { if (window.top === window) localStorage.setItem(SCENE_SKYVIS_KEY, skyVisEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            sceneSettingWrite('skyVis', skyVisEnabled);
             // Turning it back on has to re-bake: the volume is dropped when off.
             if (skyVisEnabled && !skyVisTexture && sceneRoot) {
                 const box = new THREE.Box3().setFromObject(sceneRoot);
@@ -8253,7 +7961,7 @@ const scenePruneUnreachableNodes = (xml) => {
         };
         const setSkyVisibilityStrength = (value) => {
             skyVisStrength = Math.max(0, Math.min(1, Number(value) || 0));
-            try { if (window.top === window) localStorage.setItem(SCENE_SKYVIS_STRENGTH_KEY, String(skyVisStrength)); } catch (e) { /* privacy mode */ }
+            sceneSettingWrite('skyVisStrength', skyVisStrength);
             applySkyVisibility();
             applyAoVolume();
             applySkyBounce();
@@ -8268,7 +7976,7 @@ const scenePruneUnreachableNodes = (xml) => {
         });
         const setAmbientOcclusionEnabled = (on) => {
             aoEnabled = !!on;
-            try { if (window.top === window) localStorage.setItem(SCENE_AO_KEY, aoEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            sceneSettingWrite('ao', aoEnabled);
             if (!aoEnabled) { applyAmbientOcclusion(null); disposeAoResources(); }
             regenerateForFeatures();
             applyAoVolume();
@@ -8278,7 +7986,7 @@ const scenePruneUnreachableNodes = (xml) => {
         const setAmbientOcclusionStrength = (value) => {
             const next = Number(value);
             aoStrength = Number.isFinite(next) ? Math.max(0, Math.min(1, next)) : 1;
-            try { if (window.top === window) localStorage.setItem(SCENE_AO_STRENGTH_KEY, String(aoStrength)); } catch (e) { /* privacy mode */ }
+            sceneSettingWrite('aoStrength', aoStrength);
             applyAoVolume();
             applySkyBounce();
             return aoStrength;
@@ -8297,7 +8005,7 @@ const scenePruneUnreachableNodes = (xml) => {
             const next = !!on;
             if (next === bounceEnabled) return bounceEnabled;
             bounceEnabled = next;
-            try { if (window.top === window) localStorage.setItem(SCENE_BOUNCE_KEY, bounceEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            sceneSettingWrite('bounce', bounceEnabled);
             // Turning it back on has to re-bake: the volume is dropped when
             // off. Needs the sky bake's own volume and RGBA data, so rebuild
             // that first when it is not already held.
@@ -8314,7 +8022,7 @@ const scenePruneUnreachableNodes = (xml) => {
         const setSceneBounceStrength = (value) => {
             const next = Number(value);
             bounceStrength = Number.isFinite(next) ? Math.max(0, Math.min(1, next)) : 1;
-            try { if (window.top === window) localStorage.setItem(SCENE_BOUNCE_STRENGTH_KEY, String(bounceStrength)); } catch (e) { /* privacy mode */ }
+            sceneSettingWrite('bounceStrength', bounceStrength);
             applySkyBounce();
             renderFrame();
             return bounceStrength;
@@ -8327,20 +8035,20 @@ const scenePruneUnreachableNodes = (xml) => {
         });
         const setScreenSpaceReflections = (on) => {
             ssrEnabled = !SCENE_SSR_PARKED && !!on;
-            try { if (window.top === window) localStorage.setItem(SCENE_SSR_KEY, ssrEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            sceneSettingWrite('ssrOn', ssrEnabled);
             if (!ssrEnabled) { applySsrHistory(); disposeSsrHistoryResources(); }
             return ssrEnabled;
         };
         const setScreenSpaceReflectionStrength = (value) => {
             const next = Number(value);
             ssrStrength = Number.isFinite(next) ? Math.max(0, Math.min(1, next)) : 1;
-            try { if (window.top === window) localStorage.setItem(SCENE_SSR_STRENGTH_KEY, String(ssrStrength)); } catch (e) { /* privacy mode */ }
+            sceneSettingWrite('ssrStrength', ssrStrength);
             return ssrStrength;
         };
         const setScreenSpaceReflectionMaxRoughness = (value) => {
             const next = Number(value);
             ssrMaxRoughness = Number.isFinite(next) ? Math.max(0.05, Math.min(1, next)) : 0.5;
-            try { if (window.top === window) localStorage.setItem(SCENE_SSR_MAX_ROUGHNESS_KEY, String(ssrMaxRoughness)); } catch (e) { /* privacy mode */ }
+            sceneSettingWrite('ssrMaxRoughness', ssrMaxRoughness);
             return ssrMaxRoughness;
         };
         // reason names the case where SSR cannot be ready at all: no HDR
@@ -8363,7 +8071,7 @@ const scenePruneUnreachableNodes = (xml) => {
             const next = !SCENE_LOCAL_ENV_PARKED && !!on;
             if (next === localEnvEnabled) return localEnvEnabled;
             localEnvEnabled = next;
-            try { if (window.top === window) localStorage.setItem(SCENE_LOCAL_ENV_KEY, localEnvEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            sceneSettingWrite('localReflections', localEnvEnabled);
             if (localEnvEnabled && !localEnvTexture) markLocalEnvDirty();
             applyLocalEnv();
             renderFrame();
@@ -8372,7 +8080,7 @@ const scenePruneUnreachableNodes = (xml) => {
         const setLocalReflectionStrength = (value) => {
             const next = Number(value);
             localEnvStrength = Number.isFinite(next) ? Math.max(0, Math.min(1, next)) : 1;
-            try { if (window.top === window) localStorage.setItem(SCENE_LOCAL_ENV_STRENGTH_KEY, String(localEnvStrength)); } catch (e) { /* privacy mode */ }
+            sceneSettingWrite('localEnvStrength', localEnvStrength);
             applyLocalEnv();
             renderFrame();
             return localEnvStrength;
@@ -8387,7 +8095,7 @@ const scenePruneUnreachableNodes = (xml) => {
         });
         const setStageLightsEnabled = (on) => {
             stageLightsEnabled = !!on;
-            try { if (window.top === window) localStorage.setItem(SCENE_STAGE_LIGHTS_KEY, stageLightsEnabled ? '1' : '0'); } catch (e) { /* privacy mode */ }
+            sceneSettingWrite('stageLightsOn', stageLightsEnabled);
             // The active stage-light set also determines caster ranking and
             // slot ownership. Rebuild immediately so toggling the rig cannot
             // leave an atlas tile shadowing a light that is no longer active.
@@ -8398,7 +8106,7 @@ const scenePruneUnreachableNodes = (xml) => {
         const setStageLightsEv = (value) => {
             stageLightsEv = Math.max(-8, Math.min(8, Number(value) || 0));
             if (shadowsEnabled) updateShadowMap();
-            try { if (window.top === window) localStorage.setItem(SCENE_STAGE_LIGHTS_EV_KEY, String(stageLightsEv)); } catch (e) { /* privacy mode */ }
+            sceneSettingWrite('stageLightsEv', stageLightsEv);
             applyMaterialEnvironment();
             return stageLightsEv;
         };
@@ -8478,13 +8186,11 @@ const scenePruneUnreachableNodes = (xml) => {
         const setTextureMaxSize = (px) => {
             const value = px === Infinity || String(px).toLowerCase() === 'original' ? Infinity : Math.round(Number(px));
             const next = Number.isNaN(value) ? sceneOptions.textureMaxSize : value;
-            if (!SCENE_TEXTURE_MAX_SIZE_VALUES.includes(next) || next === sceneOptions.textureMaxSize) {
+            if (!sceneSettingOptions('textureMaxSize').includes(next) || next === sceneOptions.textureMaxSize) {
                 return sceneOptions.textureMaxSize;
             }
             sceneOptions.textureMaxSize = next;
-            if (window.top === window) {
-                try { localStorage.setItem(SCENE_TEXTURE_MAX_SIZE_KEY, next === Infinity ? 'original' : String(next)); } catch (e) { /* privacy mode */ }
-            }
+            sceneSettingWrite('textureMaxSize', next);
             udimVariantByMaterial.clear();
             displayDirty = true;
             displayRevision += 1;
@@ -8502,11 +8208,9 @@ const scenePruneUnreachableNodes = (xml) => {
                 return sceneOptions.textureMaxBytes;
             }
             sceneOptions.textureMaxBytes = next;
-            if (window.top === window) {
+            {
                 const gib = next / GIB;
-                if (SCENE_TEXTURE_BUDGET_VALUES.includes(gib)) {
-                    try { localStorage.setItem(SCENE_TEXTURE_BUDGET_KEY, String(gib)); } catch (e) { /* privacy mode */ }
-                }
+                if (sceneSettingOptions('textureBudgetGib').includes(gib)) sceneSettingWrite('textureBudgetGib', gib);
             }
             udimVariantByMaterial.clear();
             displayDirty = true;
@@ -8554,8 +8258,8 @@ const scenePruneUnreachableNodes = (xml) => {
         // rebuilds through requestSceneRebuild (never the plain Subdivision
         // setting's full worker reload).
         const setDisplacementSubdivisionOverride = (value) => {
-            const next = value === 'follow' || SCENE_DISPLACEMENT_SUBDIVISION_VALUES.includes(Number(value))
-                ? (value === 'follow' ? 'follow' : Number(value)) : SCENE_DISPLACEMENT_SUBDIVISION_DEFAULT;
+            const next = value === 'follow' || sceneSettingOptions('displacementSubdivision').includes(Number(value))
+                ? (value === 'follow' ? 'follow' : Number(value)) : 'follow';
             if (next === displacementSubdivisionOverride) return displacementSubdivisionOverride;
             displacementSubdivisionOverride = next;
             setStoredSceneDisplacementSubdivision(next);
@@ -8597,7 +8301,7 @@ const scenePruneUnreachableNodes = (xml) => {
                 if (has('triangleLimits')) setTriangleLimits(!!partial.triangleLimits);
                 if (has('displacementSubdivision')) setDisplacementSubdivisionOverride(partial.displacementSubdivision);
                 if (has('subdivision')) setStoredSceneSubdivisionLevel(Number(partial.subdivision));
-                if (has('displacement') && window.setDisplacementEnabled) window.setDisplacementEnabled(!!partial.displacement);
+                if (has('displacement')) setSceneDisplacement(!!partial.displacement);
                 if (has('transparency') && window.setUsdSceneTransparency) window.setUsdSceneTransparency(!!partial.transparency);
             } finally {
                 queueDisplayRebuild = savedQueue;
@@ -8614,8 +8318,18 @@ const scenePruneUnreachableNodes = (xml) => {
         // Called by setDisplacementEnabled/setPreviewSubdivisionLevel through
         // LIVE_VIEWS; Scene ignores previewSubdivision (its own select
         // covers that) and only acts on the shared enabled flag.
+        // The Scene's own displacement flag; the other tools' broadcasts only
+        // rebuild when this stage value actually changed.
+        let displacementSeen = sceneDisplacementEnabled();
+        const setSceneDisplacement = (on) => {
+            sceneSettingWrite('displacement', !!on);
+            displacementSeen = sceneDisplacementEnabled();
+            requestSceneRebuild();
+        };
         const refreshDisplacement = () => {
             if (stopped) return;
+            if (sceneDisplacementEnabled() === displacementSeen) return;
+            displacementSeen = sceneDisplacementEnabled();
             requestSceneRebuild();
         };
         if (textureStats.ktx2Substituted > 0) {
@@ -8674,6 +8388,7 @@ const scenePruneUnreachableNodes = (xml) => {
             setTriangleLimits,
             applySceneSettings,
             refreshDisplacement,
+            refreshKeyLight: () => { if (!stopped && env) setEnvironment(env); },
             whenDisplacementSettled: () => sceneRebuildQueue.whenSettled(),
             getTextureStats: () => ({
                 textureMaxSize: sceneOptions.textureMaxSize,

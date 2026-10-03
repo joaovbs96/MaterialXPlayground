@@ -64,9 +64,10 @@
             },
             encode: (v, P) => String(clamp(Math.round(Number(v) || 0), P.min, P.max)),
         },
+        // Options may be numbers (stored as their string); the option itself is returned.
         enum: {
-            decode: (raw, P) => (P.options && P.options.indexOf(raw) !== -1) ? raw : undefined,
-            encode: (v, P) => (P.options && P.options.indexOf(v) !== -1) ? v : P.levels.default,
+            decode: (raw, P) => (raw === null || raw === undefined || !P.options) ? undefined : P.options.find((o) => String(o) === String(raw)),
+            encode: (v, P) => { const hit = P.options && P.options.find((o) => String(o) === String(v)); return hit !== undefined ? hit : P.levels.default; },
         },
         // 'original' <-> Infinity; other values validated against P.options.
         sizeOrOriginal: {
@@ -111,8 +112,10 @@
                 return clamp(Number(value) || 0, P.min, P.max);
             case 'int':
                 return clamp(Math.round(Number(value) || 0), P.min, P.max);
-            case 'enum':
-                return (P.options && P.options.indexOf(value) !== -1) ? value : P.levels.default;
+            case 'enum': {
+                const hit = P.options && P.options.find((o) => String(o) === String(value));
+                return hit !== undefined ? hit : P.levels.default;
+            }
             case 'sizeOrOriginal':
                 if (value === Infinity || String(value).toLowerCase() === 'original') return Infinity;
                 { const n = Number(value); return (P.options && P.options.indexOf(n) !== -1) ? n : P.levels.default; }
@@ -137,7 +140,7 @@
             hint: 'Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.',
             profiles: {
                 preview: { storage: 'mtlxForceTransparency', codec: 'bool01', setter: 'setForceTransparency', levels: { performance: false, default: false, quality: false } },
-                stage: { storage: 'mtlxUsdSceneTransparency', codec: 'bool01', legacy: ['mtlxForceTransparency'], levels: { performance: false, default: true, quality: true } },
+                stage: { storage: 'mtlxUsdSceneTransparency', codec: 'bool01', legacy: ['mtlxForceTransparency'], migrateLegacy: true, ui: { label: 'Transparency', experimental: true, hint: 'Render opacity/transmission authored by scene materials. When off, transparent materials render opaque. Staged: takes effect on Apply.' }, levels: { performance: false, default: true, quality: true } },
             },
             surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
             embed: { attr: 'forcetransparency', live: true },
@@ -147,7 +150,7 @@
             hint: "Moves the mesh by the material's displacement; the material itself is unchanged.",
             profiles: {
                 preview: { storage: 'mtlxDisplacement', codec: 'boolOn', query: 'displacement', queryDecode: parseBoolFlag, setter: 'setDisplacementEnabled', levels: { performance: true, default: true, quality: true } },
-                stage: { storage: 'mtlxDisplacement', codec: 'boolOn', levels: { performance: false, default: true, quality: true } },
+                stage: { storage: 'mtlx_scene_displacement', codec: 'boolOn', legacy: ['mtlxDisplacement'], migrateLegacy: 'once', ui: { hint: 'Moves geometry bound to a displaced MaterialX material. Staged: takes effect on Apply.' }, levels: { performance: false, default: true, quality: true } },
             },
             surfaces: { viewer: 'yes', compare: 'yes', docs: NA("docs previews render a single node's output, so no displacement shader is ever bound"), graph: 'yes', embed: 'yes', scene: 'yes' },
             embed: { attr: 'displacement', live: true },
@@ -194,7 +197,7 @@
             hint: 'Cosine-convolves the environment instead of a 9 term spherical harmonic fit. More accurate diffuse under small bright lights.',
             profiles: {
                 preview: { storage: 'mtlx_diffuse_env', codec: 'enum', options: ['convolve', 'sh'], query: 'diffuseEnv', queryDecode: (raw) => (raw === 'sh' ? 'sh' : 'convolve'), setter: 'setDiffuseEnvMethod', levels: { performance: 'convolve', default: 'convolve', quality: 'convolve' } },
-                stage: { storage: 'mtlx_diffuse_env', codec: 'enum', options: ['convolve', 'sh'], levels: { performance: 'convolve', default: 'convolve', quality: 'convolve' } },
+                stage: { storage: 'mtlx_scene_diffuse_env', codec: 'enum', options: ['convolve', 'sh'], legacy: ['mtlx_diffuse_env'], migrateLegacy: 'once', ui: { label: 'Convolved diffuse environment', asBool: { on: 'convolve', off: 'sh' } }, levels: { performance: 'convolve', default: 'convolve', quality: 'convolve' } },
             },
             surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
@@ -204,7 +207,7 @@
             hint: 'How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping).',
             profiles: {
                 preview: { storage: 'mtlx_display_transform', codec: 'enum', options: ['srgb', 'aces', 'neutral', 'lin_rec709'], setter: 'setDisplayTransform', levels: { performance: 'srgb', default: 'srgb', quality: 'srgb' } },
-                stage: { storage: 'mtlx_scene_display_transform', codec: 'enum', options: ['srgb', 'aces', 'neutral', 'lin_rec709'], levels: { performance: 'neutral', default: 'neutral', quality: 'neutral' } },
+                stage: { storage: 'mtlx_scene_display_transform', codec: 'enum', options: ['srgb', 'aces', 'neutral', 'lin_rec709'], ui: { label: 'Display transform', experimental: true, options: ['neutral', 'aces', 'srgb', 'lin_rec709'], hint: 'How the linear render is encoded for display. Neutral rolls highlights off while keeping hue; sRGB clips at 1.0 and matches the official MaterialX viewer.' }, levels: { performance: 'neutral', default: 'neutral', quality: 'neutral' } },
             },
             surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
@@ -213,7 +216,7 @@
             hint: 'Scales the whole image before the display transform, the way a camera would.',
             profiles: {
                 preview: { storage: 'mtlx_display_exposure', codec: 'number', min: -8, max: 8, setter: 'setDisplayExposure', levels: { performance: 0, default: 0, quality: 0 } },
-                stage: { storage: 'mtlx_display_exposure', codec: 'number', min: -8, max: 8, levels: { performance: 0, default: 0, quality: 0 } },
+                stage: { storage: 'mtlx_scene_display_exposure', codec: 'number', min: -8, max: 8, legacy: ['mtlx_display_exposure'], migrateLegacy: 'once', ui: { label: 'Camera exposure', decimals: 2, hint: 'Scales the whole image before the display transform, the way a camera would. The exposure in Environment settings only scales the image based lighting.' }, levels: { performance: 0, default: 0, quality: 0 } },
             },
             surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
@@ -222,8 +225,9 @@
             hint: 'Automatically extract a strong sun into a directional light so sharp highlights stay crisp (rebuilds the environment).',
             profiles: {
                 preview: { storage: 'mtlx_env_keylight', codec: 'boolOn', setter: 'setKeyLightEnabled', levels: { performance: true, default: true, quality: true } },
+                stage: { storage: 'mtlx_scene_key_light', codec: 'boolOn', legacy: ['mtlx_env_keylight'], migrateLegacy: 'once', levels: { performance: true, default: true, quality: true } },
             },
-            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: PLANNED('P5') },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
         {
             key: 'geometry', label: 'Preview Geometry', group: 'geometry', order: 12, type: 'enum',
@@ -277,7 +281,7 @@
             min: 0, max: 360, step: 1, unit: 'deg', apply: 'environment', ui: true, persist: 'view',
             profiles: {
                 preview: { codec: 'number', min: 0, max: 360, levels: { performance: 0, default: 0, quality: 0 } },
-                stage: { codec: 'number', min: 0, max: 360, levels: { performance: 0, default: 0, quality: 0 } },
+                stage: { codec: 'number', min: 0, max: 360, ui: { decimals: 0 }, levels: { performance: 0, default: 0, quality: 0 } },
             },
             surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
@@ -286,7 +290,7 @@
             min: -3, max: 3, step: 0.1, unit: 'EV', apply: 'environment', ui: true, persist: 'view',
             profiles: {
                 preview: { codec: 'number', min: -3, max: 3, levels: { performance: 0, default: 0, quality: 0 } },
-                stage: { codec: 'number', min: -3, max: 3, levels: { performance: 0, default: 0, quality: 0 } },
+                stage: { codec: 'number', min: -3, max: 3, ui: { label: 'Exposure', decimals: 1 }, levels: { performance: 0, default: 0, quality: 0 } },
             },
             surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
             embed: { attr: 'exposure' },
@@ -294,152 +298,159 @@
 
         // ---- Stage-profile rows (js/usd-scene-renderer.js / js/usd-scene-app.jsx) ----
         {
-            key: 'textureMaxSize', label: 'Texture Max Size', group: 'geometry', order: 0, type: 'enum', options: [512, 1024, 2048, 4096, Infinity], apply: 'reload', ui: true,
+            key: 'textureMaxSize', label: 'Texture resolution', optionLabels: { 512: '512 px', 1024: '1024 px', 2048: '2048 px', 4096: '4096 px', Infinity: 'Original' }, hint: 'The maximum size each texture loads at. Higher values show finer detail in color, normal and roughness maps, but loading takes longer and uses more memory. If all textures together would go over Texture memory, they load smaller than this. Staged: takes effect on Apply.', group: 'geometry', order: 0, type: 'enum', options: [512, 1024, 2048, 4096, Infinity], apply: 'reload', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_texture_size', codec: 'sizeOrOriginal', options: [512, 1024, 2048, 4096, Infinity], levels: { performance: 512, default: 2048, quality: 4096 } } },
             surfaces: { viewer: NA('the Material Viewer has no scene texture budget'), compare: NA('the Material Viewer has no scene texture budget'), docs: NA('the Material Viewer has no scene texture budget'), graph: NA('the Material Viewer has no scene texture budget'), embed: NA('the Material Viewer has no scene texture budget'), scene: 'yes' },
         },
         {
-            key: 'textureBudgetGib', label: 'Texture Budget (GiB)', group: 'geometry', order: 1, type: 'enum', options: [1, 2, 4], apply: 'reload', ui: true,
+            key: 'textureBudgetGib', label: 'Texture memory', optionLabels: { 1: '1 GB', 2: '2 GB', 4: '4 GB' }, hint: 'How much memory all scene textures may use. Over the limit, all textures load at a lower resolution (1024, then 512 px) until they fit; if they still do not fit, the rest are left out (default values, grey UDIM tiles). Too high a value can exceed GPU memory and blank the view. Staged: takes effect on Apply.', group: 'geometry', order: 1, type: 'enum', options: [1, 2, 4], apply: 'reload', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_texture_budget', codec: 'gib', options: [1, 2, 4], levels: { performance: 1, default: 1, quality: 4 } } },
             surfaces: { viewer: NA('the Material Viewer has no scene texture budget'), compare: NA('the Material Viewer has no scene texture budget'), docs: NA('the Material Viewer has no scene texture budget'), graph: NA('the Material Viewer has no scene texture budget'), embed: NA('the Material Viewer has no scene texture budget'), scene: 'yes' },
         },
         {
-            key: 'subdivision', label: 'Subdivision', group: 'geometry', order: 2, type: 'number', min: 0, max: 2, apply: 'reload', ui: true,
+            key: 'subdivision', label: 'Subdivision', hint: 'Loop-subdivides catmullClark meshes for preview; the runtime cannot expose the cage, so this approximates the limit surface. Staged: reloads the stage on Apply.', group: 'geometry', order: 2, type: 'number', min: 0, max: 2, apply: 'reload', ui: true,
             control: 'select', options: [0, 1, 2], optionLabels: { 0: 'Off', 1: '1', 2: '2' },
             profiles: { stage: { storage: 'mtlx_scene_subdivision', codec: 'int', min: 0, max: 2, levels: { performance: 0, default: 0, quality: 2 } } },
             surfaces: { viewer: NA('the Material Viewer has no stage subdivision'), compare: NA('the Material Viewer has no stage subdivision'), docs: NA('the Material Viewer has no stage subdivision'), graph: NA('the Material Viewer has no stage subdivision'), embed: NA('the Material Viewer has no stage subdivision'), scene: 'yes' },
         },
         {
-            key: 'shadows', label: 'Shadows', group: 'lighting', order: 2, type: 'bool', apply: 'renderMode', ui: true,
+            key: 'shadows', label: 'Shadows', experimental: true, hint: 'Up to 32 shadow faces, packed into one shadow atlas, chosen by the light they deliver to sampled receivers. The atlas is rebuilt when the camera or lighting changes. Staged: takes effect on Apply.', group: 'lighting', order: 2, type: 'bool', apply: 'renderMode', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_shadows', codec: 'boolOnlyOne', levels: { performance: false, default: false, quality: true } } },
             surfaces: { viewer: PLANNED('P9'), compare: PLANNED('P9'), docs: PLANNED('P9'), graph: PLANNED('P9'), embed: PLANNED('P9'), scene: 'yes' },
         },
         {
-            key: 'ao', label: 'Ambient Occlusion', group: 'effects', order: 0, type: 'bool', apply: 'renderMode', ui: true,
+            key: 'ao', label: 'Ambient occlusion', experimental: true, hint: 'Environment light reaches every surface equally, including ones facing a wall, which makes interiors read flat. This estimates how much sky each pixel can actually see. Staged: takes effect on Apply.', group: 'effects', order: 0, type: 'bool', apply: 'renderMode', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_ao', codec: 'boolOnlyOne', levels: { performance: false, default: false, quality: true } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
         {
-            key: 'skyVis', label: 'Sky Visibility', group: 'lighting', order: 3, type: 'bool', apply: 'renderMode', ui: true,
+            key: 'skyVis', label: 'Sky visibility', experimental: true, hint: 'Environment light has no visibility term, so a wall does not block the sky and interiors read flat and overlit. This bakes how much sky each part of the stage can see into a coarse volume. Staged: takes effect on Apply.', group: 'lighting', order: 3, type: 'bool', apply: 'renderMode', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_skyvis', codec: 'boolOnlyOne', levels: { performance: false, default: false, quality: true } } },
             surfaces: { viewer: NA('the Material Viewer has no room-scale visibility bake'), compare: NA('the Material Viewer has no room-scale visibility bake'), docs: NA('the Material Viewer has no room-scale visibility bake'), graph: NA('the Material Viewer has no room-scale visibility bake'), embed: NA('the Material Viewer has no room-scale visibility bake'), scene: 'yes' },
         },
         {
-            key: 'displacementSubdivision', label: 'Displacement Subdivision', group: 'geometry', order: 4, type: 'enum', options: ['follow', 0, 1, 2, 3], apply: 'reload', ui: true,
+            key: 'displacementSubdivision', label: 'Displacement subdivision', optionLabels: { follow: 'Follow stage', 0: 'Off', 1: '1', 2: '2', 3: '3' }, hint: 'Subdivision applied to meshes bound to displaced MaterialX materials. Staged: takes effect on Apply.', group: 'geometry', order: 4, type: 'enum', options: ['follow', 0, 1, 2, 3], apply: 'reload', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_displacement_subdivision', codec: 'enum', options: ['follow', 0, 1, 2, 3], levels: { performance: 'follow', default: 'follow', quality: 3 } } },
             surfaces: { viewer: NA('the Material Viewer uses previewSubdivision'), compare: NA('the Material Viewer uses previewSubdivision'), docs: NA('the Material Viewer uses previewSubdivision'), graph: NA('the Material Viewer uses previewSubdivision'), embed: NA('the Material Viewer uses previewSubdivision'), scene: 'yes' },
         },
         {
-            key: 'triangleLimits', label: 'Triangle Limits', group: 'geometry', order: 5, type: 'bool', apply: 'reload', ui: true,
+            key: 'triangleLimits', label: 'Triangle limits', hint: 'Skips or lowers subdivision and displacement detail that would exceed 700,000 triangles per mesh or 6,000,000 per scene. Turning this off can run out of memory or freeze the tab on heavy scenes. Staged: reloads the stage on Apply.', group: 'geometry', order: 5, type: 'bool', apply: 'reload', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_triangle_limits', codec: 'boolTrueFalse', levels: { performance: true, default: true, quality: false } } },
             surfaces: { viewer: NA('the Material Viewer has no stage triangle budget'), compare: NA('the Material Viewer has no stage triangle budget'), docs: NA('the Material Viewer has no stage triangle budget'), graph: NA('the Material Viewer has no stage triangle budget'), embed: NA('the Material Viewer has no stage triangle budget'), scene: 'yes' },
         },
         {
-            key: 'bounce', label: 'One-Bounce Diffuse', group: 'effects', order: 2, type: 'bool', apply: 'renderMode', ui: true,
-            profiles: { stage: { storage: 'mtlx_scene_bounce', codec: 'boolOn', levels: { performance: false, default: true, quality: true } } },
+            key: 'bounce', label: 'Diffuse bounce', experimental: true, hint: 'Environment light is not reflected back off the room, so shadowed sides and corners lose the light the walls and floor bounce onto them. This bakes a coarse estimate of that bounce and adds it back where the sky is blocked. Staged: takes effect on Apply.', group: 'effects', order: 2, type: 'bool', apply: 'renderMode', ui: true,
+            profiles: { stage: { storage: 'mtlx_scene_bounce', codec: 'boolOn', framedValue: false, levels: { performance: false, default: true, quality: true } } },
             surfaces: { viewer: NA('the Material Viewer has no room-scale bounce bake'), compare: NA('the Material Viewer has no room-scale bounce bake'), docs: NA('the Material Viewer has no room-scale bounce bake'), graph: NA('the Material Viewer has no room-scale bounce bake'), embed: NA('the Material Viewer has no room-scale bounce bake'), scene: 'yes' },
         },
         {
-            key: 'localReflections', label: 'Local Reflections', group: 'effects', order: 4, type: 'bool', apply: 'renderMode', ui: true,
+            key: 'localReflections', label: 'Local reflections', experimental: true, hint: 'Reflections only show the environment, so the floor and the wall of a studio set never appear in a metal or a glossy surface. This captures the scene once from the subject and reflects that instead wherever it covers the sky. Staged: takes effect on Apply.', group: 'effects', order: 4, type: 'bool', apply: 'renderMode', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_local_reflections', codec: 'boolOnlyOne', levels: { performance: false, default: false, quality: true } } },
             surfaces: { viewer: NA('the Material Viewer has no per-stage local environment capture'), compare: NA('the Material Viewer has no per-stage local environment capture'), docs: NA('the Material Viewer has no per-stage local environment capture'), graph: NA('the Material Viewer has no per-stage local environment capture'), embed: NA('the Material Viewer has no per-stage local environment capture'), scene: 'yes' },
         },
         {
-            key: 'specularAA', label: 'Specular Anti-Aliasing', group: 'display', order: 2, type: 'bool', apply: 'regenerate', ui: true,
-            profiles: { stage: { storage: 'mtlx_scene_specular_aa', codec: 'boolOn', levels: { performance: false, default: true, quality: true } } },
+            key: 'specularAA', label: 'Specular anti-aliasing', experimental: true, hint: 'Widens anisotropic specular roughness by the screen-space variance of the shading normal and of the roughness input, so a fine procedural roughness noise network does not sparkle under a single-sample rasterizer the way a multi-sample path tracer would not. Smooth, constant-roughness materials are essentially unaffected. Staged: takes effect on Apply.', group: 'display', order: 2, type: 'bool', apply: 'regenerate', ui: true,
+            profiles: { stage: { storage: 'mtlx_scene_specular_aa', codec: 'boolOn', framedValue: false, levels: { performance: false, default: true, quality: true } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
 
         // ---- Stage-profile "live" rows (same value at every level) ----
         {
-            key: 'materialWorkspace', label: 'Material Working Space', group: 'display', order: 1, type: 'enum', options: ['rec709', 'acescg'], apply: 'regenerate', ui: true,
+            key: 'materialWorkspace', label: 'Material working space', experimental: true, optionLabels: { rec709: 'Rec.709', acescg: 'ACEScg' }, hint: 'How untagged colour numbers in the material (constants, interface values, USD overrides, displayColor) are read. Rec.709 takes them literally; ACEScg treats them as Houdini/Karma\'s scene-linear space and converts them, which matches Karma\'s albedo more closely. Tagged textures and colorspace-tagged inputs are unaffected.', group: 'display', order: 1, type: 'enum', options: ['rec709', 'acescg'], apply: 'regenerate', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_material_workspace', codec: 'enum', options: ['rec709', 'acescg'], levels: { performance: 'rec709', default: 'rec709', quality: 'rec709' } } },
             surfaces: { viewer: NA('untagged-colour convention is Scene-only'), compare: NA('untagged-colour convention is Scene-only'), docs: NA('untagged-colour convention is Scene-only'), graph: NA('untagged-colour convention is Scene-only'), embed: NA('untagged-colour convention is Scene-only'), scene: 'yes' },
         },
         {
-            key: 'stageLightsOn', label: 'Stage Lights', group: 'lighting', order: 0, type: 'bool', apply: 'environment', ui: true,
+            key: 'stageLightsOn', label: 'Stage lights', experimental: true, hint: 'Light the stage with the lights authored on it. Area lights are split into several point samples across their surface, sharing the emitter\'s power.', group: 'lighting', order: 0, type: 'bool', apply: 'environment', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_stage_lights', codec: 'boolOn', levels: { performance: true, default: true, quality: true } } },
             surfaces: { viewer: NA('the Material Viewer has no analytic stage lights'), compare: NA('the Material Viewer has no analytic stage lights'), docs: NA('the Material Viewer has no analytic stage lights'), graph: NA('the Material Viewer has no analytic stage lights'), embed: NA('the Material Viewer has no analytic stage lights'), scene: 'yes' },
         },
         {
-            key: 'stageLightsEv', label: 'Stage Lights EV', group: 'lighting', order: 1, type: 'number', min: -8, max: 8, apply: 'environment', ui: true,
+            key: 'stageLightsEv', label: 'Stage light intensity', step: 0.25, unit: 'EV', decimals: 2, hint: 'Scales the imported stage lights\' overall brightness.', group: 'lighting', order: 1, type: 'number', min: -8, max: 8, apply: 'environment', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_stage_lights_ev', codec: 'number', min: -8, max: 8, levels: { performance: 0, default: 0, quality: 0 } } },
             surfaces: { viewer: NA('the Material Viewer has no analytic stage lights'), compare: NA('the Material Viewer has no analytic stage lights'), docs: NA('the Material Viewer has no analytic stage lights'), graph: NA('the Material Viewer has no analytic stage lights'), embed: NA('the Material Viewer has no analytic stage lights'), scene: 'yes' },
         },
         {
-            key: 'aoStrength', label: 'AO Strength', group: 'effects', order: 1, type: 'number', min: 0, max: 1, apply: 'uniform', ui: true,
+            key: 'aoStrength', label: 'Ambient occlusion strength', step: 0.05, decimals: 2, hint: 'How strongly the estimated occlusion darkens creases and corners.', group: 'effects', order: 1, type: 'number', min: 0, max: 1, apply: 'uniform', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_ao_strength', codec: 'number', min: 0, max: 1, levels: { performance: 0.85, default: 0.85, quality: 0.85 } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
         {
-            key: 'bounceStrength', label: 'Bounce Strength', group: 'effects', order: 3, type: 'number', min: 0, max: 1, apply: 'uniform', ui: true,
+            key: 'bounceStrength', label: 'Diffuse bounce strength', step: 0.05, decimals: 2, hint: 'How strongly the baked bounce term fills back in.', group: 'effects', order: 3, type: 'number', min: 0, max: 1, apply: 'uniform', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_bounce_strength', codec: 'number', min: 0, max: 1, levels: { performance: 1, default: 1, quality: 1 } } },
             surfaces: { viewer: NA('the Material Viewer has no room-scale bounce bake'), compare: NA('the Material Viewer has no room-scale bounce bake'), docs: NA('the Material Viewer has no room-scale bounce bake'), graph: NA('the Material Viewer has no room-scale bounce bake'), embed: NA('the Material Viewer has no room-scale bounce bake'), scene: 'yes' },
         },
         {
-            key: 'skyVisStrength', label: 'Sky Visibility Strength', group: 'lighting', order: 4, type: 'number', min: 0, max: 1, apply: 'uniform', ui: true,
+            key: 'skyVisStrength', label: 'Sky visibility strength', step: 0.05, decimals: 2, hint: 'How strongly the baked sky visibility darkens occluded areas.', group: 'lighting', order: 4, type: 'number', min: 0, max: 1, apply: 'uniform', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_skyvis_strength', codec: 'number', min: 0, max: 1, levels: { performance: 1, default: 1, quality: 1 } } },
             surfaces: { viewer: NA('the Material Viewer has no room-scale visibility bake'), compare: NA('the Material Viewer has no room-scale visibility bake'), docs: NA('the Material Viewer has no room-scale visibility bake'), graph: NA('the Material Viewer has no room-scale visibility bake'), embed: NA('the Material Viewer has no room-scale visibility bake'), scene: 'yes' },
         },
         {
-            key: 'localEnvStrength', label: 'Local Reflections Strength', group: 'effects', order: 5, type: 'number', min: 0, max: 1, apply: 'uniform', ui: true,
+            key: 'localEnvStrength', label: 'Local reflection strength', step: 0.05, decimals: 2, hint: 'How strongly the captured local reflection blends in.', group: 'effects', order: 5, type: 'number', min: 0, max: 1, apply: 'uniform', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_local_reflections_strength', codec: 'number', min: 0, max: 1, levels: { performance: 1, default: 1, quality: 1 } } },
             surfaces: { viewer: NA('the Material Viewer has no per-stage local environment capture'), compare: NA('the Material Viewer has no per-stage local environment capture'), docs: NA('the Material Viewer has no per-stage local environment capture'), graph: NA('the Material Viewer has no per-stage local environment capture'), embed: NA('the Material Viewer has no per-stage local environment capture'), scene: 'yes' },
         },
         {
-            key: 'ssrOn', label: 'Screen-Space Reflections', group: 'effects', order: 6, type: 'bool', apply: 'renderMode', ui: true, experimental: true,
+            key: 'ssrOn', label: 'Screen-space reflections', hint: 'Traces a screen-space ray through last frame\'s colour buffer for a reflection, falling back to the environment when it misses.', group: 'effects', order: 6, type: 'bool', apply: 'renderMode', ui: true, experimental: true,
             profiles: { stage: { storage: 'mtlx_scene_ssr', codec: 'boolOn', levels: { performance: false, default: false, quality: false } } },
             surfaces: { viewer: NA('SSR is Scene-only and parked'), compare: NA('SSR is Scene-only and parked'), docs: NA('SSR is Scene-only and parked'), graph: NA('SSR is Scene-only and parked'), embed: NA('SSR is Scene-only and parked'), scene: 'yes' },
         },
         {
-            key: 'ssrStrength', label: 'SSR Strength', group: 'effects', order: 7, type: 'number', min: 0, max: 1, apply: 'uniform', ui: true, experimental: true,
+            key: 'ssrStrength', label: 'Reflection strength', step: 0.05, decimals: 2, hint: 'How much of the traced reflection blends into specular.', group: 'effects', order: 7, type: 'number', min: 0, max: 1, apply: 'uniform', ui: true, experimental: true,
             profiles: { stage: { storage: 'mtlx_scene_ssr_strength', codec: 'number', min: 0, max: 1, levels: { performance: 1, default: 1, quality: 1 } } },
             surfaces: { viewer: NA('SSR is Scene-only and parked'), compare: NA('SSR is Scene-only and parked'), docs: NA('SSR is Scene-only and parked'), graph: NA('SSR is Scene-only and parked'), embed: NA('SSR is Scene-only and parked'), scene: 'yes' },
         },
         {
-            key: 'ssrMaxRoughness', label: 'SSR Max Roughness', group: 'effects', order: 8, type: 'number', min: 0.05, max: 1, apply: 'uniform', ui: true, experimental: true,
+            key: 'ssrMaxRoughness', label: 'Reflection max roughness', step: 0.05, decimals: 2, hint: 'Roughest surface that still receives a screen-space reflection.', group: 'effects', order: 8, type: 'number', min: 0.05, max: 1, apply: 'uniform', ui: true, experimental: true,
             profiles: { stage: { storage: 'mtlx_scene_ssr_max_roughness', codec: 'number', min: 0.05, max: 1, levels: { performance: 0.5, default: 0.5, quality: 0.5 } } },
             surfaces: { viewer: NA('SSR is Scene-only and parked'), compare: NA('SSR is Scene-only and parked'), docs: NA('SSR is Scene-only and parked'), graph: NA('SSR is Scene-only and parked'), embed: NA('SSR is Scene-only and parked'), scene: 'yes' },
         },
 
         // ---- Presentation jsonField rows (mtlx_scene_presentation) ----
         {
-            key: 'hdrPresentation', label: 'HDR Presentation', group: 'display', order: 4, type: 'bool', apply: 'post', ui: true,
+            key: 'hdrPresentation', label: 'HDR presentation', hint: 'Capture scene-linear HDR before a single display transform. Off uses the previous rendering path.', group: 'display', order: 4, type: 'bool', apply: 'post', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'enabled', codec: 'jsonField', levels: { performance: true, default: true, quality: true } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
         {
-            key: 'bloom', label: 'Bloom', group: 'display', order: 5, type: 'bool', apply: 'post', ui: true,
+            key: 'bloom', label: 'Highlight glow', hint: 'Optical glow from actual HDR highlights. This does not add lighting to nearby geometry.', group: 'display', order: 5, type: 'bool', apply: 'post', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'bloom', codec: 'jsonField', levels: { performance: false, default: false, quality: false } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
         {
-            key: 'bloomStrength', label: 'Bloom Strength', group: 'display', order: 6, type: 'number', min: 0, max: 1, apply: 'post', ui: true,
+            key: 'bloomStrength', label: 'Glow strength', step: 0.025, decimals: 3, hint: 'Controls how much of the glow highlight bleeds into the image.', group: 'display', order: 6, type: 'number', min: 0, max: 1, apply: 'post', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'strength', codec: 'jsonField', min: 0, max: 1, levels: { performance: 0.25, default: 0.25, quality: 0.25 } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
         {
-            key: 'bloomThreshold', label: 'Bloom Threshold', group: 'display', order: 7, type: 'number', min: 0.01, max: 1000, apply: 'post', ui: true,
+            key: 'hdrView', label: 'HDR view', group: 'display', order: 6.5, type: 'enum', options: ['final', 'linear', 'no-bloom', 'highlights', 'bloom', 'composite'], apply: 'post', ui: true, persist: 'view',
+            optionLabels: { final: 'Final', linear: 'Scene linear', 'no-bloom': 'No glow', highlights: 'Highlights', bloom: 'Glow', composite: 'Composite' },
+            hint: 'Temporary inspection view for the HDR presentation pipeline.',
+            profiles: { stage: { codec: 'enum', options: ['final', 'linear', 'no-bloom', 'highlights', 'bloom', 'composite'], levels: { performance: 'final', default: 'final', quality: 'final' } } },
+            surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
+        },
+        {
+            key: 'bloomThreshold', label: 'Glow threshold', step: 0.01, decimals: 2, hint: 'Luminance level above which highlights start to glow.', group: 'display', order: 7, type: 'number', min: 0.01, max: 1000, apply: 'post', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'threshold', codec: 'jsonField', min: 0.01, max: 1000, levels: { performance: 1, default: 1, quality: 1 } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
         {
-            key: 'bloomKnee', label: 'Bloom Knee', group: 'display', order: 8, type: 'number', min: 0, max: 1, apply: 'post', ui: true,
+            key: 'bloomKnee', label: 'Glow knee', step: 0.01, decimals: 2, hint: 'How softly the glow threshold transitions.', group: 'display', order: 8, type: 'number', min: 0, max: 1, apply: 'post', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'knee', codec: 'jsonField', min: 0, max: 1, levels: { performance: 0.5, default: 0.5, quality: 0.5 } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
         {
-            key: 'bloomRadius', label: 'Bloom Radius', group: 'display', order: 9, type: 'number', min: 0, max: 1, apply: 'post', ui: true,
+            key: 'bloomRadius', label: 'Glow radius', step: 0.01, decimals: 2, hint: 'How far the glow spreads from each highlight.', group: 'display', order: 9, type: 'number', min: 0, max: 1, apply: 'post', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'radius', codec: 'jsonField', min: 0, max: 1, levels: { performance: 0.65, default: 0.65, quality: 0.65 } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
         {
-            key: 'postAntialias', label: 'Post Antialias', group: 'display', order: 20, type: 'bool', apply: 'post', ui: true,
+            key: 'postAntialias', label: 'Post Antialias', group: 'display', order: 20, type: 'bool', apply: 'post', ui: false,
             profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'antialias', codec: 'jsonField', levels: { performance: true, default: true, quality: true } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
         {
-            key: 'msaaSamples', label: 'MSAA Samples', group: 'display', order: 21, type: 'number', min: 0, max: 4, apply: 'post', ui: true,
+            key: 'msaaSamples', label: 'MSAA Samples', group: 'display', order: 21, type: 'number', min: 0, max: 4, apply: 'post', ui: false,
             profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'samples', codec: 'jsonField', min: 0, max: 4, levels: { performance: 4, default: 4, quality: 4 } } },
             surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
         },
@@ -456,6 +467,13 @@
             if (window.__MTLX_VSCODE__) return true;
             return window.self === window.top;
         } catch (e) { return false; }
+    };
+
+    // The Scene never reads or writes stored values inside a frame (an embed
+    // or the VS Code webview): it runs on the defaults, and a row may pin a
+    // different value there with `framedValue` (effects that are never on).
+    const isFramed = () => {
+        try { return window.self !== window.top; } catch (e) { return true; }
     };
 
     const readStorage = (key) => {
@@ -497,6 +515,15 @@
             if (LEVELS.indexOf(raw) !== -1) return raw;
         }
         return LEVEL_DEFAULTS[surface] || 'default';
+    };
+
+    // The level id the user picked, or null when none was stored (the Scene
+    // then infers it from the values); never falls back to the default.
+    const getStoredLevel = (surface) => {
+        if (LEVEL_OVERRIDES[surface] !== undefined) return LEVEL_OVERRIDES[surface];
+        const storageKey = LEVEL_KEYS[surface];
+        const raw = storageKey ? readStorage(storageKey) : null;
+        return LEVELS.indexOf(raw) !== -1 ? raw : null;
     };
 
     // A row is "governed" for a profile when its three level values differ.
@@ -547,12 +574,14 @@
         // not keep overriding what they just picked.
         if (OVERRIDES.has(seedKey)) return OVERRIDES.get(seedKey);
         if (URL_SEEDS.has(seedKey)) return URL_SEEDS.get(seedKey);
+        if (profile === 'stage' && isFramed()) return P.framedValue !== undefined ? P.framedValue : P.levels.default;
         if (P.storage) {
             const codec = CODECS[P.codec];
             const rejects = (value) => P.rejectStored && P.rejectStored.indexOf(value) !== -1;
             let decoded = codec.decode(readStorage(P.storage), P);
             if (decoded !== undefined && rejects(decoded)) decoded = undefined;
-            if (decoded === undefined && P.legacy) {
+            // migrateLegacy profiles copied their legacy value once at load.
+            if (decoded === undefined && P.legacy && !P.migrateLegacy) {
                 for (let i = 0; i < P.legacy.length; i++) {
                     let legacyDecoded = codec.decode(readStorage(P.legacy[i]), P);
                     if (legacyDecoded !== undefined && rejects(legacyDecoded)) legacyDecoded = undefined;
@@ -580,7 +609,7 @@
         const seedKey = profile + '|' + key;
         OVERRIDES.set(seedKey, validated);
         const persist = options.persist !== false;
-        if (persist && P.storage && canPersist()) persistValue(P, validated);
+        if (persist && P.storage && canPersist() && !(profile === 'stage' && isFramed())) persistValue(P, validated);
         notify({ key, profile, surface: options.surface, value: validated });
         if (row.legacyEvent) {
             try { window.dispatchEvent(new CustomEvent(row.legacyEvent, { detail: { value: validated } })); } catch (e) { /* best-effort */ }
@@ -602,6 +631,24 @@
             set(row.key, P.levels[level] !== undefined ? P.levels[level] : P.levels.default, { surface, persist });
         });
         try { window.dispatchEvent(new CustomEvent('mtlx-render-level', { detail: { surface, level } })); } catch (e) { /* best-effort */ }
+    };
+
+    // Records the picked level id without touching any row: a surface that
+    // stages its values (the Scene's draft and Apply) writes rows itself.
+    const markLevel = (surface, level, opts) => {
+        if (LEVELS.indexOf(level) === -1) return;
+        LEVEL_OVERRIDES[surface] = level;
+        const storageKey = LEVEL_KEYS[surface];
+        if (!(opts && opts.persist === false) && surface !== 'embed' && storageKey && canPersist()) writeStorage(storageKey, level);
+        try { window.dispatchEvent(new CustomEvent('mtlx-render-level', { detail: { surface, level } })); } catch (e) { /* best-effort */ }
+    };
+
+    // Row metadata as one surface shows it: the profile's `ui` block
+    // (label, hint, experimental, options, optionLabels, asBool, step,
+    // decimals) overrides the row's own, so a surface keeps its wording.
+    const rowUi = (row, surface) => {
+        const P = row.profiles[PROFILE_OF[surface]];
+        return Object.assign({}, row, (P && P.ui) || {});
     };
 
     // The write path a settings UI should use: calls the row's setter if
@@ -653,12 +700,36 @@
             });
         });
         Object.keys(LEVEL_KEYS).forEach((s) => keys.add(LEVEL_KEYS[s]));
+        keys.add(SPLIT_MARKER);
         return Array.from(keys);
     };
 
+    // Split keys (stage profile): a value stored under the shared key is
+    // copied into the profile's own key when that is unset. 'once' (the
+    // exposure, diffuse and displacement splits) runs only the first time, the
+    // marker records it, so later changes in the other tools never reach the
+    // stage; true (transparency) keeps its older per-load migration.
+    const SPLIT_MARKER = 'mtlx_settings_split';
+    (function migrateSplitKeys() {
+        if (!canPersist()) return;
+        const markerSet = !!readStorage(SPLIT_MARKER);
+        if (!markerSet) writeStorage(SPLIT_MARKER, '1');
+        ROWS.forEach((row) => {
+            const P = row.profiles.stage;
+            if (!P || !P.migrateLegacy || !P.legacy) return;
+            if (P.migrateLegacy === 'once' && markerSet) return;
+            const codec = CODECS[P.codec];
+            if (codec.decode(readStorage(P.storage), P) !== undefined) return;
+            for (let i = 0; i < P.legacy.length; i++) {
+                const value = codec.decode(readStorage(P.legacy[i]), P);
+                if (value !== undefined) { persistValue(P, value); return; }
+            }
+        });
+    })();
+
     window.MtlxRenderSettings = {
         SURFACES, PROFILE_OF, LEVELS, ROWS, GROUPS,
-        get, set, apply, getLevel, setLevel, canPersist,
+        get, set, apply, getLevel, getStoredLevel, setLevel, markLevel, rowUi, canPersist,
         rowsFor, subscribe, storageKeys,
     };
 })();

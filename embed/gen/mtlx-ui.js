@@ -1,4 +1,5 @@
 ;(function () {
+function _extends() { return _extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, _extends.apply(null, arguments); }
 // js/shared/mtlx-ui.jsx — shared UI-glue library for the docs/viewer/graph
 // views (extracted from near-identical copies in js/viewer-app.jsx and
 // js/node-preview.jsx; no behavior change). Loaded FIRST in each view's
@@ -787,16 +788,53 @@ const rowMeta = (key, surface) => {
   }
 };
 
+// Scene settings rows carry a quality-level dirty dot and a cost badge.
+const SETTINGS_EXP_BADGE = /*#__PURE__*/React.createElement("span", {
+  className: "text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300"
+}, "Experimental");
+const SettingsDirtyDot = ({
+  show
+}) => show ? /*#__PURE__*/React.createElement("span", {
+  title: "Differs from the selected quality level",
+  className: "w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0"
+}) : null;
+const SETTINGS_COST_ICON = {
+  reload: 'refresh',
+  rebuild: 'code',
+  geometry: 'cube'
+};
+const SETTINGS_COST_TITLE = {
+  reload: 'Changing this reloads the stage',
+  rebuild: 'Changing this recompiles materials',
+  geometry: 'Changing this rebuilds geometry'
+};
+const SettingsCostBadge = ({
+  kind,
+  pending
+}) => kind ? /*#__PURE__*/React.createElement("span", {
+  title: SETTINGS_COST_TITLE[kind],
+  className: 'inline-flex ' + (pending ? 'text-amber-400' : 'text-gray-500')
+}, /*#__PURE__*/React.createElement(MtlxIcon, {
+  name: SETTINGS_COST_ICON[kind],
+  className: "w-3 h-3"
+})) : null;
+
 // Manifest rows for a surface in manifest order (bool Toggle, enum MtlxSelect,
 // number SliderField); writes go through MtlxRenderSettings.apply. `keys`
 // renders a subset for cards that own only some of a group's rows.
+// `draft` hands the Scene's staged-value model to the same rows:
+// { value(row), onChange(row, next), visible?, disabled?, dirty?, cost?,
+// pending?, title?, hint?, defaultValue?, testId? }. Variants: sidebar and
+// dialog (preview surfaces), panel (Scene popover tabs), popover (Scene
+// Environment popover), flat (one label and select per line).
 function RenderSettingsSection({
   surface,
   groups,
   keys,
   variant = 'sidebar',
   exclude,
-  labelClassName = 'text-gray-200'
+  labelClassName = 'text-gray-200',
+  draft
 }) {
   const RS = window.MtlxRenderSettings;
   const [, forceTick] = React.useState(0);
@@ -816,15 +854,145 @@ function RenderSettingsSection({
     const keySet = new Set(keys);
     rows = rows.filter(row => keySet.has(row.key));
   }
+  if (draft && draft.visible) rows = rows.filter(row => draft.visible(row));
   if (!rows.length) return null;
   const showHint = variant === 'sidebar';
-  return /*#__PURE__*/React.createElement(React.Fragment, null, rows.map(row => {
-    const value = RS.get(row.key, {
+  return /*#__PURE__*/React.createElement(React.Fragment, null, rows.map(baseRow => {
+    const row = RS.rowUi(baseRow, surface);
+    const P = row.profiles[RS.PROFILE_OF[surface]];
+    const value = draft ? draft.value(row) : RS.get(row.key, {
       surface
     });
-    const onChange = next => RS.apply(row.key, next, {
+    const onChange = draft ? next => draft.onChange(row, next) : next => RS.apply(row.key, next, {
       surface
     });
+    const hint = draft && draft.hint && draft.hint(row) || row.hint;
+    const title = draft && draft.title ? draft.title(row) : row.hint;
+    const disabled = !!(draft && draft.disabled && draft.disabled(row));
+    const options = row.options;
+    const asBool = row.asBool;
+    const isToggle = row.type === 'bool' || !!asBool;
+    const isSelect = !isToggle && (row.type === 'enum' || row.control === 'select');
+    const defValue = row.type === 'enum' ? P && P.levels ? P.levels.default : options[0] : options ? options[0] : undefined;
+    const sliderDefault = draft && draft.defaultValue ? draft.defaultValue(row) : undefined;
+    const decimals = row.decimals !== undefined ? row.decimals : row.type === 'int' ? 0 : undefined;
+    const step = row.step || (row.type === 'int' ? 1 : 0.1);
+    const experimental = row.experimental ? SETTINGS_EXP_BADGE : null;
+    const toggleChecked = asBool ? value === asBool.on : !!value;
+    const toggleChange = asBool ? next => onChange(next ? asBool.on : asBool.off) : onChange;
+    const selectNode = extra => /*#__PURE__*/React.createElement(MtlxSelect, _extends({
+      value: value,
+      options: options,
+      labels: row.optionLabels || {},
+      onChange: onChange,
+      defValue: defValue,
+      title: variant === 'panel' ? undefined : row.hint,
+      size: "sm",
+      disabled: disabled
+    }, extra));
+    const sliderNode = /*#__PURE__*/React.createElement(SliderField, {
+      label: row.label,
+      unit: row.unit,
+      value: value,
+      min: row.min,
+      max: row.max,
+      step: step,
+      decimals: decimals,
+      defaultValue: sliderDefault,
+      disabled: disabled,
+      onSlider: onChange,
+      onNumber: onChange
+    });
+    if (variant === 'panel') {
+      const kind = draft && draft.cost ? draft.cost(row) : null;
+      const dirty = !!(draft && draft.dirty && draft.dirty(row));
+      const labelNode = /*#__PURE__*/React.createElement("span", {
+        className: "inline-flex items-center gap-1.5 text-xs font-medium text-gray-300"
+      }, /*#__PURE__*/React.createElement(SettingsDirtyDot, {
+        show: dirty
+      }), /*#__PURE__*/React.createElement("span", null, row.label), experimental, /*#__PURE__*/React.createElement(SettingsCostBadge, {
+        kind: kind,
+        pending: !!(draft && draft.pending && draft.pending(row))
+      }));
+      const shell = 'py-2 border-b border-gray-700/60 last:border-b-0';
+      const hintNode = hint ? /*#__PURE__*/React.createElement("div", {
+        className: "mt-1 text-[11px] text-gray-400"
+      }, hint) : null;
+      if (isToggle) {
+        return /*#__PURE__*/React.createElement("div", {
+          key: row.key,
+          className: shell
+        }, /*#__PURE__*/React.createElement("label", {
+          className: "flex items-center justify-between gap-2 cursor-pointer",
+          title: title
+        }, labelNode, /*#__PURE__*/React.createElement(Toggle, {
+          checked: toggleChecked,
+          onChange: toggleChange,
+          disabled: disabled
+        })), hintNode);
+      }
+      if (isSelect) {
+        return /*#__PURE__*/React.createElement("div", {
+          key: row.key,
+          className: shell,
+          title: title
+        }, /*#__PURE__*/React.createElement("div", {
+          className: "flex items-center justify-between gap-2"
+        }, labelNode, selectNode()), hintNode);
+      }
+      return /*#__PURE__*/React.createElement("div", {
+        key: row.key,
+        className: shell
+      }, dirty ? /*#__PURE__*/React.createElement("div", {
+        className: "flex items-center gap-1.5 mb-1"
+      }, /*#__PURE__*/React.createElement(SettingsDirtyDot, {
+        show: true
+      }), /*#__PURE__*/React.createElement("span", {
+        className: "text-[10px] text-amber-300/80"
+      }, "Differs from the selected quality level")) : null, sliderNode, hintNode);
+    }
+    if (variant === 'popover') {
+      if (isToggle) {
+        return /*#__PURE__*/React.createElement("div", {
+          key: row.key,
+          className: "flex items-center justify-between",
+          title: title
+        }, /*#__PURE__*/React.createElement("span", {
+          className: labelClassName
+        }, row.label), /*#__PURE__*/React.createElement(Toggle, {
+          checked: toggleChecked,
+          onChange: toggleChange,
+          disabled: disabled
+        }));
+      }
+      if (isSelect) {
+        return /*#__PURE__*/React.createElement("div", {
+          key: row.key,
+          className: "flex items-center justify-between gap-2",
+          title: title
+        }, /*#__PURE__*/React.createElement("span", {
+          className: labelClassName
+        }, row.label), selectNode());
+      }
+      return /*#__PURE__*/React.createElement("div", {
+        key: row.key
+      }, sliderNode);
+    }
+    if (variant === 'flat') {
+      const testId = draft && draft.testId ? draft.testId(row) : undefined;
+      return /*#__PURE__*/React.createElement("div", {
+        key: row.key,
+        className: "flex items-center justify-between gap-3",
+        title: title
+      }, /*#__PURE__*/React.createElement("span", {
+        className: labelClassName
+      }, row.label), /*#__PURE__*/React.createElement("div", {
+        "data-testid": testId
+      }, selectNode({
+        ariaLabel: row.label,
+        title: undefined
+      })));
+    }
     const labelNode = /*#__PURE__*/React.createElement("span", {
       className: labelClassName + ' inline-flex items-center gap-1.5'
     }, row.label, row.experimental && /*#__PURE__*/React.createElement("span", {
@@ -844,7 +1012,6 @@ function RenderSettingsSection({
       }, row.hint));
     }
     if (row.type === 'enum') {
-      const P = row.profiles[RS.PROFILE_OF[surface]];
       return /*#__PURE__*/React.createElement("div", {
         key: row.key
       }, /*#__PURE__*/React.createElement("div", {
