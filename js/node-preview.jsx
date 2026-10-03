@@ -63,7 +63,7 @@
         const ParamLabel = ({ p }) => (
             <label className="flex items-center gap-1.5 text-[11px] font-mono mb-1">
                 <span className="w-2 h-2 rounded-full flex-none" style={{ background: typeColor(p.type) }} />
-                <span className="text-gray-300 truncate">{p.label}</span>
+                <span className="text-fg-secondary truncate">{p.label}</span>
                 <span className="ml-auto flex-none text-[9px]" style={{ color: typeColor(p.type) }}>{p.type}</span>
             </label>
         );
@@ -71,8 +71,8 @@
         // for this panel's p-3 container: -mx-3/w-[calc(100%+1.5rem)] replace
         // its -mx-2.5/w-[calc(100%+1.25rem)] so the bar still reaches the edge.
         const FOLDER_HEADER_CLASS = 'w-[calc(100%+1.5rem)] flex items-center gap-1.5 -mx-3 px-2.5 py-1.5 border-t border-b '
-            + 'border-gray-700 bg-gray-900/40 text-[10px] font-semibold uppercase tracking-wider text-gray-400 '
-            + 'hover:bg-gray-900/70 hover:text-gray-200 transition-colors';
+            + 'border-line bg-chrome/40 text-[10px] font-semibold uppercase tracking-wider text-fg-muted '
+            + 'hover:bg-chrome/70 hover:text-fg-soft transition-colors';
         const Node3DPreview = ({ nodeName, library, nodegroup, preferredType, preferredDef, disabledNotice, enabled, onEnable, active = true, embed = EMBED }) => {
             // Lets a future multi-view shell pause this preview's render loop
             // when backgrounded, without unmounting. Standalone index.html
@@ -205,9 +205,7 @@
                 const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
                 return c ? { epoch: c.epoch, name: c.name } : null;
             });
-            const [glEpoch, setGlEpoch] = React.useState(0);
             const pendingCustomGeomRef = React.useRef(false);
-            const pendingGlRestoredRef = React.useRef(false);
             const pendingGlobalGeomRef = React.useRef(false);
             // canvasRef (target) is always mounted, unlike sourceCanvasRef
             // which only exists in compare mode, so it's the right check.
@@ -251,22 +249,11 @@
             // Restore re-inits GL state but not render-target contents, so a
             // glEpoch bump forces the build effect to dispose and fully
             // rebuild both views.
-            React.useEffect(() => {
-                const onGlContext = (e) => {
-                    const d = e.detail || {};
-                    if (d.canvas !== canvasRef.current && d.canvas !== sourceCanvasRef.current) return;
-                    if (d.state === 'lost') {
-                        if (!surfaceHidden()) {
-                            setNotice('The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.');
-                        }
-                    } else if (d.state === 'restored') {
-                        if (surfaceHidden()) pendingGlRestoredRef.current = true;
-                        else setGlEpoch((n) => n + 1);
-                    }
-                };
-                window.addEventListener('mtlx-gl-context', onGlContext);
-                return () => window.removeEventListener('mtlx-gl-context', onGlContext);
-            }, []);
+            const [glEpoch] = useRenderContextRecovery({
+                groups: [[canvasRef, sourceCanvasRef]],
+                isHidden: surfaceHidden,
+                onLost: () => setNotice(RENDER_CONTEXT_LOST_MESSAGE),
+            });
             React.useEffect(() => {
                 const flush = () => {
                     // hashchange fires before/around the shell's display:none class
@@ -274,7 +261,6 @@
                     requestAnimationFrame(() => {
                         if (surfaceHidden()) return;
                         if (pendingCustomGeomRef.current) { pendingCustomGeomRef.current = false; applyCustomGeom(); }
-                        if (pendingGlRestoredRef.current) { pendingGlRestoredRef.current = false; setGlEpoch((n) => n + 1); }
                         if (pendingGlobalGeomRef.current) { pendingGlobalGeomRef.current = false; applyGlobalGeom(); }
                     });
                 };
@@ -1583,12 +1569,12 @@
             // reuses this instance, so a later hook would crash it (React 310).
             if (enabled === false) {
                 return (
-                    <div className="flex items-center justify-between gap-3 bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 my-6 text-sm text-gray-400">
+                    <div className="flex items-center justify-between gap-3 bg-surface-sunken border border-line rounded-lg px-4 py-3 my-6 text-sm text-fg-muted">
                         <span>3D previews are disabled (global setting).</span>
                         {onEnable && (
                             <button
                                 onClick={onEnable}
-                                className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors flex-none"
+                                className="text-xs px-2 py-1 rounded bg-chip hover:bg-hover-strong text-fg-soft transition-colors flex-none"
                             >
                                 Enable previews
                             </button>
@@ -1605,11 +1591,11 @@
                 // No fixed width: numberFieldStyle below sizes this from
                 // its own min/max/step so a longer float never clips under
                 // the native spinner (px-1 = 0.25rem/side, border = 1px/side).
-                const numCls = 'flex-none bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-[11px] font-mono text-gray-200';
+                const numCls = 'flex-none bg-control border border-line-strong rounded px-1 py-0.5 text-[11px] font-mono text-fg-soft';
                 // Read-only input (e.g. a geometric default like Vworld) —
                 // shown so the input isn't "missing", but not editable.
                 if (p.readonly) {
-                    return <span className="text-[11px] text-gray-500 italic font-mono">{String(cur)}</span>;
+                    return <span className="text-[11px] text-fg-subtle italic font-mono">{String(cur)}</span>;
                 }
                 // String with a fixed set of accepted values → dropdown. The
                 // value IS the selected string (unlike numeric enums below).
@@ -1636,7 +1622,7 @@
                     return (
                         <input
                             type="text"
-                            className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-[11px] font-mono text-gray-200"
+                            className="w-full bg-control border border-line-strong rounded px-2 py-1 text-[11px] font-mono text-fg-soft"
                             value={String(cur)}
                             onChange={(e) => onParamChange(p, e.target.value)}
                         />
@@ -1683,7 +1669,7 @@
                                 Gated to color3/4 signatures, see isColorSignature. */}
                             {p.colorManaged && (
                             <div className="flex items-center gap-2">
-                                <span className="text-[10px] text-gray-500 flex-none font-mono">colorspace</span>
+                                <span className="text-[10px] text-fg-subtle flex-none font-mono">colorspace</span>
                                 <MtlxSelect
                                     value={csVal}
                                     options={COLORSPACES}
@@ -1708,7 +1694,7 @@
                     return (
                         <input
                             type="checkbox"
-                            className="h-4 w-4 accent-blue-500"
+                            className="h-4 w-4 accent-accent-base"
                             checked={!!cur}
                             onChange={(e) => onParamChange(p, e.target.checked)}
                         />
@@ -1727,7 +1713,7 @@
                     return (
                         <div className="flex items-center gap-2">
                             <input
-                                type="range" className="flex-1 accent-blue-500 min-w-0"
+                                type="range" className="flex-1 accent-accent-base min-w-0"
                                 min={p.min} max={p.max} step={step} value={Number(cur)}
                                 title={hasDefault ? 'Right click to reset' : undefined}
                                 onChange={(e) => onParamChange(p, parse(e.target.value))}
@@ -1775,7 +1761,7 @@
                             <div className="flex items-center gap-1">
                                 <ColorSwatch
                                     rgb={rgb}
-                                    className="flex-none w-6 h-6 p-0 bg-transparent border border-gray-600 rounded cursor-pointer"
+                                    className="flex-none w-6 h-6 p-0 bg-transparent border border-line-strong rounded cursor-pointer"
                                     title="Linear RGB — hex bytes map 1:1 onto the 0-1 values to the right"
                                     onChange={(nv) => {
                                         onParamChange(p, p.type === 'color4' ? nv.concat([cur[3]]) : nv);
@@ -1785,7 +1771,7 @@
                                     <input
                                         key={i} type="number" min="0" max="1" step="0.01"
                                         title={chan[i] + ' (linear, 0-1)'}
-                                        className="w-full min-w-0 bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-[11px] font-mono text-gray-200"
+                                        className="w-full min-w-0 bg-control border border-line-strong rounded px-1 py-0.5 text-[11px] font-mono text-fg-soft"
                                         value={fmt(c)}
                                         onChange={(e) => setComp(i, e.target.value)}
                                         onBlur={(e) => { e.target.value = String(fmt(cur[i])); }}
@@ -1796,7 +1782,7 @@
                                 // Colorspace: a codegen decision (CMS transform
                                 // baked into the shader), so picking regenerates.
                                 <div className="flex items-center gap-2">
-                                    <span className="text-[10px] text-gray-500 flex-none font-mono">colorspace</span>
+                                    <span className="text-[10px] text-fg-subtle flex-none font-mono">colorspace</span>
                                     <MtlxSelect
                                         value={csVal}
                                         options={COLORSPACES}
@@ -1823,7 +1809,7 @@
                         {cur.map((c, i) => (
                             <input
                                 key={i} type="number" step="0.01"
-                                className="w-full min-w-0 bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-[11px] font-mono text-gray-200"
+                                className="w-full min-w-0 bg-control border border-line-strong rounded px-1 py-0.5 text-[11px] font-mono text-fg-soft"
                                 value={c}
                                 onChange={(e) => {
                                     const n = parseFloat(e.target.value);
@@ -1905,11 +1891,11 @@
                     onScreenshot={takeScreenshot}
                     isFullscreen={isFullscreen}
                     onToggleFullscreen={toggleFullscreenView}
-                    // Docs node previews render a single node's output, not
-                    // a full material, so mesh displacement never applies.
-                    hideDisplacementSettings
+                    // Manifest marks displacement/subdivision 'na' for docs
+                    // surface, so RenderSettingsSection renders no rows for them.
+                    surface="docs"
                     containerClassName={compact ? 'absolute top-2 right-2 z-20 flex items-center gap-1.5' : undefined}
-                    buttonClassName={compact ? ((active) => 'w-7 h-7 flex-none flex items-center justify-center rounded transition-colors ' + (active ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-gray-700 hover:bg-gray-600 text-gray-200')) : undefined}
+                    buttonClassName={compact ? ((active) => 'w-7 h-7 flex-none flex items-center justify-center rounded transition-colors ' + (active ? 'bg-accent-fill text-on-accent hover:bg-accent-fill-hover' : 'bg-chip hover:bg-hover-strong text-fg-soft')) : undefined}
                 />
             );
             // Parameters panel header/body, shared between the normal
@@ -1917,8 +1903,8 @@
             // the two is mounted at a time; the remount on a fullscreen
             // toggle is harmless since all values live in state here.
             const renderParamsHeader = (extraButtons) => (
-                <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 flex-none">
-                    <span className="text-sm font-semibold text-gray-200">Parameters</span>
+                <div className="flex items-center justify-between px-3 py-2 border-b border-line flex-none">
+                    <span className="text-sm font-semibold text-fg-soft">Parameters</span>
                     <div className="flex items-center gap-1.5">
                         <button
                             onClick={onExportMtlx}
@@ -1955,7 +1941,7 @@
                             disabled={loading}
                             title={compareOn ? 'Show only the translated shader' : 'Compare against the source shader (swipe)'}
                             className={(compareOn
-                                ? 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-blue-600/80 border-blue-500 text-white transition-colors whitespace-nowrap shrink-0'
+                                ? 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-accent-fill/80 border-accent-base text-on-accent transition-colors whitespace-nowrap shrink-0'
                                 : BTN_TOOLBAR) + ' font-sans disabled:opacity-40 disabled:cursor-not-allowed'}
                         >
                             <MtlxIcon name="compare" className="w-3.5 h-3.5" />
@@ -1995,7 +1981,7 @@
                                     onClick={() => setParamFoldersOpen((prev) => Object.assign({}, prev, { [f.name]: !open }))}
                                     className={FOLDER_HEADER_CLASS}
                                 >
-                                    <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5 text-gray-500" />
+                                    <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5 text-fg-subtle" />
                                     <span className="truncate">{f.name}</span>
                                 </button>
                                 {open && (
@@ -2016,12 +2002,12 @@
             return (
                 <div className="my-6">
                 {notice && (
-                    <div className="text-sm text-gray-400 bg-gray-900 border border-gray-700 rounded-lg px-4 py-3">
+                    <div className="text-sm text-fg-muted bg-surface-sunken border border-line rounded-lg px-4 py-3">
                         {notice}
                     </div>
                 )}
                 {!notice && error && (
-                    <div className="text-sm text-amber-500/90 bg-gray-900 border border-amber-700/40 rounded-lg px-4 py-3">
+                    <div className="text-sm text-warning-hue/90 bg-surface-sunken border border-warning-border/40 rounded-lg px-4 py-3">
                         {error}
                     </div>
                 )}
@@ -2035,8 +2021,8 @@
                         // driven by the ROW's own width (rowWide), not the
                         // window's, so it also stacks in a narrow panel.
                         className={params.length > 0
-                            ? (rowWide ? "relative w-96 flex-none h-96 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden" : "relative w-full h-64 sm:h-80 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden")
-                            : "relative w-full flex-1 min-w-0 h-64 sm:h-80 bg-gray-900 border border-gray-700 rounded-lg overflow-hidden"}
+                            ? (rowWide ? "relative w-96 flex-none h-96 bg-stage border border-line rounded-lg overflow-hidden" : "relative w-full h-64 sm:h-80 bg-stage border border-line rounded-lg overflow-hidden")
+                            : "relative w-full flex-1 min-w-0 h-64 sm:h-80 bg-stage border border-line rounded-lg overflow-hidden"}
                         // width too: the md/lg:w-96 author style would
                         // otherwise pin native fullscreen at 24rem wide
                         // (the CSS-maximize fallback inlines its own).
@@ -2044,7 +2030,7 @@
                     >
                         <LoadingOverlay show={loading} label="Generating 3D Preview..." />
                         {modelError && (
-                            <div className="absolute top-10 left-2 z-30 text-[11px] text-red-400 bg-gray-900/85 rounded px-2 py-1">
+                            <div className="absolute top-10 left-2 z-30 text-[11px] text-error bg-hud/85 rounded px-2 py-1">
                                 {modelError}
                             </div>
                         )}
@@ -2066,9 +2052,9 @@
                                     title="Preview geometry"
                                     size="md" variant="plain" className="absolute top-2 left-2 z-20"
                                     theme={{
-                                        surface: 'var(--site-gray-700, #374151)',
-                                        surfaceHover: 'var(--site-gray-600, #4b5563)',
-                                        text: 'var(--site-gray-200, #e5e7eb)',
+                                        surface: MtlxTheme.var('chip'),
+                                        surfaceHover: MtlxTheme.var('hover-strong'),
+                                        text: MtlxTheme.var('fg-soft'),
                                     }}
                                 />
                             </React.Fragment>
@@ -2106,7 +2092,7 @@
                             (the side card below is a sibling and would be
                             invisible). top-12 clears the controls strip. */}
                         {isFullscreen && params.length > 0 && (fsParamsOpen ? (
-                            <div className="absolute top-12 right-2 bottom-2 w-80 z-20 flex flex-col bg-gray-900/95 backdrop-blur border border-gray-700 rounded-lg overflow-hidden">
+                            <div className="absolute top-12 right-2 bottom-2 w-80 z-20 flex flex-col bg-hud/95 backdrop-blur border border-line rounded-lg overflow-hidden">
                                 {renderParamsHeader(
                                     <button
                                         onClick={() => setFsParamsOpen(false)}
@@ -2123,7 +2109,7 @@
                             <button
                                 onClick={() => setFsParamsOpen(true)}
                                 title="Show the parameters sidebar"
-                                className="absolute top-12 right-2 z-20 h-7 inline-flex items-center gap-1 text-[11px] font-sans px-2 rounded border bg-gray-800/80 backdrop-blur border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors whitespace-nowrap"
+                                className="absolute top-12 right-2 z-20 h-7 inline-flex items-center gap-1 text-[11px] font-sans px-2 rounded border bg-hud-raised/80 backdrop-blur border-hud-line text-hud-fg hover:bg-hud-hover/80 transition-colors whitespace-nowrap"
                             >
                                 <MtlxIcon name="chevrons-left" className="w-3.5 h-3.5" />
                                 Parameters
@@ -2131,7 +2117,7 @@
                         ))}
                     </div>
                     {params.length > 0 && !isFullscreen && (
-                        <div className={rowWide ? "flex-1 min-w-0 bg-gray-900 border border-gray-700 rounded-lg flex flex-col h-96" : "w-full bg-gray-900 border border-gray-700 rounded-lg flex flex-col max-h-80"}>
+                        <div className={rowWide ? "flex-1 min-w-0 bg-surface-sunken border border-line rounded-lg flex flex-col h-96" : "w-full bg-surface-sunken border border-line rounded-lg flex flex-col max-h-80"}>
                             {renderParamsHeader(null)}
                             {renderParamsBody(true)}
                         </div>

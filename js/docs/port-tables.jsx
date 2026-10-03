@@ -52,10 +52,10 @@
         const DESCRIPTION_MIN_REM = 8;
         const EXTRA_COL_REM = 8;
         const CELL_STYLES = {
-            port: 'font-medium text-gray-100 font-mono whitespace-nowrap',
-            type: 'font-mono text-xs text-gray-200 break-words',
-            default: 'font-mono text-xs text-gray-300 break-words',
-            accepted_values: 'font-mono text-xs text-gray-400 break-words',
+            port: 'font-medium text-fg font-mono whitespace-nowrap',
+            type: 'font-mono text-xs text-fg-soft break-words',
+            default: 'font-mono text-xs text-fg-secondary break-words',
+            accepted_values: 'font-mono text-xs text-fg-muted break-words',
         };
 
         // Type column dot: an exact TYPE_COLORS key gets the legend's own
@@ -77,7 +77,7 @@
                                 {tok}
                             </span>
                         )
-                        : <span className="italic text-gray-400">{tok}</span>}
+                        : <span className="italic text-fg-muted">{tok}</span>}
                 </React.Fragment>
             ));
         };
@@ -265,26 +265,26 @@
                 0
             );
             return (
-                <div className="overflow-x-auto rounded-xl border border-gray-700">
+                <div className="overflow-x-auto rounded-xl border border-line">
                     <table
                         style={{ '--tbl-min': `${minRem}rem` }}
-                        className="port-table w-full table-auto text-sm text-left text-gray-300"
+                        className="port-table w-full table-auto text-sm text-left text-fg-secondary"
                     >
                         <colgroup>
                             {columns.map(col => (
                                 <col key={col} className={COL_WIDTHS[col] || ''} />
                             ))}
                         </colgroup>
-                        <thead className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500 bg-gray-900 border-b border-gray-700">
+                        <thead className="text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle bg-surface-sunken border-b border-line">
                             <tr>
                                 {columns.map(col => (
-                                    <th key={col} scope="col" className={`px-4 py-3 border-r border-gray-700/50 last:border-r-0 ${col === 'port' ? 'whitespace-nowrap' : ''}`}>{headerLabel(col)}</th>
+                                    <th key={col} scope="col" className={`px-4 py-3 border-r border-line/50 last:border-r-0 ${col === 'port' ? 'whitespace-nowrap' : ''}`}>{headerLabel(col)}</th>
                                 ))}
                             </tr>
                         </thead>
                         <tbody>
                             {Object.entries(table.ports).map(([portName, portData]) => (
-                                <tr className="border-b border-gray-700/50 last:border-b-0 hover:bg-gray-700/40" key={portName}>
+                                <tr className="border-b border-line/50 last:border-b-0 hover:bg-hover/40" key={portName}>
                                     {columns.map(col => {
                                         const overridden = col === 'default' && defaultsOverride
                                             && Object.prototype.hasOwnProperty.call(defaultsOverride, portName);
@@ -294,7 +294,7 @@
                                             : typeOverridden ? typesOverride[portName]
                                             : (portData[col] || '');
                                         return (
-                                            <td key={col} className={`px-4 py-3 align-top border-r border-gray-700/50 last:border-r-0 ${CELL_STYLES[col] || ''}`}>
+                                            <td key={col} className={`px-4 py-3 align-top border-r border-line/50 last:border-r-0 ${CELL_STYLES[col] || ''}`}>
                                                 {col === 'port'
                                                     ? portName
                                                     : col === 'type'
@@ -316,9 +316,9 @@
         // the two read as one consistent notice, not two similar ones.
         function AutoDocNotice() {
             return (
-                <div className="bg-blue-950/40 border border-blue-800/60 text-blue-200/90 text-sm rounded-xl px-4 py-3 flex items-start gap-2 mb-3">
+                <div className="bg-info-bg/40 border border-info-border/60 text-info-text/90 text-sm rounded-xl px-4 py-3 flex items-start gap-2 mb-3">
                     <MtlxIcon name="info-circle" className="w-4 h-4 shrink-0 mt-0.5" />
-                    <span><span className="font-semibold text-blue-200">Generated from the nodedef.</span> This node's ports, types and defaults were read directly from the MaterialX node definition, not from the specification documents.</span>
+                    <span><span className="font-semibold text-info-text">Generated from the nodedef.</span> This node's ports, types and defaults were read directly from the MaterialX node definition, not from the specification documents.</span>
                 </div>
             );
         }
@@ -330,7 +330,7 @@
             rows = rows || [];
             if (!rows.length) {
                 return (
-                    <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 text-sm text-gray-500 italic">
+                    <div className="bg-surface-sunken border border-line-subtle rounded-xl p-4 text-sm text-fg-subtle italic">
                         No specific ports defined or extracted for this node.
                     </div>
                 );
@@ -338,25 +338,25 @@
             return (
                 <div>
                     {showNotice && <AutoDocNotice />}
-                    <div className="overflow-x-auto bg-gray-900 border border-gray-700 rounded-xl">
+                    <div className="overflow-x-auto bg-surface-sunken border border-line rounded-xl">
                         <table className="w-full text-sm">
                             <thead>
-                                <tr className="text-[10px] font-semibold uppercase tracking-[0.08em] text-gray-500 bg-gray-900 border-b border-gray-700">
-                                    <th className="px-3 py-2 border-r border-gray-700/50 last:border-r-0">Port</th>
-                                    <th className="px-3 py-2 border-r border-gray-700/50 last:border-r-0">Kind</th>
-                                    <th className="px-3 py-2 border-r border-gray-700/50 last:border-r-0">Type(s)</th>
-                                    <th className="px-3 py-2 border-r border-gray-700/50 last:border-r-0">Default</th>
-                                    <th className="px-3 py-2 border-r border-gray-700/50 last:border-r-0">Accepted values</th>
+                                <tr className="text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle bg-surface-sunken border-b border-line">
+                                    <th className="px-3 py-2 border-r border-line/50 last:border-r-0">Port</th>
+                                    <th className="px-3 py-2 border-r border-line/50 last:border-r-0">Kind</th>
+                                    <th className="px-3 py-2 border-r border-line/50 last:border-r-0">Type(s)</th>
+                                    <th className="px-3 py-2 border-r border-line/50 last:border-r-0">Default</th>
+                                    <th className="px-3 py-2 border-r border-line/50 last:border-r-0">Accepted values</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {rows.map((r) => (
-                                    <tr key={r.kind + ':' + r.name} className="border-b border-gray-700/50 last:border-0 align-top">
-                                        <td className="px-3 py-2 font-mono text-gray-100 border-r border-gray-700/50 last:border-r-0">{r.name}</td>
-                                        <td className="px-3 py-2 text-gray-400 border-r border-gray-700/50 last:border-r-0">{r.kind}</td>
-                                        <td className="px-3 py-2 font-mono text-xs border-r border-gray-700/50 last:border-r-0"><TypeCell text={r.types.join(', ')} /></td>
-                                        <td className="px-3 py-2 font-mono text-gray-300 break-all border-r border-gray-700/50 last:border-r-0">{r.value}</td>
-                                        <td className="px-3 py-2 font-mono text-gray-400 break-words border-r border-gray-700/50 last:border-r-0">{r.enums}</td>
+                                    <tr key={r.kind + ':' + r.name} className="border-b border-line/50 last:border-0 align-top">
+                                        <td className="px-3 py-2 font-mono text-fg border-r border-line/50 last:border-r-0">{r.name}</td>
+                                        <td className="px-3 py-2 text-fg-muted border-r border-line/50 last:border-r-0">{r.kind}</td>
+                                        <td className="px-3 py-2 font-mono text-xs border-r border-line/50 last:border-r-0"><TypeCell text={r.types.join(', ')} /></td>
+                                        <td className="px-3 py-2 font-mono text-fg-secondary break-all border-r border-line/50 last:border-r-0">{r.value}</td>
+                                        <td className="px-3 py-2 font-mono text-fg-muted break-words border-r border-line/50 last:border-r-0">{r.enums}</td>
                                     </tr>
                                 ))}
                             </tbody>

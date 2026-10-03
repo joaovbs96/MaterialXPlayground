@@ -135,55 +135,54 @@ const MtlxIcon = (props) => {
     });
 };
 
-// Shared floating-pill family for controls overlaid on 3D stages, two
-// sizes: PILL_ACTION (default) and PILL_ACTION_SM (compact variant).
+// Shared floating-pill family, two sizes: PILL_ACTION (default) and
+// PILL_ACTION_SM (compact). The PILL_ACTION* pair is the over-render (hud)
+// variant; PILL_PAGE* is the same look on ordinary page surfaces.
 // disabled:cursor-not-allowed, not cursor-wait: `disabled` on these
 // buttons is not always "an async op is in flight" (e.g. the Scene Apply
 // pill is also disabled when there is simply nothing staged to apply),
 // so a wait cursor there is a false busy signal.
-const PILL_ACTION = 'inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-gray-600/50 bg-gray-900/70 text-xs font-medium text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 [&:hover_svg]:text-gray-100 transition-colors disabled:opacity-60 disabled:cursor-not-allowed';
-const PILL_ACTION_SM = 'inline-flex items-center gap-1 h-6 px-2 rounded-md border border-gray-600/50 bg-gray-900/70 text-[11px] font-medium text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 [&:hover_svg]:text-gray-100 transition-colors disabled:opacity-60 disabled:cursor-not-allowed';
+const PILL_ACTION = 'inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-hud-line/50 bg-hud/70 text-xs font-medium text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong [&:hover_svg]:text-hud-fg-strong transition-colors disabled:opacity-60 disabled:cursor-not-allowed';
+const PILL_ACTION_SM = 'inline-flex items-center gap-1 h-6 px-2 rounded-md border border-hud-line/50 bg-hud/70 text-[11px] font-medium text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong [&:hover_svg]:text-hud-fg-strong transition-colors disabled:opacity-60 disabled:cursor-not-allowed';
+const PILL_PAGE = 'inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-line-strong/50 bg-chrome/70 text-xs font-medium text-fg-muted hover:bg-hover hover:border-line-strong hover:text-fg [&:hover_svg]:text-fg transition-colors disabled:opacity-60 disabled:cursor-not-allowed';
+const PILL_PAGE_SM = 'inline-flex items-center gap-1 h-6 px-2 rounded-md border border-line-strong/50 bg-chrome/70 text-[11px] font-medium text-fg-muted hover:bg-hover hover:border-line-strong hover:text-fg [&:hover_svg]:text-fg transition-colors disabled:opacity-60 disabled:cursor-not-allowed';
 
-Object.assign(window, { MtlxIcon, MTLX_ICON_PATHS, PILL_ACTION, PILL_ACTION_SM });
+// React hook: re-render when the active theme changes; returns the theme name.
+const useMtlxTheme = () => {
+    const [name, setName] = React.useState(() => window.MtlxTheme.current());
+    React.useEffect(() => window.MtlxTheme.onChange(() => setName(window.MtlxTheme.current())), []);
+    return name;
+};
+
+Object.assign(window, { MtlxIcon, MTLX_ICON_PATHS, PILL_ACTION, PILL_ACTION_SM, PILL_PAGE, PILL_PAGE_SM, useMtlxTheme });
 
 // Shared node-type palette: single source for the graph legend and
 // the docs port tables, so a type's dot color always matches its
-// legend color no matter which view renders it.
-const TYPE_COLORS = {
-    boolean: '#d2372b',            // crimson red
-    BSDF: '#2e7d32',               // forest green
-    color3: '#fdd835',             // sunflower yellow
-    color4: '#f4511e',             // coral orange
-    displacementshader: '#8d6e63', // warm taupe
-    EDF: '#cddc39',                // yellow-green
-    filename: '#90a4ae',           // cool blue-gray
-    float: '#3949ab',              // deep indigo blue
-    integer: '#8e24aa',            // royal violet
-    lightshader: '#ff934f',        // warm apricot orange
-    material: '#ff404f',           // vivid red
-    matrix33: '#cfd8dc',           // pale blue-gray
-    matrix44: '#546e7a',           // slate blue-gray
-    string: '#d7c4a3',             // warm sand
-    surfaceshader: '#00897b',      // deep teal
-    vector2: '#5c6bc0',            // muted indigo
-    vector3: '#b388ff',            // soft lavender
-    vector4: '#ec407a',            // rose pink
-    VDF: '#9ccc65',                // fresh green
-    volumeshader: '#00bcd4',       // bright cyan
-    node: '#a1887f',               // muted warm stone
-    nodegraph: '#854d0e'           // bronze brown
-};
-// Stable string hash → hue; fixed saturation/lightness keeps hashed
-// colors legible on the dark stage.
+// legend color no matter which view renders it. Values resolve through
+// the type-* tokens at read time; keys keep their original casing.
+const TYPE_COLORS = {};
+[
+    'boolean', 'BSDF', 'color3', 'color4', 'displacementshader', 'EDF', 'filename',
+    'float', 'integer', 'lightshader', 'material', 'matrix33', 'matrix44', 'string',
+    'surfaceshader', 'vector2', 'vector3', 'vector4', 'VDF', 'volumeshader', 'node', 'nodegraph',
+].forEach((key) => {
+    Object.defineProperty(TYPE_COLORS, key, {
+        enumerable: true,
+        get: () => window.MtlxTheme.get('type-' + key.toLowerCase()),
+    });
+});
+// Stable string hash → hue; theme-provided saturation/lightness keep
+// hashed colors legible on the stage.
 const typeHue = (s) => {
     let h = 0;
     for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
     return ((h % 360) + 360) % 360;
 };
 const typeColor = (t) => {
-    if (!t) return '#94a3b8'; // untyped: default slate
+    if (!t) return window.MtlxTheme.get('type-untyped'); // untyped: default slate
     if (TYPE_COLORS[t]) return TYPE_COLORS[t];
-    return 'hsl(' + typeHue(String(t)) + ', 65%, 62%)';
+    const f = window.MtlxTheme.typeFallback();
+    return 'hsl(' + typeHue(String(t)) + ', ' + f.saturation + '%, ' + f.lightness + '%)';
 };
 
 Object.assign(window, { TYPE_COLORS, typeHue, typeColor });

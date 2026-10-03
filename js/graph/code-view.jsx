@@ -35,44 +35,42 @@
         // The decompiler indents with tabs.
         const CODE_TAB_SIZE = 4;
         // VS Code-style current-line band and line number.
-        const CODE_CURRENT_LINE_CLASS = 'bg-white/[0.04] border-y border-white/[0.07]';
-        const CODE_CURRENT_NUMBER_CLASS = 'text-gray-300';
+        const CODE_CURRENT_LINE_CLASS = 'bg-fg-strong/[0.04] border-y border-fg-strong/[0.07]';
+        const CODE_CURRENT_NUMBER_CLASS = 'text-fg-secondary';
         // How long the pointer rests on a standard library call before its
         // tooltip shows: VS Code's default hover delay. (A native `title`
         // tooltip waits longer, and a page can't change that.)
         const CODE_HOVER_DELAY_MS = 300;
 
-        // Syntax colours (VS Code Dark+), keyed by js/graph/slx-syntax.jsx
-        // token type; types not listed (identifiers, punctuation, user
-        // function calls) stay plain text. Colour only, never bold or
-        // italic: the highlighted layer must keep the textarea's glyph
-        // widths exactly.
+        // Syntax colours by js/graph/slx-syntax.jsx token type (code-syntax-* tokens); unlisted types stay plain text.
+        // Colour only, never bold or italic: the highlighted layer must keep the textarea's glyph widths.
+        const slxVar = (name, alpha) => 'rgb(var(--mtlx-code-syntax-' + name + ')' + (alpha ? ' / ' + alpha : '') + ')';
         const SLX_SYNTAX_THEME = {
-            text: '#d4d4d4',
-            comment: '#6a9955',
-            string: '#ce9178',
-            number: '#b5cea8',
-            constant: '#b5cea8', // true, false, null: the literal colour
-            keyword: '#569cd6',
-            type: '#4ec9b0',
-            directive: '#c586c0',
-            attribute: '#dcdcaa',
+            text: slxVar('text'),
+            comment: slxVar('comment'),
+            string: slxVar('string'),
+            number: slxVar('number'),
+            constant: slxVar('number'), // true, false, null: the literal colour
+            keyword: slxVar('keyword'),
+            type: slxVar('type'),
+            directive: slxVar('directive'),
+            attribute: slxVar('function'),
             // Standard library calls are underlined rather than coloured:
             // Ctrl/Cmd+click opens the node's documentation, and while
             // Ctrl/Cmd is held the one under the pointer takes the link
             // colour.
-            stdlibUnderline: 'rgba(212, 212, 212, 0.5)',
-            link: '#4e94ce',
-            error: '#f14c4c', // compile error squiggles
-            caret: '#aeafad',
-            selection: '#264f78',
+            stdlibUnderline: slxVar('text', 'calc(128 / 255)'),
+            link: slxVar('link'),
+            error: slxVar('error'), // compile error squiggles
+            caret: slxVar('caret'),
+            selection: slxVar('selection'),
             // The assist popups (js/graph/slx-assist.jsx): function and
             // parameter names in signatures, the active parameter and the
             // typed characters in a suggestion, the selected suggestion.
-            func: '#dcdcaa',
-            param: '#9cdcfe',
-            highlight: '#2aaaff',
-            assistSelected: '#04395e',
+            func: slxVar('function'),
+            param: slxVar('param'),
+            highlight: slxVar('highlight'),
+            assistSelected: slxVar('assist-selected'),
         };
         (() => {
             if (typeof document === 'undefined' || document.getElementById('slx-syntax-theme')) return;
@@ -992,7 +990,7 @@
             };
 
             return (
-                <div className="flex flex-1 min-w-0 min-h-0 bg-gray-900/60">
+                <div className="flex flex-1 min-w-0 min-h-0 bg-surface-sunken/60">
                     {/* Line numbers: scrolled in lockstep with the textarea
                         (overflow hidden, never scrolled by the user). The
                         extra bottom padding covers the textarea's
@@ -1001,7 +999,7 @@
                     <pre
                         ref={gutterRef}
                         aria-hidden="true"
-                        className={CODE_TEXT_CLASS + ' flex-none m-0 overflow-hidden select-none text-right text-gray-500 pl-2 pr-2 border-r border-gray-800'}
+                        className={CODE_TEXT_CLASS + ' flex-none m-0 overflow-hidden select-none text-right text-fg-subtle pl-2 pr-2 border-r border-line-subtle'}
                         style={{ paddingTop: CODE_PAD_Y, paddingBottom: CODE_PAD_Y + 24, minWidth: (String(lineCount).length + 2) + 'ch' }}
                     >{gutterBefore}<span className={CODE_CURRENT_NUMBER_CLASS}>{gutterNumbers[activeLine]}</span>{gutterAfter}</pre>
                     <div className="relative flex-1 min-w-0 flex overflow-hidden">
@@ -1057,7 +1055,7 @@
                             autoComplete="off"
                             autoCorrect="off"
                             autoCapitalize="off"
-                            className={CODE_TEXT_CLASS + ' slx-input relative flex-1 min-w-0 m-0 px-2 resize-none overflow-auto custom-scrollbar bg-transparent placeholder-gray-600 whitespace-pre focus:outline-none'}
+                            className={CODE_TEXT_CLASS + ' slx-input relative flex-1 min-w-0 m-0 px-2 resize-none overflow-auto custom-scrollbar bg-transparent placeholder-fg-faint whitespace-pre focus:outline-none'}
                             style={{ paddingTop: CODE_PAD_Y, paddingBottom: CODE_PAD_Y, tabSize: CODE_TAB_SIZE }}
                         />
                         <div ref={codeClipRef} aria-hidden="true" className="absolute left-0 top-0 overflow-hidden pointer-events-none">
@@ -1207,19 +1205,19 @@
                 <React.Fragment>
                     <aside
                         style={{ width }}
-                        className="flex-none flex flex-col bg-gray-800/95 border-r border-gray-600 overflow-hidden font-mono">
-                        <div className="flex items-center gap-2 px-3 py-2 min-h-[45px] border-b border-gray-700 bg-gray-900/70">
-                            <MtlxIcon name="code" className="w-3.5 h-3.5 text-gray-500" />
-                            <span className="text-[13px] font-bold text-gray-100 truncate flex-1">ShadingLanguageX</span>
+                        className="flex-none flex flex-col bg-surface-raised/95 border-r border-line-strong overflow-hidden font-mono">
+                        <div className="flex items-center gap-2 px-3 py-2 min-h-[45px] border-b border-line bg-chrome/70">
+                            <MtlxIcon name="code" className="w-3.5 h-3.5 text-fg-subtle" />
+                            <span className="text-[13px] font-bold text-fg truncate flex-1">ShadingLanguageX</span>
                             {modified && (
-                                <span className="flex-none text-[10px] text-amber-300" title="The code has edits that haven't been compiled into the node graph yet">
+                                <span className="flex-none text-[10px] text-warning" title="The code has edits that haven't been compiled into the node graph yet">
                                     modified
                                 </span>
                             )}
                             <button
                                 type="button"
                                 title="Collapse the code view"
-                                className="flex-none w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700/80 transition-colors"
+                                className="flex-none w-6 h-6 flex items-center justify-center rounded text-fg-muted hover:text-fg-soft hover:bg-hover/80 transition-colors"
                                 onClick={onCollapse}
                             >
                                 <MtlxIcon name="chevrons-left" className="w-4 h-4" />
@@ -1238,20 +1236,20 @@
                                 apiRef={editorApiRef}
                             />
                             {loading && (
-                                <div className="absolute inset-0 flex items-center justify-center text-[11px] text-gray-500 animate-pulse pointer-events-none">
+                                <div className="absolute inset-0 flex items-center justify-center text-[11px] text-fg-subtle animate-pulse pointer-events-none">
                                     {'Decompiling…'}
                                 </div>
                             )}
                         </div>
-                        <div className="flex-none flex flex-col gap-2 p-2 border-t border-gray-700 bg-gray-900/70">
+                        <div className="flex-none flex flex-col gap-2 p-2 border-t border-line bg-chrome/70">
                             {message && message.kind === 'error' && (
-                                <div className="max-h-40 overflow-y-auto custom-scrollbar px-2 py-1.5 rounded border border-red-800/60 bg-red-950/60 text-red-300 text-[11px] whitespace-pre-wrap break-words">
+                                <div className="max-h-40 overflow-y-auto custom-scrollbar px-2 py-1.5 rounded border border-error-border/60 bg-error-bg/60 text-error-text text-[11px] whitespace-pre-wrap break-words">
                                     {message.text}
                                     {errorLine != null && (
                                         <button
                                             type="button"
                                             onClick={() => editorApiRef.current && editorApiRef.current.revealDiagnostic(0)}
-                                            className="block mt-1 underline decoration-dotted underline-offset-2 hover:text-red-200"
+                                            className="block mt-1 underline decoration-dotted underline-offset-2 hover:text-error-text-strong"
                                         >
                                             Go to line {errorLine}
                                         </button>
@@ -1259,7 +1257,7 @@
                                 </div>
                             )}
                             {message && message.kind === 'ok' && (
-                                <div className="flex items-center gap-1.5 px-0.5 text-[11px] text-green-300">
+                                <div className="flex items-center gap-1.5 px-0.5 text-[11px] text-success-text">
                                     <MtlxIcon name="check" className="w-3.5 h-3.5 flex-none" />
                                     <span className="truncate">{message.text}</span>
                                     {message.undoable && (
@@ -1267,7 +1265,7 @@
                                             type="button"
                                             onClick={() => editorApiRef.current && editorApiRef.current.undo()}
                                             title="Put back the code this replaced (Ctrl+Z in the code)"
-                                            className="flex-none underline decoration-dotted underline-offset-2 hover:text-green-200"
+                                            className="flex-none underline decoration-dotted underline-offset-2 hover:text-success-text-strong"
                                         >
                                             Undo
                                         </button>
@@ -1302,7 +1300,7 @@
                         onMouseDown={onHandleMouseDown}
                         title="Drag to resize"
                         className={'flex-none w-1.5 cursor-col-resize transition-colors '
-                            + (dragging ? 'bg-blue-500/70' : 'bg-transparent hover:bg-blue-500/50')}
+                            + (dragging ? 'bg-accent-base/70' : 'bg-transparent hover:bg-accent-base/50')}
                     />
                 </React.Fragment>
             );

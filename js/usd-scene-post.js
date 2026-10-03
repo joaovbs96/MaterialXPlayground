@@ -18,7 +18,6 @@
     // These are inspection outputs, rather than creative looks. They must
     // never become a surprise persisted presentation choice on a later load.
     const DEBUG_VIEWS = Object.freeze(['final','linear','no-bloom','highlights','bloom','composite']);
-    const KEY = 'mtlx_scene_presentation';
     const vertex = 'in vec3 position; in vec2 uv; out vec2 vUv; void main(){vUv=uv;gl_Position=vec4(position.xy,0.0,1.0);}';
     const header = 'precision highp float; precision highp int; in vec2 vUv; out vec4 o;\n';
     const brightFunction = `
@@ -141,7 +140,21 @@
     function create(renderer, options = {}) {
         const THREE = root.THREE;
         let persisted = null;
-        try { if (root.top === root) persisted=JSON.parse(root.localStorage.getItem(KEY)||'null'); } catch (_) {}
+        try {
+            if (root.top === root && root.MtlxRenderSettings) {
+                const S = root.MtlxRenderSettings;
+                persisted = {
+                    enabled: S.get('hdrPresentation', { surface: 'scene' }),
+                    bloom: S.get('bloom', { surface: 'scene' }),
+                    strength: S.get('bloomStrength', { surface: 'scene' }),
+                    threshold: S.get('bloomThreshold', { surface: 'scene' }),
+                    knee: S.get('bloomKnee', { surface: 'scene' }),
+                    radius: S.get('bloomRadius', { surface: 'scene' }),
+                    antialias: S.get('postAntialias', { surface: 'scene' }),
+                    samples: S.get('msaaSamples', { surface: 'scene' }),
+                };
+            }
+        } catch (_) {}
         let settings = sanitize(Object.assign({}, persisted, options.settings));
         let resources = null, permanentFailure = null, rendering = false, frames = 0, lastPasses = 0;
         const gl=renderer.getContext();
@@ -352,7 +365,10 @@
                 if(oldSamples!==settings.samples||!settings.enabled)free();
                 // Persist only supported artistic/presentation controls. An
                 // active diagnostic must never survive a reload unnoticed.
-                if(next.persist!==false){try{if(root.top===root){const persisted=Object.assign({},settings);delete persisted.debugView;root.localStorage.setItem(KEY,JSON.stringify(persisted));}}catch(_) {}}
+                if(next.persist!==false){try{if(root.top===root&&root.MtlxRenderSettings){const S=root.MtlxRenderSettings;const o={surface:'scene'};
+                    S.set('hdrPresentation',settings.enabled,o);S.set('bloom',settings.bloom,o);S.set('bloomStrength',settings.strength,o);
+                    S.set('bloomThreshold',settings.threshold,o);S.set('bloomKnee',settings.knee,o);S.set('bloomRadius',settings.radius,o);
+                    S.set('postAntialias',settings.antialias,o);S.set('msaaSamples',settings.samples,o);}}catch(_) {}}
                 return getSettings();
             },
             debug:()=>({settings:getSettings(),frames,lastPasses,size:resources?[resources.w,resources.h]:null,

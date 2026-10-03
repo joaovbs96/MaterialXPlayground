@@ -7862,6 +7862,12 @@ const scenePruneUnreachableNodes = (xml) => {
             selectionState.dirty = false;
             selectionState.key = '';
         };
+        // hud-selection token as 0..1 floats, 3 decimals like the old literal.
+        const selectionOutlineColor = () => {
+            const hex = window.MtlxTheme.get('hud-selection');
+            const c = [1, 3, 5].map((i) => Math.round(parseInt(hex.slice(i, i + 2), 16) / 255 * 1000) / 1000);
+            return new THREE.Vector3(c[0], c[1], c[2]);
+        };
         const ensureSelectionQuad = () => {
             if (selectionState.quadScene) return;
             const vertexShader = 'varying vec2 vUv;\nvoid main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
@@ -7873,7 +7879,7 @@ const scenePruneUnreachableNodes = (xml) => {
                     uPx: { value: new THREE.Vector2(1, 1) },
                     uWidth: { value: 2 },
                     uRim: { value: 1 },
-                    uColor: { value: new THREE.Vector3(0.376, 0.647, 0.980) }, // blue-400, the site's selection accent
+                    uColor: { value: selectionOutlineColor() },
                 },
                 vertexShader,
                 fragmentShader: [
@@ -7924,6 +7930,12 @@ const scenePruneUnreachableNodes = (xml) => {
             selectionState.quad = quad;
             selectionState.quadScene = new THREE.Scene();
             selectionState.quadScene.add(quad);
+            if (window.MtlxTheme) {
+                selectionState.themeOff = window.MtlxTheme.onChange(() => {
+                    selectionState.quadMaterial.uniforms.uColor.value.copy(selectionOutlineColor());
+                    selectionState.key = '';
+                });
+            }
             selectionState.quadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
         };
         // Drawing-buffer rect covering the selected proxies plus the outline margin;
@@ -8996,6 +9008,7 @@ const scenePruneUnreachableNodes = (xml) => {
             dispose: () => {
                 if (stopped) return;
                 stopped = true;
+                if (selectionState.themeOff) { selectionState.themeOff(); selectionState.themeOff = null; }
                 sceneRebuildQueue.cancel();
                 rebuildListeners.clear();
                 rebuildProgress.endAll();

@@ -19,6 +19,10 @@
 // Outbound (iframe -> host): ready, renderables, error, snapshot, camera, displacement.
 (function () {
     'use strict';
+    // Marks this page for MtlxRenderSettings.canPersist(): the embed
+    // viewer iframe never persists the shared per-origin preferences,
+    // same guard shape as window.__MTLX_EMBED for the docs iframe.
+    window.__MTLX_EMBED_PAGE__ = true;
 
     var qs = new URLSearchParams(window.location.search);
 
@@ -158,6 +162,16 @@
     // Applies one theme param, or reports+skips it (leaving whatever was
     // there before, default or previously-applied) if it fails validation.
     function applyTheme(name, value) {
+        if (name === 'theme') {
+            // Unknown or cleared values behave as dark, the default; auto follows the OS. Any registry id is accepted
+            // except 'vscode' (webview-only); a theme code (mtlx1.) passes through and theme.js decodes it strictly.
+            var raw = String(value == null ? '' : value).trim();
+            var t = raw.toLowerCase();
+            var known = window.MtlxTheme && window.MtlxTheme.list ? window.MtlxTheme.list() : [{ id: 'dark' }, { id: 'light' }];
+            var pref = /^mtlx\d+\./.test(raw) ? raw : t === 'auto' ? 'system' : (t !== 'vscode' && known.some(function (x) { return x.id === t; }) ? t : 'dark');
+            if (window.MtlxTheme && window.MtlxTheme.setPreference) window.MtlxTheme.setPreference(pref, { persist: false });
+            return;
+        }
         if (value == null || value === '') return;
         if (!themeValueOk(name, value)) {
             post('error', { message: 'Invalid `' + name + '` value "' + value + '" rejected (failed CSS validation).' });
@@ -195,7 +209,10 @@
     // `backdrop` -> props.backdrop, replacing the old boolean `background`
     // toggle. Undefined when absent (the legacy alias below decides then);
     // otherwise the parsed mode, or `'studio'` (reported) if unrecognized.
-    var BACKDROP_MODES = ['studio', 'studio-dark', 'environment', 'none'];
+    // Sourced from js/shared/render-settings.js (loaded eagerly, before
+    // this file, see embed/viewer.html) instead of a second hardcoded list.
+    var BACKDROP_ROW = window.MtlxRenderSettings.ROWS.find(function (r) { return r.key === 'backdrop'; });
+    var BACKDROP_MODES = BACKDROP_ROW.options;
     function parseBackdrop(v) {
         if (v == null || v === '') return undefined;
         var lower = String(v).trim().toLowerCase();
@@ -666,7 +683,7 @@
     // as the initial query-param pass, so a bad live value still can't
     // reach the stylesheet.
     function handleSetTheme(msg) {
-        if (!THEME_VARS.hasOwnProperty(msg.name)) return;
+        if (msg.name !== 'theme' && !THEME_VARS.hasOwnProperty(msg.name)) return;
         applyTheme(msg.name, msg.value);
     }
 

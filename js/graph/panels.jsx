@@ -14,6 +14,7 @@
         const IFACE_VALUE_TYPES = ['boolean', 'color3', 'color4', 'filename', 'float', 'integer',
             'matrix33', 'matrix44', 'string', 'vector2', 'vector3', 'vector4',
             'surfaceshader', 'displacementshader', 'volumeshader', 'BSDF', 'EDF', 'VDF', 'lightshader', 'material'];
+        const DEF_VALUE_TYPES = IFACE_VALUE_TYPES.filter((t) => t !== 'material');
 
         // filterMode/filterType drive the port-dot double-click flow:
         // 'in' matches nodes whose OUTPUT feeds the port, 'out' matches
@@ -155,44 +156,40 @@
             return (
                 <div className="absolute inset-0 z-40" onMouseDown={onClose}>
                     <div
-                        className="absolute left-1/2 -translate-x-1/2 top-16 w-[22rem] max-w-[90%] bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden"
+                        className="absolute left-1/2 -translate-x-1/2 top-16 w-[22rem] max-w-[90%] bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden"
                         onMouseDown={(e) => e.stopPropagation()}
                     >
                         {ifaceDraft ? (
                             <div onKeyDown={onDraftKeyDown}>
-                                <div className="px-3 py-2 border-b border-gray-700 text-[11px] text-gray-400 italic">
+                                <div className="px-3 py-2 border-b border-line text-[11px] text-fg-muted italic">
                                     New {ifaceDraft.kind === 'iface-input' ? 'interface input' : 'output'}
                                 </div>
                                 <div className="px-3 py-2.5 space-y-2">
                                     <input
                                         ref={nameRef}
-                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                                        className="w-full bg-surface-sunken border border-line-strong rounded px-2 py-1 text-[12px] font-mono text-fg placeholder-fg-subtle focus:border-focus focus:outline-none"
                                         placeholder={'name (optional — auto)'}
                                         value={ifaceDraft.name}
                                         spellCheck={false}
                                         onChange={(e) => setIfaceDraft(Object.assign({}, ifaceDraft, { name: e.target.value }))}
                                     />
-                                    <select
-                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none"
+                                    <TypeSelect
+                                        className="w-full"
+                                        size="md"
                                         value={ifaceDraft.type}
-                                        onChange={(e) => {
-                                            const type = e.target.value;
+                                        onChange={(type) => {
                                             const patch = { type };
                                             if (!ifaceNumericType(type)) { patch.uimin = ''; patch.uimax = ''; }
                                             if (!ifaceLiteralType(type)) patch.value = '';
                                             setIfaceDraft(Object.assign({}, ifaceDraft, patch));
                                         }}
-                                    >
-                                        {IFACE_VALUE_TYPES.map((t) => (
-                                            <option key={t} value={t} style={{ color: typeColor(t) }}>{t}</option>
-                                        ))}
-                                    </select>
+                                    />
                                     {ifaceDraft.kind === 'iface-input' && (
                                         <div>
                                             <button
                                                 type="button"
                                                 onClick={() => setIfaceMoreOpen((o) => !o)}
-                                                className="flex items-center gap-1 text-[10px] text-gray-500 hover:text-gray-300 transition-colors"
+                                                className="flex items-center gap-1 text-[10px] text-fg-subtle hover:text-fg-secondary transition-colors"
                                             >
                                                 <MtlxIcon name={ifaceMoreOpen ? 'chevron-down' : 'chevron-right'} className="w-3 h-3 flex-none" />
                                                 More options
@@ -200,14 +197,14 @@
                                             {ifaceMoreOpen && (
                                                 <div className="pt-1.5 space-y-1.5">
                                                     <input
-                                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                                                        className="w-full bg-surface-sunken border border-line-strong rounded px-2 py-1 text-[12px] font-mono text-fg placeholder-fg-subtle focus:border-focus focus:outline-none"
                                                         placeholder="uiname (optional)"
                                                         value={ifaceDraft.uiname}
                                                         spellCheck={false}
                                                         onChange={(e) => setIfaceDraft(Object.assign({}, ifaceDraft, { uiname: e.target.value }))}
                                                     />
                                                     <input
-                                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                                                        className="w-full bg-surface-sunken border border-line-strong rounded px-2 py-1 text-[12px] font-mono text-fg placeholder-fg-subtle focus:border-focus focus:outline-none"
                                                         placeholder="uifolder (optional)"
                                                         value={ifaceDraft.uifolder}
                                                         spellCheck={false}
@@ -215,7 +212,7 @@
                                                     />
                                                     {ifaceLiteralType(ifaceDraft.type) && (
                                                         <input
-                                                            className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                                                            className="w-full bg-surface-sunken border border-line-strong rounded px-2 py-1 text-[12px] font-mono text-fg placeholder-fg-subtle focus:border-focus focus:outline-none"
                                                             placeholder="default value (optional)"
                                                             value={ifaceDraft.value}
                                                             spellCheck={false}
@@ -225,14 +222,14 @@
                                                     {ifaceNumericType(ifaceDraft.type) && (
                                                         <div className="flex items-center gap-1.5">
                                                             <input
-                                                                className="w-1/2 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                                                                className="w-1/2 bg-surface-sunken border border-line-strong rounded px-2 py-1 text-[12px] font-mono text-fg placeholder-fg-subtle focus:border-focus focus:outline-none"
                                                                 placeholder="uimin"
                                                                 value={ifaceDraft.uimin}
                                                                 spellCheck={false}
                                                                 onChange={(e) => setIfaceDraft(Object.assign({}, ifaceDraft, { uimin: e.target.value }))}
                                                             />
                                                             <input
-                                                                className="w-1/2 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                                                                className="w-1/2 bg-surface-sunken border border-line-strong rounded px-2 py-1 text-[12px] font-mono text-fg placeholder-fg-subtle focus:border-focus focus:outline-none"
                                                                 placeholder="uimax"
                                                                 value={ifaceDraft.uimax}
                                                                 spellCheck={false}
@@ -240,10 +237,10 @@
                                                             />
                                                         </div>
                                                     )}
-                                                    <label className="flex items-center gap-1.5 text-[11px] text-gray-400 font-mono">
+                                                    <label className="flex items-center gap-1.5 text-[11px] text-fg-muted font-mono">
                                                         <input
                                                             type="checkbox"
-                                                            className="h-3.5 w-3.5 accent-blue-500"
+                                                            className="h-3.5 w-3.5 accent-accent-base"
                                                             checked={ifaceDraft.uiadvanced}
                                                             onChange={(e) => setIfaceDraft(Object.assign({}, ifaceDraft, { uiadvanced: e.target.checked }))}
                                                         />
@@ -251,7 +248,7 @@
                                                     </label>
                                                     {ifaceColorManaged(ifaceDraft.type) && (
                                                         <div className="flex items-center gap-1.5">
-                                                            <span className="text-[10px] text-gray-500 flex-none font-mono">colorspace</span>
+                                                            <span className="text-[10px] text-fg-subtle flex-none font-mono">colorspace</span>
                                                             <MtlxSelect
                                                                 value={ifaceDraft.colorspace || ''}
                                                                 options={COLORSPACES}
@@ -275,52 +272,50 @@
                                     <div className="flex items-center gap-2 pt-0.5">
                                         <button
                                             onClick={confirmIface}
-                                            className="h-7 text-[11px] px-2.5 rounded border bg-blue-600/80 border-blue-500 text-gray-100 hover:bg-blue-600 transition-colors"
+                                            className="h-7 text-[11px] px-2.5 rounded border bg-accent-fill/80 border-accent-base text-on-accent-soft hover:bg-accent-fill transition-colors"
                                         >Add</button>
                                         <button
                                             onClick={() => setIfaceDraft(null)}
-                                            className="h-7 text-[11px] px-2.5 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                            className="h-7 text-[11px] px-2.5 rounded border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors"
                                         >Back</button>
                                     </div>
                                 </div>
-                                <div className="px-3 py-1.5 border-t border-gray-700 text-[10px] text-gray-500">
+                                <div className="px-3 py-1.5 border-t border-line text-[10px] text-fg-subtle">
                                     Enter add {'·'} Esc back
                                 </div>
                             </div>
                         ) : defDraft ? (
                             <div onKeyDown={onDefDraftKeyDown}>
-                                <div className="px-3 py-2 border-b border-gray-700 text-[11px] text-gray-400 italic">
+                                <div className="px-3 py-2 border-b border-line text-[11px] text-fg-muted italic">
                                     New node definition
                                 </div>
                                 <div className="px-3 py-2.5 space-y-2">
                                     <input
                                         ref={defNameRef}
-                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                                        className="w-full bg-surface-sunken border border-line-strong rounded px-2 py-1 text-[12px] font-mono text-fg placeholder-fg-subtle focus:border-focus focus:outline-none"
                                         placeholder="node name, e.g. my_shader"
                                         value={defDraft.node}
                                         spellCheck={false}
                                         onChange={(e) => setDefDraft(Object.assign({}, defDraft, { node: e.target.value }))}
                                     />
-                                    <select
-                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none"
+                                    <TypeSelect
+                                        className="w-full"
+                                        size="md"
+                                        types={DEF_VALUE_TYPES}
                                         value={defDraft.type}
-                                        onChange={(e) => setDefDraft(Object.assign({}, defDraft, { type: e.target.value }))}
-                                    >
-                                        {IFACE_VALUE_TYPES.filter((t) => t !== 'material').map((t) => (
-                                            <option key={t} value={t} style={{ color: typeColor(t) }}>{t}</option>
-                                        ))}
-                                    </select>
+                                        onChange={(type) => setDefDraft(Object.assign({}, defDraft, { type }))}
+                                    />
                                     <input
-                                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-[12px] font-mono text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                                        className="w-full bg-surface-sunken border border-line-strong rounded px-2 py-1 text-[12px] font-mono text-fg placeholder-fg-subtle focus:border-focus focus:outline-none"
                                         placeholder="nodegroup (optional)"
                                         value={defDraft.nodegroup}
                                         spellCheck={false}
                                         onChange={(e) => setDefDraft(Object.assign({}, defDraft, { nodegroup: e.target.value }))}
                                     />
-                                    <label className="flex items-center gap-1.5 text-[11px] text-gray-400 font-mono">
+                                    <label className="flex items-center gap-1.5 text-[11px] text-fg-muted font-mono">
                                         <input
                                             type="checkbox"
-                                            className="h-3.5 w-3.5 accent-blue-500"
+                                            className="h-3.5 w-3.5 accent-accent-base"
                                             checked={defDraft.withGraph}
                                             onChange={(e) => setDefDraft(Object.assign({}, defDraft, { withGraph: e.target.checked }))}
                                         />
@@ -330,50 +325,50 @@
                                         <button
                                             onClick={confirmDef}
                                             disabled={!defDraft.node.trim()}
-                                            className="h-7 text-[11px] px-2.5 rounded border bg-blue-600/80 border-blue-500 text-gray-100 hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                            className="h-7 text-[11px] px-2.5 rounded border bg-accent-fill/80 border-accent-base text-on-accent-soft hover:bg-accent-fill transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                         >Create</button>
                                         <button
                                             onClick={() => setDefDraft(null)}
-                                            className="h-7 text-[11px] px-2.5 rounded border bg-gray-800/80 border-gray-600 text-gray-300 hover:bg-gray-700/80 transition-colors"
+                                            className="h-7 text-[11px] px-2.5 rounded border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors"
                                         >Back</button>
                                     </div>
                                 </div>
-                                <div className="px-3 py-1.5 border-t border-gray-700 text-[10px] text-gray-500">
+                                <div className="px-3 py-1.5 border-t border-line text-[10px] text-fg-subtle">
                                     Enter create {'·'} Esc back
                                 </div>
                             </div>
                         ) : (<React.Fragment>
-                        <div className="flex items-stretch border-b border-gray-700">
+                        <div className="flex items-stretch border-b border-line">
                             <input
                                 ref={inputRef}
-                                className="flex-1 min-w-0 bg-gray-900 px-3 py-2 text-sm font-mono text-gray-100 placeholder-gray-500 focus:outline-none"
+                                className="flex-1 min-w-0 bg-surface-sunken px-3 py-2 text-sm font-mono text-fg placeholder-fg-subtle focus:outline-none"
                                 placeholder={filterMode ? 'Add a connected node…' : 'Add a node — type to search…'}
                                 value={q}
                                 spellCheck={false}
                                 onChange={(e) => setQ(e.target.value)}
                                 onKeyDown={onKeyDown}
                             />
-                            <select
-                                className="flex-none w-24 bg-gray-900 border-l border-gray-700 px-1.5 text-[11px] font-mono text-gray-300 rounded-none focus:outline-none focus:border-blue-500 disabled:opacity-70"
+                            <TypeSelect
+                                className="flex-none w-24"
+                                size="fill"
+                                variant="fused"
+                                maxWidth={96}
+                                types={typeOptions}
+                                emptyOption="Any type"
                                 value={typeFilter}
                                 title={filterMode
                                     ? ('Locked to the port you double-clicked (' + typeFilter + ')')
                                     : 'Filter by output type'}
                                 disabled={!!filterMode}
-                                onChange={(e) => setTypeFilter(e.target.value)}
-                            >
-                                <option value="">Any type</option>
-                                {typeOptions.map((t) => (
-                                    <option key={t} value={t} style={{ color: typeColor(t) }}>{t}</option>
-                                ))}
-                            </select>
+                                onChange={(v) => { setTypeFilter(v); if (inputRef.current) inputRef.current.focus(); }}
+                            />
                         </div>
                         <div ref={listRef} className="max-h-72 overflow-y-auto custom-scrollbar">
                             {!catalog && !items.length && (
-                                <div className="px-3 py-3 text-[11px] text-gray-500 animate-pulse">Loading the node library {'…'}</div>
+                                <div className="px-3 py-3 text-[11px] text-fg-subtle animate-pulse">Loading the node library {'…'}</div>
                             )}
                             {catalog && !items.length && (
-                                <div className="px-3 py-3 text-[11px] text-gray-500">No node matches {'“'}{q}{'”'}.</div>
+                                <div className="px-3 py-3 text-[11px] text-fg-subtle">No node matches {'“'}{q}{'”'}.</div>
                             )}
                             {items.map((c, i) => (
                                 <button
@@ -381,29 +376,29 @@
                                     onMouseEnter={() => setHi(i)}
                                     onClick={() => pick(c)}
                                     className={'w-full flex items-center gap-2 px-3 py-1.5 text-left text-[12px] font-mono transition-colors '
-                                        + (i === hi ? 'bg-blue-600/30 text-gray-100' : 'text-gray-300 hover:bg-gray-700/60')}
+                                        + (i === hi ? 'bg-selection/30 text-fg' : 'text-fg-secondary hover:bg-hover/60')}
                                 >
                                     {c.synthetic ? (
                                         <React.Fragment>
-                                            <span className="w-2 h-2 rotate-45 flex-none border" style={{ background: 'transparent', borderColor: '#94a3b8' }} />
+                                            <span className="w-2 h-2 rotate-45 flex-none border" style={{ background: 'transparent', borderColor: MtlxTheme.get('type-untyped') }} />
                                             <span className="truncate italic">{c.category}</span>
-                                            <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-gray-500 border border-gray-600 border-dashed rounded px-1">{c.synthetic === 'definition' ? 'new' : 'interface'}</span>
+                                            <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-fg-subtle border border-line-strong border-dashed rounded px-1">{c.synthetic === 'definition' ? 'new' : 'interface'}</span>
                                         </React.Fragment>
                                     ) : (
                                         <React.Fragment>
                                             <span className="w-2 h-2 rounded-full flex-none" style={{ background: typeColor(typeFilter || (c.signatures[0] || {}).type || '') }} />
                                             <span className="truncate">{c.category}</span>
                                             {c.signatures.length > 1 && (
-                                                <span className="ml-auto flex-none text-[9px] text-gray-500" title="This category has several signatures — pick one in the properties panel after adding">{c.signatures.length} sigs</span>
+                                                <span className="ml-auto flex-none text-[9px] text-fg-subtle" title="This category has several signatures — pick one in the properties panel after adding">{c.signatures.length} sigs</span>
                                             )}
-                                            {c.group && <span className={(c.signatures.length > 1 ? '' : 'ml-auto ') + 'flex-none text-[9px] text-gray-500 uppercase tracking-wider'}>{c.group}</span>}
-                                            {c.local && <span className={(c.signatures.length > 1 || c.group ? '' : 'ml-auto ') + 'flex-none text-blue-300/90 border border-blue-500/40 rounded px-1 text-[8px] uppercase tracking-wider'}>doc</span>}
+                                            {c.group && <span className={(c.signatures.length > 1 ? '' : 'ml-auto ') + 'flex-none text-[9px] text-fg-subtle uppercase tracking-wider'}>{c.group}</span>}
+                                            {c.local && <span className={(c.signatures.length > 1 || c.group ? '' : 'ml-auto ') + 'flex-none text-accent-fg-strong/90 border border-accent-wash/40 rounded px-1 text-[8px] uppercase tracking-wider'}>doc</span>}
                                         </React.Fragment>
                                     )}
                                 </button>
                             ))}
                         </div>
-                        <div className="px-3 py-1.5 border-t border-gray-700 text-[10px] text-gray-500">
+                        <div className="px-3 py-1.5 border-t border-line text-[10px] text-fg-subtle">
                             {'↑↓'} select {'·'} Enter add {'·'} Esc close
                         </div>
                         </React.Fragment>)}
@@ -421,7 +416,7 @@
             const commit = () => { if (draft !== (value || '')) onCommit(draft); };
             return (
                 <input
-                    className={'flex-1 min-w-0 h-6 py-0 px-1.5 placeholder-gray-600 bg-gray-900 border border-gray-600 rounded text-[11px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none'
+                    className={'flex-1 min-w-0 h-6 py-0 px-1.5 placeholder-fg-faint bg-surface-sunken border border-line-strong rounded text-[11px] font-mono text-fg-soft focus:border-focus focus:outline-none'
                         + (readOnly ? ' opacity-60' : '') + (className ? ' ' + className : '')}
                     value={draft}
                     placeholder={placeholder}
@@ -441,7 +436,7 @@
         // Type-picker dropdown: swatch-dotted, mono-font MtlxSelect over
         // a type list (defaults to IFACE_VALUE_TYPES). Forwards onChange
         // as the plain string value, not an event.
-        function TypeSelect({ value, onChange, disabled, title, className, types, emptyOption }) {
+        function TypeSelect({ value, onChange, disabled, title, className, types, emptyOption, size = 'sm', variant = 'field', maxWidth }) {
             const typeList = types || IFACE_VALUE_TYPES;
             const labels = React.useMemo(() => {
                 const m = {};
@@ -464,8 +459,9 @@
                     disabled={disabled}
                     title={title}
                     emptyOption={emptyOption}
-                    size="sm"
-                    variant="field"
+                    size={size}
+                    variant={variant}
+                    maxWidth={maxWidth}
                     font="mono"
                     align="left"
                     className={className || 'flex-none w-28'}
@@ -565,7 +561,7 @@
             const isColor = inp.type === 'color3' || inp.type === 'color4';
             const enumNames = splitList(inp.enumNames);
             const enumValues = splitList(inp.enumValues);
-            const boxCls = 'bg-gray-900 border border-gray-600 rounded text-[11px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none';
+            const boxCls = 'bg-surface-sunken border border-line-strong rounded text-[11px] font-mono text-fg-soft focus:border-focus focus:outline-none';
 
             // Hidden file input the FilePickerField's Choose button
             // clicks (the graph owns its own picker flow, rather than
@@ -577,7 +573,7 @@
             // node-preview's MtlxSelect presentation exactly.
             const colorspaceRow = () => (
                 <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] text-gray-500 flex-none font-mono">colorspace</span>
+                    <span className="text-[10px] text-fg-subtle flex-none font-mono">colorspace</span>
                     <MtlxSelect
                         value={inp.colorspace || ''}
                         options={COLORSPACES}
@@ -597,7 +593,7 @@
 
             const textField = () => (
                 <input
-                    className={'flex-1 min-w-0 px-1.5 py-0.5 placeholder-gray-600 ' + boxCls}
+                    className={'flex-1 min-w-0 px-1.5 py-0.5 placeholder-fg-faint ' + boxCls}
                     value={draft}
                     placeholder="(no value)"
                     spellCheck={false}
@@ -655,7 +651,7 @@
                     return (
                         <input
                             type="checkbox"
-                            className="h-3.5 w-3.5 accent-blue-500"
+                            className="h-3.5 w-3.5 accent-accent-base"
                             checked={draft === 'true'}
                             onChange={(e) => commitNow(e.target.checked ? 'true' : 'false')}
                         />
@@ -707,7 +703,7 @@
                                 {isColor && (
                                     <ColorSwatch
                                         rgb={comps.slice(0, 3)}
-                                        className="flex-none w-6 h-6 p-0 bg-transparent border border-gray-600 rounded cursor-pointer"
+                                        className="flex-none w-6 h-6 p-0 bg-transparent border border-line-strong rounded cursor-pointer"
                                         title="Linear RGB — hex bytes map 1:1 onto the 0-1 values to the right"
                                         onChange={(nv) => {
                                             if (vecN === 4) nv.push(comps[3]);
@@ -773,7 +769,7 @@
                         <div className="flex items-center gap-1.5">
                             {hasRange && (
                                 <input
-                                    type="range" className="flex-1 min-w-0 accent-blue-500"
+                                    type="range" className="flex-1 min-w-0 accent-accent-base"
                                     min={lo} max={hi} step={step}
                                     value={Math.max(lo, Math.min(hi, curN))}
                                     title={hasParamDefault ? 'Right click to reset' : undefined}
@@ -869,13 +865,13 @@
                     <button
                         onClick={() => onJump(sourceId)}
                         title="Select and show the node this input is connected to"
-                        className={(hideHeader ? '' : 'mt-1 ') + 'max-w-full inline-flex items-center gap-1 text-left text-[10px] text-blue-300 hover:text-blue-200 font-mono underline decoration-dotted truncate'}
+                        className={(hideHeader ? '' : 'mt-1 ') + 'max-w-full inline-flex items-center gap-1 text-left text-[10px] text-accent-fg-strong hover:text-accent-fg-bright font-mono underline decoration-dotted truncate'}
                     ><MtlxIcon name="arrow-left" className="w-3 h-3 shrink-0" /> from {sourceId.slice(2)}</button>
                 ) : (
-                    <div className={(hideHeader ? '' : 'mt-1 ') + 'inline-flex items-center gap-1 text-[10px] text-gray-500 font-mono'}><MtlxIcon name="arrow-left" className="w-3 h-3 shrink-0" /> set by connection</div>
+                    <div className={(hideHeader ? '' : 'mt-1 ') + 'inline-flex items-center gap-1 text-[10px] text-fg-subtle font-mono'}><MtlxIcon name="arrow-left" className="w-3 h-3 shrink-0" /> set by connection</div>
                 )
             ) : readOnly ? (
-                <div className={(hideHeader ? '' : 'mt-1 ') + 'text-[11px] text-gray-400 font-mono truncate'} title={inp.value}>
+                <div className={(hideHeader ? '' : 'mt-1 ') + 'text-[11px] text-fg-muted font-mono truncate'} title={inp.value}>
                     {inp.value !== '' ? inp.value : '\u2014'}
                 </div>
             ) : (
@@ -885,10 +881,10 @@
             if (hideHeader) return <div className="flex-1 min-w-0">{body}</div>;
 
             return (
-                <div className="py-1.5 border-b border-gray-700/60 last:border-b-0">
+                <div className="py-1.5 border-b border-line/60 last:border-b-0">
                     <div className="flex items-center gap-1.5 text-[11px] font-mono">
                         <span className="w-2 h-2 rounded-full flex-none" style={{ background: typeColor(inp.type) }} />
-                        <span className="text-gray-300 truncate text-[11px] font-mono" title={inp.uiname ? inp.name : undefined}>{inp.uiname || inp.name}</span>
+                        <span className="text-fg-secondary truncate text-[11px] font-mono" title={inp.uiname ? inp.name : undefined}>{inp.uiname || inp.name}</span>
                         <span className="ml-auto flex-none text-[9px] font-mono" style={{ color: typeColor(inp.type) }}>{inp.type}</span>
                     </div>
                     {body}

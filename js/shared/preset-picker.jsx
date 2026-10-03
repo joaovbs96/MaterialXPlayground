@@ -26,10 +26,10 @@ const PRESET_PICKER_TAG_FILTERS = [
 
 // Small pill idioms, sized well below the Material Gallery's own chips so
 // two rows of them fit under the search bar in a narrow left column.
-const PRESET_PICKER_CHIP_ACTIVE = 'border-blue-500 bg-blue-500/[0.12] text-blue-300';
-const PRESET_PICKER_CHIP_IDLE = 'border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100';
+const PRESET_PICKER_CHIP_ACTIVE = 'border-accent-base bg-accent-wash/[0.12] text-accent-fg-strong';
+const PRESET_PICKER_CHIP_IDLE = 'border-line-strong bg-control text-fg-secondary hover:bg-hover hover:text-fg';
 const PRESET_PICKER_CHIP_BASE = 'h-6 px-2 rounded-full border text-[11px] font-medium transition-colors whitespace-nowrap';
-const PRESET_PICKER_TAG_CLASS = 'text-[9px] font-medium uppercase tracking-wide px-[6px] py-px rounded-full border border-gray-600 text-gray-400';
+const PRESET_PICKER_TAG_CLASS = 'text-[9px] font-medium uppercase tracking-wide px-[6px] py-px rounded-full border border-line-strong text-fg-muted';
 
 // Doc cache cap, same LRU idiom as gallery-app.jsx's GALLERY_DOC_CACHE_MAX
 // (duplicated here rather than shared: this file has no imports).
@@ -124,12 +124,12 @@ function PresetPickerRow({ entry, highlighted, onClick, onDoubleClick, setRowEl 
             onDoubleClick={onDoubleClick}
             title={entry.name}
             className={'w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md text-left transition-colors border '
-                + (highlighted ? 'bg-blue-600/20 border-blue-500/60' : 'border-transparent hover:bg-gray-700/50')}
+                + (highlighted ? 'bg-selection/20 border-accent-base/60' : 'border-transparent hover:bg-hover/50')}
         >
             {showPlaceholder ? (
                 <div
-                    className="w-12 h-12 shrink-0 rounded flex items-center justify-center text-sm font-semibold text-blue-300/70"
-                    style={{ backgroundImage: 'linear-gradient(135deg, rgba(59,130,246,0.18), rgba(59,130,246,0.04))' }}
+                    className="w-12 h-12 shrink-0 rounded flex items-center justify-center text-sm font-semibold text-accent-fg-strong/70"
+                    style={{ backgroundImage: 'linear-gradient(135deg, rgb(var(--mtlx-accent-wash) / calc(46 / 255)), rgb(var(--mtlx-accent-wash) / calc(10 / 255)))' }}
                 >
                     {(entry.name || '?').charAt(0).toUpperCase()}
                 </div>
@@ -141,11 +141,11 @@ function PresetPickerRow({ entry, highlighted, onClick, onDoubleClick, setRowEl 
                     width={48}
                     height={48}
                     onError={() => setImgFailed(true)}
-                    className="w-12 h-12 shrink-0 rounded object-cover border border-gray-700"
+                    className="w-12 h-12 shrink-0 rounded object-cover border border-line"
                 />
             )}
             <div className="min-w-0 flex-1">
-                <span className="block text-[12px] font-medium text-gray-100 truncate">{entry.name}</span>
+                <span className="block text-[12px] font-medium text-fg truncate">{entry.name}</span>
                 <div className="flex flex-wrap gap-1 mt-1">
                     <span className={PRESET_PICKER_TAG_CLASS}>{entry.familyLabel}</span>
                     {entry.textured !== null && (
@@ -340,14 +340,14 @@ function MtlxPresetPicker({ open, onClose, onSelect, title, overlayClassName }) 
             // Also subtracts --mtlx-header-h, matching the fixed-overlay
             // callers' own header carve-out, so this panel never grows as
             // tall as the header band when a caller passes that overlay.
-            panelClassName="bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl w-full max-w-[70rem] max-h-[calc(100vh-var(--mtlx-header-h,0px)-4rem)] overflow-hidden flex flex-col"
+            panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-full max-w-[70rem] max-h-[calc(100vh-var(--mtlx-header-h,0px)-4rem)] overflow-hidden flex flex-col"
         >
             <div className="flex h-[440px]">
                 <div
-                    className="w-72 sm:w-[22rem] shrink-0 border-r border-gray-700 flex flex-col h-full"
+                    className="w-72 sm:w-[22rem] shrink-0 border-r border-line flex flex-col h-full"
                     onKeyDown={onKeyDown}
                 >
-                    <div className="p-2.5 space-y-2 shrink-0 border-b border-gray-700/60">
+                    <div className="p-2.5 space-y-2 shrink-0 border-b border-line/60">
                         <input
                             type="text"
                             autoFocus
@@ -370,7 +370,7 @@ function MtlxPresetPicker({ open, onClose, onSelect, title, overlayClassName }) 
                                 </button>
                             ))}
                             {mode === 'manifest' && families.length > 0 && (
-                                <span className="w-px h-4 bg-gray-700 self-center" aria-hidden="true" />
+                                <span className="w-px h-4 bg-line self-center" aria-hidden="true" />
                             )}
                             {mode === 'manifest' && PRESET_PICKER_TAG_FILTERS.map((t) => (
                                 <button
@@ -387,10 +387,10 @@ function MtlxPresetPicker({ open, onClose, onSelect, title, overlayClassName }) 
                     </div>
                     <div role="listbox" aria-label="Materials" className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-1.5 space-y-0.5">
                         {mode === 'loading' && (
-                            <div className="flex items-center justify-center h-full text-gray-500 text-[12px] animate-pulse">Loading...</div>
+                            <div className="flex items-center justify-center h-full text-fg-subtle text-[12px] animate-pulse">Loading...</div>
                         )}
                         {mode !== 'loading' && filtered.length === 0 && (
-                            <div className="flex items-center justify-center h-full text-gray-500 text-[12px] text-center px-3">No materials match these filters.</div>
+                            <div className="flex items-center justify-center h-full text-fg-subtle text-[12px] text-center px-3">No materials match these filters.</div>
                         )}
                         {filtered.map((entry) => (
                             <PresetPickerRow
@@ -406,7 +406,7 @@ function MtlxPresetPicker({ open, onClose, onSelect, title, overlayClassName }) 
                 </div>
                 <div ref={previewColRef} className="flex-1 min-w-0 relative h-full">
                     {!doc ? (
-                        <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm">
+                        <div className="absolute inset-0 flex items-center justify-center text-fg-subtle text-sm">
                             {filtered.length ? 'Loading material...' : 'No material to preview.'}
                         </div>
                     ) : (
@@ -425,21 +425,21 @@ function MtlxPresetPicker({ open, onClose, onSelect, title, overlayClassName }) 
                                 height={previewHeight}
                             />
                             {!ready && docStatus === 'loading' && (
-                                <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-900/70 text-gray-300 text-sm">
+                                <div className="absolute inset-0 z-10 flex items-center justify-center bg-veil/70 text-fg-secondary text-sm">
                                     Loading material...
                                 </div>
                             )}
                             {docStatus === 'error' && (
-                                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-gray-900/85 text-center px-4">
-                                    <MtlxIcon name="alert-triangle" className="w-6 h-6 text-amber-300" />
-                                    <span className="text-sm text-gray-300">Could not load this material.</span>
+                                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-veil/85 text-center px-4">
+                                    <MtlxIcon name="alert-triangle" className="w-6 h-6 text-warning" />
+                                    <span className="text-sm text-fg-secondary">Could not load this material.</span>
                                 </div>
                             )}
                         </div>
                     )}
                 </div>
             </div>
-            <div className="shrink-0 flex justify-end gap-2 px-4 py-2.5 border-t border-gray-700 bg-gray-900/70">
+            <div className="shrink-0 flex justify-end gap-2 px-4 py-2.5 border-t border-line bg-chrome/70">
                 <button type="button" onClick={onClose} className={BTN_SECONDARY}>Cancel</button>
                 <button
                     type="button"

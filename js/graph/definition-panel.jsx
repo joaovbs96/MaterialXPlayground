@@ -3,7 +3,7 @@
 // implementation graphs. Self-exports via Object.assign(window, {}).
 
         // GROUP_HEADER_CLASS, ICON_BTN_SM* now live in js/shared/mtlx-ui.jsx;
-        // PILL_ACTION_SM lives in js/shared/ui-commons.js.
+        // PILL_PAGE_SM lives in js/shared/ui-commons.js.
 
         // The definition card's scroll body has no side padding (so this
         // header can reach both edges); swap the negative-margin/overflow
@@ -18,14 +18,14 @@
 
         // Class for the name/value fields inside add rows (input/output/enum),
         // matching IfaceMetaField's own box but without its flex-1 sizing.
-        const DEF_ADD_FIELD = 'flex-1 min-w-0 h-6 py-0 px-1.5 placeholder-gray-600 bg-gray-900 border border-gray-600 rounded '
-            + 'text-[11px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none disabled:opacity-50';
+        const DEF_ADD_FIELD = 'flex-1 min-w-0 h-6 py-0 px-1.5 placeholder-fg-faint bg-surface-sunken border border-line-strong rounded '
+            + 'text-[11px] font-mono text-fg-soft focus:border-focus focus:outline-none disabled:opacity-50';
 
         // Label + control row, same idiom as graph-app.jsx's Interface group.
         function DefFieldRow({ label, children }) {
             return (
                 <div className="flex items-center gap-1.5">
-                    <span className="w-24 flex-none text-[10px] text-gray-500 font-mono truncate" title={label}>{label}</span>
+                    <span className="w-24 flex-none text-[10px] text-fg-subtle font-mono truncate" title={label}>{label}</span>
                     {children}
                 </div>
             );
@@ -63,8 +63,8 @@
             return (
                 <div className="relative w-full">
                     <textarea
-                        className={'block w-full pl-1.5 pr-4 py-0.5 placeholder-gray-600 bg-gray-900 border border-gray-600 rounded '
-                            + 'text-[11px] font-mono text-gray-200 focus:border-blue-500 focus:outline-none resize-none custom-scrollbar'
+                        className={'block w-full pl-1.5 pr-4 py-0.5 placeholder-fg-faint bg-surface-sunken border border-line-strong rounded '
+                            + 'text-[11px] font-mono text-fg-soft focus:border-focus focus:outline-none resize-none custom-scrollbar'
                             + (readOnly ? ' opacity-60' : '')}
                         style={{ height }}
                         value={draft}
@@ -76,7 +76,7 @@
                         onKeyDown={(e) => { if (e.key === 'Escape') { setDraft(value || ''); e.target.blur(); } }}
                     />
                     <span
-                        className="absolute right-[3px] bottom-[3px] z-10 cursor-ns-resize text-gray-500 hover:text-gray-300 touch-none select-none leading-none"
+                        className="absolute right-[3px] bottom-[3px] z-10 cursor-ns-resize text-fg-subtle hover:text-fg-secondary touch-none select-none leading-none"
                         title="Resize"
                         onPointerDown={startDrag}
                     >
@@ -95,9 +95,9 @@
             return (
                 <div className="mt-2 first:mt-0">
                     <button type="button" onClick={onToggle} className={DEF_SECTION_HEADER_CLASS}>
-                        <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5 text-gray-500" />
+                        <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="flex-none w-3.5 h-3.5 text-fg-subtle" />
                         <span className="truncate">{title}</span>
-                        {count !== undefined && <span className="ml-auto flex-none text-[9px] text-gray-500 normal-case tracking-normal">{count}</span>}
+                        {count !== undefined && <span className="ml-auto flex-none text-[9px] text-fg-subtle normal-case tracking-normal">{count}</span>}
                     </button>
                     {open && <div className="pt-1.5 space-y-1.5 px-2.5">{children}</div>}
                 </div>
@@ -109,13 +109,13 @@
         function MoveStack({ onUp, onDown, upDisabled, downDisabled, size }) {
             const iconSize = size || 'w-3 h-3';
             return (
-                <div className="flex-none flex flex-col w-6 h-6 rounded border border-gray-600 bg-gray-800/80 overflow-hidden">
+                <div className="flex-none flex flex-col w-6 h-6 rounded border border-line-strong bg-control/80 overflow-hidden">
                     <button type="button" title="Move up" disabled={upDisabled}
-                        className="flex-1 inline-flex items-center justify-center text-gray-400 hover:bg-gray-700/80 hover:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-400 border-b border-gray-700"
+                        className="flex-1 inline-flex items-center justify-center text-fg-muted hover:bg-hover/80 hover:text-fg-soft disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-fg-muted border-b border-line"
                         onClick={onUp}
                     ><MtlxIcon name="chevron-up" className={iconSize} /></button>
                     <button type="button" title="Move down" disabled={downDisabled}
-                        className="flex-1 inline-flex items-center justify-center text-gray-400 hover:bg-gray-700/80 hover:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-gray-400"
+                        className="flex-1 inline-flex items-center justify-center text-fg-muted hover:bg-hover/80 hover:text-fg-soft disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-fg-muted"
                         onClick={onDown}
                     ><MtlxIcon name="chevron-down" className={iconSize} /></button>
                 </div>
@@ -128,11 +128,11 @@
             const type = inp.type;
             return (
                 <div className="py-1.5">
-                    <div className={open ? 'rounded border border-gray-700/60 bg-gray-800/40 -mx-1 px-1 pb-1' : ''}>
+                    <div className={open ? 'rounded border border-line/60 bg-surface-raised/40 -mx-1 px-1 pb-1' : ''}>
                         <div className="flex items-center gap-1.5">
                             {grip || <span className="w-3.5 flex-none" />}
                             <button type="button" title="Edit input" aria-pressed={open} onClick={onToggle}
-                                className={ICON_BTN_SM + (open ? ' bg-gray-700/80 text-gray-200' : '')}
+                                className={ICON_BTN_SM + (open ? ' bg-chip/80 text-fg-soft' : '')}
                             ><MtlxIcon name="pencil" className="w-3.5 h-3.5" /></button>
                             <span className="w-2 h-2 rounded-full flex-none" style={{ background: typeColor(type) }} />
                             <IfaceMetaField
@@ -151,7 +151,7 @@
                             ><MtlxIcon name="trash" className="w-3.5 h-3.5" /></button>
                         </div>
                         {open && (
-                            <div className="mt-1.5 ml-5 p-2 space-y-1.5 rounded border border-gray-700 bg-gray-900/30">
+                            <div className="mt-1.5 ml-5 p-2 space-y-1.5 rounded border border-line bg-surface-sunken/30">
                                 <DefFieldRow label="type">
                                     <TypeSelect
                                         className="flex-1 min-w-0"
@@ -205,7 +205,7 @@
                                     </React.Fragment>
                                 )}
                                 <DefFieldRow label="uiadvanced">
-                                    <input type="checkbox" className="h-3.5 w-3.5 accent-blue-500"
+                                    <input type="checkbox" className="h-3.5 w-3.5 accent-accent-base"
                                         checked={!!inp.uiadvanced} disabled={readOnly}
                                         onChange={(e) => actions.applyDefinitionInputMeta(nodedefName, inp.name, { uiadvanced: e.target.checked })} />
                                 </DefFieldRow>
@@ -238,11 +238,11 @@
         function DefOutputRow({ nodedefName, out, readOnly, disableRemove, isFirst, isLast, open, onToggle, actions, grip }) {
             return (
                 <div className="py-1.5">
-                    <div className={open ? 'rounded border border-gray-700/60 bg-gray-800/40 -mx-1 px-1 pb-1' : ''}>
+                    <div className={open ? 'rounded border border-line/60 bg-surface-raised/40 -mx-1 px-1 pb-1' : ''}>
                         <div className="flex items-center gap-1.5">
                             {grip || <span className="w-3.5 flex-none" />}
                             <button type="button" title="Edit output" aria-pressed={open} onClick={onToggle}
-                                className={ICON_BTN_SM + (open ? ' bg-gray-700/80 text-gray-200' : '')}
+                                className={ICON_BTN_SM + (open ? ' bg-chip/80 text-fg-soft' : '')}
                             ><MtlxIcon name="pencil" className="w-3.5 h-3.5" /></button>
                             <span className="w-2 h-2 rounded-full flex-none" style={{ background: typeColor(out.type) }} />
                             <IfaceMetaField
@@ -261,7 +261,7 @@
                             ><MtlxIcon name="trash" className="w-3.5 h-3.5" /></button>
                         </div>
                         {open && (
-                            <div className="mt-1.5 ml-5 p-2 space-y-1.5 rounded border border-gray-700 bg-gray-900/30">
+                            <div className="mt-1.5 ml-5 p-2 space-y-1.5 rounded border border-line bg-surface-sunken/30">
                                 <DefFieldRow label="type">
                                     <TypeSelect
                                         className="flex-1 min-w-0"
@@ -373,7 +373,7 @@
                         ><MtlxIcon name="plus" className="w-3.5 h-3.5" /></button>
                     </div>
                     {showMismatch && (
-                        <div className="text-[10px] text-amber-300">enumvalues count differs from enum count; the instance panel falls back to indices.</div>
+                        <div className="text-[10px] text-warning">enumvalues count differs from enum count; the instance panel falls back to indices.</div>
                     )}
                 </div>
             );
@@ -416,10 +416,10 @@
                 <div>
                     {!entry.local && (
                         <div className="px-2.5">
-                            <div className="mb-2 p-2 rounded border border-amber-700/50 bg-amber-900/20 text-[10px] text-amber-300 space-y-1.5">
+                            <div className="mb-2 p-2 rounded border border-warning-border/50 bg-warning-bg/20 text-[10px] text-warning space-y-1.5">
                                 <div>This definition comes from the library.</div>
                                 {entry.nodedef && (
-                                    <button type="button" className={PILL_ACTION_SM}
+                                    <button type="button" className={PILL_PAGE_SM}
                                         onClick={() => actions.copyLibraryDefinition(entry.nodedef)}
                                     ><MtlxIcon name="copy" className="w-3.5 h-3.5" />Copy into document</button>
                                 )}
@@ -445,7 +445,7 @@
                                 onCommit={(v) => actions.applyDefinitionMeta(nodedefName, { version: v })} />
                         </DefFieldRow>
                         <DefFieldRow label="default version">
-                            <input type="checkbox" className="h-3.5 w-3.5 accent-blue-500"
+                            <input type="checkbox" className="h-3.5 w-3.5 accent-accent-base"
                                 checked={!!(def && mxSafe(() => def.getDefaultVersion(), false))}
                                 disabled={readOnly}
                                 onChange={(e) => actions.applyDefinitionMeta(nodedefName, { isdefaultversion: e.target.checked })} />
@@ -543,16 +543,16 @@
 
                     <DefSection title="Implementation" open={implOpen} onToggle={() => setImplOpen((o) => !o)}>
                         {(entry.graphs || []).map((gName) => (
-                            <div key={gName} className="flex items-center gap-1.5 py-1.5 border-b border-gray-700/60 last:border-b-0">
+                            <div key={gName} className="flex items-center gap-1.5 py-1.5 border-b border-line/60 last:border-b-0">
                                 <span className="w-2 h-2 rounded-full flex-none" style={{ background: typeColor('nodegraph') }} />
-                                <span className="flex-1 min-w-0 truncate text-[11px] text-gray-300 font-mono">{gName}</span>
-                                <button type="button" className={PILL_ACTION_SM + ' ml-auto'} onClick={() => actions.openGraph(gName)}>
+                                <span className="flex-1 min-w-0 truncate text-[11px] text-fg-secondary font-mono">{gName}</span>
+                                <button type="button" className={PILL_PAGE_SM + ' ml-auto'} onClick={() => actions.openGraph(gName)}>
                                     Open<MtlxIcon name="arrow-right" className="w-3.5 h-3.5" />
                                 </button>
                             </div>
                         ))}
                         {(!entry.graphs || !entry.graphs.length) && (
-                            <button type="button" disabled={readOnly} className={PILL_ACTION_SM}
+                            <button type="button" disabled={readOnly} className={PILL_PAGE_SM}
                                 onClick={() => actions.createImplementationGraph(nodedefName)}
                             ><MtlxIcon name="plus" className="w-3.5 h-3.5" />Create implementation graph</button>
                         )}

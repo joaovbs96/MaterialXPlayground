@@ -10,6 +10,7 @@
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -222,6 +223,93 @@ async function buildOne(target) {
   return normalizeEol(body);
 }
 
+// ---------------------------------------------------------------------
+// Theme-token utilities. The embed has no Tailwind, so every token class
+// class listed below gets a plain rule, mirroring Tailwind 3.4 output.
+// A class embed.css never mirrored was a no-op, so it must stay unlisted.
+// Each batch that renames a mirrored palette class to a token adds the
+// token class here and deletes the old embed.css rule. Plain classes only.
+const THEME_CSS_OUT = "embed/gen/theme-utilities.css";
+const EMBED_MIRRORED_TOKEN_CLASSES = [
+  "bg-chrome/70", // was bg-gray-900/70
+  "bg-error-bg/90", // was bg-red-950/90
+  "bg-hud-raised/90", // was bg-gray-800/90
+  "bg-hud/70", // was bg-gray-900/70
+  "bg-stage", // was bg-gray-900
+  "bg-surface-base", // was bg-gray-900
+  "bg-surface-sunken", // was bg-gray-900
+  "bg-veil/70", // was bg-gray-900/70
+  "border-error-border/60", // was border-red-800/60
+  "border-hud-line", // was border-gray-600
+  "border-line-strong", // was border-gray-600
+  "text-error-text-strong", // was text-red-200
+  "text-fg-secondary", // was text-gray-300
+  "text-hud-fg", // was text-gray-300
+];
+const THEME_CLASS_RE =
+  /(?<![\w:/.[-])(bg|text|border|ring|fill|stroke|placeholder|divide|outline|from|via|to|accent|caret|decoration)-([a-z][a-z0-9-]*)(?:\/(\d{1,3}|\[\d*\.?\d+\]))?(?![\w-])/g;
+
+function themeDecls(prefix, color) {
+  const fade = color.replace(/ \/ [^)]*\)$/, " / 0)");
+  switch (prefix) {
+    case "bg": return [["background-color", color]];
+    case "text": return [["color", color]];
+    case "border": case "divide": return [["border-color", color]];
+    case "ring": return [["--tw-ring-color", color]];
+    case "fill": return [["fill", color]];
+    case "stroke": return [["stroke", color]];
+    case "outline": return [["outline-color", color]];
+    case "accent": return [["accent-color", color]];
+    case "caret": return [["caret-color", color]];
+    case "decoration": return [["text-decoration-color", color]];
+    case "placeholder": return [["color", color]];
+    case "from": return [["--tw-gradient-from", `${color} var(--tw-gradient-from-position)`], ["--tw-gradient-to", `${fade} var(--tw-gradient-to-position)`], ["--tw-gradient-stops", "var(--tw-gradient-from), var(--tw-gradient-to)"]];
+    case "via": return [["--tw-gradient-to", `${fade} var(--tw-gradient-to-position)`], ["--tw-gradient-stops", `var(--tw-gradient-from), ${color} var(--tw-gradient-via-position), var(--tw-gradient-to)`]];
+    case "to": return [["--tw-gradient-to", `${color} var(--tw-gradient-to-position)`]];
+    default: return null;
+  }
+}
+
+const cssEscape = (c) => c.replace(/[^A-Za-z0-9_-]/g, (ch) => "\\" + ch);
+
+/** Returns { css, count }: one Tailwind-equivalent rule per listed token
+ * class, sorted by class name. */
+function buildThemeUtilities(sources) {
+  const req = createRequire(import.meta.url);
+  const tokens = new Set(Object.keys(req(path.join(REPO_ROOT, "js/shared/theme-tokens.js")).themes.dark));
+  const found = new Map();
+  for (const src of sources) {
+    for (const m of src.matchAll(THEME_CLASS_RE)) {
+      if (tokens.has(m[2])) found.set(m[0], m);
+    }
+  }
+  for (const cls of EMBED_MIRRORED_TOKEN_CLASSES) {
+    if (!found.has(cls)) {
+      fail(`error: EMBED_MIRRORED_TOKEN_CLASSES lists "${cls}" but no embed/gen/*.js source uses it (or it is not a token class); remove it or fix the name.`);
+    }
+  }
+  for (const cls of [...found.keys()]) {
+    if (!EMBED_MIRRORED_TOKEN_CLASSES.includes(cls)) found.delete(cls);
+  }
+  const rules = [];
+  for (const cls of [...found.keys()].sort()) {
+    const [, prefix, token, alphaRaw] = found.get(cls);
+    let alpha = "1";
+    if (alphaRaw) alpha = alphaRaw[0] === "[" ? alphaRaw.slice(1, -1) : String(Number(alphaRaw) / 100);
+    const decls = themeDecls(prefix, `rgb(var(--mtlx-${token}) / ${alpha})`).map(([k, v]) => `${k}: ${v};`).join(" ");
+    let sel = "." + cssEscape(cls);
+    if (prefix === "placeholder") sel += "::placeholder";
+    if (prefix === "divide") sel += " > :not([hidden]) ~ :not([hidden])";
+    rules.push(`${sel} { ${decls} }`);
+  }
+  const css =
+    "/* GENERATED FILE, DO NOT EDIT BY HAND.\n" +
+    "   Generated from embed/gen/*.js by scripts/build-embed.mjs (`npm run build:embed`).\n" +
+    "   Theme-token utility classes for the Tailwind-free embed. */\n" +
+    rules.join("\n") + "\n";
+  return { css, count: rules.length };
+}
+
 async function main() {
   // Runs first and unconditionally — see its header comment for why this
   // isn't gated on CHECK_MODE like the byte-compare below.
@@ -231,6 +319,9 @@ async function main() {
   for (const target of TARGETS) {
     outputs.push({ target, output: await buildOne(target) });
   }
+  const theme = buildThemeUtilities(outputs.map((o) => o.output));
+  outputs.push({ target: { out: THEME_CSS_OUT }, output: theme.css });
+  log(`${THEME_CSS_OUT}: ${theme.count} rules`);
 
   if (CHECK_MODE) {
     for (const { target, output } of outputs) {

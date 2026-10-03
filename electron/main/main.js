@@ -3,11 +3,12 @@
 // docs/local/ELECTRON.md for why).
 'use strict';
 
-const { app, BrowserWindow, protocol, session, shell, ipcMain, dialog, Menu, screen, clipboard } = require('electron');
+const { app, BrowserWindow, protocol, session, shell, ipcMain, dialog, Menu, screen, clipboard, nativeTheme } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const docScanner = require('./doc-scanner');
+const themePrefsLib = require('./theme-prefs');
 
 // macOS diverges on window chrome and menu layout, both decided at
 // startup; the existing one-off process.platform checks stay as they are.
@@ -937,7 +938,7 @@ function saveSettings() {
     try {
         fsSync.writeFileSync(
             getSettingsPath(),
-            JSON.stringify({ openInNewWindow, showRecentInSystem, documentOpenView, safeMode, windowBounds }),
+            JSON.stringify({ openInNewWindow, showRecentInSystem, documentOpenView, safeMode, windowBounds, theme: themePref, themeBase: customThemeBase, customThemes }),
             'utf8'
         );
     } catch (e) {
@@ -1424,9 +1425,80 @@ function openRouteRouted(route) {
 // Window Controls Overlay theming: matches .mtlx-header's rgba(17,24,39,.95)
 // blended over the same #111827 page background, and the gray-200 icon
 // color from js/site-tokens.css; height matches --site-header-height.
-const TITLEBAR_OVERLAY_COLOR = '#111827';
-const TITLEBAR_OVERLAY_SYMBOL_COLOR = '#e5e7eb';
+// Values come from the site's token data (dark theme), staged with js/ under the site root.
+const THEME_DATA = require(path.join(getSiteRoot(), 'js', 'shared', 'theme-tokens.js'));
+const THEMES = THEME_DATA.themes;
+// Entries of other hosts (vscode, base auto) are dropped; see theme-prefs.js.
+const THEME_REGISTRY = themePrefsLib.electronRegistry(THEME_DATA.registry || [{ id: 'dark', base: 'dark' }, { id: 'light', base: 'light' }]);
+const THEME_DARK = THEMES.dark;
 const TITLEBAR_OVERLAY_HEIGHT = 56;
+
+// Persisted preference ('system' or a registry id); nativeTheme follows the
+// base of the chosen theme, or the OS for 'system'.
+const THEME_PREFS = themePrefsLib.themePrefs(THEME_REGISTRY);
+function themeBase(pref) {
+    return themePrefsLib.themeBase(pref, THEME_REGISTRY);
+}
+function applyThemeSource(pref) {
+    nativeTheme.themeSource = themePrefsLib.themeSource(pref, THEME_REGISTRY, customThemeBase);
+}
+const initialSettings = readSettingsSync();
+let themePref = themePrefsLib.normalizeThemePref(initialSettings.theme, THEME_REGISTRY);
+// Base of a custom preference as reported by the renderer; null until known.
+let customThemeBase = themePrefsLib.normalizeBase(initialSettings.themeBase);
+// Opaque theme codes: stored and handed to the renderer, never decoded here.
+let customThemes = themePrefsLib.sanitizeCustomThemes(initialSettings.customThemes);
+applyThemeSource(themePref);
+
+// Native chrome token of the resolved theme. A preset without its own
+// native-* value falls back to its base theme's, then dark.
+function nativeColor(key) {
+    const custom = themePrefsLib.isCustomPref(themePref);
+    const id = themePref === 'system' || (custom && !customThemeBase)
+        ? (nativeTheme.shouldUseDarkColors ? 'dark' : 'light')
+        : (custom ? customThemeBase : themePref);
+    const t = THEMES[id];
+    const b = THEMES[themeBase(id)];
+    return (t && t[key]) || (b && b[key]) || THEME_DARK[key];
+}
+
+// Repaints every open window's native chrome for the resolved theme.
+function applyNativeTheme() {
+    for (const win of BrowserWindow.getAllWindows()) {
+        if (win.isDestroyed()) continue;
+        win.setBackgroundColor(nativeColor('native-window-bg'));
+        if (!IS_MAC) {
+            win.setTitleBarOverlay({
+                color: nativeColor('native-titlebar'),
+                symbolColor: nativeColor('native-titlebar-symbol'),
+                height: TITLEBAR_OVERLAY_HEIGHT,
+            });
+        }
+    }
+}
+nativeTheme.on('updated', applyNativeTheme);
+
+// Wired to window.__mtlxThemePersist (preload.js) via the header switch.
+// Payload is { preference, base } (a bare string is accepted too); base only matters for custom themes.
+ipcMain.on('mtlx-set-theme', (event, payload) => {
+    const value = payload && typeof payload === 'object' ? payload.preference : payload;
+    const custom = themePrefsLib.isCustomPref(value);
+    if (!custom && !THEME_PREFS.includes(value)) return;
+    const base = custom ? themePrefsLib.normalizeBase(payload && payload.base) : null;
+    if (value === themePref && base === customThemeBase) return;
+    themePref = value;
+    customThemeBase = base;
+    applyThemeSource(value);
+    saveSettings();
+    applyNativeTheme();
+});
+
+// Custom theme codes: read synchronously by preload.js before page scripts, saved on change.
+ipcMain.on('mtlx-get-custom-themes', (event) => { event.returnValue = customThemes; });
+ipcMain.on('mtlx-set-custom-themes', (event, codes) => {
+    customThemes = themePrefsLib.sanitizeCustomThemes(codes);
+    saveSettings();
+});
 // macOS traffic lights: x is the cluster's left edge. Kept in sync with
 // the --mtlx-traffic-light-gutter reserve in js/site-header.css; change
 // both or the header brand slides under the buttons.
@@ -1544,7 +1616,7 @@ function createWindow(route) {
         ...(Number.isFinite(bounds.x) && Number.isFinite(bounds.y) ? { x: bounds.x, y: bounds.y } : {}),
         minWidth: WINDOW_MIN_WIDTH,
         minHeight: WINDOW_MIN_HEIGHT,
-        backgroundColor: '#0b0f19',
+        backgroundColor: nativeColor('native-window-bg'),
         show: false,
         icon: runtimeIconPath(),
         // Hides the native title bar behind the site header, which becomes
@@ -1569,8 +1641,8 @@ function createWindow(route) {
             }
             : {
                 titleBarOverlay: {
-                    color: TITLEBAR_OVERLAY_COLOR,
-                    symbolColor: TITLEBAR_OVERLAY_SYMBOL_COLOR,
+                    color: nativeColor('native-titlebar'),
+                    symbolColor: nativeColor('native-titlebar-symbol'),
                     height: TITLEBAR_OVERLAY_HEIGHT,
                 },
             }),
@@ -1582,6 +1654,8 @@ function createWindow(route) {
             // disk. contextIsolation (above) still walls off the page.
             sandbox: false,
             preload: path.join(__dirname, '..', 'preload', 'preload.js'),
+            // Read synchronously by preload.js (window.__MTLX_THEME_PREF__).
+            additionalArguments: ['--mtlx-theme=' + themePref],
         },
     });
 

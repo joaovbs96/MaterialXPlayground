@@ -57,11 +57,14 @@ in-page, for reference while you work.
 | `wheel` | `scroll`, `zoom`, `none` | `scroll` | Plain mouse-wheel behavior over the viewport. `scroll` (the default) leaves a plain wheel event to scroll the *host page*, since an embed has no business hijacking the scroll of the page it's sitting in; zooming instead needs Ctrl+wheel (Cmd+wheel on Mac; a macOS trackpad pinch works too, since it arrives as a synthetic ctrl+wheel event), and a plain wheel briefly shows a hint pointing that out. While the embed is in fullscreen, a plain wheel zooms directly, since there's no host page left to scroll at that point. `zoom` restores plain-wheel zooming everywhere. `none` disables zooming entirely (wheel, Ctrl+wheel and touch pinch); dragging to orbit still works and a plain wheel scrolls the host page. An unrecognized value falls back to `scroll` and is reported through `mtlx-error`. |
 | `camera` | `"px,py,pz,tx,ty,tz"` (six comma-separated numbers) | *(the engine's default framing)* | Initial camera position (`px,py,pz`) and orbit target (`tx,ty,tz`), in world units. Applied once, to the first view that gets built; later geometry/material switches keep whatever pose the visitor has since orbited to. It also becomes the pose the HUD Reset button and the `resetCamera` message return to, in place of the engine's authored default framing; a later `setCamera` call, or a live `.camera` attribute change, rebases that pose again to wherever it moved the camera. A malformed value (wrong count, non-numeric) is ignored and reported through `mtlx-error`. Easiest way to get six real numbers: orbit the material into place in a running viewer and read the pose back with `el.getCamera()` (see [Methods](#methods)). The site's Embed Builder page does this for you: its "Use current view" button reads the live preview's pose and fills it into the generated snippets, so the resulting embed's Reset returns to that captured view. |
 | `controls` | comma-separated list, see below | `none` (fully chromeless) | Which HUD buttons to show over the viewport. Accepts the nine names below plus the `none`/`all` keywords. Omitting the param entirely is identical to `controls=none`. Unrecognized names are dropped and reported through `mtlx-error`; recognized ones still work. |
-| `backdrop` | `studio`, `environment`, `none` | `studio` | What surrounds the preview geometry. `studio` is a plain white photo-studio room, the new default look for every geometry except `shaderball-scene` (which has its own authored room and ignores this param entirely, see the `geometry` row above). `environment` shows the HDRI environment map itself as the visible backdrop, identical to the legacy `background=1`. `none` is a plain dark void, identical to the legacy `background=0`. The environment's own lighting is always on regardless of which mode is showing; only its visibility as a backdrop changes. `transparent` below overrides `backdrop` entirely, forcing it off so the host page shows through instead of any of the three. An unrecognized value falls back to `studio` and is reported through `mtlx-error`. |
+| `backdrop` | `studio`, `studio-dark`, `environment`, `none` | `studio` | What surrounds the preview geometry. `studio` is a plain white photo-studio room, the new default look for every geometry except `shaderball-scene` (which has its own authored room and ignores this param entirely, see the `geometry` row above). `studio-dark` is the same room in a dark finish. `environment` shows the HDRI environment map itself as the visible backdrop, identical to the legacy `background=1`. `none` is a plain dark void, identical to the legacy `background=0`. The environment's own lighting is always on regardless of which mode is showing; only its visibility as a backdrop changes. `transparent` below overrides `backdrop` entirely, forcing it off so the host page shows through instead of any of these. An unrecognized value falls back to `studio` and is reported through `mtlx-error`. |
 | `background` | boolean | off | Legacy alias for `backdrop` above, kept working for existing embeds. With no `backdrop` param present, `background=1` resolves to `backdrop=environment` and `background=0` resolves to `backdrop=none`, exactly this param's old meaning. If `backdrop` is present, it wins and this param is ignored. One deliberate change either way: leaving *both* params unset used to mean the old dark void and now means the new `studio` room, since `studio` is `backdrop`'s default. New embeds should set `backdrop` directly. |
 | `envmap` | URL to a `.hdr` or `.exr` file | *(the default HDRI environment)* | Custom environment map. Fetched by the iframe itself, under the same CORS requirement as `src`; the extension is sniffed from the URL with any query string or fragment stripped first, so a signed or query-string URL still resolves. Replaces the default environment for both lighting and (when `backdrop` is `environment`) the visible backdrop; the current `env`/`exposure`/`backdrop` settings carry over, and it's reapplied automatically across later geometry/material switches. Absent or cleared restores the default. A fetch/decode failure, or an extension other than `.hdr`/`.exr`, leaves whatever environment was already showing untouched and is reported through `mtlx-error`. |
 | `transparent` | boolean | off | Makes the page itself see-through, so the host page's own background shows behind the rendered geometry, instead of whatever `backdrop` would otherwise show (the studio room, by default). See [Transparent background](#transparent-background). |
 | `forcetransparency` | boolean | *(off, or the visitor's last Settings choice)* | Renders materials that have opacity or transmission with real alpha blending instead of the default opaque preview. Not the same feature as `transparent` above. See [Force transparency](#force-transparency). |
+| `displacement` | boolean | on | Enables the CPU-side mesh displacement pass; off previews the undisplaced mesh. This tab-only setting never touches the visitor's shared site preference. |
+| `previewsubdivision` | integer `0`-`3` | `2` | Loop subdivision level applied ahead of displacement, capped per-mesh against a triangle budget. This tab-only setting never touches the visitor's shared site preference. |
+| `theme` | `dark`, `light`, `auto`, a theme id, or a custom theme code (see Theming) | `dark` | Look of the viewer's own UI, loading screen included. `auto` follows the visitor's OS setting live; an unknown value or an invalid code behaves as `dark`. Never persisted for an embed. See [Theming](#theming). |
 | `accent` | CSS color | `#3b82f6` | HUD accent color (active state, focus outline, slider fill). See [Theming](#theming). |
 | `surface` | CSS color | `#1f2937` | HUD button/panel background color. See [Theming](#theming). |
 | `text` | CSS color | `#d1d5db` | HUD text/icon color. See [Theming](#theming). |
@@ -92,10 +95,10 @@ Geometry labels shown in the HUD's own dropdown (source: `GEOM_LABELS` in
 | `material` | The material-picker dropdown. Shown only when the loaded document has two or more renderables; otherwise there's nothing to switch between, so it's hidden even if requested. |
 | `rotate` | The auto-rotate toggle. |
 | `reset` | A "reset camera" button. Returns to the pose set via `camera`/`setCamera` (or the `.camera` attribute), if one was ever provided, instead of the engine's default framing; also restores the host-provided `env`/`exposure` values, if any. |
-| `env` | The environment popover (rotation, exposure, backdrop picker, HDR import, key-light toggle). |
+| `env` | The environment popover (rotation, exposure, backdrop picker, key-light toggle). No HDR import here; use `envmap` to set a custom environment. |
 | `screenshot` | A "save PNG" button. |
 | `record` | A "Record" button that exports a 360° turntable GIF of the current view. |
-| `settings` | The settings popover (force-transparency, etc.). |
+| `settings` | The settings popover (view transform, camera exposure, force-transparency, displacement, subdivision, diffuse environment method). None of these picks persist for this embed. |
 | `fullscreen` | A fullscreen toggle button. Requires `allowfullscreen` on the `<iframe>` itself, see [Limitations](#limitations). |
 
 `rotate` and the Environment panel's backdrop picker have no effect on the default `shaderball-scene` geometry (auto-rotate is disabled for the full scene, and its authored room ignores `backdrop` entirely, occluding the sky sphere too), so both are hidden while it's selected and come back as soon as the geometry changes to something else. Neither is reported through `mtlx-error`: `shaderball-scene` is the default geometry, so reporting it would make every `controls=all` embed noisy from the moment it loads.
@@ -204,12 +207,13 @@ reloads the iframe (a real navigation, with a fresh `ready` handshake).
 | `wheel` | `.wheel` | `scroll`, `zoom`, `none` | `scroll` | No (reload) |
 | `camera` | `.camera` | `"px,py,pz,tx,ty,tz"` | (none) | Yes |
 | `controls` | `.controls` | comma list (or an array via the property), plus `all`/`none` | `none` | No (reload) |
-| `backdrop` | `.backdrop` | `studio`, `environment`, `none` | `studio` | Yes |
+| `backdrop` | `.backdrop` | `studio`, `studio-dark`, `environment`, `none` | `studio` | Yes |
 | `background` | `.background` | boolean | off | Yes |
 | `envmap` | `.envmap` | URL string (`.hdr`/`.exr`) | (none) | Yes |
 | `geometryurl` | `.geometryUrl` | URL string (`.obj`/`.glb`/`.gltf`) | (none) | Yes |
 | `transparent` | `.transparent` | boolean | off | Yes |
 | `forcetransparency` | `.forceTransparency` | boolean | off | Yes |
+| `theme` | `.theme` | `dark`, `light`, `auto`, theme id, theme code | `dark` | Yes |
 | `accent` | `.accent` | CSS color | `#3b82f6` | Yes |
 | `surface` | `.surface` | CSS color | `#1f2937` | Yes |
 | `text` | `.text` | CSS color | `#d1d5db` | Yes |
@@ -282,6 +286,41 @@ el.addEventListener('mtlx-error', (e) => console.error('viewer error:', e.detail
 ```
 
 ## Theming
+
+The `theme` param (`<materialx-viewer theme="...">`) picks `dark`, `light`, `auto` or any theme id from
+the list below. The default, `dark`, applies when the attribute is missing or unknown. `light` switches the viewer to its light
+look, and `auto` follows the visitor's OS color scheme and reacts if it changes. Changing the
+attribute updates the running viewer in place, no reload. The choice is never saved for the
+visitor. It sets the base look, and `accent`, `surface` and `text` below still override it on top.
+The placeholder and the loading screen shown before the viewer is ready follow `theme` too. The host page
+only knows the light themes it was told about, so the placeholder uses dark colors for any other id until
+the viewer itself loads.
+
+Theme ids and labels:
+
+| Id | Label |
+| --- | --- |
+| `light` | Light |
+| `dark` | Dark |
+| `hc-dark` | High contrast dark |
+| `hc-light` | High contrast light |
+| `dim` | Dim |
+| `paper` | Paper |
+
+**Custom themes.** `theme` also accepts a custom theme code, the string the Playground's theme editor
+copies when you share a theme. It starts with `mtlx1.`, for example:
+
+```html
+<materialx-viewer src="..." theme="mtlx1.LPbx5ysmICZZyQRzYW5kBFNhbmQA"></materialx-viewer>
+```
+
+The viewer decodes the code, derives the full palette and applies it, keeping every text and control at WCAG AA
+contrast. A code is case-sensitive (keep its letters exactly as copied) and is at most 8192 characters. The
+placeholder reads the theme's base from the code itself (`mtlx1.L...` is light-based, `mtlx1.D...` dark-based),
+so it matches before the viewer loads. A code that cannot be decoded behaves as `dark`; a valid code whose colors
+cannot reach AA contrast shows its base theme (`light` or `dark`). Codes are strictly validated: they carry only
+`#rrggbb` colors for known color roles, a short name and two numeric modifiers, so a code cannot inject CSS,
+markup or URLs into the viewer.
 
 Four params (`accent`, `surface`, `text`, `radius`) map to CSS custom properties consumed by
 `embed/embed-controls.css` (the HUD strip's own stylesheet), which defines them on `:root`

@@ -1,0 +1,147 @@
+[
+  {
+    "file": "js/shared/theme-tokens.js",
+    "match": "/./",
+    "reason": "Token source of truth: the only place color values are defined."
+  },
+  {
+    "file": "js/gen/theme-tokens.css",
+    "match": "/./",
+    "reason": "Generated from the token source."
+  },
+  {
+    "file": "js/shared/render-environment.js",
+    "match": "/^#(f6f6f6|ffffff|e3e3e3|c8c8c8|1d2635|242e40|131a28|0c1220)$/i",
+    "reason": "Studio backdrop cyclorama gradient stops (STUDIO_STOPS): viewport art per backdrop mode, not UI theme."
+  },
+  {
+    "file": "js/shared/render-environment.js",
+    "match": "/^0x(111827|000000)$/",
+    "reason": "environmentBackdrop clear colors: viewport backdrop coupled to stage, not UI."
+  },
+  {
+    "file": "js/shared/render-environment.js",
+    "match": "/^0xffffff$/",
+    "reason": "SpotLight color: render-internal lighting, not UI."
+  },
+  {
+    "file": "js/shared/mtlx-ui.jsx",
+    "match": "/^(border-white|#f00|#ff0|#0f0|#0ff|#00f|#f0f|#fff|rgba\\(2)$/",
+    "reason": "ColorPicker gradients and white handles: functional color-space rendering, not themeable."
+  },
+  {
+    "file": "js/shared/mtlx-ui.jsx",
+    "match": "/^rgba\\(0$/",
+    "reason": "ColorPicker black-to-transparent gradient stop: functional color-space rendering."
+  },
+  {
+    "file": "js/shared/compare-ui.jsx",
+    "match": "/^(bg-white\\/(80|90)|bg-black\\/60|text-white\\/(90|50))$/",
+    "reason": "Compare slider handle and render-overlay chips: must contrast with arbitrary render pixels in every theme."
+  },
+  {
+    "file": "js/shared/hero-grid.jsx",
+    "match": "/^rgba\\(0$/",
+    "reason": "CSS mask alpha stops: coverage, not visible color."
+  },
+  {
+    "file": "index.html",
+    "match": "#111827",
+    "reason": "theme-color meta: static pre-paint hint; Phase 2 updates it at runtime."
+  },
+  {
+    "file": "js/viewer-app.jsx",
+    "match": "/^(bg-black[/]60|text-white[/](90|40))$/",
+    "reason": "Render-overlay chip (black/60 with white text) must contrast with arbitrary render pixels."
+  },
+  {
+    "file": "js/compare-app.jsx",
+    "match": "/^(bg-black[/]60|text-white[/](40|50|90))$/",
+    "reason": "Render-overlay chips over the compare canvases: must contrast with arbitrary render pixels."
+  },
+  {
+    "file": "js/compare-app.jsx",
+    "match": "/^#(60a5fa|fbbf24)$/i",
+    "reason": "SLOT_COLORS: slot A/B data colors."
+  },
+  {
+    "file": "js/compare-app.jsx",
+    "match": "/^rgba[(](0|2)$/",
+    "reason": "Split guides (white 0.2) over renders and radial CSS mask alpha stops."
+  },
+  {
+    "file": "js/mtlx-engine.js",
+    "match": "/^0x(000000|ffffff)$/i",
+    "reason": "three.js render-internal clear colors."
+  },
+  {
+    "file": "js/mtlx-engine.js",
+    "match": "/^0x7FFFFF$/",
+    "reason": "Float16 mantissa bit mask, not a color."
+  },
+  {
+    "file": "js/builder-app.jsx",
+    "match": "/^#(1f2937|2563eb|3b82f6|d1d5db|f9fafb)$/i",
+    "reason": "Embed Builder Look defaults and presets: product data written into snippets."
+  },
+  {
+    "file": "js/builder-app.jsx",
+    "match": "/^#(27272a|3f3f46)$/i",
+    "reason": "Builder transparency checkerboard: art behind the embed preview, not UI theme."
+  },
+  {
+    "file": "js/builder-app.jsx",
+    "match": "/^border-black[/]25$/",
+    "reason": "Swatch outline over user-chosen Look colors."
+  },
+  {
+    "file": "js/builder-app.jsx",
+    "match": "/^#(374151|000000)$/i",
+    "reason": "Builder Light preset text color (product data written into snippets) and color-input fallback value."
+  },
+  {
+    "file": "js/shared/mtlx-ui.jsx",
+    "match": "/^#000$/",
+    "reason": "Recording preview black (render preview) and ColorPicker value-axis black gradient stop: functional, not themeable."
+  },
+  {
+    "file": "js/graph/texture-convert.jsx",
+    "match": "0x7FFFFF",
+    "reason": "float mantissa bit mask, not a color"
+  },
+  {
+    "file": "js/usd-scene-app.jsx",
+    "match": "/^rgba\\(0$/",
+    "reason": "Empty-stage grid CSS mask alpha stops: alpha only, not a themed color."
+  },
+  {
+    "file": "js/usd-scene-app.jsx",
+    "match": "/^(bg-black\\/60|text-white\\/(90|70|40))$/",
+    "reason": "Render-overlay chips over the 3D stage stay literal (black scrim with white text)."
+  },
+  {
+    "file": "js/usd-scene-renderer.js",
+    "match": "/^0x(ffffff|000000|111827)$/i",
+    "reason": "Renderer internals: mask and clear colors, viewport clear matching the stage backdrop."
+  },
+  {
+    "file": "js/usd-scene-localenv.js",
+    "match": "/^0x000000$/i",
+    "reason": "Render-internal clear color."
+  },
+  {
+    "file": "embed/embed.css",
+    "match": "/^rgb\\(0$/",
+    "reason": "shadow-lg Tailwind mirror (black shadow alpha), not a themed color."
+  },
+  {
+    "file": "js/site-tokens.css",
+    "match": "/./",
+    "reason": "legacy --site-* palette kept for the Learn/tutorials subsite, which is outside this repo; not loaded by the app"
+  },
+  {
+    "file": "embed/mtlx-viewer.js",
+    "match": "/^#(111827|9ca3af|f3f4f6|4b5563)$/i",
+    "reason": "host-page shadow DOM has no token CSS; values mirror the theme tokens"
+  }
+]

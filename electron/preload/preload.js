@@ -15,6 +15,30 @@ contextBridge.exposeInMainWorld('__MTLX_ELECTRON__', true);
 // goes), so this is the value that decides that layout.
 contextBridge.exposeInMainWorld('__MTLX_PLATFORM__', process.platform);
 
+// Initial theme preference, passed by main.js as --mtlx-theme=<pref> so
+// js/shared/theme.js can read it before any page script runs.
+const themeArg = process.argv.find((a) => a.startsWith('--mtlx-theme='));
+const themePref = themeArg ? themeArg.slice('--mtlx-theme='.length) : 'system';
+contextBridge.exposeInMainWorld('__MTLX_THEME_PREF__', /^[a-z0-9-]{1,32}$/.test(themePref) ? themePref : 'system');
+// base is the resolved base of a custom preference; main cannot decode theme codes.
+function sendTheme(pref, base) {
+    if (typeof pref !== 'string') return;
+    ipcRenderer.send('mtlx-set-theme', { preference: pref, base: base === 'light' || base === 'dark' ? base : null });
+}
+contextBridge.exposeInMainWorld('__mtlxThemePersist', sendTheme);
+contextBridge.exposeInMainWorld('__mtlxThemeReport', sendTheme);
+
+// Custom theme codes, read synchronously (too big for a command-line argument) so theme.js sees them at load.
+let customThemeCodes = [];
+try {
+    const got = ipcRenderer.sendSync('mtlx-get-custom-themes');
+    if (Array.isArray(got)) customThemeCodes = got.filter((c) => typeof c === 'string');
+} catch (e) { customThemeCodes = []; }
+contextBridge.exposeInMainWorld('__MTLX_CUSTOM_THEMES__', customThemeCodes);
+contextBridge.exposeInMainWorld('__mtlxCustomThemesPersist', (codes) => {
+    if (Array.isArray(codes)) ipcRenderer.send('mtlx-set-custom-themes', codes.filter((c) => typeof c === 'string'));
+});
+
 // Buffered like the site's own window.__mtlxPendingImport pattern: main
 // may send 'mtlx-open-file' before the page registers onOpenFile, so the
 // payload is held until a callback shows up.

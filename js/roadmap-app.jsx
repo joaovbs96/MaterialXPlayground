@@ -7,11 +7,11 @@
 // Status metadata: order, label, dot color (amber only for "in progress",
 // muted for "parked", green for "done", matching the site's tone palette).
 const ROADMAP_STATUSES = [
-    { id: 'in progress', label: 'In progress', dot: 'bg-amber-400', text: 'text-amber-300', border: 'border-amber-500/40', bg: 'bg-amber-500/10' },
-    { id: 'planned', label: 'Planned', dot: 'bg-blue-400', text: 'text-blue-300', border: 'border-blue-500/40', bg: 'bg-blue-500/10' },
-    { id: 'idea', label: 'Idea', dot: 'bg-gray-400', text: 'text-gray-300', border: 'border-gray-500/40', bg: 'bg-gray-500/10' },
-    { id: 'parked', label: 'Parked', dot: 'bg-gray-600', text: 'text-gray-500', border: 'border-gray-700', bg: 'bg-gray-800/60' },
-    { id: 'done', label: 'Done', dot: 'bg-green-400', text: 'text-green-300', border: 'border-green-500/40', bg: 'bg-green-500/10' },
+    { id: 'in progress', label: 'In progress', dot: 'bg-warning-marker', text: 'text-warning', border: 'border-warning-hue/40', bg: 'bg-warning-hue/10' },
+    { id: 'planned', label: 'Planned', dot: 'bg-accent-fg', text: 'text-accent-fg-strong', border: 'border-accent-wash/40', bg: 'bg-accent-wash/10' },
+    { id: 'idea', label: 'Idea', dot: 'bg-fg-muted', text: 'text-fg-secondary', border: 'border-line-heavy/40', bg: 'bg-line-heavy/10' },
+    { id: 'parked', label: 'Parked', dot: 'bg-fg-faint', text: 'text-fg-subtle', border: 'border-line', bg: 'bg-surface-raised/60' },
+    { id: 'done', label: 'Done', dot: 'bg-success', text: 'text-success-text', border: 'border-success-hue/40', bg: 'bg-success-hue/10' },
 ];
 const ROADMAP_STATUS_BY_ID = {};
 ROADMAP_STATUSES.forEach((s) => { ROADMAP_STATUS_BY_ID[s.id] = s; });
@@ -36,14 +36,14 @@ function roadmapInline(text, keyPrefix) {
     return parts.filter((p) => p !== undefined && p !== '').map((part) => {
         const key = keyPrefix + '-' + (n++);
         if (/^\*\*[^*]+\*\*$/.test(part)) {
-            return <strong key={key} className="font-semibold text-gray-100">{part.slice(2, -2)}</strong>;
+            return <strong key={key} className="font-semibold text-fg">{part.slice(2, -2)}</strong>;
         }
         if (/^`[^`]+`$/.test(part)) {
-            return <code key={key} className="font-mono text-[0.9em] text-gray-200 bg-gray-700/50 border border-gray-700 rounded px-1 py-px">{part.slice(1, -1)}</code>;
+            return <code key={key} className="font-mono text-[0.9em] text-fg-soft bg-code-inline-bg/50 border border-line rounded px-1 py-px">{part.slice(1, -1)}</code>;
         }
         const linkMatch = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(part);
         if (linkMatch) {
-            return <a key={key} href={linkMatch[2]} className="text-blue-400 hover:text-blue-300 transition-colors" target="_blank" rel="noreferrer">{linkMatch[1]}</a>;
+            return <a key={key} href={linkMatch[2]} className="text-accent-fg hover:text-accent-fg-strong transition-colors" target="_blank" rel="noreferrer">{linkMatch[1]}</a>;
         }
         return part;
     });
@@ -109,11 +109,11 @@ function RoadmapStatusPill({ status, active, count, onClick }) {
             aria-pressed={active}
             onClick={onClick}
             className={'h-8 px-3.5 rounded-full border text-[13px] font-medium transition-colors inline-flex items-center gap-1.5 '
-                + (active ? 'border-blue-500 bg-blue-500/[0.12] text-blue-300' : 'border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100')}
+                + (active ? 'border-accent-base bg-accent-wash/[0.12] text-accent-fg-strong' : 'border-line-strong bg-control text-fg-secondary hover:bg-hover hover:text-fg')}
         >
             <span className={'w-1.5 h-1.5 rounded-full ' + meta.dot} aria-hidden="true" />
             {meta.label}
-            {typeof count === 'number' && <span className="text-gray-500">{count}</span>}
+            {typeof count === 'number' && <span className="text-fg-subtle">{count}</span>}
         </button>
     );
 }
@@ -122,17 +122,17 @@ function RoadmapStatusPill({ status, active, count, onClick }) {
 // description with inline formatting.
 function RoadmapItemRow({ item }) {
     if (!item.status) {
-        return <p id={item.id} className="text-sm text-gray-400">{roadmapInline(item.text, item.id)}</p>;
+        return <p id={item.id} className="text-sm text-fg-muted">{roadmapInline(item.text, item.id)}</p>;
     }
     const meta = ROADMAP_STATUS_BY_ID[item.status];
     return (
-        <div id={item.id} className="flex flex-col sm:flex-row sm:items-baseline gap-1.5 sm:gap-3 py-2 border-b border-gray-700/40 last:border-b-0">
+        <div id={item.id} className="flex flex-col sm:flex-row sm:items-baseline gap-1.5 sm:gap-3 py-2 border-b border-line/40 last:border-b-0">
             <span className={'shrink-0 self-start text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full border ' + meta.border + ' ' + meta.bg + ' ' + meta.text}>
                 {meta.label}
             </span>
             <div className="min-w-0">
-                <span className="font-semibold text-gray-100 text-sm">{item.title}</span>
-                <span className="text-sm text-gray-400">{item.text ? ': ' : ''}{roadmapInline(item.text, item.id)}</span>
+                <span className="font-semibold text-fg text-sm">{item.title}</span>
+                <span className="text-sm text-fg-muted">{item.text ? ': ' : ''}{roadmapInline(item.text, item.id)}</span>
             </div>
         </div>
     );
@@ -140,10 +140,10 @@ function RoadmapItemRow({ item }) {
 
 function RoadmapErrorState() {
     return (
-        <div className="flex flex-col items-center justify-center gap-3 text-center py-20 px-4 bg-gray-800 border border-gray-800 rounded-xl">
-            <MtlxIcon name="alert-triangle" className="w-8 h-8 text-amber-300" />
-            <h2 className="text-lg font-semibold text-gray-100">Roadmap not available</h2>
-            <p className="text-sm text-gray-400 max-w-md">
+        <div className="flex flex-col items-center justify-center gap-3 text-center py-20 px-4 bg-surface-raised border border-line-subtle rounded-xl">
+            <MtlxIcon name="alert-triangle" className="w-8 h-8 text-warning" />
+            <h2 className="text-lg font-semibold text-fg">Roadmap not available</h2>
+            <p className="text-sm text-fg-muted max-w-md">
                 ROADMAP.md could not be fetched. If you are running this locally, make sure the site is
                 served from the repository root.
             </p>
@@ -189,26 +189,26 @@ function MtlxRoadmapApp({ active } = {}) {
         <div ref={rootRef} className="relative">
         <HeroGrid rootRef={rootRef} fadeRef={fadeRef} fadeFrom="top" />
         <div className="relative max-w-5xl mx-auto px-2 sm:px-0 py-8 sm:py-14 space-y-6">
-            <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs text-gray-500">
-                <a href="#!home" className="hover:text-gray-300 transition-colors">Home</a>
+            <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs text-fg-subtle">
+                <a href="#!home" className="hover:text-fg-secondary transition-colors">Home</a>
                 <MtlxIcon name="chevron-right" className="w-3 h-3" />
                 <span>Learn</span>
                 <MtlxIcon name="chevron-right" className="w-3 h-3" />
-                <span className="text-gray-400">Roadmap</span>
+                <span className="text-fg-muted">Roadmap</span>
             </nav>
 
             <div ref={fadeRef} className="space-y-2">
-                <h1 className="text-[28px] sm:text-[34px] leading-[1.15] font-bold tracking-[-0.01em] text-gray-100 text-balance">
+                <h1 className="text-[28px] sm:text-[34px] leading-[1.15] font-bold tracking-[-0.01em] text-fg text-balance">
                     {parsed ? parsed.title : 'Roadmap'}
                 </h1>
                 {parsed && parsed.intro && (
-                    <p className="text-gray-400 text-sm sm:text-base max-w-[60em]">{roadmapInline(parsed.intro, 'intro')}</p>
+                    <p className="text-fg-muted text-sm sm:text-base max-w-[60em]">{roadmapInline(parsed.intro, 'intro')}</p>
                 )}
             </div>
 
             {raw === 'error' && <RoadmapErrorState />}
             {raw === null && (
-                <div className="flex items-center justify-center h-40 text-gray-400 text-sm animate-pulse">Loading roadmap…</div>
+                <div className="flex items-center justify-center h-40 text-fg-muted text-sm animate-pulse">Loading roadmap…</div>
             )}
 
             {parsed && (
@@ -219,9 +219,9 @@ function MtlxRoadmapApp({ active } = {}) {
                             aria-pressed={statusFilter === 'all'}
                             onClick={() => setStatusFilter('all')}
                             className={'h-8 px-3.5 rounded-full border text-[13px] font-medium transition-colors '
-                                + (statusFilter === 'all' ? 'border-blue-500 bg-blue-500/[0.12] text-blue-300' : 'border-gray-600 bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100')}
+                                + (statusFilter === 'all' ? 'border-accent-base bg-accent-wash/[0.12] text-accent-fg-strong' : 'border-line-strong bg-control text-fg-secondary hover:bg-hover hover:text-fg')}
                         >
-                            All <span className="text-gray-500">{totalItems}</span>
+                            All <span className="text-fg-subtle">{totalItems}</span>
                         </button>
                         {ROADMAP_STATUSES.map((s) => (
                             <RoadmapStatusPill
@@ -250,7 +250,7 @@ function MtlxRoadmapApp({ active } = {}) {
                         })}
                     </div>
 
-                    <p className="text-xs text-gray-500 pt-2 border-t border-gray-700/40">
+                    <p className="text-xs text-fg-subtle pt-2 border-t border-line/40">
                         Edit ROADMAP.md in the repository to change this page.
                     </p>
                 </>

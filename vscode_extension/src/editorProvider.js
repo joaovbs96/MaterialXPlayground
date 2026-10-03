@@ -14,7 +14,32 @@ const os = require('os');
 const docScanner = require('./docScanner');
 const textureStamp = require('./textureStamp');
 const { errMsg } = require('./util');
-const { getSetting } = require('./settingsHost');
+const { getSetting, getThemePreference, setThemePreference, getThemeKind, getCustomThemes, setCustomThemes, setCustomThemeMeta } = require('./settingsHost');
+const { injectCustomThemes, sanitizeCodes } = require('./customThemes');
+
+// Every webview built by buildHtml, for theme-preference broadcasts; a
+// disposed one throws or rejects on post and is dropped.
+const themeWebviews = new Set();
+function broadcastThemePreference(value) {
+    for (const wv of Array.from(themeWebviews)) {
+        try {
+            Promise.resolve(wv.postMessage({ type: 'mtlx-theme-preference', value })).then((ok) => { if (ok === false) themeWebviews.delete(wv); }, () => themeWebviews.delete(wv));
+        } catch (err) { themeWebviews.delete(wv); }
+    }
+}
+
+// Live push of materialxPlayground.customThemes (opaque codes) to every webview.
+function broadcastCustomThemes(codes) {
+    for (const wv of Array.from(themeWebviews)) {
+        try {
+            Promise.resolve(wv.postMessage({ type: 'mtlx-custom-themes', codes })).then((ok) => { if (ok === false) themeWebviews.delete(wv); }, () => themeWebviews.delete(wv));
+        } catch (err) { themeWebviews.delete(wv); }
+    }
+}
+
+// Sidebar hook: told when a webview reports new {id, label} meta.
+let customThemeMetaListener = null;
+function onCustomThemeMeta(fn) { customThemeMetaListener = fn; }
 
 // How long to wait after the last keystroke before rescanning + resending
 // the document to the webview. Keeps a fast typist from triggering a
@@ -372,6 +397,11 @@ async function buildHtml(context, webview, initialHash, docsOnly, extraResourceR
     // by js/shell.jsx's AboutDialog for its VS Code version block.
     html = html.split('${extensionVersion}').join(String(context.extension.packageJSON.version || ''));
     html = html.split('${vscodeVersion}').join(String(vscode.version || ''));
+    // Read by bootstrap.js before js/shared/theme.js runs (first-paint theme).
+    html = html.split('${themePref}').join(getThemePreference());
+    html = html.split('${themeKind}').join(getThemeKind());
+    html = injectCustomThemes(html, getCustomThemes());
+    themeWebviews.add(webview);
 
     if (!live()) return false;
     webview.html = html;
@@ -611,6 +641,16 @@ function wireCommonWebviewMessages(webview, outputChannel, documentUri, life) {
             if (testHooks) testHooks.emitGraphSelectionReport(msg.report || null);
         } else if (msg.type === 'mtlx-test-docs-filter') {
             if (testHooks) testHooks.emitDocsFilterReport(msg.report || null);
+        } else if (msg.type === 'mtlx-set-theme-preference') {
+            await setThemePreference(msg.value);
+        } else if (msg.type === 'mtlx-set-custom-themes') {
+            // Codes stay opaque strings; meta ({id, label}) only feeds the sidebar menu.
+            const meta = setCustomThemeMeta(msg.meta);
+            await setCustomThemes(sanitizeCodes(msg.codes));
+            if (customThemeMetaListener) customThemeMetaListener(meta);
+        } else if (msg.type === 'mtlx-custom-theme-meta') {
+            const meta = setCustomThemeMeta(msg.meta);
+            if (customThemeMetaListener) customThemeMetaListener(meta);
         } else if (msg.type === 'mtlx-save-file') {
             await handleSaveFile(webview, msg, documentUri);
         }
@@ -710,6 +750,11 @@ function postToActivePanel(message) {
         return;
     }
     activePanelInfo.panel.webview.postMessage(message);
+}
+
+// Sidebar "Customize...": asks the active Playground webview to open its theme editor.
+function openThemeEditorInActivePanel() {
+    postToActivePanel({ type: 'mtlx-open-theme-editor' });
 }
 
 // Command handler for materialxPlayground.saveGraph (registered in
@@ -1225,6 +1270,10 @@ module.exports = {
     buildHtml,
     panelLifecycle,
     wireCommonWebviewMessages,
+    broadcastThemePreference,
+    broadcastCustomThemes,
+    onCustomThemeMeta,
+    openThemeEditorInActivePanel,
     toFileUrls,
     missingRefUris,
     trackScenePanel,

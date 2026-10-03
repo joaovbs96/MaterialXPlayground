@@ -87,14 +87,16 @@ window.MTLX_DIFFUSE_ENV = 'sh';
     // those short of a parallel protocol embed-boot.js doesn't speak.
     var LIVE_ATTRS = {
         geometry: 1, env: 1, exposure: 1, background: 1, backdrop: 1, transparent: 1,
-        accent: 1, surface: 1, text: 1, radius: 1, material: 1, camera: 1,
+        accent: 1, surface: 1, text: 1, radius: 1, theme: 1, material: 1, camera: 1,
         envmap: 1, forcetransparency: 1, geometryurl: 1,
         displacement: 1, previewsubdivision: 1,
     };
     // Theme attributes forwarded verbatim as `setTheme` messages — see
     // embed-boot.js's THEME_VARS/applyTheme, which does the actual
     // CSS.supports() validation on the other side of the iframe boundary.
-    var THEME_ATTRS = { accent: 1, surface: 1, text: 1, radius: 1 };
+    // Light-base theme ids for the placeholder; a unit test keeps this equal to the registry.
+    var LIGHT_THEME_IDS = ['light', 'hc-light', 'paper'];
+    var THEME_ATTRS = { accent: 1, surface: 1, text: 1, radius: 1, theme: 1 };
 
     // `displacement` off-like spellings, see the `displacement` getter.
     var DISPLACEMENT_OFF_WORDS = ['off', '0', 'false', 'no'];
@@ -105,7 +107,7 @@ window.MTLX_DIFFUSE_ENV = 'sh';
     class MtlxViewerElement extends HTMLElement {
         static get observedAttributes() {
             return ['src', 'geometry', 'env', 'exposure', 'autorotate', 'controls', 'background', 'backdrop', 'transparent', 'base', 'poster',
-                'accent', 'surface', 'text', 'radius', 'material', 'camera', 'wheel', 'version', 'envmap', 'forcetransparency', 'geometryurl',
+                'accent', 'surface', 'text', 'radius', 'theme', 'material', 'camera', 'wheel', 'version', 'envmap', 'forcetransparency', 'geometryurl',
                 'displacement', 'previewsubdivision'];
         }
 
@@ -231,6 +233,10 @@ window.MTLX_DIFFUSE_ENV = 'sh';
         get surface() { return this.getAttribute('surface') || ''; }
         set surface(v) { this._reflect('surface', v); }
 
+        // light | dark | auto (default; invalid values behave as auto).
+        get theme() { return this.getAttribute('theme') || ''; }
+        set theme(v) { this._reflect('theme', v); }
+
         get text() { return this.getAttribute('text') || ''; }
         set text(v) { this._reflect('text', v); }
 
@@ -323,17 +329,23 @@ window.MTLX_DIFFUSE_ENV = 'sh';
         _buildShadow() {
             var shadow = this.attachShadow({ mode: 'open' });
             var style = document.createElement('style');
+            // Placeholder colors mirror the theme tokens surface-base and fg-muted.
             style.textContent =
+                ':host{--ph-bg:#111827;--ph-fg:#9ca3af;}' +
+                // The host page has no registry: known light-base ids get the light literals, anything else dark.
+                // A theme code carries its base in its first payload character: mtlx1.L is light, mtlx1.D dark.
+                LIGHT_THEME_IDS.map(function (id) { return ':host([theme="' + id + '" i])'; }).join(',') + ',:host([theme^="mtlx1.L"]){--ph-bg:#f3f4f6;--ph-fg:#4b5563;}' +
+                '@media (prefers-color-scheme:light){:host([theme="auto" i]){--ph-bg:#f3f4f6;--ph-fg:#4b5563;}}' +
                 ':host{display:block;position:relative;width:100%;aspect-ratio:16/9;' +
-                'background:#111827;overflow:hidden;box-sizing:border-box;}' +
+                'background:var(--ph-bg);overflow:hidden;box-sizing:border-box;}' +
                 // Layer 4 of 4 (docs/EMBEDDING.md): outside the iframe entirely, so this
                 // applies regardless of the framed document's own state.
                 ':host([transparent]){background:transparent;}' +
                 '.slot{position:absolute;inset:0;}' +
                 'iframe{position:absolute;inset:0;width:100%;height:100%;border:0;display:block;}' +
                 '.placeholder{position:absolute;inset:0;display:flex;align-items:center;' +
-                'justify-content:center;background-color:#111827;background-position:center;' +
-                'background-size:cover;background-repeat:no-repeat;color:#9ca3af;' +
+                'justify-content:center;background-color:var(--ph-bg);background-position:center;' +
+                'background-size:cover;background-repeat:no-repeat;color:var(--ph-fg);' +
                 'font:13px ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,sans-serif;' +
                 'text-align:center;padding:12px;box-sizing:border-box;}' +
                 ':host([transparent]) .placeholder{background-color:transparent;}';

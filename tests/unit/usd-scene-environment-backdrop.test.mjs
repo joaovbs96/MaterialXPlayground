@@ -5,16 +5,17 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
-// Slices the pure backdrop helper out of the environment bridge (a classic script).
+// Slices the pure backdrop helper out of the shared stage environment (a classic script).
 function loadBackdrop() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-  const source = fs.readFileSync(path.join(root, 'js', 'usd-scene-environment.js'), 'utf8');
+  const source = fs.readFileSync(path.join(root, 'js', 'shared', 'render-environment.js'), 'utf8');
   const start = source.indexOf('const environmentBackdrop =');
-  const end = source.indexOf('const createUsdSceneEnvironment =', start);
-  assert.ok(start >= 0 && end > start, 'environment backdrop helper is present');
+  const close = source.indexOf('\n    };\n', start);
+  const end = close + '\n    };'.length;
+  assert.ok(start >= 0 && close > start, 'environment backdrop helper is present');
   const context = {};
   vm.runInNewContext(source.slice(start, end) + '\nthis.environmentBackdrop = environmentBackdrop;',
-    context, { filename: 'usd-scene-environment.js' });
+    context, { filename: 'render-environment.js' });
   return context.environmentBackdrop;
 }
 

@@ -25,8 +25,9 @@
 5. **embed** (`scripts/build-embed.mjs`) - precompiles `js/mtlx-engine.js`, `js/shared/mtlx-ui.jsx`, `js/viewer-app.jsx` into `embed/gen/*.js` so the embed ships no Babel. Also enforces that `embed/viewer.html` carries every `vendor/three/**`/`js/vendor/**` script tag `index.html` loads.
 6. **embeddocs** (`scripts/build-embed-docs.mjs`) - renders `docs/EMBEDDING.md` into `js/gen/embedding-docs.html`. Fails on any dangling internal anchor.
 7. **tutorials** (`scripts/build-tutorials.mjs`) - builds the MkDocs subsite into `/tutorials/`. Only runs when `tutorials-src/mkdocs.yml` exists.
-8. **buildid** (`scripts/lib/build-id.mjs`) - hashes `index.html`, `js/**` (except `js/materialx/` and `js/gen/build-id.json`), and `vendor/vendor-manifest.json` into `js/gen/build-id.json` and the `window.__MTLX_BUILD` stamp in `index.html`. Merge conflicts on either file: take either side and rerun `npm run build`.
-9. **webview** (`scripts/build-webview.mjs`) - splices `vscode_extension/media/webview.html` from `index.html`.
+8. **render** (`scripts/check-render-parity.mjs`) - anti-drift guard for `js/shared/render-settings.js`, the store every render/quality toggle routes through. Checks the manifest shape, that storage keys appear only in `render-settings.js` (plus a small allow list), the embed attribute and payload-budget contracts, and regenerates the committed `docs/RENDER-FEATURES.md` surface-parity table.
+9. **buildid** (`scripts/lib/build-id.mjs`) - hashes `index.html`, `js/**` (except `js/materialx/` and `js/gen/build-id.json`), and `vendor/vendor-manifest.json` into `js/gen/build-id.json` and the `window.__MTLX_BUILD` stamp in `index.html`. Merge conflicts on either file: take either side and rerun `npm run build`.
+10. **webview** (`scripts/build-webview.mjs`) - splices `vscode_extension/media/webview.html` from `index.html`.
 
 ## CI
 
@@ -45,6 +46,7 @@
 | Want a non-default MaterialX version locally (Compare) | `npm run vendor:versions` |
 | `libraries/` or anything affecting node docs | `npm run build:nodelib` |
 | Tutorial content (`tutorials-src/`) | `npm run build:tutorials` |
+| `js/shared/render-settings.js` (rows, codecs, embed attrs) | `npm run build:render` (or `npm run build`), so `docs/RENDER-FEATURES.md` does not go stale |
 | Anything under `index.html`, `js/**` (excluding `js/materialx/`), or `vendor/vendor-manifest.json` | `npm run build:buildid` (or `npm run build`) |
 | `index.html` structure or webview-only fragments | `npm run build:webview` |
 | Not sure | `npm run build` then `npm run check`, it's idempotent |

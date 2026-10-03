@@ -76,8 +76,8 @@
                                 title={seg.title}
                                 aria-pressed={active}
                                 className={'rounded px-1 leading-none transition-colors ' + (active
-                                    ? 'bg-blue-600/70 text-white'
-                                    : 'text-gray-400 hover:text-gray-200')}
+                                    ? 'mtlx-fill-accent-translucent text-on-accent'
+                                    : 'text-fg-muted hover:text-fg-soft')}
                             ><MtlxIcon name={seg.icon} className="w-3.5 h-3.5" /></button>
                         );
                     })}
@@ -92,15 +92,15 @@
             // Embedded (docked at the foot of the left sidebar) drops the
             // floating card's own chrome and just fills the sidebar column.
             const cardCls = embedded
-                ? 'w-full px-3 py-2 border-t border-gray-700 bg-gray-900/70'
+                ? 'w-full px-3 py-2 border-t border-line bg-chrome/70'
                 // w-80 (not w-60): the longest type name (displacementshader,
                 // ~133px at this legend's text-[11px] font-mono) doesn't fit
                 // in a grid-cols-2 column at the old width.
-                : 'bg-gray-800/90 backdrop-blur border border-gray-700 rounded-lg p-3 w-80';
+                : 'bg-surface-raised/90 backdrop-blur border border-line rounded-lg p-3 w-80';
             return open ? (
                 <div className={cardCls}>
                     <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Types</span>
+                        <span className="text-xs font-semibold text-fg-muted uppercase tracking-wider">Types</span>
                         <LegendTriState
                             legendOpen={open}
                             legendShowAll={showAll}
@@ -115,7 +115,7 @@
                             return (
                                 <div key={t}
                                     className={'flex items-center gap-1.5 text-[11px] font-mono min-w-0 '
-                                        + (inGraph ? 'text-gray-400' : 'text-gray-600')}
+                                        + (inGraph ? 'text-fg-muted' : 'text-fg-disabled')}
                                     title={inGraph ? t : t + ' (not in current graph)'}
                                 >
                                     <span className={'w-2 h-2 rounded-full flex-none' + (inGraph ? '' : ' opacity-50')}
@@ -125,11 +125,11 @@
                             );
                         })}
                         {!displayTypes.length && (
-                            <div className="col-span-2 text-[11px] text-gray-500">No typed ports in view.</div>
+                            <div className="col-span-2 text-[11px] text-fg-subtle">No typed ports in view.</div>
                         )}
                     </div>
                     {showCounts && (
-                        <div className="text-[10px] text-gray-500 mt-2 pt-1.5 border-t border-gray-700">
+                        <div className="text-[10px] text-fg-subtle mt-2 pt-1.5 border-t border-line">
                             {nodeCount} node{nodeCount === 1 ? '' : 's'} {'\u00B7'}{' '}
                             {connectionCount} connection{connectionCount === 1 ? '' : 's'}
                         </div>
@@ -151,10 +151,10 @@
                     }}
                     title="Show the type color legend"
                     className={(embedded
-                        ? 'w-full flex items-center gap-2 px-3 py-1.5 border-t border-gray-700 bg-gray-900/70 cursor-pointer'
+                        ? 'w-full flex items-center gap-2 px-3 py-1.5 border-t border-line bg-chrome/70 cursor-pointer'
                         : BTN_TOOLBAR + ' cursor-pointer')}
                 >
-                    <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Types</span>
+                    <span className="text-xs font-semibold text-fg-muted uppercase tracking-wider">Types</span>
                     {types.slice(0, 3).map((t) => (
                         <span key={t} className="w-2 h-2 rounded-full" style={{ background: typeColor(t) }} />
                     ))}

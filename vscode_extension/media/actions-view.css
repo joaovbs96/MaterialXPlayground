@@ -251,8 +251,37 @@ body {
 /* ---- Header overflow menu ("..."): Tutorials / Report an Issue / What's
    New, kept out of the toolbar row itself so it never overflows a narrow
    sidebar (task H). Styled like a native VS Code context menu. */
-.mtlx-more-wrap {
+.mtlx-more-wrap,
+.mtlx-theme-wrap {
     position: relative;
+}
+
+.mtlx-theme-label {
+    flex: 1 1 auto;
+}
+
+.mtlx-theme-check {
+    display: flex;
+    visibility: hidden;
+}
+
+.mtlx-more-item[aria-checked="true"] .mtlx-theme-check {
+    visibility: visible;
+}
+
+.mtlx-theme-sep {
+    height: 1px;
+    margin: 4px 0;
+    background: var(--vscode-menu-separatorBackground, var(--vscode-widget-border));
+}
+
+.mtlx-theme-heading {
+    padding: 4px 12px 2px;
+    font-size: 10px;
+    line-height: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--vscode-descriptionForeground);
 }
 
 .mtlx-more-glyph {

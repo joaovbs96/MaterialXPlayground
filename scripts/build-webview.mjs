@@ -179,8 +179,9 @@ const BOOTSTRAP_BLOCK = `    <!-- Bootstrap: MUST be the first script to run, be
          and wires up the extension <-> webview postMessage contract. See
          vscode_extension/media/bootstrap.js.
          data-extension-version/data-vscode-version feed window.__MTLX_VSCODE_VERSIONS__,
-         read by js/shell.jsx's AboutDialog. -->
-    <script src="\${bootstrapUri}" data-initial-hash="\${initialHash}" data-docs-only="\${docsOnly}" data-scene-only="\${sceneOnly}" data-extension-version="\${extensionVersion}" data-vscode-version="\${vscodeVersion}"></script>`;
+         read by js/shell.jsx's AboutDialog. data-theme-pref/data-vscode-theme-kind
+         feed window.__MTLX_THEME_PREF__/__MTLX_VSCODE_THEME_KIND__ for js/shared/theme.js. -->
+    <script src="\${bootstrapUri}" data-initial-hash="\${initialHash}" data-docs-only="\${docsOnly}" data-scene-only="\${sceneOnly}" data-extension-version="\${extensionVersion}" data-vscode-version="\${vscodeVersion}" data-theme-pref="\${themePref}" data-vscode-theme-kind="\${themeKind}"></script>`;
 
 // Webview-only :focus{outline:none}: VS Code's Chromium shows a native
 // focus outline that a regular browser's :focus-visible heuristics
@@ -209,7 +210,7 @@ const FOCUS_CSS_BLOCK = `
             margin: 0 !important;
         }`;
 
-const PLACEHOLDERS = ["${cspSource}", "${baseUri}", "${bootstrapUri}", "${initialHash}", "${docsOnly}", "${sceneOnly}", "${extensionVersion}", "${vscodeVersion}"];
+const PLACEHOLDERS = ["${cspSource}", "${baseUri}", "${bootstrapUri}", "${initialHash}", "${docsOnly}", "${sceneOnly}", "${extensionVersion}", "${vscodeVersion}", "${themePref}", "${themeKind}"];
 
 /** Count non-overlapping occurrences of `needle` in `haystack`. */
 function countOccurrences(haystack, needle) {

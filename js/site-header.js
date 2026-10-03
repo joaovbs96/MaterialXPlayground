@@ -57,7 +57,7 @@
     // dangerouslySetInnerHTML) so the brand mark can't drift. The two
     // fill attributes must stay byte-identical between both consumers.
     var LOGO_PATHS =
-        '<path d="M7.113213314864547,17.836439757602623 C3.962962545544091,14.629149767071237 4.00919965907034,9.475663485904064 7.216489095788643,6.325413260547549 C10.423779086320033,3.1751624912270877 15.577264823523263,3.221399050940242 18.72751559284372,6.428689041471628 C21.87776581820023,9.635978478189926 21.831529802451016,14.789464769206242 18.624239811919622,17.939715538526702 C15.416950375201322,21.08996576388322 10.26346354022106,21.04372919432092 7.113213314864547,17.836439757602623 C7.113213314864547,17.836439757602623 7.113213314864547,17.836439757602623 7.113213314864547,17.836439757602623 ZM8.91732412511588,9.218661251949928 C9.232340172246467,9.539381057705786 9.747706415252441,9.544005421136866 10.068426774821386,9.228988830042336 C11.67202746503994,7.653906962497572 14.248858155804163,7.677026030285823 15.823940023348927,9.280626720504376 C16.138956614443458,9.601347080073324 16.654322867298575,9.605970345727371 16.975042673054432,9.290954298596784 C17.29576247881029,8.975938251466197 17.300386842241373,8.460572008460225 16.985370251146843,8.139851648891277 C14.780255745376962,5.894810793347922 11.172692558751647,5.86244409647454 8.92765170320829,8.067558602244421 C8.606931343639342,8.382575193338951 8.602308077985294,8.897941446194071 8.91732412511588,9.218661251949928 C8.91732412511588,9.218661251949928 8.91732412511588,9.218661251949928 8.91732412511588,9.218661251949928 Z" fill="#ffffff" />' +
+        '<path d="M7.113213314864547,17.836439757602623 C3.962962545544091,14.629149767071237 4.00919965907034,9.475663485904064 7.216489095788643,6.325413260547549 C10.423779086320033,3.1751624912270877 15.577264823523263,3.221399050940242 18.72751559284372,6.428689041471628 C21.87776581820023,9.635978478189926 21.831529802451016,14.789464769206242 18.624239811919622,17.939715538526702 C15.416950375201322,21.08996576388322 10.26346354022106,21.04372919432092 7.113213314864547,17.836439757602623 C7.113213314864547,17.836439757602623 7.113213314864547,17.836439757602623 7.113213314864547,17.836439757602623 ZM8.91732412511588,9.218661251949928 C9.232340172246467,9.539381057705786 9.747706415252441,9.544005421136866 10.068426774821386,9.228988830042336 C11.67202746503994,7.653906962497572 14.248858155804163,7.677026030285823 15.823940023348927,9.280626720504376 C16.138956614443458,9.601347080073324 16.654322867298575,9.605970345727371 16.975042673054432,9.290954298596784 C17.29576247881029,8.975938251466197 17.300386842241373,8.460572008460225 16.985370251146843,8.139851648891277 C14.780255745376962,5.894810793347922 11.172692558751647,5.86244409647454 8.92765170320829,8.067558602244421 C8.606931343639342,8.382575193338951 8.602308077985294,8.897941446194071 8.91732412511588,9.218661251949928 C8.91732412511588,9.218661251949928 8.91732412511588,9.218661251949928 8.91732412511588,9.218661251949928 Z" style="fill:rgb(var(--mtlx-brand-logo-inner))" />' +
         '<path d="M12,2 C17.523000717163086,2 22,6.4770002365112305 22,12 C22,17.523000717163086 17.523000717163086,22 12,22 C6.4770002365112305,22 2,17.523000717163086 2,12 C2,6.4770002365112305 6.4770002365112305,2 12,2 C12,2 12,2 12,2 ZM18,11 C17.447715759277344,11 17,11.447714805603027 17,12 C17,14.76142406463623 14.76142406463623,17 12,17 C11.447714805603027,17 11,17.447715759277344 11,18 C11,18.552284240722656 11.447714805603027,19 12,19 C15.86599349975586,19 19,15.86599349975586 19,12 C19,11.447714805603027 18.552284240722656,11 18,11 C18,11 18,11 18,11 Z" fill="currentColor" />';
 
     // Fact-row icons (tag/star/git-fork) for the GitHub widget, from
@@ -108,6 +108,103 @@
             '<path d="M12 17l0 .01" />' +
             '<path d="M12 13.5a1.5 1.5 0 0 1 1 -1.5a2.6 2.6 0 1 0 -3 -4" />' +
         '</svg>';
+
+    // Theme switch icons (Tabler outline, MIT: brightness-half, sun, moon,
+    // device-desktop, check), same viewBox/stroke convention as above.
+    function tablerSvg(inner) {
+        return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + inner + '</svg>';
+    }
+    var ICON_THEME = tablerSvg('<path d="M12 9a3 3 0 0 0 0 6v-6z" /><path d="M6 6h3.5l2.5 -2.5l2.5 2.5h3.5v3.5l2.5 2.5l-2.5 2.5v3.5h-3.5l-2.5 2.5l-2.5 -2.5h-3.5v-3.5l-2.5 -2.5l2.5 -2.5z" />');
+    var THEME_ICONS = {
+        vscode: tablerSvg('<path d="M16 3v18l4 -2.5v-13l-4 -2.5" /><path d="M9.165 13.903l-4.165 3.597l-2 -1l4.333 -4.5m1.735 -1.802l6.932 -7.198v5l-4.795 4.141" /><path d="M16 16.5l-11 -10l-2 1l13 13.5" />'),
+        system: tablerSvg('<path d="M3 5a1 1 0 0 1 1 -1h16a1 1 0 0 1 1 1v10a1 1 0 0 1 -1 1h-16a1 1 0 0 1 -1 -1v-10z" /><path d="M7 20h10" /><path d="M9 16v4" /><path d="M15 16v4" />'),
+        light: tablerSvg('<path d="M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0" /><path d="M3 12h1m8 -9v1m8 8h1m-9 8v1m-6.4 -15.4l.7 .7m12.1 -.7l-.7 .7m0 11.4l.7 .7m-12.1 -.7l-.7 .7" />'),
+        dark: tablerSvg('<path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />'),
+        // Tabler contrast and palette.
+        contrast: tablerSvg('<path d="M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0" /><path d="M12 3v18" /><path d="M12 14l7 -7" /><path d="M12 19l8.5 -8.5" /><path d="M12 9l4.2 -4.2" />'),
+        palette: tablerSvg('<path d="M12 21a9 9 0 0 1 0 -18c4.97 0 9 3.582 9 8c0 1.06 -.474 2.078 -1.318 2.828c-.844 .75 -1.989 1.172 -3.182 1.172h-2.5a2 2 0 0 0 -1 3.75a1.3 1.3 0 0 1 -1 2.25" /><path d="M8.5 10.5m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /><path d="M12.5 7.5m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" /><path d="M16.5 10.5m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />')
+    };
+    var ICON_THEME_CHECK = tablerSvg('<path d="M5 12l5 5l10 -10" />').replace('<svg ', '<svg class="mtlx-theme-check" ');
+    // Tabler adjustments: the Customize item that opens the Theme editor panel.
+    var ICON_CUSTOMIZE = tablerSvg('<path d="M4 10a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" /><path d="M6 4v4" /><path d="M6 12v8" /><path d="M10 16a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" /><path d="M12 4v10" /><path d="M12 18v2" /><path d="M16 7a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" /><path d="M18 4v1" /><path d="M18 9v11" />');
+    function themeIcon(c) {
+        if (THEME_ICONS[c.id]) return THEME_ICONS[c.id];
+        return c.group === 'accessibility' ? THEME_ICONS.contrast : THEME_ICONS.palette;
+    }
+    function escAttr(v) { return String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+    // System first, then standard, then labeled Accessibility / Presets / My themes sections.
+    function themeSections() {
+        var list = (window.MtlxTheme && window.MtlxTheme.list && window.MtlxTheme.list()) || [];
+        function pick(g) { return list.filter(function (c) { return c.group === g; }); }
+        // 'vscode' leads when offered (VS Code host only); never shown elsewhere.
+        var inVsc = !!window.__MTLX_VSCODE__;
+        var vsc = inVsc ? list.filter(function (c) { return c.id === 'vscode'; }) : [];
+        var std = pick('standard').filter(function (c) { return c.id !== 'vscode'; });
+        var top = vsc.concat([{ id: 'system', label: 'System', group: 'standard' }], std);
+        var more = [];
+        if (pick('accessibility').length) more.push({ label: 'Accessibility', items: pick('accessibility') });
+        if (pick('presets').length) more.push({ label: 'Presets', items: pick('presets') });
+        if (pick('custom').length) more.push({ label: 'My themes', items: pick('custom') });
+        return { top: top, more: more };
+    }
+    // The label span is filled by fillThemeLabels (textContent): custom theme labels are user text.
+    function themeItemHtml(c) {
+        return '<button type="button" role="menuitemradio" aria-checked="false" tabindex="-1"' +
+            ' class="mtlx-menu-item mtlx-theme-item" data-theme-choice="' + escAttr(c.id) + '">' +
+            themeIcon(c) + '<span class="mtlx-menu-label"></span>' + ICON_THEME_CHECK +
+            '</button>';
+    }
+    function fillThemeLabels(root) {
+        if (!root) return;
+        var s = themeSections();
+        var byId = {};
+        s.top.concat.apply(s.top, s.more.map(function (g) { return g.items; })).forEach(function (c) { byId[c.id] = c.label; });
+        Array.prototype.forEach.call(root.querySelectorAll('[data-theme-choice]'), function (el) {
+            var span = el.querySelector('.mtlx-menu-label');
+            if (span) span.textContent = String(byId[el.getAttribute('data-theme-choice')] || '');
+        });
+    }
+    function customizeItemHtml() {
+        return '<button type="button" role="menuitem" tabindex="-1" class="mtlx-menu-item mtlx-theme-item mtlx-theme-customize"' +
+            ' data-theme-action="customize">' + ICON_CUSTOMIZE + '<span class="mtlx-menu-label">Customize&hellip;</span></button>';
+    }
+    function themeMenuHtml() {
+        var s = themeSections();
+        var html = s.top.map(themeItemHtml).join('');
+        if (s.more.length) {
+            html += '<div class="mtlx-theme-sep" role="separator"></div><div class="mtlx-theme-more" role="presentation">More themes</div>';
+            s.more.forEach(function (g) {
+                html += '<div class="mtlx-theme-group" role="presentation">' + g.label + '</div>' + g.items.map(themeItemHtml).join('');
+            });
+        }
+        return html + '<div class="mtlx-theme-sep" role="separator"></div>' + customizeItemHtml();
+    }
+    function themeRowHtml() {
+        var s = themeSections();
+        var html = s.top.map(function (c) {
+            return '<button type="button" role="radio" aria-checked="false" aria-label="' + escAttr(c.label) + '"' +
+                ' class="mtlx-theme-row-btn" data-theme-choice="' + escAttr(c.id) + '">' +
+                themeIcon(c) + '<span>' + escAttr(c.label) + '</span></button>';
+        }).join('');
+        return html;
+    }
+
+    // Mobile disclosure: toggle row plus grouped rows, same markup as the popup.
+    var ICON_CHEVRON = tablerSvg('<path d="M6 9l6 6l6 -6" />').replace('<svg ', '<svg class="mtlx-theme-chev" ');
+    function themeMoreHtml() {
+        var s = themeSections();
+        if (!s.more.length) return '';
+        var list = s.more.map(function (g) {
+            return '<div class="mtlx-theme-group" role="presentation">' + g.label + '</div>' +
+                g.items.map(function (c) {
+                    return themeItemHtml(c).replace('role="menuitemradio"', 'role="radio"');
+                }).join('');
+        }).join('');
+        return '<button type="button" id="mtlx-theme-more-btn" class="mtlx-menu-item mtlx-theme-more-btn"' +
+            ' aria-expanded="false" aria-controls="mtlx-theme-more-list">' +
+            '<span class="mtlx-menu-label">More themes</span>' + ICON_CHEVRON + '</button>' +
+            '<div id="mtlx-theme-more-list" class="mtlx-theme-more-list" role="radiogroup" aria-label="More themes" hidden>' + list + '</div>';
+    }
 
     // Update-banner icon (alert-triangle), paths only, hand-copied from
     // window.MTLX_ICON_PATHS in js/shared/ui-commons.js, same
@@ -464,6 +561,16 @@
                 // filled in by setVer() below) for js/shell.jsx's AboutDialog.
                 (window.__MTLX_VSCODE__ ? '' :
                 '<div id="mtlx-nav-right" class="mtlx-nav-right">' +
+                    // Theme switch, immediately left of the About button.
+                    '<div class="mtlx-theme-wrap">' +
+                        '<button type="button" id="mtlx-theme-btn" class="mtlx-icon-btn"' +
+                            ' title="Theme" aria-label="Theme" aria-haspopup="menu" aria-expanded="false"' +
+                            ' aria-controls="mtlx-theme-menu">' +
+                            ICON_THEME +
+                        '</button>' +
+                        '<div id="mtlx-theme-menu" class="mtlx-menu mtlx-theme-menu" role="menu"' +
+                            ' aria-labelledby="mtlx-theme-btn"></div>' +
+                    '</div>' +
                     // About button, immediately left of the GitHub widget.
                     // Dispatches an event for js/shell.jsx's AboutDialog to
                     // pick up (same "just a CustomEvent" contract as the
@@ -530,6 +637,14 @@
                 // the extension's sidebar instead).
                 (window.__MTLX_VSCODE__ ? '' :
                 '<div class="mtlx-mobile-links">' +
+                    '<div id="mtlx-theme-row" class="mtlx-theme-row" role="radiogroup" aria-label="Theme"></div>' +
+                    '<div id="mtlx-theme-more" class="mtlx-theme-morewrap"></div>' +
+                    // Opens the Theme editor panel, same event as the desktop popup's Customize item.
+                    '<div class="mtlx-theme-morewrap">' +
+                        '<button type="button" id="mtlx-theme-customize-mobile" class="mtlx-menu-item mtlx-theme-more-btn mtlx-theme-customize">' +
+                            ICON_CUSTOMIZE + '<span class="mtlx-menu-label">Customize&hellip;</span>' +
+                        '</button>' +
+                    '</div>' +
                     // .mtlx-mobile-link-brand adds a flex row (icon + text)
                     // over .mtlx-mobile-link's flat styling, kept separate
                     // from .mtlx-source-mobile (its gap suits a square glyph).
@@ -754,6 +869,165 @@
         closeAllMenus = function () {
             for (var i = 0; i < groups.length; i++) closeMenu(groups[i], false);
         };
+    })();
+
+    // Theme switch: popup menu on desktop, radio row in the mobile panel.
+    // Both call MtlxTheme.setPreference and follow MtlxTheme.onChange; Customize
+    // dispatches 'mtlx-open-theme-editor' (js/shell.jsx mounts the Theme editor).
+    (function initThemeSwitch() {
+        var btn = document.getElementById('mtlx-theme-btn');
+        var menu = document.getElementById('mtlx-theme-menu');
+        var row = document.getElementById('mtlx-theme-row');
+        var T = window.MtlxTheme;
+        if (!T) return;
+        var items = [];
+        var radios = [];
+        var moreBtn = null;
+        var moreList = null;
+        var moreItems = [];
+        function openEditor(opener) {
+            window.dispatchEvent(new CustomEvent('mtlx-open-theme-editor', { detail: { opener: opener || null } }));
+        }
+        // Menu is rebuilt on every open so it reflects the live registry and custom themes.
+        function build() {
+            if (!menu) return;
+            menu.innerHTML = themeMenuHtml();
+            fillThemeLabels(menu);
+            items = Array.prototype.slice.call(menu.querySelectorAll('[role="menuitemradio"], [role="menuitem"]'));
+        }
+        if (row) {
+            row.innerHTML = themeRowHtml();
+            radios = Array.prototype.slice.call(row.querySelectorAll('[role="radio"]'));
+        }
+        var moreWrap = document.getElementById('mtlx-theme-more');
+        function setMore(on) {
+            if (!moreBtn) return;
+            moreList.hidden = !on;
+            moreBtn.setAttribute('aria-expanded', on ? 'true' : 'false');
+        }
+        // Mobile More themes list; rebuilt when custom themes change, keeping its open state.
+        function buildMore() {
+            if (!moreWrap) return;
+            var wasOpen = !!moreList && !moreList.hidden;
+            moreWrap.innerHTML = themeMoreHtml();
+            fillThemeLabels(moreWrap);
+            moreBtn = moreWrap.querySelector('#mtlx-theme-more-btn');
+            moreList = moreWrap.querySelector('#mtlx-theme-more-list');
+            moreItems = moreList ? Array.prototype.slice.call(moreList.querySelectorAll('[role="radio"]')) : [];
+            if (wasOpen) setMore(true);
+        }
+        buildMore();
+        build();
+        function sync() {
+            var pref = T.getPreference();
+            items.concat(radios, moreItems).forEach(function (el) {
+                if (!el.hasAttribute('data-theme-choice')) return;
+                el.setAttribute('aria-checked', el.getAttribute('data-theme-choice') === pref ? 'true' : 'false');
+            });
+            var inMore = moreItems.some(function (el) { return el.getAttribute('aria-checked') === 'true'; });
+            if (moreBtn) {
+                moreBtn.classList.toggle('is-active', inMore);
+                if (inMore) setMore(true);
+            }
+        }
+        function isOpen() { return !!menu && menu.classList.contains('is-open'); }
+        function close(restoreFocus) {
+            if (!menu) return;
+            menu.classList.remove('is-open');
+            btn.setAttribute('aria-expanded', 'false');
+            if (restoreFocus) btn.focus();
+        }
+        function open(focus) {
+            build();
+            sync();
+            menu.classList.add('is-open');
+            btn.setAttribute('aria-expanded', 'true');
+            if (focus === 'checked') {
+                var cur = items.filter(function (el) { return el.getAttribute('aria-checked') === 'true'; })[0];
+                (cur || items[0]).focus();
+            } else if (focus === 'last') items[items.length - 1].focus();
+        }
+        if (btn && menu) {
+            btn.addEventListener('click', function () { if (isOpen()) close(false); else open(null); });
+            btn.addEventListener('keydown', function (e) {
+                if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open('checked'); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); open('last'); }
+            });
+            menu.addEventListener('keydown', function (e) {
+                var idx = items.indexOf(document.activeElement);
+                if (e.key === 'Escape') { e.preventDefault(); close(true); }
+                else if (e.key === 'ArrowDown') { e.preventDefault(); items[(idx + 1) % items.length].focus(); }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); items[(idx <= 0 ? items.length : idx) - 1].focus(); }
+                else if (e.key === 'Home') { e.preventDefault(); items[0].focus(); }
+                else if (e.key === 'End') { e.preventDefault(); items[items.length - 1].focus(); }
+                else if (e.key === 'Tab') close(false);
+            });
+            menu.addEventListener('click', function (e) {
+                if (e.target.closest && e.target.closest('[data-theme-action="customize"]')) {
+                    close(true);
+                    openEditor(btn);
+                    return;
+                }
+                var it = e.target.closest && e.target.closest('[data-theme-choice]');
+                if (!it) return;
+                T.setPreference(it.getAttribute('data-theme-choice'));
+                close(true);
+            });
+            document.addEventListener('pointerdown', function (e) {
+                if (isOpen() && !menu.parentNode.contains(e.target)) close(false);
+            });
+            closeAllMenus = (function (prev) { return function () { prev(); close(false); }; })(closeAllMenus);
+        }
+        if (row) {
+            row.addEventListener('click', function (e) {
+                var it = e.target.closest && e.target.closest('[data-theme-choice]');
+                if (it) T.setPreference(it.getAttribute('data-theme-choice'));
+            });
+        }
+        // Delegated on the stable wrapper, since buildMore replaces its contents.
+        if (moreWrap) {
+            moreWrap.addEventListener('click', function (e) {
+                if (!e.target.closest) return;
+                if (moreBtn && e.target.closest('#mtlx-theme-more-btn')) { setMore(moreList.hidden); return; }
+                var it = e.target.closest('[data-theme-choice]');
+                if (it) T.setPreference(it.getAttribute('data-theme-choice'));
+            });
+            moreWrap.addEventListener('keydown', function (e) {
+                if (!moreBtn) return;
+                if (document.activeElement === moreBtn) {
+                    if (e.key === 'ArrowDown') { e.preventDefault(); setMore(true); moreItems[0].focus(); }
+                    else if (e.key === 'ArrowRight' && moreList.hidden) { e.preventDefault(); setMore(true); }
+                    else if (e.key === 'ArrowLeft' && !moreList.hidden) { e.preventDefault(); setMore(false); }
+                    return;
+                }
+                var idx = moreItems.indexOf(document.activeElement);
+                if (idx < 0) return;
+                if (e.key === 'ArrowDown') { e.preventDefault(); moreItems[(idx + 1) % moreItems.length].focus(); }
+                else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    if (idx <= 0) moreBtn.focus(); else moreItems[idx - 1].focus();
+                }
+                else if (e.key === 'Home') { e.preventDefault(); moreItems[0].focus(); }
+                else if (e.key === 'End') { e.preventDefault(); moreItems[moreItems.length - 1].focus(); }
+                else if (e.key === 'Escape') { e.preventDefault(); setMore(false); moreBtn.focus(); }
+            });
+        }
+        // Mobile Customize: the panel is about to close, so focus returns to the hamburger.
+        var customizeMobile = document.getElementById('mtlx-theme-customize-mobile');
+        if (customizeMobile) {
+            customizeMobile.addEventListener('click', function () {
+                closeMobileMenu();
+                if (navToggle) navToggle.focus();
+                openEditor(navToggle);
+            });
+        }
+        window.addEventListener('mtlx-custom-themes-change', function () {
+            if (isOpen()) build();
+            buildMore();
+            sync();
+        });
+        sync();
+        T.onChange(sync);
     })();
 
     // ---- Measured collapse to hamburger ---------------------------------

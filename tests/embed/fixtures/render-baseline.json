@@ -1,0 +1,53 @@
+{
+  "/tests/embed/fixtures/multi-material.mtlx": {
+    "vs": "3f33f1fde1fbfdf81c1bae68274e462397f82e57e44203f36d74868ff62f88a1",
+    "fs": "e90c1bdead660d0fdf187fa2b85952ee35d0819890b17f9114ae1fbe537f0265"
+  },
+  "/tests/embed/fixtures/textured.mtlx": {
+    "vs": "d11b9613d769977816cf85d299c87973ab0fc8d3bb4fb2831f459fdd158888b3",
+    "fs": "80dd85a590fb194477c13b660d8c218a5638ff69ca44398aa287023bab531648"
+  },
+  "/tests/embed/fixtures/glass.mtlx": {
+    "vs": "3f33f1fde1fbfdf81c1bae68274e462397f82e57e44203f36d74868ff62f88a1",
+    "fs": "42e011ac40d68187e4215e0251480659a62340b3fe9701aa4977ef1c68eef425"
+  },
+  "fingerprint": {
+    "renderer": {
+      "toneMapping": 5,
+      "outputEncoding": 3001,
+      "toneMappingExposure": 1,
+      "shadowMapEnabled": true,
+      "shadowMapType": 3,
+      "pixelRatio": 1
+    },
+    "camera": {
+      "fov": 45,
+      "near": 0.1,
+      "far": 100,
+      "position": [
+        0,
+        0.4999999999999999,
+        3.6
+      ]
+    },
+    "controls": {
+      "minDistance": 1.4,
+      "maxDistance": 9,
+      "enablePan": false,
+      "dampingFactor": 0.08,
+      "autoRotateSpeed": 1.5
+    },
+    "scene": {
+      "childCount": 3,
+      "bgMeshRenderOrder": -1000,
+      "bgMeshRotationY": 3.141592653589793,
+      "bgMeshVisible": false,
+      "studioMeshRenderOrder": -900,
+      "studioCatcherRenderOrder": -800,
+      "studioCatcherOpacity": 0.28,
+      "studioLightAngle": 0.5880026035475675,
+      "studioLightPenumbra": 0.5
+    },
+    "backdrop": "studio"
+  }
+}

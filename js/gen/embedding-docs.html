@@ -112,9 +112,9 @@ in-page, for reference while you work.</p>
 </tr>
 <tr>
 <td><code>backdrop</code></td>
-<td><code>studio</code>, <code>environment</code>, <code>none</code></td>
+<td><code>studio</code>, <code>studio-dark</code>, <code>environment</code>, <code>none</code></td>
 <td><code>studio</code></td>
-<td>What surrounds the preview geometry. <code>studio</code> is a plain white photo-studio room, the new default look for every geometry except <code>shaderball-scene</code> (which has its own authored room and ignores this param entirely, see the <code>geometry</code> row above). <code>environment</code> shows the HDRI environment map itself as the visible backdrop, identical to the legacy <code>background=1</code>. <code>none</code> is a plain dark void, identical to the legacy <code>background=0</code>. The environment&#39;s own lighting is always on regardless of which mode is showing; only its visibility as a backdrop changes. <code>transparent</code> below overrides <code>backdrop</code> entirely, forcing it off so the host page shows through instead of any of the three. An unrecognized value falls back to <code>studio</code> and is reported through <code>mtlx-error</code>.</td>
+<td>What surrounds the preview geometry. <code>studio</code> is a plain white photo-studio room, the new default look for every geometry except <code>shaderball-scene</code> (which has its own authored room and ignores this param entirely, see the <code>geometry</code> row above). <code>studio-dark</code> is the same room in a dark finish. <code>environment</code> shows the HDRI environment map itself as the visible backdrop, identical to the legacy <code>background=1</code>. <code>none</code> is a plain dark void, identical to the legacy <code>background=0</code>. The environment&#39;s own lighting is always on regardless of which mode is showing; only its visibility as a backdrop changes. <code>transparent</code> below overrides <code>backdrop</code> entirely, forcing it off so the host page shows through instead of any of these. An unrecognized value falls back to <code>studio</code> and is reported through <code>mtlx-error</code>.</td>
 </tr>
 <tr>
 <td><code>background</code></td>
@@ -139,6 +139,24 @@ in-page, for reference while you work.</p>
 <td>boolean</td>
 <td><em>(off, or the visitor&#39;s last Settings choice)</em></td>
 <td>Renders materials that have opacity or transmission with real alpha blending instead of the default opaque preview. Not the same feature as <code>transparent</code> above. See <a href="#force-transparency">Force transparency</a>.</td>
+</tr>
+<tr>
+<td><code>displacement</code></td>
+<td>boolean</td>
+<td>on</td>
+<td>Enables the CPU-side mesh displacement pass; off previews the undisplaced mesh. This tab-only setting never touches the visitor&#39;s shared site preference.</td>
+</tr>
+<tr>
+<td><code>previewsubdivision</code></td>
+<td>integer <code>0</code>-<code>3</code></td>
+<td><code>2</code></td>
+<td>Loop subdivision level applied ahead of displacement, capped per-mesh against a triangle budget. This tab-only setting never touches the visitor&#39;s shared site preference.</td>
+</tr>
+<tr>
+<td><code>theme</code></td>
+<td><code>dark</code>, <code>light</code>, <code>auto</code>, a theme id, or a custom theme code (see Theming)</td>
+<td><code>dark</code></td>
+<td>Look of the viewer&#39;s own UI, loading screen included. <code>auto</code> follows the visitor&#39;s OS setting live; an unknown value or an invalid code behaves as <code>dark</code>. Never persisted for an embed. See <a href="#theming">Theming</a>.</td>
 </tr>
 <tr>
 <td><code>accent</code></td>
@@ -234,7 +252,7 @@ not just a literal <code>1</code>). Anything else falls back to the default show
 </tr>
 <tr>
 <td><code>env</code></td>
-<td>The environment popover (rotation, exposure, backdrop picker, HDR import, key-light toggle).</td>
+<td>The environment popover (rotation, exposure, backdrop picker, key-light toggle). No HDR import here; use <code>envmap</code> to set a custom environment.</td>
 </tr>
 <tr>
 <td><code>screenshot</code></td>
@@ -246,7 +264,7 @@ not just a literal <code>1</code>). Anything else falls back to the default show
 </tr>
 <tr>
 <td><code>settings</code></td>
-<td>The settings popover (force-transparency, etc.).</td>
+<td>The settings popover (view transform, camera exposure, force-transparency, displacement, subdivision, diffuse environment method). None of these picks persist for this embed.</td>
 </tr>
 <tr>
 <td><code>fullscreen</code></td>
@@ -427,7 +445,7 @@ reloads the iframe (a real navigation, with a fresh <code>ready</code> handshake
 <tr>
 <td><code>backdrop</code></td>
 <td><code>.backdrop</code></td>
-<td><code>studio</code>, <code>environment</code>, <code>none</code></td>
+<td><code>studio</code>, <code>studio-dark</code>, <code>environment</code>, <code>none</code></td>
 <td><code>studio</code></td>
 <td>Yes</td>
 </tr>
@@ -464,6 +482,13 @@ reloads the iframe (a real navigation, with a fresh <code>ready</code> handshake
 <td><code>.forceTransparency</code></td>
 <td>boolean</td>
 <td>off</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td><code>theme</code></td>
+<td><code>.theme</code></td>
+<td><code>dark</code>, <code>light</code>, <code>auto</code>, theme id, theme code</td>
+<td><code>dark</code></td>
 <td>Yes</td>
 </tr>
 <tr>
@@ -624,6 +649,58 @@ el.addEventListener(&#39;mtlx-renderables&#39;, (e) =&gt; console.log(&#39;mater
 el.addEventListener(&#39;mtlx-error&#39;, (e) =&gt; console.error(&#39;viewer error:&#39;, e.detail.message));
 </code></pre>
 <h2 id="theming">Theming</h2>
+<p>The <code>theme</code> param (<code>&lt;materialx-viewer theme=&quot;...&quot;&gt;</code>) picks <code>dark</code>, <code>light</code>, <code>auto</code> or any theme id from
+the list below. The default, <code>dark</code>, applies when the attribute is missing or unknown. <code>light</code> switches the viewer to its light
+look, and <code>auto</code> follows the visitor&#39;s OS color scheme and reacts if it changes. Changing the
+attribute updates the running viewer in place, no reload. The choice is never saved for the
+visitor. It sets the base look, and <code>accent</code>, <code>surface</code> and <code>text</code> below still override it on top.
+The placeholder and the loading screen shown before the viewer is ready follow <code>theme</code> too. The host page
+only knows the light themes it was told about, so the placeholder uses dark colors for any other id until
+the viewer itself loads.</p>
+<p>Theme ids and labels:</p>
+<table>
+<thead>
+<tr>
+<th>Id</th>
+<th>Label</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>light</code></td>
+<td>Light</td>
+</tr>
+<tr>
+<td><code>dark</code></td>
+<td>Dark</td>
+</tr>
+<tr>
+<td><code>hc-dark</code></td>
+<td>High contrast dark</td>
+</tr>
+<tr>
+<td><code>hc-light</code></td>
+<td>High contrast light</td>
+</tr>
+<tr>
+<td><code>dim</code></td>
+<td>Dim</td>
+</tr>
+<tr>
+<td><code>paper</code></td>
+<td>Paper</td>
+</tr>
+</tbody></table>
+<p><strong>Custom themes.</strong> <code>theme</code> also accepts a custom theme code, the string the Playground&#39;s theme editor
+copies when you share a theme. It starts with <code>mtlx1.</code>, for example:</p>
+<pre><code class="language-html">&lt;materialx-viewer src=&quot;...&quot; theme=&quot;mtlx1.LPbx5ysmICZZyQRzYW5kBFNhbmQA&quot;&gt;&lt;/materialx-viewer&gt;
+</code></pre>
+<p>The viewer decodes the code, derives the full palette and applies it, keeping every text and control at WCAG AA
+contrast. A code is case-sensitive (keep its letters exactly as copied) and is at most 8192 characters. The
+placeholder reads the theme&#39;s base from the code itself (<code>mtlx1.L...</code> is light-based, <code>mtlx1.D...</code> dark-based),
+so it matches before the viewer loads. A code that cannot be decoded behaves as <code>dark</code>; a valid code whose colors
+cannot reach AA contrast shows its base theme (<code>light</code> or <code>dark</code>). Codes are strictly validated: they carry only
+<code>#rrggbb</code> colors for known color roles, a short name and two numeric modifiers, so a code cannot inject CSS,
+markup or URLs into the viewer.</p>
 <p>Four params (<code>accent</code>, <code>surface</code>, <code>text</code>, <code>radius</code>) map to CSS custom properties consumed by
 <code>embed/embed-controls.css</code> (the HUD strip&#39;s own stylesheet), which defines them on <code>:root</code>
 with the defaults below as fallbacks:</p>

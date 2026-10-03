@@ -7,8 +7,8 @@
 // SLX_SYNTAX_THEME). Self-exports via Object.assign(window, {}); no
 // top-level import/export.
 
-        const SLX_ASSIST_BOX = 'fixed left-0 top-0 z-[80] rounded border border-gray-600 bg-gray-800 shadow-xl '
-            + 'text-[11px] leading-4 text-gray-300 font-sans';
+        const SLX_ASSIST_BOX = 'fixed left-0 top-0 z-[80] rounded border border-line-strong bg-surface-raised shadow-xl '
+            + 'text-[11px] leading-4 text-fg-secondary font-sans';
         // Hover lists this many signatures, then "+N more".
         const SLX_HOVER_MAX_SIGNATURES = 6;
 
@@ -19,7 +19,7 @@
         function SlxSignature({ sig, active = -1 }) {
             const type = (t, cls = 'slx-assist-type') => <span className={cls}>{slxTypeDisplay(t)}</span>;
             return (
-                <code className="font-mono text-[12px] leading-[18px] text-gray-300 whitespace-pre-wrap break-words">
+                <code className="font-mono text-[12px] leading-[18px] text-fg-secondary whitespace-pre-wrap break-words">
                     {type(sig.ret)}{' '}<span className="slx-assist-func">{sig.name}</span>
                     {sig.template && (
                         <React.Fragment>
@@ -90,20 +90,20 @@
                                 aria-selected={i === index}
                                 onClick={() => onPick(i)}
                                 className={'flex items-center gap-1.5 h-5 px-1.5 cursor-pointer '
-                                    + (i === index ? 'slx-assist-selected text-gray-100' : 'hover:bg-white/5')}
+                                    + (i === index ? 'slx-assist-selected text-fg' : 'hover:bg-fg-strong/5')}
                             >
                                 <span className={'flex-none w-3 text-center font-mono slx-kind-' + entry.item.kind}>{SLX_KIND_BADGES[entry.item.kind]}</span>
                                 <span className="font-mono text-[12px] truncate">{slxMatchedLabel(entry.item.label, entry.positions)}</span>
-                                <span className="ml-auto pl-3 flex-none max-w-[50%] truncate text-[10px] text-gray-500">{entry.item.detail}</span>
+                                <span className="ml-auto pl-3 flex-none max-w-[50%] truncate text-[10px] text-fg-subtle">{entry.item.detail}</span>
                             </div>
                         ))}
-                        {!entries.length && <div className="px-2 h-5 flex items-center text-gray-500">No suggestions.</div>}
+                        {!entries.length && <div className="px-2 h-5 flex items-center text-fg-subtle">No suggestions.</div>}
                     </div>
                     {selected && (sigs || selected.description) && (
-                        <div className="border-t border-gray-700 px-2 py-1.5">
+                        <div className="border-t border-line px-2 py-1.5">
                             {sigs && <SlxSignature sig={sigs[0]} />}
-                            {sigs && sigs.length > 1 && <span className="text-gray-500">{' '}+{sigs.length - 1} more</span>}
-                            {selected.description && <div className="mt-1 text-gray-400 line-clamp-3">{selected.description}</div>}
+                            {sigs && sigs.length > 1 && <span className="text-fg-subtle">{' '}+{sigs.length - 1} more</span>}
+                            {selected.description && <div className="mt-1 text-fg-muted line-clamp-3">{selected.description}</div>}
                         </div>
                     )}
                 </div>
@@ -127,7 +127,7 @@
                 if (a.top < b.top || a.bottom > b.bottom) box.scrollTop += a.top - b.top - (b.height - a.height) / 2;
             }, [help.index, help.active]);
             const arrow = (step, label, title) => (
-                <button type="button" tabIndex={-1} title={title} onClick={() => onCycle(step)} className="px-0.5 hover:text-gray-200">{label}</button>
+                <button type="button" tabIndex={-1} title={title} onClick={() => onCycle(step)} className="px-0.5 hover:text-fg-soft">{label}</button>
             );
             return slxPortal(
                 <div
@@ -138,7 +138,7 @@
                 >
                     <div className="flex items-start gap-1.5">
                         {help.sigs.length > 1 && (
-                            <span className="flex-none flex items-center font-mono text-[11px] leading-[18px] text-gray-500 select-none">
+                            <span className="flex-none flex items-center font-mono text-[11px] leading-[18px] text-fg-subtle select-none">
                                 {arrow(-1, '▲', 'Previous signature (Up)')}
                                 {help.index + 1}/{help.sigs.length}
                                 {arrow(1, '▼', 'Next signature (Down)')}
@@ -151,13 +151,13 @@
                             <span className="font-mono slx-assist-param">{param.name}</span>
                             {param.doc && ': ' + param.doc}
                             {param.defaultText && (
-                                <span className="text-gray-500">
-                                    {param.doc ? ' ' : ': '}Default <code className="font-mono text-gray-400">{param.defaultText}</code>
+                                <span className="text-fg-subtle">
+                                    {param.doc ? ' ' : ': '}Default <code className="font-mono text-fg-muted">{param.defaultText}</code>
                                 </span>
                             )}
                         </div>
                     )}
-                    {help.description && <div className="mt-0.5 text-gray-400 line-clamp-2">{help.description}</div>}
+                    {help.description && <div className="mt-0.5 text-fg-muted line-clamp-2">{help.description}</div>}
                 </div>
             );
         }
@@ -176,10 +176,10 @@
                     className={SLX_ASSIST_BOX + ' pointer-events-none max-w-[min(520px,calc(100vw-16px))] max-h-[50vh] overflow-hidden px-2 py-1.5'}
                 >
                     {sigs.map((sig, i) => <div key={i}><SlxSignature sig={sig} /></div>)}
-                    {more > 0 && <div className="text-gray-500">+{more} more signature{more === 1 ? '' : 's'}</div>}
+                    {more > 0 && <div className="text-fg-subtle">+{more} more signature{more === 1 ? '' : 's'}</div>}
                     {fn && fn.description && <div className="mt-1 line-clamp-4">{fn.description}</div>}
-                    <div className={body ? 'mt-1 text-gray-500' : ''}>
-                        {!body && <span className="font-mono text-gray-100">{name}: </span>}
+                    <div className={body ? 'mt-1 text-fg-subtle' : ''}>
+                        {!body && <span className="font-mono text-fg">{name}: </span>}
                         Ctrl/Cmd + click to open its documentation
                     </div>
                 </div>

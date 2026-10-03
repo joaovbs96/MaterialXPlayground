@@ -147,6 +147,8 @@
                         return undefined;
                     }
                     const el = document.createElement('materialx-viewer');
+                    // Follows the site's Light/Dark/System preference live.
+                    if (window.MtlxTheme && window.MtlxTheme.bindEmbed) window.MtlxTheme.bindEmbed(el);
                     el.wheel = 'none';
                     // Experimental depth-peeled alpha blending for opacity and
                     // transmission, matching what-is-materialx.jsx's ViewerPane.
@@ -222,8 +224,8 @@
 
             return failed ? (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-center px-3">
-                    <MtlxIcon name="cube" className="w-5 h-5 text-gray-600" />
-                    <span className="text-[11px] text-gray-500">
+                    <MtlxIcon name="cube" className="w-5 h-5 text-fg-disabled" />
+                    <span className="text-[11px] text-fg-subtle">
                         {window.__MTLX_VSCODE__ ? 'Preview unavailable in VS Code' : '3D preview needs WebGL2'}
                     </span>
                 </div>
@@ -232,7 +234,7 @@
                     <div ref={mountRef} className="absolute inset-0" />
                     {!loaded && (
                         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                            <span className="text-[11px] text-gray-500">Loading material</span>
+                            <span className="text-[11px] text-fg-subtle">Loading material</span>
                         </div>
                     )}
                     {mounted && MtlxSelectComp && renderables.length > 1 && (
@@ -256,7 +258,7 @@
                             onClick={() => elRef.current && elRef.current.resetCamera()}
                             title="Reset camera"
                             aria-label="Reset camera"
-                            className="flex items-center justify-center w-6 h-6 rounded-md border border-gray-600/50 bg-gray-900/70 text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 transition-colors absolute bottom-1.5 right-1.5 z-10"
+                            className="flex items-center justify-center w-6 h-6 rounded-md border border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-line-strong hover:text-hud-fg-strong transition-colors absolute bottom-1.5 right-1.5 z-10"
                         >
                             <MtlxIcon name="camera-reset" className="w-3.5 h-3.5" />
                         </button>
@@ -269,10 +271,10 @@
         // read from, exactly like the minimap/legend panels below it.
         function ZoomCluster() {
             const inst = useReactFlow();
-            const btnClass = 'flex items-center justify-center w-5 h-5 rounded text-gray-300 '
-                + 'hover:bg-gray-700/60 hover:text-gray-100';
+            const btnClass = 'flex items-center justify-center w-5 h-5 rounded text-fg-secondary '
+                + 'hover:bg-hover/60 hover:text-fg';
             return (
-                <div className="flex items-center gap-0.5 rounded-md border border-gray-700 bg-gray-900/80 p-1">
+                <div className="flex items-center gap-0.5 rounded-md border border-line bg-hud/80 p-1">
                     <button type="button" onClick={() => inst.zoomOut()} title="Zoom out" className={btnClass}>
                         <MtlxIcon name="zoom-out" className="w-3.5 h-3.5" />
                     </button>
@@ -291,13 +293,13 @@
         function Breadcrumb({ stack, onJump }) {
             return (
                 <div role="navigation" aria-label="Nodegraph path"
-                    className="flex items-center gap-1 rounded-md border border-gray-700 bg-gray-900/80 px-1.5 py-1 text-[11px] text-gray-300">
+                    className="flex items-center gap-1 rounded-md border border-line bg-hud/80 px-1.5 py-1 text-[11px] text-hud-fg">
                     {stack.map((name, i) => (
                         <React.Fragment key={i}>
-                            {i > 0 && <span className="text-gray-600">/</span>}
+                            {i > 0 && <span className="text-fg-disabled">/</span>}
                             <button type="button" onClick={() => onJump(i)} disabled={i === stack.length - 1}
                                 className={'flex items-center gap-1 rounded px-1 '
-                                    + (i === stack.length - 1 ? 'text-gray-100' : 'hover:bg-gray-700/60 hover:text-gray-100')}>
+                                    + (i === stack.length - 1 ? 'text-fg' : 'hover:bg-hover/60 hover:text-fg')}>
                                 {i === 0 && <MtlxIcon name="arrow-left" className="w-2.5 h-2.5" />}
                                 {i === 0 ? (name || 'Document') : name}
                             </button>
@@ -312,6 +314,7 @@
         // mounted) collide document-wide, so each preview claims a unique id.
         let GRAPH_PREVIEW_SEQ = 0;
         function MtlxGraphPreview(props) {
+            useMtlxTheme(); // re-render so React Flow color props resolve again
             const {
                 src, xml, graph,
                 scope: initialScope = '',
@@ -783,10 +786,12 @@
                 // Only a real column (never the collapsed no-rail state) needs
                 // a divider: with no column left of it, this would just be a
                 // stray line along the graph's own outer edge.
-                if (chrome === 'card' && previewSupported && !previewCollapsed) classNames.push('border-r', 'border-gray-700');
+                if (chrome === 'card' && previewSupported && !previewCollapsed) classNames.push('border-r', 'border-line');
+                // The graph is editor UI, not a render: graph-canvas (same dark value as the row's stage).
+                if (!isTransparent) classNames.push('bg-graph-canvas');
             } else {
-                if (chrome === 'card' && !flush) classNames.push('border', 'border-gray-700', 'rounded-lg');
-                if (!isTransparent) classNames.push('bg-gray-900');
+                if (chrome === 'card' && !flush) classNames.push('border', 'border-line', 'rounded-lg');
+                if (!isTransparent) classNames.push('bg-graph-canvas');
             }
 
             // Mounted whenever expanded (placeholder/toggle need somewhere to
@@ -796,8 +801,8 @@
 
             const wheelHintStyle = {
                 position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-                padding: '6px 14px', borderRadius: 9999, background: 'rgba(17,24,39,0.85)',
-                color: '#f3f4f6', font: '13px system-ui, sans-serif', pointerEvents: 'none',
+                padding: '6px 14px', borderRadius: 9999, background: MtlxTheme.rgba('hud', 0.85),
+                color: MtlxTheme.var('hud-fg-strong'), font: '13px system-ui, sans-serif', pointerEvents: 'none',
                 zIndex: 30, whiteSpace: 'nowrap', opacity: wheelHintOn ? 1 : 0,
                 transition: prefersReducedMotion ? 'none' : 'opacity 200ms ease',
             };
@@ -812,7 +817,7 @@
                     title={previewCollapsed ? 'Show 3D preview' : 'Hide 3D preview'}
                     aria-label={previewCollapsed ? 'Show 3D preview' : 'Hide 3D preview'}
                     aria-expanded={!previewCollapsed}
-                    className="flex items-center justify-center w-6 h-6 rounded-md border border-gray-600/50 bg-gray-900/70 text-gray-400 hover:bg-gray-700 hover:border-gray-600 hover:text-gray-100 transition-colors absolute top-1.5 right-1.5 z-10"
+                    className="flex items-center justify-center w-6 h-6 rounded-md border border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-line-strong hover:text-hud-fg-strong transition-colors absolute top-1.5 right-1.5 z-10"
                 >
                     {/* chevron-left doesn't exist in MTLX_ICON_PATHS; chevrons-left is the nearest "point back open" glyph */}
                     <MtlxIcon name={previewCollapsed ? 'chevrons-left' : 'chevrons-right'} className="w-3.5 h-3.5" />
@@ -867,12 +872,12 @@
                             {/* Same dot grid as the editor, skipped when transparent: a
                                 caller asking to see through to the host page's own
                                 background doesn't want gray dots painted over it. */}
-                            {!isTransparent && <Background color="#374151" gap={18} size={1.5} />}
+                            {!isTransparent && <Background color={MtlxTheme.get('graph-grid')} gap={18} size={1.5} />}
                             {controlsSet.has('minimap') && (
                                 <MiniMap pannable={interactive} zoomable={interactive}
-                                    nodeColor={(n) => getNodeColor(n.data)} nodeStrokeColor="#111827"
-                                    maskColor="rgba(17, 24, 39, 0.75)"
-                                    style={{ background: '#1f2937', marginBottom: 22 }}
+                                    nodeColor={(n) => getNodeColor(n.data)} nodeStrokeColor={MtlxTheme.get('graph-minimap-stroke')}
+                                    maskColor={minimapMaskColor()}
+                                    style={{ background: MtlxTheme.var('graph-minimap-bg'), marginBottom: 22 }}
                                     position="bottom-right" />
                             )}
                             {controlsSet.has('legend') && (
@@ -902,7 +907,7 @@
                             )}
                         </ReactFlowComp>
                     ) : (
-                        <div className="absolute inset-0 flex items-center justify-center px-3 text-center text-[11px] text-gray-500">
+                        <div className="absolute inset-0 flex items-center justify-center px-3 text-center text-[11px] text-fg-subtle">
                             {status === 'error' && (errorMsg || 'This graph could not be loaded.')}
                             {status === 'loading' && chrome !== 'none' && 'Loading graph...'}
                         </div>
@@ -923,8 +928,8 @@
             // one surface; overflow-hidden clips the flush preview column to
             // the same outside-only corner radius.
             const rowClassNames = ['flex', 'items-stretch'];
-            if (chrome === 'card' && !flush) rowClassNames.push('border', 'border-gray-700', 'rounded-lg', 'overflow-hidden');
-            if (!isTransparent) rowClassNames.push('bg-gray-900');
+            if (chrome === 'card' && !flush) rowClassNames.push('border', 'border-line', 'rounded-lg', 'overflow-hidden');
+            if (!isTransparent) rowClassNames.push('bg-stage');
 
             const previewColumnStyle = previewResizable ? { width: previewWidth } : undefined;
             const previewColumnClass = previewResizable ? 'relative flex-none' : 'relative flex-none w-64 sm:w-72';
@@ -936,7 +941,7 @@
                             data-testid="mtlx-graph-preview-divider"
                             role="separator"
                             aria-orientation="vertical"
-                            className="flex-none w-1.5 cursor-col-resize touch-none bg-gray-700 hover:bg-gray-500"
+                            className="flex-none w-1.5 cursor-col-resize touch-none bg-line hover:bg-line-heavy"
                             onPointerDown={onDividerPointerDown}
                             onPointerMove={onDividerPointerMove}
                             onPointerUp={onDividerPointerUp}

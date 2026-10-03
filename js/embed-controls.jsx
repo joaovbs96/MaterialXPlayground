@@ -27,6 +27,84 @@ const useElementWidth = (ref) => {
     return width;
 };
 
+// Manifest entries per 'embed' surface rendered with native <select>/<button>.
+// Writes use MtlxRenderSettings.apply(persist:false) so picks never touch
+// shared per-origin localStorage; `keys` renders an explicit subset.
+const EmbedRenderSettings = ({ keys }) => {
+    const RS = window.MtlxRenderSettings;
+    const [, forceTick] = React.useState(0);
+    React.useEffect(() => {
+        const onChange = () => forceTick((n) => n + 1);
+        const events = ['mtlx-render-setting', 'mtlx-settings-changed', 'mtlx-display-transform', 'mtlx-display-exposure'];
+        events.forEach((ev) => window.addEventListener(ev, onChange));
+        return () => events.forEach((ev) => window.removeEventListener(ev, onChange));
+    }, []);
+    if (!RS) return null;
+    let rows = RS.rowsFor('embed', { ui: true });
+    if (keys) {
+        const keySet = new Set(keys);
+        rows = rows.filter((row) => keySet.has(row.key));
+    }
+    return (
+        <React.Fragment>
+            {rows.map((row) => {
+                const value = RS.get(row.key, { surface: 'embed' });
+                const onChange = (next) => RS.apply(row.key, next, { surface: 'embed', persist: false });
+                if (row.type === 'bool') {
+                    return (
+                        <React.Fragment key={row.key}>
+                            <div className="mtlx-ec-panel-row">
+                                <span>{row.label}</span>
+                                <button
+                                    type="button"
+                                    className={'mtlx-ec-toggle' + (value ? ' is-on' : '')}
+                                    onClick={() => onChange(!value)}
+                                    title={value ? `Disable ${row.label.toLowerCase()}` : `Enable ${row.label.toLowerCase()}`}
+                                >
+                                    {value ? 'On' : 'Off'}
+                                </button>
+                            </div>
+                            {row.hint && <div className="mtlx-ec-desc">{row.hint}</div>}
+                        </React.Fragment>
+                    );
+                }
+                if (row.type === 'enum' || row.control === 'select') {
+                    const coerce = row.type === 'enum' ? (v) => v : Number;
+                    return (
+                        <div className="mtlx-ec-panel-row" key={row.key}>
+                            <span>{row.label}</span>
+                            <select
+                                className="mtlx-ec-select"
+                                value={value}
+                                onChange={(e) => onChange(coerce(e.target.value))}
+                                title={row.hint}
+                            >
+                                {row.options.map((opt) => (
+                                    <option key={String(opt)} value={opt}>{(row.optionLabels && row.optionLabels[opt]) || opt}</option>
+                                ))}
+                            </select>
+                        </div>
+                    );
+                }
+                // number
+                return (
+                    <div className="mtlx-ec-panel-row mtlx-ec-panel-row--slider" key={row.key}>
+                        <div className="mtlx-ec-slider-label">
+                            <span>{row.label}</span>
+                            <span>{Number(value).toFixed(row.type === 'int' ? 0 : 2)}{row.unit ? ' ' + row.unit : ''}</span>
+                        </div>
+                        <input
+                            type="range" min={row.min} max={row.max} step={row.step || 1}
+                            value={value}
+                            onChange={(e) => onChange(Number(e.target.value))}
+                        />
+                    </div>
+                );
+            })}
+        </React.Fragment>
+    );
+};
+
 const EmbedControls = ({
     containerRef,
     geom, geomList, onGeomChange, showGeom,
@@ -50,38 +128,9 @@ const EmbedControls = ({
         () => (typeof initialEnvRotation === 'number' ? initialEnvRotation : 0));
     const [envExposure, setEnvExposureState] = React.useState(
         () => (typeof initialEnvExposure === 'number' ? initialEnvExposure : 1.0));
-    const [forceT, setForceT] = React.useState(
-        () => !!(window.getForceTransparency && window.getForceTransparency()));
-    const [displayTransform, setDisplayTransformState] = React.useState(
-        () => (window.getDisplayTransform ? window.getDisplayTransform() : 'srgb'));
-    const [dispOn, setDispOn] = React.useState(
-        () => !!(window.getDisplacementEnabled && window.getDisplacementEnabled()));
-    const [subdivLevel, setSubdivLevel] = React.useState(
-        () => (window.getPreviewSubdivisionLevel ? window.getPreviewSubdivisionLevel() : 2));
-
-    // Adopts a Displacement/Subdivision change made elsewhere (e.g. this
-    // embed reloaded live-attr driven, see docs/EMBEDDING.md), same
-    // mtlx-settings-changed contract as js/shared/mtlx-ui.jsx's rows.
-    React.useEffect(() => {
-        const onChanged = (e) => {
-            if (!e.detail) return;
-            if (e.detail.key === 'displacement') setDispOn(!!e.detail.value);
-            else if (e.detail.key === 'previewSubdivision') setSubdivLevel(e.detail.value);
-        };
-        window.addEventListener('mtlx-settings-changed', onChanged);
-        return () => window.removeEventListener('mtlx-settings-changed', onChanged);
-    }, []);
-
-    // Adopts a display transform change made elsewhere (e.g. this same
-    // embed reloaded in another tab sharing localStorage), same event
-    // viewer-app.jsx/compare-app.jsx already listen for.
-    React.useEffect(() => {
-        const onDisplayTransform = () => {
-            if (window.getDisplayTransform) setDisplayTransformState(window.getDisplayTransform());
-        };
-        window.addEventListener('mtlx-display-transform', onDisplayTransform);
-        return () => window.removeEventListener('mtlx-display-transform', onDisplayTransform);
-    }, []);
+    // Backdrop options/labels come from manifest so no second list is needed;
+    // value stays the caller's real per-view state via backdrop/onBackdropChange.
+    const backdropRow = rowMeta('backdrop', 'embed');
 
     // Re-apply rotation/exposure whenever the view is rebuilt (geometry or
     // material change), mirroring ViewportControls' identical effect.
@@ -108,24 +157,6 @@ const EmbedControls = ({
         setEnvExposureState(v);
         const view = viewRef && viewRef.current;
         if (view && view.setEnvExposure) view.setEnvExposure(v);
-    };
-    const toggleForceTransparency = () => {
-        const next = !forceT;
-        setForceT(next);
-        if (window.setForceTransparency) window.setForceTransparency(next);
-    };
-    const pickDisplayTransform = (mode) => {
-        setDisplayTransformState(mode);
-        if (window.setDisplayTransform) window.setDisplayTransform(mode);
-    };
-    const toggleDisplacement = () => {
-        const next = !dispOn;
-        setDispOn(next);
-        if (window.setDisplacementEnabled) window.setDisplacementEnabled(next, { persist: false });
-    };
-    const pickSubdivision = (level) => {
-        setSubdivLevel(level);
-        if (window.setPreviewSubdivisionLevel) window.setPreviewSubdivisionLevel(level, { persist: false });
     };
 
     // Reset camera and, if the host provided preset env values, restore
@@ -246,16 +277,16 @@ const EmbedControls = ({
                 <div className="mtlx-ec-panel">
                     {showBackdropPicker && (
                         <div className="mtlx-ec-panel-row">
-                            <span>Backdrop</span>
+                            <span>{(backdropRow && backdropRow.label) || 'Backdrop'}</span>
                             <select
                                 className="mtlx-ec-select"
                                 value={backdrop}
                                 onChange={(e) => onBackdropChange(e.target.value)}
-                                title="Studio: a white room. Environment: the HDRI as background. None: a dark void."
+                                title={(backdropRow && backdropRow.hint) || 'Studio: a white room. Environment: the HDRI as background. None: a dark void.'}
                             >
-                                <option value="studio">Studio</option>
-                                <option value="environment">Environment</option>
-                                <option value="none">None</option>
+                                {((backdropRow && backdropRow.options) || ['studio', 'environment', 'none']).map((opt) => (
+                                    <option key={opt} value={opt}>{(backdropRow && backdropRow.optionLabels && backdropRow.optionLabels[opt]) || opt}</option>
+                                ))}
                             </select>
                         </div>
                     )}
@@ -285,65 +316,18 @@ const EmbedControls = ({
                             onContextMenu={rangeResetOnContextMenu({ defaultValue: 0, min: EV_MIN, max: EV_MAX, commit: (v) => setEnvExposure(evToLinear(v)) })}
                         />
                     </div>
+                    {/* New: key light is a true engine-wide global (unlike
+                        backdrop/rotation/exposure above), so it round-trips
+                        through the manifest store safely. */}
+                    <EmbedRenderSettings keys={['keyLight']} />
                 </div>
             )}
             {openPanel === 'settings' && (
                 <div className="mtlx-ec-panel">
-                    <div className="mtlx-ec-panel-row">
-                        <span>View Transform</span>
-                        <select
-                            className="mtlx-ec-select"
-                            value={displayTransform}
-                            onChange={(e) => pickDisplayTransform(e.target.value)}
-                            title="How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping)."
-                        >
-                            <option value="srgb">sRGB</option>
-                            <option value="aces">ACES</option>
-                            <option value="lin_rec709">lin_rec709</option>
-                        </select>
-                    </div>
-                    <div className="mtlx-ec-panel-row">
-                        <span>Force Transparency</span>
-                        <button
-                            type="button"
-                            className={'mtlx-ec-toggle' + (forceT ? ' is-on' : '')}
-                            onClick={toggleForceTransparency}
-                            title={forceT ? 'Disable forced transparency' : 'Enable forced transparency'}
-                        >
-                            {forceT ? 'On' : 'Off'}
-                        </button>
-                    </div>
                     <div className="mtlx-ec-desc">
-                        Render opacity/transmission with real alpha blending. When off, the preview
-                        matches the standard MaterialX viewer (opaque).
+                        These settings apply to this embed only; none of them persist.
                     </div>
-                    <div className="mtlx-ec-panel-row">
-                        <span>Displacement</span>
-                        <button
-                            type="button"
-                            className={'mtlx-ec-toggle' + (dispOn ? ' is-on' : '')}
-                            onClick={toggleDisplacement}
-                            title={dispOn ? 'Disable displacement' : 'Enable displacement'}
-                        >
-                            {dispOn ? 'On' : 'Off'}
-                        </button>
-                    </div>
-                    <div className="mtlx-ec-panel-row">
-                        <span>Subdivision</span>
-                        <select
-                            className="mtlx-ec-select"
-                            value={subdivLevel}
-                            onChange={(e) => pickSubdivision(Number(e.target.value))}
-                            title="Applied to preview geometry when the material has displacement"
-                        >
-                            {[0, 1, 2, 3].map((level) => (
-                                <option key={level} value={level}>{level === 0 ? 'Off' : level}</option>
-                            ))}
-                        </select>
-                    </div>
-                    <div className="mtlx-ec-desc">
-                        Moves the mesh by the material's displacement; never persists for this embed.
-                    </div>
+                    <EmbedRenderSettings keys={['displayTransform', 'displayExposure', 'transparency', 'displacement', 'previewSubdivision', 'diffuseEnv']} />
                 </div>
             )}
         </div>
@@ -351,3 +335,4 @@ const EmbedControls = ({
 };
 
 window.EmbedControls = EmbedControls;
+window.EmbedRenderSettings = EmbedRenderSettings;
