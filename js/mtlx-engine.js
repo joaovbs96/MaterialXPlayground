@@ -7859,24 +7859,13 @@ const prewarmShaderCompile = async ({ vs, fs, isMounted, label, timeoutMs }) => 
         console.log('[mtlx-perf] GL compile submit: '
             + (performance.now() - __warmPerfStart).toFixed(1) + 'ms (target: ' + label + ')');
     }
-    const deleteWarmObjects = () => {
+    // Deleting at once cancels an abandoned parallel link so the next build's
+    // first frame is not held up; ANGLE may log a harmless GL_INVALID_VALUE
+    // glGetProgramiv for the cancelled program.
+    const cleanup = () => {
         try { if (warmProgram) gl.deleteProgram(warmProgram); } catch (e) { /* context lost etc. */ }
         try { if (warmVShader) gl.deleteShader(warmVShader); } catch (e) { /* ditto */ }
         try { if (warmFShader) gl.deleteShader(warmFShader); } catch (e) { /* ditto */ }
-    };
-    // A program deleted while its parallel link still runs makes the GPU
-    // process query a dead name (GL_INVALID_VALUE glGetProgramiv), so a
-    // bail or timeout waits for the link to finish before deleting.
-    const stillLinking = () => {
-        try {
-            return !gl.isContextLost() && gl.isProgram(warmProgram)
-                && gl.getProgramParameter(warmProgram, ext.COMPLETION_STATUS_KHR) === false;
-        } catch (e) { return false; }
-    };
-    const cleanup = () => {
-        if (!stillLinking()) { deleteWarmObjects(); return; }
-        const retry = () => { if (stillLinking()) setTimeout(retry, 100); else deleteWarmObjects(); };
-        setTimeout(retry, 100);
     };
 
     const WAIT_POLL_MS = 50, WAIT_POLL_FAST_MS = 16, WAIT_POLL_FAST_TICKS = 6;
