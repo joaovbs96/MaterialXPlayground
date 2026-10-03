@@ -256,7 +256,7 @@ test.describe('SettingsDialog popover sizing (#!graph preview)', () => {
     await settingsBtn.waitFor({ state: 'visible', timeout: WAIT_TIMEOUT });
     await settingsBtn.click();
 
-    const dialog = page.getByText('Displacement', { exact: true }).locator('xpath=ancestor::div[4]');
+    const dialog = page.locator('[data-mtlx-settings-dialog]');
     await expect(dialog).toBeVisible();
     const box = await dialog.boundingBox();
     expect(box).toBeTruthy();

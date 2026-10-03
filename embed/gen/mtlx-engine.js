@@ -48,7 +48,9 @@ const PREVIEW_STAGE_LIGHT_COUNT=0;// Feature-gated shaders kill switch, default 
 const FEATURE_GATED_KEY='mtlx_feature_gated_shaders';const readFeatureGated=()=>{try{return localStorage.getItem(FEATURE_GATED_KEY)!=='0';}catch(e){return true;}};// Features no preview tool can ever turn on: the Viewer, Compare, docs and
 // Graph previews and the embeds bind white shadow moments and a zero-strength
 // occlusion volume, so generating either costs compile time for a no-op.
-const PREVIEW_FEATURE_OPTIONS={skipShadowMap:true,skipOcclusion:true};// Smallest tier that still covers `count`; anything unknown or over the
+// skipLocalEnv/skipBounce are inert here too (no local reflection probe or
+// baked bounce volume in preview), so gating them off frees two samplers.
+const PREVIEW_FEATURE_OPTIONS={skipShadowMap:true,skipOcclusion:true,skipLocalEnv:true,skipBounce:true};// Smallest tier that still covers `count`; anything unknown or over the
 // ceiling falls back to the full reservation.
 const chooseStageLightTier=count=>{const n=Number(count);if(!Number.isFinite(n)||n<0)return STAGE_LIGHT_SLOTS;const tier=STAGE_LIGHT_TIERS.find(t=>t>=n);return tier===undefined?STAGE_LIGHT_SLOTS:tier;};const mxEnvPromises=new Map();// Classic-<script> fallback for UMD builds (e.g. 1.39.4) that have no
 // `export` statement and no `root.MaterialX = ...` global fallback, see
@@ -169,10 +171,16 @@ const mtlxWarn=(...args)=>{if(DEBUG_SHADERS)console.warn(...args);};// "Force Tr
 // 'mtlx-settings-changed'. { persist: false } applies the flag to this
 // tab only, for a host-driven embed that should not touch the shared
 // per-origin preference (see embed-boot.js's two call sites).
-let FORCE_TRANSPARENCY=(()=>{try{return localStorage.getItem('mtlxForceTransparency')==='1';}catch(e){return false;}})();const getForceTransparency=()=>FORCE_TRANSPARENCY;const setForceTransparency=(v,{persist=true}={})=>{FORCE_TRANSPARENCY=!!v;if(persist){try{localStorage.setItem('mtlxForceTransparency',FORCE_TRANSPARENCY?'1':'0');}catch(e){/* best-effort */}}// Settings-dialog/Scene-card callers persist (default); embed-boot.js's
+let FORCE_TRANSPARENCY=(()=>{try{return!!window.MtlxRenderSettings.get('transparency',{surface:'viewer'});}catch(e){return false;}})();const getForceTransparency=()=>FORCE_TRANSPARENCY;const setForceTransparency=(v,{persist=true}={})=>{FORCE_TRANSPARENCY=!!v;try{window.MtlxRenderSettings.set('transparency',FORCE_TRANSPARENCY,{surface:'viewer',persist});}catch(e){/* best-effort */}// Settings-dialog/Scene-card callers persist (default); embed-boot.js's
 // query-param and postMessage paths pass persist:false. Mutates each
 // live view's flags in place regardless, see refreshRenderMode.
-LIVE_VIEWS.forEach(view=>{try{view.refreshRenderMode&&view.refreshRenderMode();}catch(e){/* view mid-teardown */}});try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'forceTransparency',value:FORCE_TRANSPARENCY}}));}catch(e){/* best-effort */}};// NOTE: no separate "depth peeling" setting exists, Force Transparency
+LIVE_VIEWS.forEach(view=>{try{view.refreshRenderMode&&view.refreshRenderMode();}catch(e){/* view mid-teardown */}});try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'forceTransparency',value:FORCE_TRANSPARENCY}}));}catch(e){/* best-effort */}};// Preview transmission model ('scalar' | 'rgbt', manifest row `transmission`),
+// read per material build. The embed page and the docs iframe read their own
+// level (Performance), never the Viewer's stored one.
+const previewLevelSurface=()=>window.__MTLX_EMBED_PAGE__?'embed':window.__MTLX_EMBED?'docs':'viewer';// Preview Quality codegen (SSAO block, specular AA) for a view's surface; below
+// Quality this is PREVIEW_FEATURE_OPTIONS itself, so the sources stay identical.
+const previewSetting=(key,surface)=>{try{return window.MtlxRenderSettings.get(key,{surface:surface||previewLevelSurface()});}catch(e){return undefined;}};const previewFeatureOptions=surface=>{const ao=!!previewSetting('ao',surface),specularAA=!!previewSetting('specularAA',surface);if(!ao&&!specularAA)return PREVIEW_FEATURE_OPTIONS;return Object.assign({},PREVIEW_FEATURE_OPTIONS,ao?{skipOcclusion:false,skipSkyVis:true,skipAoVolume:true}:null,specularAA?{specularAA:true}:null);};// A view's own surface (createMtlxRenderView `surface`) when given.
+const getPreviewTransmission=surface=>{try{return window.MtlxRenderSettings.get('transmission',{surface:surface||previewLevelSurface()})==='rgbt'?'rgbt':'scalar';}catch(e){return'scalar';}};// NOTE: no separate "depth peeling" setting exists, Force Transparency
 // always means front-to-back depth-peeled OIT now (a naive single-pass
 // blended mode was collapsed into this one flag). renderFrame()/
 // syncMeshMaterialMode() gate the peel graph on FORCE_TRANSPARENCY &&
@@ -183,18 +191,22 @@ LIVE_VIEWS.forEach(view=>{try{view.refreshRenderMode&&view.refreshRenderMode();}
 const parseBoolFlag=raw=>{const s=String(raw).trim().toLowerCase();if(s==='1'||s==='true'||s==='on'||s==='yes')return true;if(s==='0'||s==='false'||s==='off'||s==='no')return false;return null;};// "Displacement" (Settings dialog, default on). Off skips the CPU-side
 // mesh displacement pass (js/shared/mesh-displacement.js) and previews
 // the undisplaced mesh. Same persist/{persist:false} contract as above.
-let DISPLACEMENT_ENABLED=(()=>{try{const qs=new URLSearchParams(window.location.search);if(qs.has('displacement')){const parsed=parseBoolFlag(qs.get('displacement'));if(parsed!==null)return parsed;}return localStorage.getItem('mtlxDisplacement')!=='0';}catch(e){return true;}})();const getDisplacementEnabled=()=>DISPLACEMENT_ENABLED;const setDisplacementEnabled=(v,{persist=true}={})=>{DISPLACEMENT_ENABLED=!!v;if(persist&&window.self===window.top){try{localStorage.setItem('mtlxDisplacement',DISPLACEMENT_ENABLED?'1':'0');}catch(e){/* best-effort */}}LIVE_VIEWS.forEach(view=>{try{view.refreshDisplacement&&view.refreshDisplacement();}catch(e){/* view mid-teardown */}});try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'displacement',value:DISPLACEMENT_ENABLED}}));}catch(e){/* best-effort */}};// Displacement shading-normal mode (Settings/test hook): 'analytic' derives
+let DISPLACEMENT_ENABLED=(()=>{try{return!!window.MtlxRenderSettings.get('displacement',{surface:'viewer'});}catch(e){return true;}})();const getDisplacementEnabled=()=>DISPLACEMENT_ENABLED;const setDisplacementEnabled=(v,{persist=true}={})=>{DISPLACEMENT_ENABLED=!!v;try{window.MtlxRenderSettings.set('displacement',DISPLACEMENT_ENABLED,{surface:'viewer',persist});}catch(e){/* best-effort */}LIVE_VIEWS.forEach(view=>{try{view.refreshDisplacement&&view.refreshDisplacement();}catch(e){/* view mid-teardown */}});try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'displacement',value:DISPLACEMENT_ENABLED}}));}catch(e){/* best-effort */}};// "Texture Anisotropy" (Settings dialog, default 8). Sessions apply this
+// live via textureSession.setAnisotropy on every LIVE_VIEWS handle that has
+// one; configureLoadedTexture's own default (8) covers callers with no
+// session (Scene until P6, the legacy Map path).
+let TEXTURE_ANISOTROPY=(()=>{try{return Number(window.MtlxRenderSettings.get('textureAnisotropy',{surface:'viewer'}))||8;}catch(e){return 8;}})();const getTextureAnisotropy=()=>TEXTURE_ANISOTROPY;const setTextureAnisotropy=(v,{persist=true}={})=>{TEXTURE_ANISOTROPY=Number(v)||8;try{window.MtlxRenderSettings.set('textureAnisotropy',TEXTURE_ANISOTROPY,{surface:'viewer',persist});}catch(e){/* best-effort */}LIVE_VIEWS.forEach(view=>{try{view.textureSession&&view.textureSession.setAnisotropy(TEXTURE_ANISOTROPY);}catch(e){/* view mid-teardown */}});};// Displacement shading-normal mode (Settings/test hook): 'analytic' derives
 // the normal from two extra tangent-offset evaluations of the displacement
 // network per vertex (crisp creases, matches the analytic surface); 'mesh'
 // keeps the older angle-weighted recompute over the displaced triangles.
-let DISPLACEMENT_NORMALS_MODE=(()=>{try{const qs=new URLSearchParams(window.location.search);if(qs.has('displacementnormals')){const v=qs.get('displacementnormals');if(v==='analytic'||v==='mesh')return v;}const raw=localStorage.getItem('mtlxDisplacementNormals');if(raw==='analytic'||raw==='mesh')return raw;// Default to 'mesh' until the analytic path is verified free of the
+let DISPLACEMENT_NORMALS_MODE=(()=>{// Default to 'mesh' until the analytic path is verified free of the
 // terracing seen on egg_normals (readback precision fix pending
 // verification); 'analytic' stays selectable via query/localStorage.
-return'mesh';}catch(e){return'mesh';}})();const getDisplacementNormalsMode=()=>DISPLACEMENT_NORMALS_MODE;const setDisplacementNormalsMode=(v,{persist=true}={})=>{if(v!=='analytic'&&v!=='mesh')return;DISPLACEMENT_NORMALS_MODE=v;if(persist&&window.self===window.top){try{localStorage.setItem('mtlxDisplacementNormals',DISPLACEMENT_NORMALS_MODE);}catch(e){/* best-effort */}}LIVE_VIEWS.forEach(view=>{try{view.refreshDisplacement&&view.refreshDisplacement();}catch(e){/* view mid-teardown */}});try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'displacementNormals',value:DISPLACEMENT_NORMALS_MODE}}));}catch(e){/* best-effort */}};// Preview subdivision level (Settings dialog, default 2, 0..3). Feeds
+try{return window.MtlxRenderSettings.get('displacementNormals',{surface:'viewer'})||'mesh';}catch(e){return'mesh';}})();const getDisplacementNormalsMode=()=>DISPLACEMENT_NORMALS_MODE;const setDisplacementNormalsMode=(v,{persist=true}={})=>{if(v!=='analytic'&&v!=='mesh')return;DISPLACEMENT_NORMALS_MODE=v;try{window.MtlxRenderSettings.set('displacementNormals',DISPLACEMENT_NORMALS_MODE,{surface:'viewer',persist});}catch(e){/* best-effort */}LIVE_VIEWS.forEach(view=>{try{view.refreshDisplacement&&view.refreshDisplacement();}catch(e){/* view mid-teardown */}});try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'displacementNormals',value:DISPLACEMENT_NORMALS_MODE}}));}catch(e){/* best-effort */}};// Preview subdivision level (Settings dialog, default 2, 0..3). Feeds
 // mesh-subdivision.js's Loop subdivision ahead of CPU displacement;
 // pickSubdivisionLevel below caps it per-mesh against a triangle budget.
-let PREVIEW_SUBDIVISION_LEVEL=(()=>{try{const qs=new URLSearchParams(window.location.search);if(qs.has('previewsubdivision')){const n=Number(qs.get('previewsubdivision'));if(Number.isInteger(n)&&n>=0&&n<=3)return n;}const raw=localStorage.getItem('mtlxPreviewSubdivision');if(raw!==null){const stored=Number(raw);if(Number.isInteger(stored)&&stored>=0&&stored<=3)return stored;}return 2;}catch(e){return 2;}})();const getPreviewSubdivisionLevel=()=>PREVIEW_SUBDIVISION_LEVEL;const setPreviewSubdivisionLevel=(level,{persist=true}={})=>{const n=Number(level);if(!Number.isFinite(n))return;// non-numeric input is ignored
-const clamped=Math.min(3,Math.max(0,Math.round(n)));PREVIEW_SUBDIVISION_LEVEL=clamped;if(persist&&window.self===window.top){try{localStorage.setItem('mtlxPreviewSubdivision',String(PREVIEW_SUBDIVISION_LEVEL));}catch(e){/* best-effort */}}LIVE_VIEWS.forEach(view=>{try{view.refreshDisplacement&&view.refreshDisplacement();}catch(e){/* view mid-teardown */}});try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'previewSubdivision',value:PREVIEW_SUBDIVISION_LEVEL}}));}catch(e){/* best-effort */}};// Highest triangle count a preview mesh may reach after subdivision,
+let PREVIEW_SUBDIVISION_LEVEL=(()=>{try{const v=window.MtlxRenderSettings.get('previewSubdivision',{surface:'viewer'});return Number.isInteger(v)?v:2;}catch(e){return 2;}})();const getPreviewSubdivisionLevel=()=>PREVIEW_SUBDIVISION_LEVEL;const setPreviewSubdivisionLevel=(level,{persist=true}={})=>{const n=Number(level);if(!Number.isFinite(n))return;// non-numeric input is ignored
+const clamped=Math.min(3,Math.max(0,Math.round(n)));PREVIEW_SUBDIVISION_LEVEL=clamped;try{window.MtlxRenderSettings.set('previewSubdivision',PREVIEW_SUBDIVISION_LEVEL,{surface:'viewer',persist});}catch(e){/* best-effort */}LIVE_VIEWS.forEach(view=>{try{view.refreshDisplacement&&view.refreshDisplacement();}catch(e){/* view mid-teardown */}});try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'previewSubdivision',value:PREVIEW_SUBDIVISION_LEVEL}}));}catch(e){/* best-effort */}};// Highest triangle count a preview mesh may reach after subdivision,
 // past which the GPU/CPU cost stops being worth the visual gain.
 const PREVIEW_TRIANGLE_BUDGET=1500000;// Highest level <= requestedLevel keeping baseTriangles * 4^level under
 // budget (level 0 always allowed, even if baseTriangles alone exceeds it).
@@ -213,7 +225,7 @@ BASE_GEOM_CACHE.delete(key);BASE_GEOM_CACHE.set(key,hit);return hit;};const base
 // applyHeightToNormalTexel below). Off by default: DCC parity is
 // unverified, this is for side-by-side comparison only. A `?heightToNormalTexel=1`
 // URL param seeds the flag for a page load without touching localStorage.
-let HEIGHT_TO_NORMAL_TEXEL=(()=>{try{const qs=new URLSearchParams(window.location.search);if(qs.has('heightToNormalTexel'))return qs.get('heightToNormalTexel')==='1';return localStorage.getItem('mtlxHeightToNormalTexel')==='1';}catch(e){return false;}})();// Specular environment method. 'prefilter' is MaterialXView's path: the
+let HEIGHT_TO_NORMAL_TEXEL=(()=>{try{return!!window.MtlxRenderSettings.get('heightToNormalTexel',{surface:'viewer'});}catch(e){return false;}})();// Specular environment method. 'prefilter' is MaterialXView's path: the
 // radiance map carries a GGX-prefiltered mip chain and the shader does one
 // textureLod, so a rough surface reads a correctly filtered value instead
 // of a 16-sample estimate. 'fis' is MaterialX's filtered-importance-
@@ -227,9 +239,9 @@ let SPECULAR_ENV_METHOD=(()=>{try{const qs=new URLSearchParams(window.location.s
 // scratchpad/displacement-verified/color-parity/direct-scale/direct-scale.md).
 // 'sh' is the original 9-coefficient spherical-harmonic path, kept as the
 // safe-fail target and the one embeds stay pinned to until verified there.
-let DIFFUSE_ENV_METHOD=(()=>{try{if(window.MTLX_DIFFUSE_ENV==='sh'||window.MTLX_DIFFUSE_ENV==='convolve')return window.MTLX_DIFFUSE_ENV;const qs=new URLSearchParams(window.location.search);if(qs.has('diffuseEnv'))return qs.get('diffuseEnv')==='sh'?'sh':'convolve';return localStorage.getItem('mtlx_diffuse_env')==='sh'?'sh':'convolve';}catch(e){return'convolve';}})();const getDiffuseEnvMethod=()=>DIFFUSE_ENV_METHOD;const setDiffuseEnvMethod=(v,{persist=true}={})=>{DIFFUSE_ENV_METHOD=v==='sh'?'sh':'convolve';if(persist){try{localStorage.setItem('mtlx_diffuse_env',DIFFUSE_ENV_METHOD);}catch(e){/* best-effort */}}// Not generation-affecting: same lookup, same uniform, just a rebind,
+let DIFFUSE_ENV_METHOD=(()=>{try{if(window.MTLX_DIFFUSE_ENV==='sh'||window.MTLX_DIFFUSE_ENV==='convolve')return window.MTLX_DIFFUSE_ENV;return window.MtlxRenderSettings.get('diffuseEnv',{surface:'viewer'})||'convolve';}catch(e){return'convolve';}})();const getDiffuseEnvMethod=()=>DIFFUSE_ENV_METHOD;const setDiffuseEnvMethod=(v,{persist=true}={})=>{DIFFUSE_ENV_METHOD=v==='sh'?'sh':'convolve';try{window.MtlxRenderSettings.set('diffuseEnv',DIFFUSE_ENV_METHOD,{surface:'viewer',persist});}catch(e){/* best-effort */}// Not generation-affecting: same lookup, same uniform, just a rebind,
 // so listeners re-run their environment effect, not a recompile.
-try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'diffuseEnvMethod',value:DIFFUSE_ENV_METHOD}}));}catch(e){/* best-effort */}};const getHeightToNormalTexel=()=>HEIGHT_TO_NORMAL_TEXEL;const setHeightToNormalTexel=(v,{persist=true}={})=>{HEIGHT_TO_NORMAL_TEXEL=!!v;if(persist){try{localStorage.setItem('mtlxHeightToNormalTexel',HEIGHT_TO_NORMAL_TEXEL?'1':'0');}catch(e){/* best-effort */}}// Generation-affecting: existing compiled sources bake in the old
+try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'diffuseEnvMethod',value:DIFFUSE_ENV_METHOD}}));}catch(e){/* best-effort */}};const getHeightToNormalTexel=()=>HEIGHT_TO_NORMAL_TEXEL;const setHeightToNormalTexel=(v,{persist=true}={})=>{HEIGHT_TO_NORMAL_TEXEL=!!v;try{window.MtlxRenderSettings.set('heightToNormalTexel',HEIGHT_TO_NORMAL_TEXEL,{surface:'viewer',persist});}catch(e){/* best-effort */}// Generation-affecting: existing compiled sources bake in the old
 // rewrite decision, so every live view must recompile its materials,
 // mirroring how forceTransparency's setter above nudges live views.
 try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'heightToNormalTexel',value:HEIGHT_TO_NORMAL_TEXEL}}));}catch(e){/* best-effort */}};// Nearest transparent layers the peel loop resolves before giving up on
@@ -241,7 +253,7 @@ const PEEL_LAYERS=8;// Shared 1x1 opaque-black dummy texture: the DEFAULT bindin
 // uniforms always have SOME bound texture even though they're only
 // sampled while u_peelMode != 0. Module-scope + lazily created.
 let MTLX_DUMMY_TEX=null;const getDummyTex=()=>{if(!MTLX_DUMMY_TEX){MTLX_DUMMY_TEX=new THREE.DataTexture(new Uint8Array([0,0,0,255]),1,1,THREE.RGBAFormat);MTLX_DUMMY_TEX.needsUpdate=true;}return MTLX_DUMMY_TEX;};// White counterpart, depth==1.0 (far plane): the fail-safe default for
-// u_opaqueDepth (see bindMaterialUniforms/renderFrame) so a stale/missing
+// u_opaqueDepth (see createMtlxSceneUniforms/renderFrame) so a stale/missing
 // binding reads as "nothing there", never triggering the peel discard.
 let MTLX_DUMMY_TEX_WHITE=null;// Shadow matrix meaning "no shadow": maps every world position to the origin,
 // so mx_shadow_occlusion samples the middle of a white moments map at depth
@@ -251,13 +263,10 @@ let MTLX_DUMMY_TEX_WHITE=null;// Shadow matrix meaning "no shadow": maps every w
 let MTLX_SHADOW_OFF_MATRIX=null;const shadowOffMatrix=()=>{if(!MTLX_SHADOW_OFF_MATRIX){MTLX_SHADOW_OFF_MATRIX=new THREE.Matrix4().set(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1);}return MTLX_SHADOW_OFF_MATRIX.clone();};const getDummyTexWhite=()=>{if(!MTLX_DUMMY_TEX_WHITE){MTLX_DUMMY_TEX_WHITE=new THREE.DataTexture(new Uint8Array([255,255,255,255]),1,1,THREE.RGBAFormat);MTLX_DUMMY_TEX_WHITE.needsUpdate=true;}return MTLX_DUMMY_TEX_WHITE;};// White 1x1x1 volume, so a material whose stage has no baked sky visibility
 // still has something to sample. Paired with u_skyVisStrength 0 it is an exact
 // no-op, which is what the Material Viewer runs with.
-let MTLX_DUMMY_TEX3D_WHITE=null;const getDummyTex3DWhite=()=>{if(!MTLX_DUMMY_TEX3D_WHITE&&THREE.DataTexture3D){MTLX_DUMMY_TEX3D_WHITE=new THREE.DataTexture3D(new Uint8Array([255]),1,1,1);MTLX_DUMMY_TEX3D_WHITE.format=THREE.RedFormat;MTLX_DUMMY_TEX3D_WHITE.type=THREE.UnsignedByteType;MTLX_DUMMY_TEX3D_WHITE.minFilter=THREE.LinearFilter;MTLX_DUMMY_TEX3D_WHITE.magFilter=THREE.LinearFilter;MTLX_DUMMY_TEX3D_WHITE.wrapS=THREE.ClampToEdgeWrapping;MTLX_DUMMY_TEX3D_WHITE.wrapT=THREE.ClampToEdgeWrapping;MTLX_DUMMY_TEX3D_WHITE.wrapR=THREE.ClampToEdgeWrapping;MTLX_DUMMY_TEX3D_WHITE.needsUpdate=true;}return MTLX_DUMMY_TEX3D_WHITE;};// Filters ONE benign warning: on Windows, ANGLE's fxc backend emits
-// "X4008 division by zero" for unrolled FIS/light loops (harmless,
-// guarded by M_FLOAT_EPS), matched by exact signature; always restored.
-const compileFilteringDriverNoise=(renderer,scene,camera)=>{const origWarn=console.warn;console.warn=function(...args){const isProgLog=typeof args[0]==='string'&&args[0].indexOf('THREE.WebGLProgram: gl.getProgramInfoLog()')===0;const text=args.join(' ');// Anchored on the exact fxc signature (X4008 + "division by
-// zero"), not the generic word "warning", any OTHER warning
-// in the log must still reach the real console.warn.
-const isKnownDriverNoise=isProgLog&&/\bX4008\b/.test(text)&&/division by zero/i.test(text)&&!/error/i.test(text);if(isKnownDriverNoise){if(DEBUG_SHADERS)console.debug('[mtlx] driver warnings (benign, filtered):',...args);return;}return origWarn.apply(console,args);};try{renderer.compile(scene,camera);}finally{console.warn=origWarn;}};// Shared u_time/u_frame clock, MaterialXView semantics: wall seconds since
+let MTLX_DUMMY_TEX3D_WHITE=null;const getDummyTex3DWhite=()=>{if(!MTLX_DUMMY_TEX3D_WHITE&&THREE.DataTexture3D){MTLX_DUMMY_TEX3D_WHITE=new THREE.DataTexture3D(new Uint8Array([255]),1,1,1);MTLX_DUMMY_TEX3D_WHITE.format=THREE.RedFormat;MTLX_DUMMY_TEX3D_WHITE.type=THREE.UnsignedByteType;MTLX_DUMMY_TEX3D_WHITE.minFilter=THREE.LinearFilter;MTLX_DUMMY_TEX3D_WHITE.magFilter=THREE.LinearFilter;MTLX_DUMMY_TEX3D_WHITE.wrapS=THREE.ClampToEdgeWrapping;MTLX_DUMMY_TEX3D_WHITE.wrapT=THREE.ClampToEdgeWrapping;MTLX_DUMMY_TEX3D_WHITE.wrapR=THREE.ClampToEdgeWrapping;MTLX_DUMMY_TEX3D_WHITE.needsUpdate=true;}return MTLX_DUMMY_TEX3D_WHITE;};// Driver-noise filter moved to MtlxRender.compileFilteringDriverNoise
+// (js/shared/render-session.js); lazy alias so prewarmPreviewTarget and
+// every applyMaterialInternal call site below keep working unchanged.
+const compileFilteringDriverNoise=(renderer,scene,camera)=>MtlxRender.compileFilteringDriverNoise(renderer,scene,camera,DEBUG_SHADERS);// Shared u_time/u_frame clock, MaterialXView semantics: wall seconds since
 // first frame, per-frame counter (uint32 wrap). float32 in the shader, so
 // timing gets coarser after ~2 days with the same page open (reload resets).
 const MTLX_CLOCK={time:0,frame:0,lastTs:undefined,epoch:undefined};const clockTick=ts=>{if(typeof ts!=='number'||ts===MTLX_CLOCK.lastTs)return;if(MTLX_CLOCK.epoch===undefined)MTLX_CLOCK.epoch=ts;MTLX_CLOCK.lastTs=ts;MTLX_CLOCK.time=(ts-MTLX_CLOCK.epoch)/1000;MTLX_CLOCK.frame=MTLX_CLOCK.frame+1>>>0;};// Scrapes `uniform <type> u_<name>;` declarations from generated source
@@ -522,7 +531,8 @@ const patchShadowBounds=fs=>{const call='mx_variance_shadow_occlusion(shadowMome
 const SHADOW_FACE_SLOTS=32;const SHADOW_LIGHT_SLOTS_MAX=32;// One bias policy for every caster kind: a normal offset off the surface
 // and a depth bias on the comparison, both measured in atlas texels so
 // they scale with the per-face texel footprint. Injected as #define below.
-const SHADOW_NORMAL_OFFSET_TEXELS=1.0;const SHADOW_DEPTH_BIAS_TEXELS=1.0;const patchShadowLightScope=(fs,{skipTransmittance=false}={})=>{const call='occlusion = mx_shadow_occlusion(u_shadowMap, u_shadowMatrix, positionWorld);';const site='L = lightShader.direction;';if(fs.indexOf(call)===-1||fs.indexOf(site)===-1)return fs;// The geometric normal, when the surface exposes one. Used to push the
+const SHADOW_NORMAL_OFFSET_TEXELS=1.0;const SHADOW_DEPTH_BIAS_TEXELS=1.0;// faceSlots: compile-time face array size, a generation parameter (the Scene uses the full atlas).
+const patchShadowLightScope=(fs,{skipTransmittance=false,faceSlots=SHADOW_FACE_SLOTS}={})=>{const call='occlusion = mx_shadow_occlusion(u_shadowMap, u_shadowMatrix, positionWorld);';const site='L = lightShader.direction;';if(fs.indexOf(call)===-1||fs.indexOf(site)===-1)return fs;// The geometric normal, when the surface exposes one. Used to push the
 // receiver test point off the shaded surface before the shadow lookup
 // (see mx_shadow_atlas), which is what removes self-shadow acne without
 // a large constant bias. Absent it, the lookup falls back to testing at
@@ -532,7 +542,7 @@ const hasNormal=/\bin\s+vec3\s+normalWorld\s*;/.test(fs);const shadowNormalExpr=
 let out=fs.replace(call,'occlusion = 1.0;');// Caches shadow visibility per resolved face for this fragment
 // invocation (reset each main()), so light slots that share an omni
 // face reuse one lookup instead of repeating the atlas search.
-const lightLoop='        // Light loop\n';const transmitCacheInit=skipTransmittance?'':'        vec3 mx_shadowTransmit['+SHADOW_FACE_SLOTS+'];\n'+'        for (int mx_transmitIndex = 0; mx_transmitIndex < '+SHADOW_FACE_SLOTS+'; ++mx_transmitIndex) {\n'+'            mx_shadowTransmit[mx_transmitIndex] = vec3(-1.0);\n'+'        }\n';const cacheDecl='        float mx_shadowVisibility['+SHADOW_FACE_SLOTS+'];\n'+'        for (int mx_shadowIndex = 0; mx_shadowIndex < '+SHADOW_FACE_SLOTS+'; ++mx_shadowIndex) {\n'+'            mx_shadowVisibility[mx_shadowIndex] = -1.0;\n'+'        }\n'+transmitCacheInit+'        vec3 mx_shadowNormal = '+shadowNormalExpr+';\n\n';if(out.indexOf(lightLoop)!==-1&&out.indexOf('mx_shadowVisibility[')===-1){out=out.replace(lightLoop,cacheDecl+lightLoop);}const shadowPerCaster=out.indexOf('mx_shadowVisibility[')!==-1?'\n                if (mx_face < 0) {'+'\n                    occlusion = 1.0;'+'\n                } else if (mx_shadowVisibility[mx_face] < -0.5) {'+'\n                    mx_shadowVisibility[mx_face] = mx_shadow_atlas(mx_face, positionWorld, mx_shadowNormal);'+'\n                    occlusion = mx_shadowVisibility[mx_face];'+'\n                } else {'+'\n                    occlusion = mx_shadowVisibility[mx_face];'+'\n                }':'\n                occlusion = mx_shadow_atlas(mx_face, positionWorld, '+shadowNormalExpr+');';// Resolves a light slot to an atlas face: faceCount 1 maps straight
+const lightLoop='        // Light loop\n';const transmitCacheInit=skipTransmittance?'':'        vec3 mx_shadowTransmit['+faceSlots+'];\n'+'        for (int mx_transmitIndex = 0; mx_transmitIndex < '+faceSlots+'; ++mx_transmitIndex) {\n'+'            mx_shadowTransmit[mx_transmitIndex] = vec3(-1.0);\n'+'        }\n';const cacheDecl='        float mx_shadowVisibility['+faceSlots+'];\n'+'        for (int mx_shadowIndex = 0; mx_shadowIndex < '+faceSlots+'; ++mx_shadowIndex) {\n'+'            mx_shadowVisibility[mx_shadowIndex] = -1.0;\n'+'        }\n'+transmitCacheInit+'        vec3 mx_shadowNormal = '+shadowNormalExpr+';\n\n';if(out.indexOf(lightLoop)!==-1&&out.indexOf('mx_shadowVisibility[')===-1){out=out.replace(lightLoop,cacheDecl+lightLoop);}const shadowPerCaster=out.indexOf('mx_shadowVisibility[')!==-1?'\n                if (mx_face < 0) {'+'\n                    occlusion = 1.0;'+'\n                } else if (mx_shadowVisibility[mx_face] < -0.5) {'+'\n                    mx_shadowVisibility[mx_face] = mx_shadow_atlas(mx_face, positionWorld, mx_shadowNormal);'+'\n                    occlusion = mx_shadowVisibility[mx_face];'+'\n                } else {'+'\n                    occlusion = mx_shadowVisibility[mx_face];'+'\n                }':'\n                occlusion = mx_shadow_atlas(mx_face, positionWorld, '+shadowNormalExpr+');';// Resolves a light slot to an atlas face: faceCount 1 maps straight
 // through, faceCount >= 2 (an omni/area cube group) expresses the
 // shaded point in the group's basis and picks the face by major axis.
 out=out.replace(site,site+'\n            {'+'\n                int mx_slotFace = u_shadowSlotFace[activeLightIndex];'+'\n                int mx_slotCount = u_shadowSlotFaceCount[activeLightIndex];'+'\n                int mx_face = -1;'+'\n                if (mx_slotFace >= 0) {'+'\n                    if (mx_slotCount >= 2) {'+'\n                        vec3 mx_faceVec = positionWorld - u_shadowFaceOrigin[mx_slotFace];'+'\n                        vec3 mx_faceLocal = vec3('+'\n                            dot(mx_faceVec, u_shadowFaceBasisX[mx_slotFace]),'+'\n                            dot(mx_faceVec, u_shadowFaceBasisY[mx_slotFace]),'+'\n                            dot(mx_faceVec, u_shadowFaceBasisZ[mx_slotFace]));'+'\n                        vec3 mx_faceAbs = abs(mx_faceLocal);'+'\n                        int mx_axis;'+'\n                        if (mx_faceAbs.x >= mx_faceAbs.y && mx_faceAbs.x >= mx_faceAbs.z) mx_axis = mx_faceLocal.x >= 0.0 ? 0 : 1;'+'\n                        else if (mx_faceAbs.y >= mx_faceAbs.x && mx_faceAbs.y >= mx_faceAbs.z) mx_axis = mx_faceLocal.y >= 0.0 ? 2 : 3;'+'\n                        else mx_axis = mx_faceLocal.z >= 0.0 ? 4 : 5;'+'\n                        mx_face = mx_slotFace + mx_axis;'+'\n                        if (u_shadowFaceValid[mx_face] < 0.5) mx_face = -1;'+'\n                    } else {'+'\n                        mx_face = mx_slotFace;'+'\n                    }'+'\n                }'+shadowPerCaster// Keep scalar shadow visibility in ClosureData.occlusion. MaterialX
@@ -542,24 +552,24 @@ out=out.replace(site,site+'\n            {'+'\n                int mx_slotFace =
 // replace those per-closure rules with a global intensity mask. Colored
 // transmittance still scales source radiance because ClosureData can
 // carry only a scalar visibility term.
-+(skipTransmittance?'':'\n                vec3 mx_transmit = vec3(1.0);'+'\n                if (mx_face < 0) {'+'\n                    mx_transmit = vec3(1.0);'+'\n                } else if (mx_shadowTransmit[mx_face].x < -0.5) {'+'\n                    mx_shadowTransmit[mx_face] = mx_shadow_transmittance(mx_face, positionWorld, mx_shadowNormal);'+'\n                    mx_transmit = mx_shadowTransmit[mx_face];'+'\n                } else {'+'\n                    mx_transmit = mx_shadowTransmit[mx_face];'+'\n                }')+'\n                lightShader.intensity *= '+(skipTransmittance?'':'mx_transmit * ')+'u_shadowDiagnosticVisibilityScale;'+'\n            }');if(out.indexOf('uniform sampler2D u_shadowAtlas;')!==-1)return out;const decl=['uniform sampler2D u_shadowAtlas;','uniform mat4 u_shadowMatrices['+SHADOW_FACE_SLOTS+'];',// xy = tile origin in atlas UV, zw = tile size.
-'uniform vec4 u_shadowTiles['+SHADOW_FACE_SLOTS+'];',// Normalized positive light-view Z plane for linear moments.
-'uniform vec4 u_shadowDepthPlanes['+SHADOW_FACE_SLOTS+'];',// x = near, y = far - near, in the same world units used by the
++(skipTransmittance?'':'\n                vec3 mx_transmit = vec3(1.0);'+'\n                if (mx_face < 0) {'+'\n                    mx_transmit = vec3(1.0);'+'\n                } else if (mx_shadowTransmit[mx_face].x < -0.5) {'+'\n                    mx_shadowTransmit[mx_face] = mx_shadow_transmittance(mx_face, positionWorld, mx_shadowNormal);'+'\n                    mx_transmit = mx_shadowTransmit[mx_face];'+'\n                } else {'+'\n                    mx_transmit = mx_shadowTransmit[mx_face];'+'\n                }')+'\n                lightShader.intensity *= '+(skipTransmittance?'':'mx_transmit * ')+'u_shadowDiagnosticVisibilityScale;'+'\n            }');if(out.indexOf('uniform sampler2D u_shadowAtlas;')!==-1)return out;const decl=['uniform sampler2D u_shadowAtlas;','uniform mat4 u_shadowMatrices['+faceSlots+'];',// xy = tile origin in atlas UV, zw = tile size.
+'uniform vec4 u_shadowTiles['+faceSlots+'];',// Normalized positive light-view Z plane for linear moments.
+'uniform vec4 u_shadowDepthPlanes['+faceSlots+'];',// x = near, y = far - near, in the same world units used by the
 // authored emitter radius. Kept separate because the normalized
 // plane alone cannot recover its near offset.
-'uniform vec2 u_shadowDepthRanges['+SHADOW_FACE_SLOTS+'];',// x/y = authored source radius in world units; z/w = explicit
+'uniform vec2 u_shadowDepthRanges['+faceSlots+'];',// x/y = authored source radius in world units; z/w = explicit
 // perspective projection scale. Directional casters use all zeroes.
-'uniform vec4 u_shadowSourceRadii['+SHADOW_FACE_SLOTS+'];',// World-space size of one atlas texel at the caster's near plane
+'uniform vec4 u_shadowSourceRadii['+faceSlots+'];',// World-space size of one atlas texel at the caster's near plane
 // (perspective) or across the whole frustum (orthographic). Feeds
 // both the normal-offset and the depth bias below; zero disables
 // both for that slot.
-'uniform float u_shadowTexelWorldSize['+SHADOW_FACE_SLOTS+'];',// Light position for an omni caster's face, used to pick which of
+'uniform float u_shadowTexelWorldSize['+faceSlots+'];',// Light position for an omni caster's face, used to pick which of
 // its six faces a shaded point falls into. Unused (zero) otherwise.
-'uniform vec3 u_shadowFaceOrigin['+SHADOW_FACE_SLOTS+'];',// 1.0 where a face actually holds rendered data, 0.0 where the
+'uniform vec3 u_shadowFaceOrigin['+faceSlots+'];',// 1.0 where a face actually holds rendered data, 0.0 where the
 // renderer reserved the slot but never allocated a cell for it.
-'uniform float u_shadowFaceValid['+SHADOW_FACE_SLOTS+'];',// A cube group's own world +X/+Y/+Z, read only at the group's base
+'uniform float u_shadowFaceValid['+faceSlots+'];',// A cube group's own world +X/+Y/+Z, read only at the group's base
 // face index: world axes for omni, the emitter's own frame for area.
-'uniform vec3 u_shadowFaceBasisX['+SHADOW_FACE_SLOTS+'];','uniform vec3 u_shadowFaceBasisY['+SHADOW_FACE_SLOTS+'];','uniform vec3 u_shadowFaceBasisZ['+SHADOW_FACE_SLOTS+'];',// Per light slot: base face index (or -1 for none) and how many
+'uniform vec3 u_shadowFaceBasisX['+faceSlots+'];','uniform vec3 u_shadowFaceBasisY['+faceSlots+'];','uniform vec3 u_shadowFaceBasisZ['+faceSlots+'];',// Per light slot: base face index (or -1 for none) and how many
 // consecutive faces it spans (1 for directional, 6 for a cube group).
 'uniform int u_shadowSlotFace['+SHADOW_LIGHT_SLOTS_MAX+'];','uniform int u_shadowSlotFaceCount['+SHADOW_LIGHT_SLOTS_MAX+'];',// Test-only multiplier for direct incoming visibility. Normal
 // rendering always binds one; keeping it in the compiled shader lets
@@ -567,7 +577,7 @@ out=out.replace(site,site+'\n            {'+'\n                int mx_slotFace =
 'uniform float u_shadowDiagnosticVisibilityScale;'].concat(skipTransmittance?[]:[// Packed into one texture: R1 (nearest transmitter) cell origin/size,
 // R2 (product of all) is the same rect offset by half the height.
 // Zero size means no record for that face (dropped, or feature off).
-'uniform sampler2D u_shadowTransmittance;','uniform vec4 u_shadowRecordCells['+SHADOW_FACE_SLOTS+'];']).concat(['#define SHADOW_NORMAL_OFFSET_TEXELS '+SHADOW_NORMAL_OFFSET_TEXELS.toFixed(4),'#define SHADOW_DEPTH_BIAS_TEXELS '+SHADOW_DEPTH_BIAS_TEXELS.toFixed(4),'float mx_shadow_vsm(vec2 moments, float receiverDepth) {','    float p = (receiverDepth <= moments.x) ? 1.0 : 0.0;','    float variance = max(moments.y - moments.x * moments.x, 2e-7);','    float d = receiverDepth - moments.x;','    float lit = max(p, variance / (variance + d * d));','    return smoothstep(0.3, 1.0, lit);','}','float mx_shadow_atlas(int caster, vec3 P, vec3 Ng) {','    if (caster < 0) return 1.0;','    vec4 depthPlane = u_shadowDepthPlanes[caster];','    vec2 depthRange = u_shadowDepthRanges[caster];','    float nearDepth = depthRange.x;','    float depthSpan = max(depthRange.y, 1e-9);','    vec2 projectionScale = u_shadowSourceRadii[caster].zw;','    bool perspective = projectionScale.x > 0.0 || projectionScale.y > 0.0;','    vec2 sourceRadius = u_shadowSourceRadii[caster].xy;',// Normal offset AND depth bias share one texel-world estimate,
+'uniform sampler2D u_shadowTransmittance;','uniform vec4 u_shadowRecordCells['+faceSlots+'];']).concat(['#define SHADOW_NORMAL_OFFSET_TEXELS '+SHADOW_NORMAL_OFFSET_TEXELS.toFixed(4),'#define SHADOW_DEPTH_BIAS_TEXELS '+SHADOW_DEPTH_BIAS_TEXELS.toFixed(4),'float mx_shadow_vsm(vec2 moments, float receiverDepth) {','    float p = (receiverDepth <= moments.x) ? 1.0 : 0.0;','    float variance = max(moments.y - moments.x * moments.x, 2e-7);','    float d = receiverDepth - moments.x;','    float lit = max(p, variance / (variance + d * d));','    return smoothstep(0.3, 1.0, lit);','}','float mx_shadow_atlas(int caster, vec3 P, vec3 Ng) {','    if (caster < 0) return 1.0;','    vec4 depthPlane = u_shadowDepthPlanes[caster];','    vec2 depthRange = u_shadowDepthRanges[caster];','    float nearDepth = depthRange.x;','    float depthSpan = max(depthRange.y, 1e-9);','    vec2 projectionScale = u_shadowSourceRadii[caster].zw;','    bool perspective = projectionScale.x > 0.0 || projectionScale.y > 0.0;','    vec2 sourceRadius = u_shadowSourceRadii[caster].xy;',// Normal offset AND depth bias share one texel-world estimate,
 // scaled by distance for a perspective caster (using the raw,
 // unbiased point). Small enough now to apply to every caster kind.
 '    float texelBase = u_shadowTexelWorldSize[caster];','    float rawDepth = dot(vec4(P, 1.0), depthPlane);','    float rawZ = max(nearDepth + depthSpan * rawDepth, 0.0);','    float texelWorld = texelBase * (perspective ? rawZ : 1.0);','    vec3 offsetP = P + Ng * (texelWorld * SHADOW_NORMAL_OFFSET_TEXELS);','    vec4 c4 = u_shadowMatrices[caster] * vec4(offsetP, 1.0);','    if (c4.w <= 0.0) return 1.0;','    vec3 sc = c4.xyz / c4.w;','    sc = sc * 0.5 + 0.5;','    if (any(lessThan(sc, vec3(0.0))) || any(greaterThan(sc, vec3(1.0)))) return 1.0;','    vec4 tile = u_shadowTiles[caster];','    vec2 atlasTexel = 1.0 / vec2(textureSize(u_shadowAtlas, 0));','    vec2 tileTexel = atlasTexel / max(tile.zw, vec2(1e-6));',// Clamp the local tile coordinate by half a texel before mapping into
@@ -1271,22 +1281,39 @@ const isHiddenSideFile=relPath=>/(^|\/)(__MACOSX\/|\._[^/]*$|\.DS_Store$)/i.test
 const readDroppedItems=async dataTransfer=>{const map={};let skipped=0;const items=dataTransfer.items?Array.from(dataTransfer.items):[];const entries=items.map(it=>it.webkitGetAsEntry?it.webkitGetAsEntry():null).filter(Boolean);if(!entries.length){// Fallback: flat file list (no folder structure available).
 for(const f of Array.from(dataTransfer.files||[])){if(isHiddenSideFile(f.name)){skipped++;continue;}map[f.name]=f;}if(skipped)console.info('readDroppedItems: skipped '+skipped+' side file(s)');return map;}const readEntry=(entry,prefix)=>new Promise(resolve=>{const relPath=prefix+entry.name;if(isHiddenSideFile(relPath)){skipped++;resolve();return;}if(entry.isFile){entry.file(f=>{map[relPath]=f;resolve();},()=>resolve());}else if(entry.isDirectory){const reader=entry.createReader();const sub=[];const readBatch=()=>reader.readEntries(batch=>{if(!batch.length){Promise.all(sub.map(e2=>readEntry(e2,relPath+'/'))).then(resolve);return;}sub.push(...batch);readBatch();// readEntries returns results in batches
 },()=>resolve());readBatch();}else resolve();});await Promise.all(entries.map(e=>readEntry(e,'')));if(skipped)console.info('readDroppedItems: skipped '+skipped+' side file(s)');return map;};// Expand any .zip files in the map into their contents (in place).
-const expandZips=async map=>{let skipped=0;for(const key of Object.keys(map)){if(!/\.zip$/i.test(key))continue;const file=map[key];delete map[key];if(!window.JSZip){throw new Error('The JSZip library is not loaded: .zip files can\'t be expanded. Reload the page and try again.');}const zip=await JSZip.loadAsync(file);const names=Object.keys(zip.files);for(const name of names){const entry=zip.files[name];if(entry.dir)continue;if(isHiddenSideFile(name)){skipped++;continue;}map[name]=await entry.async('blob');}}if(skipped)console.info('expandZips: skipped '+skipped+' side file(s)');return map;};// Find a dropped file for a path referenced inside the document:
-// exact normalized match → unique suffix match → unique basename match.
-const findFileForRef=(fileMap,ref)=>{const want=normPath(ref);if(!want)return null;const keys=Object.keys(fileMap);const norm={};for(const k of keys)norm[normPath(k)]=k;if(norm[want])return{key:norm[want],how:'exact'};const suffix=keys.filter(k=>normPath(k).endsWith('/'+want)||normPath(k)===want);if(suffix.length===1)return{key:suffix[0],how:'suffix'};const base=want.split('/').pop();const byBase=keys.filter(k=>normPath(k).split('/').pop()===base);if(byBase.length===1)return{key:byBase[0],how:'basename'};return null;};// A <UDIM> reference names a tile set: every key whose path matches the
+const expandZips=async map=>{let skipped=0;for(const key of Object.keys(map)){if(!/\.zip$/i.test(key))continue;const file=map[key];delete map[key];if(!window.JSZip){throw new Error('The JSZip library is not loaded: .zip files can\'t be expanded. Reload the page and try again.');}const zip=await JSZip.loadAsync(file);const names=Object.keys(zip.files);for(const name of names){const entry=zip.files[name];if(entry.dir)continue;if(isHiddenSideFile(name)){skipped++;continue;}map[name]=await entry.async('blob');}}if(skipped)console.info('expandZips: skipped '+skipped+' side file(s)');return map;};// Join a base directory and a reference into one path, resolving '.' and
+// '..' segments. Backslashes normalize and a leading './' or '/' strips,
+// but case is preserved (unlike normPath, which lowercases for fuzzy
+// matching). Moved from the Scene's sceneJoinPath for the exact resolvers.
+const joinRefPath=(fromDir,ref)=>{const casedNorm=v=>String(v||'').replace(/\\/g,'/').replace(/^\.\//,'').replace(/^\//,'');return casedNorm((fromDir?fromDir+'/':'')+String(ref||'')).split('/').reduce((out,part)=>{if(!part||part==='.')return out;if(part==='..'){out.pop();return out;}out.push(part);return out;},[]).join('/');};// Find a dropped file for a path referenced inside the document. Fuzzy
+// (default): exact normalized match -> unique suffix match -> unique
+// basename match. Exact ({exact:true, fromDir}): hasOwnProperty lookup on
+// joinRefPath(fromDir, ref) only, no suffix or basename fallback (a
+// composed scene can have duplicate basenames, so a miss must stay a miss).
+const findFileForRef=(fileMap,ref,opts)=>{if(opts&&opts.exact){const want=joinRefPath(opts.fromDir,ref);if(!want||!Object.prototype.hasOwnProperty.call(fileMap,want))return null;return{key:want,how:'exact'};}const want=normPath(ref);if(!want)return null;const keys=Object.keys(fileMap);const norm={};for(const k of keys)norm[normPath(k)]=k;if(norm[want])return{key:norm[want],how:'exact'};const suffix=keys.filter(k=>normPath(k).endsWith('/'+want)||normPath(k)===want);if(suffix.length===1)return{key:suffix[0],how:'suffix'};const base=want.split('/').pop();const byBase=keys.filter(k=>normPath(k).split('/').pop()===base);if(byBase.length===1)return{key:byBase[0],how:'basename'};return null;};// A <UDIM> reference names a tile set: every key whose path matches the
 // reference with the token replaced by four digits, each hit carrying the
 // concrete tile ref. Plain references yield the single findFileForRef hit.
-const findFilesForRef=(fileMap,ref)=>{const raw=String(ref||'');if(!/<UDIM>/i.test(raw)){const hit=findFileForRef(fileMap,raw);return hit?[{key:hit.key,how:hit.how,ref:raw}]:[];}const want=normPath(raw);const escaped=want.replace(/[.*+?^${}()|[\]\\]/g,'\\$&').replace(/<udim>/g,'(\\d{4})');const tries=[{how:'exact',re:new RegExp('^'+escaped+'$')},{how:'suffix',re:new RegExp('(^|/)'+escaped+'$')},{how:'basename',re:new RegExp('(^|/)'+escaped.split('/').pop()+'$')}];for(const{how,re}of tries){const hits=[];for(const key of Object.keys(fileMap)){const m=re.exec(normPath(key));if(m)hits.push({key,how,ref:raw.replace(/<UDIM>/gi,m[m.length-1])});}if(hits.length)return hits;}return[];};// Given a resolved file-map hit, prefer a sibling "<stem>.ktx2" in the same
+// Exact ({exact:true}): literal prefix/suffix split around <UDIM>, 4 case-
+// sensitive digits, code >= 1001, no suffix/basename retry. Both modes
+// return { key, how, ref, code, u, v } sorted by code.
+const findFilesForRef=(fileMap,ref,opts)=>{if(opts&&opts.exact){const raw=String(ref||'');const splitParts=raw.split(/<UDIM>/i);if(splitParts.length!==2)return[];const prefix=splitParts[0],suffix=splitParts[1];const hits=[];for(const key of Object.keys(fileMap)){if(!key.startsWith(prefix)||!key.endsWith(suffix))continue;const end=suffix.length?key.length-suffix.length:key.length;const codeText=key.slice(prefix.length,end);if(!/^\d{4}$/.test(codeText))continue;const code=Number(codeText);if(code<1001)continue;const offset=code-1001;hits.push({key,how:'exact',ref:raw.replace(/<UDIM>/i,codeText),code,u:offset%10,v:Math.floor(offset/10)});}return hits.sort((a,b)=>a.code-b.code);}const raw=String(ref||'');if(!/<UDIM>/i.test(raw)){const hit=findFileForRef(fileMap,raw);return hit?[{key:hit.key,how:hit.how,ref:raw}]:[];}const want=normPath(raw);const escaped=want.replace(/[.*+?^${}()|[\]\\]/g,'\\$&').replace(/<udim>/g,'(\\d{4})');const tries=[{how:'exact',re:new RegExp('^'+escaped+'$')},{how:'suffix',re:new RegExp('(^|/)'+escaped+'$')},{how:'basename',re:new RegExp('(^|/)'+escaped.split('/').pop()+'$')}];for(const{how,re}of tries){const hits=[];for(const key of Object.keys(fileMap)){const m=re.exec(normPath(key));if(!m)continue;const codeText=m[m.length-1];const code=Number(codeText);const offset=code-1001;hits.push({key,how,ref:raw.replace(/<UDIM>/gi,codeText),code,u:offset%10,v:Math.floor(offset/10)});}if(hits.length)return hits.sort((a,b)=>a.code-b.code);}return[];};// Given a resolved file-map hit, prefer a sibling "<stem>.ktx2" in the same
 // directory when one exists (per-UDIM tile too, since the tile code lives in
 // the stem: "wall.1001.png" -> "wall.1001.ktx2"), and never touch the
-// original file. Returns the (possibly substituted) hit.
-const preferKtx2Sibling=(fileMap,hit)=>{if(!hit||/\.ktx2$/i.test(hit.key))return hit;const dot=hit.key.lastIndexOf('.');if(dot<0)return hit;const ktx2Key=hit.key.slice(0,dot)+'.ktx2';if(Object.prototype.hasOwnProperty.call(fileMap,ktx2Key)){return{key:ktx2Key,how:hit.how,substituted:true};}return hit;};// Inline <xi:include href="..."/> from the dropped files (MaterialX
+// original file or a .mtlx document. Returns the (possibly substituted) hit.
+const preferKtx2Sibling=(fileMap,hit)=>{if(!hit||/\.ktx2$/i.test(hit.key)||/\.mtlx$/i.test(hit.key))return hit;const dot=hit.key.lastIndexOf('.');if(dot<0)return hit;const ktx2Key=hit.key.slice(0,dot)+'.ktx2';if(Object.prototype.hasOwnProperty.call(fileMap,ktx2Key)){return{key:ktx2Key,how:hit.how,substituted:true};}return hit;};// Inline <xi:include href="..."/> from the dropped files (MaterialX
 // documents may be split across files; readFromXmlString can't reach
 // our in-memory map). Missing includes are dropped with a warning.
-const resolveIncludes=async(xml,fileMap,fromDir,visited)=>{visited=visited||new Set();// href may not be the first attribute and may be single-quoted,
+// Exact ({exact:true, warnings, transformChild}): matches the Scene's
+// resolveSceneIncludes: only the exact lookup (no bare-href retry), an
+// already-visited include is skipped silently (no comment), and an
+// unresolved one pushes to `warnings` instead of console.warn.
+// transformChild(childXml, key), when given, post-processes each resolved
+// child before the wrapper strip (used by the Scene's canonicalization).
+const resolveIncludes=async(xml,fileMap,fromDir,visited,opts)=>{visited=visited||new Set();const options=opts||{};const exact=!!options.exact;// href may not be the first attribute and may be single-quoted,
 // any tag this regex misses would be handed to MaterialX, which
 // would try (and fail) to fetch it over HTTP itself.
-const INC=/<xi:include\b[^>]*?href\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*?\/?>(?:\s*<\/xi:include>)?/g;const parts=[];let last=0,m;while((m=INC.exec(xml))!==null){parts.push(xml.slice(last,m.index));last=m.index+m[0].length;const href=m[1]||m[2];const refPath=fromDir?fromDir+'/'+href:href;const hit=findFileForRef(fileMap,refPath)||findFileForRef(fileMap,href);if(!hit||visited.has(hit.key)){console.warn('xi:include not resolvable from dropped files:',href);parts.push('<!-- unresolved include: '+href.replace(/--/g,'- -')+' -->');continue;}visited.add(hit.key);let inc=await fileMap[hit.key].text();const incDir=hit.key.indexOf('/')>=0?hit.key.slice(0,hit.key.lastIndexOf('/')):'';inc=await resolveIncludes(inc,fileMap,incDir,visited);// Strip the XML declaration and the outer <materialx> wrapper,
+const INC=/<xi:include\b[^>]*?href\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*?\/?>(?:\s*<\/xi:include>)?/g;const parts=[];let last=0,m;while((m=INC.exec(xml))!==null){parts.push(xml.slice(last,m.index));last=m.index+m[0].length;const href=m[1]||m[2];if(exact){const hit=findFileForRef(fileMap,href,{exact:true,fromDir});if(!hit){if(options.warnings)options.warnings.push('Unresolved MaterialX include '+href+' from '+(fromDir||'.'));parts.push('<!-- unresolved include: '+href.replace(/--/g,'- -')+' -->');continue;}if(visited.has(hit.key))continue;// already in this document closure, skip silently
+visited.add(hit.key);let inc=await fileMap[hit.key].text();const incDir=hit.key.indexOf('/')>=0?hit.key.slice(0,hit.key.lastIndexOf('/')):'';inc=await resolveIncludes(inc,fileMap,incDir,visited,options);if(options.transformChild)inc=options.transformChild(inc,hit.key);inc=inc.replace(/<\?xml[^>]*\?>/,'');inc=inc.replace(/<materialx\b[^>]*>/,'').replace(/<\/materialx>\s*$/,'');parts.push(inc);continue;}const refPath=fromDir?fromDir+'/'+href:href;const hit=findFileForRef(fileMap,refPath)||findFileForRef(fileMap,href);if(!hit||visited.has(hit.key)){console.warn('xi:include not resolvable from dropped files:',href);parts.push('<!-- unresolved include: '+href.replace(/--/g,'- -')+' -->');continue;}visited.add(hit.key);let inc=await fileMap[hit.key].text();const incDir=hit.key.indexOf('/')>=0?hit.key.slice(0,hit.key.lastIndexOf('/')):'';inc=await resolveIncludes(inc,fileMap,incDir,visited);// Strip the XML declaration and the outer <materialx> wrapper,
 // keeping only its children.
 inc=inc.replace(/<\?xml[^>]*\?>/,'');inc=inc.replace(/<materialx\b[^>]*>/,'').replace(/<\/materialx>\s*$/,'');parts.push(inc);}parts.push(xml.slice(last));return parts.join('');};// Read a dropped file entry, resolving xi:includes against `map`. Callers
 // need BOTH strings: the graph editor validates the RAW as-authored text
@@ -1393,7 +1420,9 @@ const HEAVY_TEXTURE_DECODE_CONCURRENCY=2;const heavyTextureDecodeLimitEnabled=()
 // to learn the dimensions and then decoding again to resize. Same
 // colorSpaceConversion/premultiplyAlpha/resizeQuality semantics as before;
 // falls back to the old two-decode path if the header can't be read.
-const loadBoundedBitmapTexture=async(blob,maxSize,samplerModes)=>{if(typeof createImageBitmap!=='function')throw new Error('createImageBitmap is unavailable for bounded scene texture preview');addTexturePerf('count',1);const opts={colorSpaceConversion:'none',premultiplyAlpha:'none'};if(sceneTextureFastPathEnabled()){let dims=null;try{dims=await readImageDimensions(blob);}catch(e){dims=null;}if(dims&&dims.width>0&&dims.height>0){const needsResize=maxSize>0&&Math.max(dims.width,dims.height)>maxSize;const decodeOpts=!needsResize?opts:Object.assign({},opts,{resizeWidth:Math.max(1,Math.round(dims.width*(maxSize/Math.max(dims.width,dims.height)))),resizeHeight:Math.max(1,Math.round(dims.height*(maxSize/Math.max(dims.width,dims.height)))),resizeQuality:'high'});const t0=performance.now();let image=null;try{image=await createImageBitmap(blob,decodeOpts);}catch(e){image=null;}if(image){addTexturePerf(needsResize?'resizeMs':'decodeMs',performance.now()-t0);const texture=new THREE.Texture(image);configureLoadedTexture(texture);return texture;}// Header parsed but the sized decode failed; fall through to the
+const loadBoundedBitmapTexture=async(blob,maxSize,samplerModes)=>{if(typeof createImageBitmap!=='function')throw new Error('createImageBitmap is unavailable for bounded scene texture preview');addTexturePerf('count',1);const opts={colorSpaceConversion:'none',premultiplyAlpha:'none'};if(sceneTextureFastPathEnabled()){let dims=null;try{dims=await readImageDimensions(blob);}catch(e){dims=null;}if(dims&&dims.width>0&&dims.height>0){const needsResize=maxSize>0&&Math.max(dims.width,dims.height)>maxSize;const decodeOpts=!needsResize?opts:Object.assign({},opts,{resizeWidth:Math.max(1,Math.round(dims.width*(maxSize/Math.max(dims.width,dims.height)))),resizeHeight:Math.max(1,Math.round(dims.height*(maxSize/Math.max(dims.width,dims.height)))),resizeQuality:'high'});const t0=performance.now();let image=null;try{image=await createImageBitmap(blob,decodeOpts);}catch(e){image=null;}if(image){addTexturePerf(needsResize?'resizeMs':'decodeMs',performance.now()-t0);const texture=new THREE.Texture(image);configureLoadedTexture(texture);// This path ignores samplerModes; the Scene's legacy binds kept that.
+// (r128 textures carry no userData of their own.)
+texture.userData=Object.assign(texture.userData||{},{mtlxBoundedFastPath:true});return texture;}// Header parsed but the sized decode failed; fall through to the
 // slow path below rather than fail the whole texture.
 }}const t0=performance.now();let source;try{source=await createImageBitmap(blob,opts);}catch(error){throw new Error('The source image could not be decoded for bounded scene preview.');}addTexturePerf('decodeMs',performance.now()-t0);let image=source;if(maxSize>0&&Math.max(source.width,source.height)>maxSize){const scale=maxSize/Math.max(source.width,source.height);const resizeOpts=Object.assign({},opts,{resizeWidth:Math.max(1,Math.round(source.width*scale)),resizeHeight:Math.max(1,Math.round(source.height*scale)),resizeQuality:'high'});const t1=performance.now();try{image=await createImageBitmap(blob,resizeOpts);}catch(error){if(source.close)source.close();throw error;}addTexturePerf('resizeMs',performance.now()-t1);if(source.close)source.close();}const texture=new THREE.Texture(image);configureLoadedTexture(texture,samplerModes);return texture;};// Reads pixel dimensions straight out of an encoded image blob's header,
 // without decoding the pixels. Returns { width, height } or null when the
@@ -1433,10 +1462,18 @@ try{const src=document.createElement('canvas');src.width=w;src.height=h;src.getC
 const factor=Math.max(1,Math.round(longest/maxSize));const outW=Math.max(1,Math.floor(w/factor));const outH=Math.max(1,Math.floor(h/factor));const src=tex.image.data;const channels=4;const out=new Float32Array(outW*outH*channels);for(let oy=0;oy<outH;oy+=1){for(let ox=0;ox<outW;ox+=1){const acc=[0,0,0,0];let n=0;for(let fy=0;fy<factor;fy+=1){const sy=oy*factor+fy;if(sy>=h)continue;for(let fx=0;fx<factor;fx+=1){const sx=ox*factor+fx;if(sx>=w)continue;const si=(sy*w+sx)*channels;acc[0]+=src[si];acc[1]+=src[si+1];acc[2]+=src[si+2];acc[3]+=src[si+3];n+=1;}}const di=(oy*outW+ox)*channels;out[di]=acc[0]/n;out[di+1]=acc[1]/n;out[di+2]=acc[2]/n;out[di+3]=acc[3]/n;}}const next=new THREE.DataTexture(out,outW,outH,tex.format,tex.type);next.minFilter=next.magFilter=THREE.LinearFilter;tex.dispose&&tex.dispose();return next;};// Binds dropped textures onto the shader's filename sampler uniforms.
 // Cache hits assign synchronously; misses load async (TextureLoader, or
 // the .exr/.hdr parsers above). `onBound` fires per texture that lands.
-const bindDroppedTextures=(view,fileMap,onBound)=>{if(view&&typeof view.onDisplacementFileMap==='function')view.onDisplacementFileMap(fileMap);const bound=[],missing=[],udimFirstTile=[];const pending=[];const cache=view.textureCache||TEXTURE_CACHE;const isAlive=()=>typeof view.isAlive!=='function'||view.isAlive();let ktx2Substituted=0;for(const u of view.introspected){if(u.type!=='filename')continue;let ref='';try{if(typeof u.data==='string')ref=u.data;else if(u.data!=null)ref=String(u.data);}catch(e){ref='';}if(!ref)continue;// no file reference recorded
-let hit=findFileForRef(fileMap,ref);// A UDIM set has no single file; the shaderball's UVs live in the
+const bindDroppedTextures=(view,fileMap,onBound)=>{if(view&&typeof view.onDisplacementFileMap==='function')view.onDisplacementFileMap(fileMap);if(view&&typeof view.bindTextureFileMap==='function')view.bindTextureFileMap(fileMap);const bound=[],missing=[],udimFirstTile=[];// P4d stage 2: one entry per <UDIM> ref this drop touched, however it
+// was resolved (single first-tile bind here, or a full per-mesh split
+// via bindTextureFileMap above, which a live view reports separately
+// through getUdimTileCount()); a diagnostics-only report field.
+const udimTiles=[];const pending=[];const session=view&&view.textureSession;const cache=view.textureCache||TEXTURE_CACHE;const isAlive=()=>typeof view.isAlive!=='function'||view.isAlive();let ktx2Substituted=0;for(const u of view.introspected){if(u.type!=='filename')continue;let ref='';try{if(typeof u.data==='string')ref=u.data;else if(u.data!=null)ref=String(u.data);}catch(e){ref='';}if(!ref)continue;// no file reference recorded
+// F3: a preview handle's own textureSession owns decode/refcount/
+// dispose instead of the shared TEXTURE_CACHE Map, so a rebuild does
+// not leak the previous GL copies. Falls back to the Map path below
+// when the view has no session (Scene, legacy callers).
+if(session){let sessionHit=session.resolve(fileMap,ref);if(!sessionHit&&/<UDIM>/i.test(ref)){const tiles=session.resolveTiles(fileMap,ref).slice().sort((a,b)=>a.ref.localeCompare(b.ref));if(tiles.length){sessionHit=tiles[0];udimFirstTile.push(ref);udimTiles.push({ref,tiles:tiles.length});}}if(!sessionHit){missing.push(ref);continue;}if(sessionHit.substituted)ktx2Substituted+=1;const samplerModes=u.samplerModes||null;const apply=result=>{if(!result){missing.push(ref);return;}if(!isAlive())return;if(view.uniforms[u.name])view.uniforms[u.name].value=result.texture;if(onBound)onBound();};const acquired=session.acquire(sessionHit,{samplerModes});if(acquired&&typeof acquired.then==='function'){pending.push(acquired.then(apply,error=>{console.warn('mtlx-engine: texture decode failed for '+sessionHit.key+', keeping the node default color:',error);missing.push(ref);}));}else{apply(acquired);}bound.push(ref+'  →  '+sessionHit.key);continue;}let hit=findFileForRef(fileMap,ref);// A UDIM set has no single file; the shaderball's UVs live in the
 // first tile, so bind the lowest-numbered tile instead of nothing.
-if(!hit&&/<UDIM>/i.test(ref)){const tiles=findFilesForRef(fileMap,ref).sort((a,b)=>a.ref.localeCompare(b.ref));if(tiles.length){hit={key:tiles[0].key,how:'udim-first-tile'};udimFirstTile.push(ref);}}if(!hit){missing.push(ref);continue;}const originalHit=hit;hit=preferKtx2Sibling(fileMap,hit);if(hit.substituted)ktx2Substituted+=1;const blob=fileMap[hit.key];const samplerModes=u.samplerModes||null;// Cache check + load for one uniform, given its resolved raw key.
+if(!hit&&/<UDIM>/i.test(ref)){const tiles=findFilesForRef(fileMap,ref).sort((a,b)=>a.ref.localeCompare(b.ref));if(tiles.length){hit={key:tiles[0].key,how:'udim-first-tile'};udimFirstTile.push(ref);udimTiles.push({ref,tiles:tiles.length});}}if(!hit){missing.push(ref);continue;}const originalHit=hit;hit=preferKtx2Sibling(fileMap,hit);if(hit.substituted)ktx2Substituted+=1;const blob=fileMap[hit.key];const samplerModes=u.samplerModes||null;// Cache check + load for one uniform, given its resolved raw key.
 // Returns the in-flight load promise, or null when it was a cache
 // hit (nothing to await) so callers only add real work to `pending`.
 const bindWithRawKey=rawKey=>{const cacheKey=samplerCacheKey(rawKey,samplerModes);const cached=cache.get(cacheKey);if(cached){if(isAlive()){if(view.uniforms[u.name])view.uniforms[u.name].value=cached;if(onBound)onBound();}return null;}const ext=(hit.key.split('.').pop()||ref.split('.').pop()||'').toLowerCase();if(ext==='ktx2'){const bindTex=tex=>{if(!tex)return;configureLoadedTexture(tex,samplerModes);if(!isAlive()){tex.dispose&&tex.dispose();return;}cache.set(cacheKey,tex);if(view.uniforms[u.name])view.uniforms[u.name].value=tex;if(onBound)onBound();};return loadKtx2Texture(blob,view,hit.key).then(bindTex,error=>{if(error&&error.ktx2InvalidBaseLevel&&originalHit.key!==hit.key){const notice=`KTX2 texture ${hit.key} is not a multiple of 4; falling back to ${originalHit.key}`;if(view.notices)view.notices.push(notice);return loadTextureForHit(originalHit,fileMap[originalHit.key],view,samplerModes).then(bindTex,e2=>({error:e2}));}return{error};});}else if(ext==='exr'||ext==='hdr'||ext==='tif'||ext==='tiff'){const startDecode=()=>ext==='exr'?loadExrTexture(blob):ext==='hdr'?loadHdrTexture(blob):loadTifTexture(blob,hit.key);const parsePromise=runHeavyTextureDecode(startDecode);return parsePromise.then(tex=>{if(!tex)return;// unsupported/corrupt, the node default color stands
@@ -1450,7 +1487,50 @@ if(view.textureQueue&&Array.isArray(view.textureQueue.tails)){const q=view.textu
 // synchronously, unchanged from before. Nameless Blobs (e.g. the VS
 // Code webview's fetched texture Blobs) need their bytes sampled
 // first, so the whole bind is deferred one microtask via `pending`.
-if(hasBlobIdentity(blob)){const loadPromise=bindWithRawKey(textureCacheKey(blob,hit.key));if(loadPromise)pending.push(loadPromise);}else{pending.push(textureCacheKeyAsync(blob,hit.key).then(bindWithRawKey));}bound.push(ref+'  →  '+hit.key);}if(ktx2Substituted>0)console.info('bindDroppedTextures: '+ktx2Substituted+' texture(s) loaded from .ktx2 sibling(s)');if(udimFirstTile.length)console.info('bindDroppedTextures: '+udimFirstTile.length+' UDIM reference(s) bound to their first tile for the preview');return{bound,missing,pending,ktx2Substituted,udimFirstTile};};// Extracts a plain JS array from a real array or an embind vector-like
+if(hasBlobIdentity(blob)){const loadPromise=bindWithRawKey(textureCacheKey(blob,hit.key));if(loadPromise)pending.push(loadPromise);}else{pending.push(textureCacheKeyAsync(blob,hit.key).then(bindWithRawKey));}bound.push(ref+'  →  '+hit.key);}if(ktx2Substituted>0)console.info('bindDroppedTextures: '+ktx2Substituted+' texture(s) loaded from .ktx2 sibling(s)');if(udimFirstTile.length)console.info('bindDroppedTextures: '+udimFirstTile.length+' UDIM reference(s) bound to their first tile for the preview');return{bound,missing,pending,ktx2Substituted,udimFirstTile,udimTiles};};// ------------------------------------------------------------------
+// createTextureSession: decoded CPU prototypes (TEXTURE_SOURCES) are
+// refcounted and shared across sessions, kept in an idle LRU up to 256 MiB
+// after their last release (no-flash rebind); each session clones a proto
+// into one wrapper per (source, samplerModes) via configureLoadedTexture,
+// uploaded only on that session's own renderer. TEXTURE_CACHE above stays
+// for the legacy Map path (Scene, until P6).
+// ------------------------------------------------------------------
+const TEXTURE_SOURCE_IDLE_BUDGET=256*1024*1024;const TEXTURE_SOURCES=new Map();// key -> { proto, bytes, refs }
+let textureSourceIdleBytes=0;const textureSourceIdleOrder=[];// keys with refs === 0, oldest first
+const textureSourceBytes=proto=>{if(!proto||!proto.image)return 0;const w=proto.image.width||0,h=proto.image.height||0;const bpp=proto.isCompressedTexture?1:proto.type===THREE.FloatType?16:4;const mipped=!(proto.type===THREE.FloatType)||proto.isCompressedTexture;return Math.ceil(w*h*bpp*(mipped?4/3:1));};const evictIdleTextureSources=()=>{while(textureSourceIdleBytes>TEXTURE_SOURCE_IDLE_BUDGET&&textureSourceIdleOrder.length){const key=textureSourceIdleOrder.shift();const entry=TEXTURE_SOURCES.get(key);if(!entry)continue;textureSourceIdleBytes-=entry.bytes;TEXTURE_SOURCES.delete(key);if(entry.proto&&entry.proto.image&&typeof entry.proto.image.close==='function')entry.proto.image.close();if(entry.proto&&entry.proto.dispose)entry.proto.dispose();}};const releaseTextureSource=(cache,key)=>{const entry=cache.get(key);if(!entry)return;entry.refs-=1;if(entry.refs>0)return;textureSourceIdleOrder.push(key);textureSourceIdleBytes+=entry.bytes;evictIdleTextureSources();};const acquireTextureSourceRef=(cache,key)=>{const entry=cache.get(key);if(!entry)return null;if(entry.refs===0){const at=textureSourceIdleOrder.indexOf(key);if(at>=0){textureSourceIdleOrder.splice(at,1);textureSourceIdleBytes-=entry.bytes;}}entry.refs+=1;return entry;};// Decode matrix: png/jpg at tier Infinity go through THREE.TextureLoader
+// (keeps preview pixels identical to today); ktx2 through loadKtx2Texture
+// with capKtx2MipLevels; exr/hdr/tif through the shared heavy-decode
+// limiter, then boundDecodedTexture when a finite tier is requested; else
+// (png/jpg at a finite tier) the bounded ImageBitmap path.
+// bounded (Scene materials): the bounded decoders at every tier, Infinity
+// included (TIF gets mipmaps, PNG/JPG through createImageBitmap); a failed
+// bound keeps the undecimated texture. bitmapsOnly (Scene displacement):
+// only bitmap formats are bounded; KTX2 and float/TIF height maps stay native.
+const decodeTextureSource=async(blob,ext,path,tier,renderer,bounded,bitmapsOnly)=>{if(ext==='ktx2'){const tex=await loadKtx2Texture(blob,renderer?{renderer}:null,path);if(tex&&Number.isFinite(tier)&&!bitmapsOnly)capKtx2MipLevels(tex,tier);return tex;}if(ext==='exr'||ext==='hdr'||ext==='tif'||ext==='tiff'){const startDecode=()=>ext==='exr'?loadExrTexture(blob):ext==='hdr'?loadHdrTexture(blob):loadTifTexture(blob,path);let tex=await runHeavyTextureDecode(startDecode);if(tex&&bounded){try{tex=await boundDecodedTexture(tex,tier);}catch(e){/* keep the undecimated texture */}}else if(tex&&Number.isFinite(tier)&&!bitmapsOnly)tex=await boundDecodedTexture(tex,tier);return tex;}if((bounded||bitmapsOnly||Number.isFinite(tier))&&typeof createImageBitmap==='function'){return loadBoundedBitmapTexture(blob,tier,null);}const url=URL.createObjectURL(blob);try{return await new Promise((resolve,reject)=>{new THREE.TextureLoader().load(url,resolve,undefined,reject);});}finally{URL.revokeObjectURL(url);}};// R:2384-2446's ladder/estimate math, generalized over a session's own
+// fileMap resolver (exact or fuzzy) instead of the Scene's sceneExactFile.
+const planTextureSession=async(session,refs,fileMap)=>{const entries=new Map();// key -> blob
+for(const raw of refs||[]){if(raw==null)continue;const ref=String(raw);if(/<UDIM>/i.test(ref)){for(const hit of session.resolveTiles(fileMap,ref)){if(hit&&!entries.has(hit.key))entries.set(hit.key,hit.blob);}continue;}const hit=session.resolve(fileMap,ref);if(hit&&!entries.has(hit.key))entries.set(hit.key,hit.blob);}const dims=await Promise.all(Array.from(entries.entries()).map(async([key,blob])=>{const ext=String(key).split('.').pop().toLowerCase();let dimensions=null;try{dimensions=await readImageDimensions(blob);}catch(e){dimensions=null;}const w=dimensions&&dimensions.width||4096;const h=dimensions&&dimensions.height||4096;const isFloat=ext==='exr'||ext==='hdr';const mipmapped=!isFloat;const bytesPerPixel=ext==='ktx2'?1:isFloat?16:4;return{key,w,h,bytesPerPixel,mipmapped};}));const textureCount=dims.length;const requested=Number.isFinite(session.maxSize)?session.maxSize:Infinity;const ladder=Array.from(new Set([requested].concat(session.tiers).filter(v=>v<=requested))).sort((a,b)=>b-a);if(!ladder.length)ladder.push(session.tiers[session.tiers.length-1]||512);const estimateAt=tier=>dims.reduce((total,d)=>{const w=Math.min(d.w,tier),h=Math.min(d.h,tier);return total+w*h*d.bytesPerPixel*(d.mipmapped?4/3:1);},0);const fullBytes=estimateAt(requested===Infinity?Math.max(4096,...dims.map(d=>Math.max(d.w,d.h)),1):requested);let chosen=ladder[ladder.length-1];let plannedBytes=estimateAt(chosen);for(const tier of ladder){const estimate=estimateAt(tier);if(estimate<=session.budgetBytes){chosen=tier;plannedBytes=estimate;break;}plannedBytes=estimate;}const udimTileCount=dims.filter(d=>/\.(\d{4})\./.test(d.key)||/1[0-9]{3}/.test(d.key)).length;return{tier:chosen,plannedBytes,fullBytes,textureCount,udimTileCount};};const createTextureSession=opts=>{const options=opts||{};const cache=options.cache||TEXTURE_SOURCES;const tiers=options.tiers||[4096,2048,1024,512];const exact=!!options.exact;const maxSize=options.maxSize!=null?options.maxSize:Infinity;const budgetBytes=options.budgetBytes!=null?options.budgetBytes:Infinity;const concurrency=options.concurrency||5;const renderer=options.renderer||null;const isAlive=typeof options.isAlive==='function'?options.isAlive:()=>true;const boundedDecode=!!options.boundedDecode;const boundBitmapsOnly=!!options.boundBitmapsOnly;const sourceRefs=new Map();// sourceKey -> ref count this session holds
+const wrappers=new Map();// wrapperKey -> { texture, sourceKey }
+const inflight=new Map();// sourceKey -> Promise<entry|null>, dedupes concurrent decodes
+const reservations=new Set();let reservedBytes=0;let anisotropy=options.anisotropy!=null?options.anisotropy:8;let disposed=false;const queueTails=Array.from({length:concurrency},()=>Promise.resolve());let queueNext=0;const enqueue=fn=>{const slot=queueNext%queueTails.length;queueNext+=1;const chained=queueTails[slot].catch(()=>{}).then(fn);queueTails[slot]=chained.catch(()=>{});return chained;};const resolve=(fileMap,ref,opts2)=>{const fromDir=opts2&&opts2.fromDir;let hit=exact?findFileForRef(fileMap,ref,{exact:true,fromDir}):findFileForRef(fileMap,ref);if(!hit)return null;hit=preferKtx2Sibling(fileMap,hit);return Object.assign({},hit,{blob:fileMap[hit.key]});};const resolveTiles=(fileMap,ref,opts2)=>{const fromDir=opts2&&opts2.fromDir;const hits=exact?findFilesForRef(fileMap,ref,{exact:true,fromDir}):findFilesForRef(fileMap,ref);return hits.map(hit=>{const subbed=preferKtx2Sibling(fileMap,hit);return Object.assign({},hit,subbed,{blob:fileMap[subbed.key]});});};// acquire()'s body once the raw source key is known.
+const acquireKeyed=(hit,opts2,rawKey)=>{const options2=opts2||{};const samplerModes=options2.samplerModes||null;const tier=options2.tier!=null?options2.tier:maxSize;const ext=String(hit.key).split('.').pop().toLowerCase();const sourceKey=rawKey+'|'+(Number.isFinite(tier)?tier:'orig');const wrapperKey=sourceKey+'|'+samplerCacheKey('',samplerModes);const existingWrapper=wrappers.get(wrapperKey);if(existingWrapper)return{texture:existingWrapper.texture};// Idempotent under the concurrent-acquire race below: two
+// filename uniforms sharing one (source, samplerModes) both
+// resolve past the decode before either has stored a wrapper,
+// so the second call here must reuse the first's clone.
+const buildWrapper=proto=>{const already=wrappers.get(wrapperKey);if(already)return already.texture;const texture=proto.clone();configureLoadedTexture(texture,samplerModes,anisotropy);wrappers.set(wrapperKey,{texture,sourceKey});return texture;};const existingEntry=cache.get(sourceKey);if(existingEntry){acquireTextureSourceRef(cache,sourceKey);sourceRefs.set(sourceKey,(sourceRefs.get(sourceKey)||0)+1);return{texture:buildWrapper(existingEntry.proto)};}// Two uniforms referencing the same file (same or different
+// sampler modes) bound in the same pass call acquire() before
+// either await lands; share one in-flight decode instead of
+// starting a second one for the same sourceKey.
+if(inflight.has(sourceKey)){return inflight.get(sourceKey).then(entry=>{if(!entry)return null;sourceRefs.set(sourceKey,(sourceRefs.get(sourceKey)||0)+1);acquireTextureSourceRef(cache,sourceKey);return{texture:buildWrapper(entry.proto),bytes:entry.bytes};});}const decodePromise=enqueue(()=>decodeTextureSource(hit.blob,ext,hit.key,Number.isFinite(tier)?tier:Infinity,renderer,boundedDecode,boundBitmapsOnly)).then(proto=>{if(!proto)return null;if(disposed||!isAlive()){proto.dispose&&proto.dispose();return null;}let entry=cache.get(sourceKey);if(entry){// Another session raced this decode and stored first.
+proto.dispose&&proto.dispose();}else{entry={proto,bytes:textureSourceBytes(proto),refs:0};cache.set(sourceKey,entry);}return entry;});inflight.set(sourceKey,decodePromise);decodePromise.then(()=>inflight.delete(sourceKey),()=>inflight.delete(sourceKey));return decodePromise.then(entry=>{if(!entry)return null;sourceRefs.set(sourceKey,(sourceRefs.get(sourceKey)||0)+1);acquireTextureSourceRef(cache,sourceKey);return{texture:buildWrapper(entry.proto),bytes:entry.bytes};});};// Named `api`, not the handle-builder's own binding name: check-render-
+// parity.mjs's guard (g) locates that pair of object literals further
+// down this file by a naive first-match regex, which a same-named local
+// here anywhere earlier in the file would shadow.
+const api={tiers,maxSize,budgetBytes,exact,resolve,resolveTiles,plan:(refs,fileMap)=>planTextureSession(api,refs,fileMap),reserve:(key,opts2)=>{const options2=opts2||{};const k=String(key||'');if(reservations.has(k))return true;if(!Number.isFinite(budgetBytes)){reservations.add(k);return true;}const side=Number.isFinite(maxSize)?maxSize:4096;const estimate=options2.bytes!=null?options2.bytes:Math.ceil(4*side*side*4/3);if(reservedBytes+estimate>budgetBytes)return false;reservations.add(k);reservedBytes+=estimate;return true;},// Identity-bearing Files key synchronously; nameless Blobs (the VS Code webview's
+// fetched textures) are fingerprinted first so a texture replaced on disk reloads.
+acquire:(hit,opts2)=>{if(!hit||disposed)return null;const blob=hit.blob;const canHash=blob&&typeof blob.slice==='function'&&typeof blob.arrayBuffer==='function';if(hasBlobIdentity(blob)||!canHash)return acquireKeyed(hit,opts2,textureCacheKey(blob,hit.key));return textureCacheKeyAsync(blob,hit.key).then(rawKey=>disposed?null:acquireKeyed(hit,opts2,rawKey));},bind:(target,fileMap,onBound)=>{target.textureSession=api;return bindDroppedTextures(target,fileMap,onBound);},// Drops one wrapper this session handed out (e.g. a texture the
+// caller's budget then refused) and releases its source reference.
+release:texture=>{for(const[key,w]of wrappers){if(w.texture!==texture)continue;wrappers.delete(key);if(texture.dispose)texture.dispose();const count=sourceRefs.get(w.sourceKey)||0;if(count>1)sourceRefs.set(w.sourceKey,count-1);else sourceRefs.delete(w.sourceKey);if(count>0)releaseTextureSource(cache,w.sourceKey);return true;}return false;},setAnisotropy:value=>{anisotropy=value;wrappers.forEach(w=>{w.texture.anisotropy=value;w.texture.needsUpdate=true;});},stats:()=>({wrapperCount:wrappers.size,sourceCount:sourceRefs.size,reservedBytes,anisotropy}),dispose:()=>{if(disposed)return;disposed=true;wrappers.forEach(w=>{w.texture.dispose&&w.texture.dispose();});wrappers.clear();sourceRefs.forEach((count,key)=>{for(let i=0;i<count;i++)releaseTextureSource(cache,key);});sourceRefs.clear();}};return api;};// Extracts a plain JS array from a real array or an embind vector-like
 // value ({size(),get(i)} or {data()}). plainizeMxUniformData relies on
 // this to detach heap-backed views before the mxExclusive lock releases.
 const mxDataToPlainArray=d=>{if(Array.isArray(d))return d;if(d&&typeof d.data==='function'){try{return Array.from(d.data());}catch(e){/* not iterable */}}if(d&&typeof d.size==='function'){const o=[];for(let i=0;i<d.size();i++)o.push(d.get(i));return o;}return null;};// Enumerate a ShaderStage's uniforms via MaterialX introspection. `data`
@@ -1496,7 +1576,7 @@ const samplerHoldsDefault=slot=>!!slot&&(!slot.value||isFilenameDefaultTexture(s
 const rebindFilenameDefault=(uniforms,defaultUniformName,type,value)=>{const m=/^(.*)_default(?:_cm_in)?$/.exec(defaultUniformName||'');if(!m)return false;const slot=uniforms?uniforms[m[1]+'_file']:null;if(!samplerHoldsDefault(slot))return false;const rgba=defaultValueToRgba(type,value);if(!rgba)return false;slot.value=defaultValueTexture(rgba);return true;};// Configure a user-loaded texture the way the generated shaders expect
 // to sample a `filename` input: repeat wrapping, no flipY, anisotropic
 // filtering (three clamps to the device max at upload).
-const configureLoadedTexture=(t,samplerModes)=>{const modes=samplerModes||{u:'periodic',v:'periodic'};const wrap=mode=>{switch(normalizeSamplerAddressMode(mode)){case'clamp':return THREE.ClampToEdgeWrapping;case'mirror':return THREE.MirroredRepeatWrapping;default:return THREE.RepeatWrapping;}};t.wrapS=wrap(modes.u);t.wrapT=wrap(modes.v);t.flipY=false;t.anisotropy=8;t.needsUpdate=true;return t;};// ---- Preview geometry ----
+const configureLoadedTexture=(t,samplerModes,anisotropy)=>{const modes=samplerModes||{u:'periodic',v:'periodic'};const wrap=mode=>{switch(normalizeSamplerAddressMode(mode)){case'clamp':return THREE.ClampToEdgeWrapping;case'mirror':return THREE.MirroredRepeatWrapping;default:return THREE.RepeatWrapping;}};t.wrapS=wrap(modes.u);t.wrapT=wrap(modes.v);t.flipY=false;t.anisotropy=anisotropy==null?8:anisotropy;t.needsUpdate=true;return t;};// ---- Preview geometry ----
 // Aliases three's attributes to MaterialX vertex-shader names, providing
 // tangents (real when computable, constant +X fallback otherwise).
 // Conventional UV geomprop names aliased to the "uv" attribute so
@@ -1538,36 +1618,41 @@ const constant=constants&&constants[name];const fill=Array.isArray(constant)?con
 const normalizeGeometry=geometry=>{geometry.computeBoundingSphere();const bs=geometry.boundingSphere;if(bs&&bs.radius>0){geometry.translate(-bs.center.x,-bs.center.y,-bs.center.z);const s=1/bs.radius;geometry.scale(s,s,s);}return geometry;};// ---- Custom preview geometry (experimental) ----
 // Session-wide registry shared by the docs previewer and graph preview, in-memory only.
 // The graph editor's DocsDialog iframe has its own separate registry; callers guard for this.
-const CUSTOM_GEOM={geometry:null,name:'',epoch:0};// Latest loadCustomPreviewGeomFromFile/Url call wins; bumped by both and by clearCustomPreviewGeom.
+// uvOrigin: 'bottom' (OBJ/UDIM convention, V=0 at the bottom) or 'top'
+// (glTF convention, V=0 at the top); feeds classifyTriangle's vFlip so a
+// glTF import's UDIM tiles classify the same as an OBJ's would.
+const CUSTOM_GEOM={geometry:null,name:'',epoch:0,uvOrigin:'bottom'};// Latest loadCustomPreviewGeomFromFile/Url call wins; bumped by both and by clearCustomPreviewGeom.
 let customGeomLoadSeq=0;const getCustomPreviewGeom=()=>CUSTOM_GEOM.geometry?CUSTOM_GEOM:null;// ---- Global geometry selection (shared across every tool) ----
-const GLOBAL_GEOM_KEY='mtlx_geom_global';const GLOBAL_GEOM_VALUES=['shaderball-scene','shaderball','shaderball-mtlx','sphere','cube','cloth','buffer2d','custom'];// Old per-tool keys, read once as a seed when the global key has never been written.
-const LEGACY_GEOM_KEYS=['mtlx_preview_geom_choice','mtlx_graph_preview_geom'];const LEGACY_GEOM_SKIP=['custom','default','pernode'];let MTLX_GLOBAL_GEOM=null;// Runs once, on first getGlobalGeom/setGlobalGeom call.
-const initGlobalGeom=()=>{let stored=null;try{stored=localStorage.getItem(GLOBAL_GEOM_KEY);}catch(e){/* privacy mode */}if(stored&&GLOBAL_GEOM_VALUES.includes(stored)&&stored!=='custom'){MTLX_GLOBAL_GEOM=stored;return;}if(!stored){for(const key of LEGACY_GEOM_KEYS){let legacy=null;try{legacy=localStorage.getItem(key);}catch(e){/* privacy mode */}if(legacy&&GLOBAL_GEOM_VALUES.includes(legacy)&&!LEGACY_GEOM_SKIP.includes(legacy)){MTLX_GLOBAL_GEOM=legacy;return;}}}MTLX_GLOBAL_GEOM='shaderball-scene';};const getGlobalGeom=()=>{if(MTLX_GLOBAL_GEOM===null)initGlobalGeom();return MTLX_GLOBAL_GEOM;};// Persists only from the top-realm page (embeds must not clobber the host's
+const GLOBAL_GEOM_VALUES=['shaderball-scene','shaderball','shaderball-mtlx','sphere','cube','cloth','buffer2d','custom'];let MTLX_GLOBAL_GEOM=null;// Runs once, on first getGlobalGeom/setGlobalGeom call.
+const initGlobalGeom=()=>{try{const stored=window.MtlxRenderSettings.get('geometry',{surface:'viewer'});// Belt-and-suspenders: the store's rejectStored already filters a
+// stored/legacy 'custom' out, but 'custom' is session-only, so this
+// stays defensive against a future override path returning it anyway.
+MTLX_GLOBAL_GEOM=GLOBAL_GEOM_VALUES.includes(stored)&&stored!=='custom'?stored:'shaderball-scene';}catch(e){MTLX_GLOBAL_GEOM='shaderball-scene';}};const getGlobalGeom=()=>{if(MTLX_GLOBAL_GEOM===null)initGlobalGeom();return MTLX_GLOBAL_GEOM;};// Persists only from the top-realm page (embeds must not clobber the host's
 // choice) and only for concrete values (custom is registry-local, session-only).
-const setGlobalGeom=value=>{if(MTLX_GLOBAL_GEOM===null)initGlobalGeom();if(!GLOBAL_GEOM_VALUES.includes(value)||value===MTLX_GLOBAL_GEOM)return;MTLX_GLOBAL_GEOM=value;if(window.self===window.top&&value!=='custom'){try{localStorage.setItem(GLOBAL_GEOM_KEY,value);}catch(e){/* privacy mode */}}window.dispatchEvent(new CustomEvent('mtlx-global-geom',{detail:{value}}));};// ---- Global display transform selection (shared across every tool) ----
+const setGlobalGeom=value=>{if(MTLX_GLOBAL_GEOM===null)initGlobalGeom();if(!GLOBAL_GEOM_VALUES.includes(value)||value===MTLX_GLOBAL_GEOM)return;MTLX_GLOBAL_GEOM=value;try{window.MtlxRenderSettings.set('geometry',value,{surface:'viewer',persist:value!=='custom'});}catch(e){/* privacy mode */}window.dispatchEvent(new CustomEvent('mtlx-global-geom',{detail:{value}}));};// ---- Global display transform selection (shared across every tool) ----
 // 'srgb' (default) matches the C++ MaterialXView (no tone mapping). 'aces'
 // adds ACES filmic before that curve (this app's original look). 'neutral' is
 // Khronos PBR Neutral, which keeps hue and saturation where ACES skews them.
 // 'lin_rec709' is raw linear: no OETF, no tone map, no clamp. See ACES_SRGB_GLSL.
-const DISPLAY_TRANSFORM_KEY='mtlx_display_transform';const DISPLAY_TRANSFORM_VALUES=['srgb','aces','neutral','lin_rec709'];// Camera exposure in stops, shared by every view. Unlike the transform this is
+const DISPLAY_TRANSFORM_VALUES=['srgb','aces','neutral','lin_rec709'];// Camera exposure in stops, shared by every view. Unlike the transform this is
 // a plain uniform (u_displayExposure), so a change costs one uniform write per
 // material instead of regenerating every shader.
 // Pushes the current transform and exposure onto every live view. Both are
 // uniforms now, so this replaces the full material regeneration a transform
 // change used to cost, and it reaches the docs node previews too: they are
 // LIVE_VIEWS members but have no display listener of their own.
-const broadcastDisplaySettings=()=>{LIVE_VIEWS.forEach(v=>{try{v.refreshDisplaySettings&&v.refreshDisplaySettings();}catch(e){/* view mid-teardown */}});};const DISPLAY_EXPOSURE_KEY='mtlx_display_exposure';let MTLX_DISPLAY_EXPOSURE=null;const initDisplayExposure=()=>{let stored=null;try{stored=localStorage.getItem(DISPLAY_EXPOSURE_KEY);}catch(e){/* privacy mode */}const ev=Number(stored);MTLX_DISPLAY_EXPOSURE=stored!=null&&stored!==''&&Number.isFinite(ev)?Math.max(-8,Math.min(8,ev)):0;};const getDisplayExposure=()=>{if(MTLX_DISPLAY_EXPOSURE===null)initDisplayExposure();return MTLX_DISPLAY_EXPOSURE;};// Linear scale for the uniform. Every seeding site goes through this so the
+const broadcastDisplaySettings=()=>{LIVE_VIEWS.forEach(v=>{try{v.refreshDisplaySettings&&v.refreshDisplaySettings();}catch(e){/* view mid-teardown */}});};let MTLX_DISPLAY_EXPOSURE=null;const initDisplayExposure=()=>{try{const v=window.MtlxRenderSettings.get('displayExposure',{surface:'viewer'});MTLX_DISPLAY_EXPOSURE=Number.isFinite(v)?v:0;}catch(e){MTLX_DISPLAY_EXPOSURE=0;}};const getDisplayExposure=()=>{if(MTLX_DISPLAY_EXPOSURE===null)initDisplayExposure();return MTLX_DISPLAY_EXPOSURE;};// Linear scale for the uniform. Every seeding site goes through this so the
 // stops-to-linear conversion cannot drift between them.
-const displayExposureScale=()=>Math.pow(2,getDisplayExposure());const setDisplayExposure=ev=>{if(MTLX_DISPLAY_EXPOSURE===null)initDisplayExposure();const next=Math.max(-8,Math.min(8,Number(ev)||0));if(next===MTLX_DISPLAY_EXPOSURE)return;MTLX_DISPLAY_EXPOSURE=next;if(window.self===window.top){try{localStorage.setItem(DISPLAY_EXPOSURE_KEY,String(next));}catch(e){/* privacy mode */}}// Broadcast rather than rely on per-app listeners: every render view is a
+const displayExposureScale=()=>Math.pow(2,getDisplayExposure());const setDisplayExposure=ev=>{if(MTLX_DISPLAY_EXPOSURE===null)initDisplayExposure();const next=Math.max(-8,Math.min(8,Number(ev)||0));if(next===MTLX_DISPLAY_EXPOSURE)return;MTLX_DISPLAY_EXPOSURE=next;try{window.MtlxRenderSettings.set('displayExposure',next,{surface:'viewer'});}catch(e){/* privacy mode */}// Broadcast rather than rely on per-app listeners: every render view is a
 // LIVE_VIEWS member, including the docs node previews, which have no
 // display listener of their own and would otherwise drift out of sync.
 broadcastDisplaySettings();window.dispatchEvent(new CustomEvent('mtlx-display-exposure',{detail:{value:next}}));};let MTLX_DISPLAY_TRANSFORM=null;// Runs once, on first getDisplayTransform/setDisplayTransform call.
-const initDisplayTransform=()=>{let stored=null;try{stored=localStorage.getItem(DISPLAY_TRANSFORM_KEY);}catch(e){/* privacy mode */}MTLX_DISPLAY_TRANSFORM=DISPLAY_TRANSFORM_VALUES.includes(stored)?stored:'srgb';};// Exposed so a view that keeps its own transform (the Scene) can validate a
+const initDisplayTransform=()=>{try{const stored=window.MtlxRenderSettings.get('displayTransform',{surface:'viewer'});MTLX_DISPLAY_TRANSFORM=DISPLAY_TRANSFORM_VALUES.includes(stored)?stored:'srgb';}catch(e){MTLX_DISPLAY_TRANSFORM='srgb';}};// Exposed so a view that keeps its own transform (the Scene) can validate a
 // persisted value against the same list the shared picker uses.
 const getDisplayTransformValues=()=>DISPLAY_TRANSFORM_VALUES.slice();const getDisplayTransform=()=>{if(MTLX_DISPLAY_TRANSFORM===null)initDisplayTransform();return MTLX_DISPLAY_TRANSFORM;};// Persists only from the top-realm page (same embed guard as setGlobalGeom).
 // The mode is a uniform in generated shaders, so every live view can refresh
 // it without regenerating material programs.
-const setDisplayTransform=value=>{if(MTLX_DISPLAY_TRANSFORM===null)initDisplayTransform();if(!DISPLAY_TRANSFORM_VALUES.includes(value)||value===MTLX_DISPLAY_TRANSFORM)return;MTLX_DISPLAY_TRANSFORM=value;if(window.self===window.top){try{localStorage.setItem(DISPLAY_TRANSFORM_KEY,value);}catch(e){/* privacy mode */}}broadcastDisplaySettings();window.dispatchEvent(new CustomEvent('mtlx-display-transform',{detail:{value}}));};// Merges every mesh under `root` into one normalized BufferGeometry.
+const setDisplayTransform=value=>{if(MTLX_DISPLAY_TRANSFORM===null)initDisplayTransform();if(!DISPLAY_TRANSFORM_VALUES.includes(value)||value===MTLX_DISPLAY_TRANSFORM)return;MTLX_DISPLAY_TRANSFORM=value;try{window.MtlxRenderSettings.set('displayTransform',value,{surface:'viewer'});}catch(e){/* privacy mode */}broadcastDisplaySettings();window.dispatchEvent(new CustomEvent('mtlx-display-transform',{detail:{value}}));};// Merges every mesh under `root` into one normalized BufferGeometry.
 // Extraction must use the accessor API only, never attribute.array.slice
 // or toNonIndexed: r128's toNonIndexed corrupts InterleavedBufferAttributes from GLTFLoader.
 const buildCustomGeometryFromRoot=(root,fileName)=>{root.updateMatrixWorld(true);const meshes=[];root.traverse(o=>{if(o.isMesh&&o.geometry&&o.geometry.getAttribute('position'))meshes.push(o);});if(!meshes.length){throw new Error('No mesh geometry found in "'+fileName+'".');}const single=meshes.length===1;const parts=meshes.map(mesh=>{const src=mesh.geometry;const posAttr=src.getAttribute('position');const normAttr=src.getAttribute('normal');const uvAttr=src.getAttribute('uv');const hasNormal=!!normAttr;const hasUv=!!uvAttr;const index=src.getIndex();// keepIndex only when single, indexed, and has uv: prepGeometry zero-fills
@@ -1633,7 +1718,7 @@ gltfLoader.setKTX2Loader({load:(u,onLoad)=>onLoad(new THREE.Texture())});const p
 const gltf=declaresDraco?await Promise.race([parsePromise,new Promise((_,reject)=>{setTimeout(()=>reject(new Error('"'+label+'" timed out decoding (possibly a corrupt Draco payload).')),20000);})]):await parsePromise;return gltf.scene||gltf.scenes&&gltf.scenes[0];}catch(e){const msg=e&&e.message||String(e);if(/timed out decoding/.test(msg))throw e;if(/DRACOLoader/i.test(msg)){throw new Error('"'+label+'" uses Draco mesh compression, but the decoder is unavailable (script blocked/offline).');}if(/KTX2|basisu/i.test(msg)){throw new Error('"'+label+'" uses KTX2/Basis texture compression, which is not supported here: re-export without KTX2/Basis textures.');}if(ext==='gltf'){const hint=hasSidecars||!resourcePath?'This .gltf references external data; select its .bin file(s) together with the .gltf.':'A file referenced by this .gltf could not be fetched (CORS or missing).';throw new Error('Could not load "'+label+'": '+msg+'. '+hint);}throw new Error('Could not load "'+label+'": '+msg);}}finally{objectUrls.forEach(u=>{try{URL.revokeObjectURL(u);}catch(e){/* already revoked */}});}};// Builds `root` into a geometry and, if this call is still the latest
 // (seqId === customGeomLoadSeq), swaps it into CUSTOM_GEOM and dispatches
 // mtlx-custom-geom. A stale winner's geometry is disposed instead.
-const commitCustomGeom=(root,label,seqId)=>{const built=buildCustomGeometryFromRoot(root,label);if(seqId!==customGeomLoadSeq){try{built.dispose();}catch(e){/* registry copy is never GPU-uploaded */}return null;}const prev=CUSTOM_GEOM.geometry;CUSTOM_GEOM.geometry=built;CUSTOM_GEOM.name=String(label||'custom');CUSTOM_GEOM.epoch+=1;if(prev){try{prev.dispose();}catch(e){/* registry copy is never GPU-uploaded */}}// Keep-alive hidden preview tools subscribe to this event to mirror the
+const commitCustomGeom=(root,label,seqId)=>{const built=buildCustomGeometryFromRoot(root,label);if(seqId!==customGeomLoadSeq){try{built.dispose();}catch(e){/* registry copy is never GPU-uploaded */}return null;}const prev=CUSTOM_GEOM.geometry;CUSTOM_GEOM.geometry=built;CUSTOM_GEOM.name=String(label||'custom');CUSTOM_GEOM.uvOrigin=/\.(glb|gltf)$/i.test(String(label||''))?'top':'bottom';CUSTOM_GEOM.epoch+=1;if(prev){try{prev.dispose();}catch(e){/* registry copy is never GPU-uploaded */}}// Keep-alive hidden preview tools subscribe to this event to mirror the
 // registry into their own local state, since their views never unmount
 // and so never get a natural remount hook to re-read CUSTOM_GEOM from.
 window.dispatchEvent(new CustomEvent('mtlx-custom-geom',{detail:{epoch:CUSTOM_GEOM.epoch,name:CUSTOM_GEOM.name}}));setGlobalGeom('custom');return CUSTOM_GEOM;};// Loads a user-dropped model: input is a File, FileList, or File[]. First
@@ -1724,7 +1809,7 @@ let envPromise=null;// Session-wide user-imported environment override: when set
 // newly-created render view uses this instead of getEnvironment().
 // null = no override; getEnvironment() itself stays the Reset target.
 let envOverride=null;// Auto key-light extraction toggle (env dialog UI). Persisted; default on.
-const KEYLIGHT_STORAGE_KEY='mtlx_env_keylight';let keyLightEnabled=true;try{const saved=localStorage.getItem(KEYLIGHT_STORAGE_KEY);if(saved!==null)keyLightEnabled=saved!=='0';}catch(e){/* localStorage unavailable, default stays on */}// Pristine (pre-extraction) bytes behind the default/override env, so
+let keyLightEnabled=true;try{keyLightEnabled=!!window.MtlxRenderSettings.get('keyLight',{surface:'viewer'});}catch(e){/* localStorage unavailable, default stays on */}// Pristine (pre-extraction) bytes behind the default/override env, so
 // the toggle can re-parse + rebuild without a re-fetch/re-drop.
 let defaultEnvSource=null,overrideEnvSource=null;// Registry of live render-view handles, so environment imports/resets
 // broadcast to EVERY live view, not just the visible one, otherwise a
@@ -1820,10 +1905,9 @@ let Er=0,Eg=0,Eb=0;const moment=new THREE.Vector3();const writes=[];for(const en
 for(const{idx,retained}of writes){img.data[idx]=isHalf?floatToHalf(retained[0]):retained[0];img.data[idx+1]=isHalf?floatToHalf(retained[1]):retained[1];img.data[idx+2]=isHalf?floatToHalf(retained[2]):retained[2];}return{direction,color:[Er/maxE,Eg/maxE,Eb/maxE],intensity:maxE};}catch(e){console.warn('key-light extraction failed:',e);return null;}};// Cheaper direction-only estimate for the studio shadow when
 // extractKeyLight found nothing (or was skipped): luminance-weighted
 // centroid of texels >= 2x mean, via the same helper as extractKeyLight.
-const extractSoftKeyDir=tex=>{try{const img=tex.image;const W=img.width,H=img.height;const stride=img.data.length/(W*H);const isHalf=img.data.constructor===Uint16Array;const rd=i=>isHalf?halfToFloat(img.data[i]):img.data[i];const lum=new Float32Array(W*H);let sumW=0,sumLW=0;for(let y=0;y<H;y++){const theta=Math.PI*(y+0.5)/H;const dOmega=Math.sin(theta)*(2*Math.PI/W)*(Math.PI/H);for(let x=0;x<W;x++){const idx=(y*W+x)*stride;const L=0.2126*rd(idx)+0.7152*rd(idx+1)+0.0722*rd(idx+2);lum[y*W+x]=L;sumW+=dOmega;sumLW+=L*dOmega;}}const Lfloor=2*(sumW>0?sumLW/sumW:0);let cxW=0,cyW=0,cW=0;for(let y=0;y<H;y++){const theta=Math.PI*(y+0.5)/H;const dOmega=Math.sin(theta)*(2*Math.PI/W)*(Math.PI/H);for(let x=0;x<W;x++){const L=lum[y*W+x];if(L<Lfloor)continue;const w=L*dOmega;cxW+=x*w;cyW+=y*w;cW+=w;}}if(!Number.isFinite(cW)||cW<=0)return null;return dataDirToWorld(tex,cxW/cW,cyW/cW,W,H);}catch(e){return null;}};// Rotates the extracted key light to track env rotation (rig lights are
-// historically fixed, only this one rotates). RotY(-rad): env content
-// shifts by +rad, so the light direction shifts by -rad to match.
-const keyLightRotationMatrix=rad=>new THREE.Matrix4().makeRotationY(-rad);// Rig lights (fixed) + the active env's extracted key light (rotates
+const extractSoftKeyDir=tex=>{try{const img=tex.image;const W=img.width,H=img.height;const stride=img.data.length/(W*H);const isHalf=img.data.constructor===Uint16Array;const rd=i=>isHalf?halfToFloat(img.data[i]):img.data[i];const lum=new Float32Array(W*H);let sumW=0,sumLW=0;for(let y=0;y<H;y++){const theta=Math.PI*(y+0.5)/H;const dOmega=Math.sin(theta)*(2*Math.PI/W)*(Math.PI/H);for(let x=0;x<W;x++){const idx=(y*W+x)*stride;const L=0.2126*rd(idx)+0.7152*rd(idx+1)+0.0722*rd(idx+2);lum[y*W+x]=L;sumW+=dOmega;sumLW+=L*dOmega;}}const Lfloor=2*(sumW>0?sumLW/sumW:0);let cxW=0,cyW=0,cW=0;for(let y=0;y<H;y++){const theta=Math.PI*(y+0.5)/H;const dOmega=Math.sin(theta)*(2*Math.PI/W)*(Math.PI/H);for(let x=0;x<W;x++){const L=lum[y*W+x];if(L<Lfloor)continue;const w=L*dOmega;cxW+=x*w;cyW+=y*w;cW+=w;}}if(!Number.isFinite(cW)||cW<=0)return null;return dataDirToWorld(tex,cxW/cW,cyW/cW,W,H);}catch(e){return null;}};// Moved to js/shared/render-environment.js; lazy alias, called only at
+// runtime, well after that file has loaded.
+const keyLightRotationMatrix=rad=>MtlxRender.keyLightRotationMatrix(rad);// Rig lights (fixed) + the active env's extracted key light (rotates
 // live), padded to a FIXED length (rig.length + 1) for u_lightData,
 // the array length must never change after a program's first bind.
 // One LightData entry. Every field the merged struct declares must be
@@ -1907,7 +1991,8 @@ const IRRADIANCE_CONV_W=128;const IRRADIANCE_CONV_H=64;const IRRADIANCE_OUT_W=64
 // that has a WebGL2 renderer with a float color-buffer extension. Fail-soft
 // at every step: env.irradiance (the SH map) is never touched here, so any
 // guard failure or thrown error leaves diffuse shading exactly as it was.
-const ensureConvolvedIrradiance=(renderer,env)=>{if(!env||!env.radiance||env.irradianceTried)return env;if(getDiffuseEnvMethod()!=='convolve')return env;if(!renderer||!renderer.capabilities||!renderer.capabilities.isWebGL2)return env;env.irradianceTried=true;if(!renderer.extensions.get('EXT_color_buffer_float')){mtlxWarn('mtlx-engine: EXT_color_buffer_float missing, keeping the SH irradiance.');return env;}const src=env.radiance;const srcW=src.image&&src.image.width||IRRADIANCE_CONV_W;const srcH=src.image&&src.image.height||IRRADIANCE_CONV_H;const t0=performance.now();const previousTarget=renderer.getRenderTarget();let material=null,scene=null,target=null;try{material=new THREE.RawShaderMaterial({glslVersion:THREE.GLSL3,vertexShader:'in vec3 position;\nvoid main() { gl_Position = vec4(position, 1.0); }',fragmentShader:IRRADIANCE_GLSL,uniforms:{uSource:{value:src},uSrcLod:{value:Math.max(0,Math.log2(srcW/IRRADIANCE_CONV_W))},uTargetSize:{value:new THREE.Vector2(IRRADIANCE_OUT_W,IRRADIANCE_OUT_H)}},depthTest:false,depthWrite:false});scene=new THREE.Scene();scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),material));const camera=new THREE.OrthographicCamera(-1,1,1,-1,0,1);target=new THREE.WebGLRenderTarget(IRRADIANCE_OUT_W,IRRADIANCE_OUT_H,{minFilter:THREE.LinearFilter,magFilter:THREE.LinearFilter,format:THREE.RGBAFormat,type:THREE.FloatType,depthBuffer:false,stencilBuffer:false,generateMipmaps:false});renderer.setRenderTarget(target);renderer.render(scene,camera);const pixels=new Float32Array(IRRADIANCE_OUT_W*IRRADIANCE_OUT_H*4);renderer.readRenderTargetPixels(target,0,0,IRRADIANCE_OUT_W,IRRADIANCE_OUT_H,pixels);// Retained verbatim for the diffuse bounce v3 bake
+// `method` lets the Scene (its own stage setting) override the shared one.
+const ensureConvolvedIrradiance=(renderer,env,method)=>{if(!env||!env.radiance||env.irradianceTried)return env;if((method||getDiffuseEnvMethod())!=='convolve')return env;if(!renderer||!renderer.capabilities||!renderer.capabilities.isWebGL2)return env;env.irradianceTried=true;if(!renderer.extensions.get('EXT_color_buffer_float')){mtlxWarn('mtlx-engine: EXT_color_buffer_float missing, keeping the SH irradiance.');return env;}const src=env.radiance;const srcW=src.image&&src.image.width||IRRADIANCE_CONV_W;const srcH=src.image&&src.image.height||IRRADIANCE_CONV_H;const t0=performance.now();const previousTarget=renderer.getRenderTarget();let material=null,scene=null,target=null;try{material=new THREE.RawShaderMaterial({glslVersion:THREE.GLSL3,vertexShader:'in vec3 position;\nvoid main() { gl_Position = vec4(position, 1.0); }',fragmentShader:IRRADIANCE_GLSL,uniforms:{uSource:{value:src},uSrcLod:{value:Math.max(0,Math.log2(srcW/IRRADIANCE_CONV_W))},uTargetSize:{value:new THREE.Vector2(IRRADIANCE_OUT_W,IRRADIANCE_OUT_H)}},depthTest:false,depthWrite:false});scene=new THREE.Scene();scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),material));const camera=new THREE.OrthographicCamera(-1,1,1,-1,0,1);target=new THREE.WebGLRenderTarget(IRRADIANCE_OUT_W,IRRADIANCE_OUT_H,{minFilter:THREE.LinearFilter,magFilter:THREE.LinearFilter,format:THREE.RGBAFormat,type:THREE.FloatType,depthBuffer:false,stencilBuffer:false,generateMipmaps:false});renderer.setRenderTarget(target);renderer.render(scene,camera);const pixels=new Float32Array(IRRADIANCE_OUT_W*IRRADIANCE_OUT_H*4);renderer.readRenderTargetPixels(target,0,0,IRRADIANCE_OUT_W,IRRADIANCE_OUT_H,pixels);// Retained verbatim for the diffuse bounce v3 bake
 // (js/usd-scene-renderer.js's makeEStoredSampler): the SAME texel
 // data the shader samples through env.irradianceConvolved, so the
 // bake can evaluate the engine's own convolved irradiance at any
@@ -1922,31 +2007,36 @@ tex.flipY=false;tex.encoding=THREE.LinearEncoding;tex.needsUpdate=true;env.irrad
 // map) always exists and is the fallback; env.irradianceConvolved only
 // exists once ensureConvolvedIrradiance has succeeded on a WebGL2 renderer
 // with the 'convolve' switch active.
-const envIrradianceForShading=env=>{if(!env)return null;if(getDiffuseEnvMethod()==='convolve'&&env.irradianceConvolved)return env.irradianceConvolved;return env.irradiance;};// Runs the idempotent, retryable prefilter/convolve (no-op past the first
+const envIrradianceForShading=(env,method)=>{if(!env)return null;if((method||getDiffuseEnvMethod())==='convolve'&&env.irradianceConvolved)return env.irradianceConvolved;return env.irradiance;};// Runs the idempotent, retryable prefilter/convolve (no-op past the first
 // try) then reads back the pair to bind, so the FIRST build matches what
 // the shader was generated for, the same way setEnvironment already does.
-const resolveShadingEnv=(renderer,env)=>{ensurePrefilteredEnv(renderer,env);ensureConvolvedIrradiance(renderer,env);return{radiance:envRadianceForShading(env),irradiance:envIrradianceForShading(env)};};const buildEnvFromParsedTexture=raw=>{// Extraction mutates raw's pixels (clamps the sun) BEFORE mips/SH/
+const resolveShadingEnv=(renderer,env)=>{ensurePrefilteredEnv(renderer,env);ensureConvolvedIrradiance(renderer,env);return{radiance:envRadianceForShading(env),irradiance:envIrradianceForShading(env)};};const buildEnvFromParsedTexture=(raw,keyOn=keyLightEnabled,source=null)=>{// keyOn overrides the global switch for one build (the Scene's own key
+// light); source keeps the pristine bytes for such rebuilds.
+// Extraction mutates raw's pixels (clamps the sun) BEFORE mips/SH/
 // background are built below, so it disappears from all three,
 // matching official "split" env assets.
-const keyLight=keyLightEnabled?extractKeyLight(raw):null;// extractKeyLight only mutates raw on a SUCCESSFUL extraction (both
+const keyLight=keyOn?extractKeyLight(raw):null;// extractKeyLight only mutates raw on a SUCCESSFUL extraction (both
 // its null-return paths run before the clamp), so raw is still
 // pristine here whenever the soft fallback is actually needed.
 const softKeyDir=keyLight?null:extractSoftKeyDir(raw);const radiance=prepareEnv(raw);const irrSrc=shIrradianceFromEquirect(raw);const irradiance=irrSrc?prepareEnv(irrSrc):radiance;const img=radiance.image;const mips=Math.trunc(Math.log2(Math.max(img.width,img.height)))+1;// Correctly-oriented copy for the visible skybox mesh, see
 // makeBackgroundTexture and the env-prep header above.
-const background=makeBackgroundTexture(radiance);return{radiance,irradiance,irradianceConvolved:null,mips,background,prefilteredIrr:false,keyLight,softKeyDir};};const getEnvironment=()=>{if(!envPromise){// fetch() -> ArrayBuffer -> parseEnvBuffer, mirroring
+const background=makeBackgroundTexture(radiance);return{radiance,irradiance,irradianceConvolved:null,mips,background,prefilteredIrr:false,keyLight,softKeyDir,keyLightBuilt:!!keyOn,envSource:source};};// The same environment built with key light extraction on or off, without
+// touching the global switch (the Scene keeps its own). Environments with no
+// remembered source (stage dome lights, flat colours) come back unchanged.
+const envWithKeyLight=(env,on)=>{if(!env)return env;const base=env.keyOrigin||env;const want=!!on;if(!base.envSource||base.keyLightBuilt===want)return base;base.keyVariants=base.keyVariants||{};if(!base.keyVariants[want]){const raw=parseEnvBuffer(base.envSource.buf,base.envSource.ext);if(!raw||!raw.image||!raw.image.data)return base;const variant=buildEnvFromParsedTexture(raw,want,base.envSource);variant.keyOrigin=base;base.keyVariants[want]=variant;}return base.keyVariants[want];};const getEnvironment=()=>{if(!envPromise){// fetch() -> ArrayBuffer -> parseEnvBuffer, mirroring
 // loadEnvironmentFromFile's path (same helper, different byte
 // source). Any failure resolves null; this promise never rejects.
 const ext=ENV_MAP_URL.slice(ENV_MAP_URL.lastIndexOf('.')).toLowerCase();envPromise=fetch(ENV_MAP_URL).then(r=>r.ok?r.arrayBuffer():null).catch(()=>null).then(buf=>{if(!buf)return null;// no file / fetch failed → synthesized sky
 const raw=parseEnvBuffer(buf,ext);if(!raw||!raw.image||!raw.image.data)return null;// parse failed → synthesized sky
 defaultEnvSource={buf,ext};// pristine bytes, for the key-light toggle rebuild
-const built=buildEnvFromParsedTexture(raw);return built;});}return envPromise;};// Builds an environment from raw bytes into the same shape getEnvironment()
+const built=buildEnvFromParsedTexture(raw,keyLightEnabled,defaultEnvSource);return built;});}return envPromise;};// Builds an environment from raw bytes into the same shape getEnvironment()
 // returns. `label` only names the source in error messages; `remember` caches
 // the pristine bytes for the key-light toggle and belongs to the session-wide
 // override alone, so a stage's own dome light passes false.
 const loadEnvironmentFromBuffer=async(buf,ext,label,remember=true)=>{const lower=String(ext||'').toLowerCase();if(lower!=='.hdr'&&lower!=='.exr'){throw new Error('Unsupported environment file "'+label+'", expected .hdr or .exr.');}// Loader-presence checks run BEFORE parseEnvBuffer purely so the
 // dialog can report which specific script is missing, parseEnvBuffer
 // itself just returns null on this, with no message.
-if(lower==='.hdr'&&typeof THREE.RGBELoader==='undefined'){throw new Error('RGBELoader unavailable (script blocked/offline), cannot load .hdr environments.');}if(lower==='.exr'&&typeof THREE.EXRLoader==='undefined'){throw new Error('EXRLoader unavailable (script blocked/offline), cannot load .exr environments.');}const raw=parseEnvBuffer(buf,lower);if(!raw||!raw.image||!raw.image.data){throw new Error('Failed to parse the environment image "'+label+'".');}if(remember)overrideEnvSource={buf,ext:lower};return buildEnvFromParsedTexture(raw);};// Constant-colour environment in the same shape, for a USD dome light that
+if(lower==='.hdr'&&typeof THREE.RGBELoader==='undefined'){throw new Error('RGBELoader unavailable (script blocked/offline), cannot load .hdr environments.');}if(lower==='.exr'&&typeof THREE.EXRLoader==='undefined'){throw new Error('EXRLoader unavailable (script blocked/offline), cannot load .exr environments.');}const raw=parseEnvBuffer(buf,lower);if(!raw||!raw.image||!raw.image.data){throw new Error('Failed to parse the environment image "'+label+'".');}if(remember)overrideEnvSource={buf,ext:lower};return buildEnvFromParsedTexture(raw,keyLightEnabled,remember?overrideEnvSource:null);};// Constant-colour environment in the same shape, for a USD dome light that
 // carries a colour but no texture. Small on purpose: every texel is equal,
 // so resolution buys nothing and the mip chain still builds normally.
 const FLAT_ENV_W=32;const FLAT_ENV_H=16;const makeFlatEnvironment=rgb=>{const[r,g,b]=Array.isArray(rgb)&&rgb.length>=3?rgb:[1,1,1];const data=new Uint16Array(FLAT_ENV_W*FLAT_ENV_H*4);const half=[floatToHalf(r),floatToHalf(g),floatToHalf(b),floatToHalf(1)];for(let i=0;i<data.length;i+=4){data[i]=half[0];data[i+1]=half[1];data[i+2]=half[2];data[i+3]=half[3];}const tex=new THREE.DataTexture(data,FLAT_ENV_W,FLAT_ENV_H,THREE.RGBAFormat,THREE.HalfFloatType);tex.flipY=false;return buildEnvFromParsedTexture(tex);};// Loads a user-dropped environment file into the same shape
@@ -1965,8 +2055,8 @@ getEnvironment().then(def=>{if(!envOverride){LIVE_VIEWS.forEach(v=>{try{v.setEnv
 // pristine bytes with extraction on/off, then rebroadcasts it, reusing
 // setEnvOverride for an active import, or the memoized envPromise +
 // LIVE_VIEWS broadcast for the default env.
-const getKeyLightEnabled=()=>keyLightEnabled;const setKeyLightEnabled=on=>{keyLightEnabled=!!on;try{localStorage.setItem(KEYLIGHT_STORAGE_KEY,keyLightEnabled?'1':'0');}catch(e){/* unavailable */}const src=envOverride?overrideEnvSource:defaultEnvSource;if(!src)return;// nothing loaded yet; the next load already honors the flag
-const raw=parseEnvBuffer(src.buf,src.ext);if(!raw||!raw.image||!raw.image.data)return;const rebuilt=buildEnvFromParsedTexture(raw);if(envOverride){setEnvOverride(rebuilt);// re-broadcasts via each view's setEnvironment()
+const getKeyLightEnabled=()=>keyLightEnabled;const setKeyLightEnabled=on=>{keyLightEnabled=!!on;try{window.MtlxRenderSettings.set('keyLight',keyLightEnabled,{surface:'viewer'});}catch(e){/* unavailable */}const src=envOverride?overrideEnvSource:defaultEnvSource;if(!src)return;// nothing loaded yet; the next load already honors the flag
+const raw=parseEnvBuffer(src.buf,src.ext);if(!raw||!raw.image||!raw.image.data)return;const rebuilt=buildEnvFromParsedTexture(raw,keyLightEnabled,src);if(envOverride){setEnvOverride(rebuilt);// re-broadcasts via each view's setEnvironment()
 }else{envPromise=Promise.resolve(rebuilt);LIVE_VIEWS.forEach(v=>{try{v.setEnvironment(rebuilt);}catch(e){/* view has no lighting/env, no-op */}});}};// Standard MaterialX color spaces accepted on filename inputs. Changing
 // one is a CODEGEN decision (the CMS inserts the shader transform), so
 // the picker goes through the regen override path, not a uniform.
@@ -1989,7 +2079,10 @@ const warmKey=(vs,fs)=>{let h=5381;const s=vs+' '+fs;for(let i=0;i<s.length;i++)
 // so a driver busy with many queued programs is not mistaken for a stall.
 const prewarmShaderCompile=async({vs,fs,isMounted,label,timeoutMs})=>{const ctx=getWarmContext();if(!ctx)return'skipped';const key=warmKey(vs,fs);if(MTLX_WARMED_SOURCES.has(key)){if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] GL prewarm skipped, source already warmed this session (target: '+label+')');}return'skipped';}const{gl,ext}=ctx;const __warmPerfStart=window.MTLX_PERF_LOG?performance.now():0;let warmProgram=null,warmVShader=null,warmFShader=null;try{warmVShader=gl.createShader(gl.VERTEX_SHADER);gl.shaderSource(warmVShader,'#version 300 es\n'+vs);gl.compileShader(warmVShader);warmFShader=gl.createShader(gl.FRAGMENT_SHADER);gl.shaderSource(warmFShader,'#version 300 es\n'+fs);gl.compileShader(warmFShader);warmProgram=gl.createProgram();gl.attachShader(warmProgram,warmVShader);gl.attachShader(warmProgram,warmFShader);gl.linkProgram(warmProgram);}catch(e){// Defensive only: any failure here just skips the warm-up, falls
 // through to today's (unwarmed) compile behavior.
-try{if(warmProgram)gl.deleteProgram(warmProgram);}catch(e2){/* context lost etc. */}try{if(warmVShader)gl.deleteShader(warmVShader);}catch(e2){/* ditto */}try{if(warmFShader)gl.deleteShader(warmFShader);}catch(e2){/* ditto */}return'skipped';}if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] GL compile submit: '+(performance.now()-__warmPerfStart).toFixed(1)+'ms (target: '+label+')');}const cleanup=()=>{try{if(warmProgram)gl.deleteProgram(warmProgram);}catch(e){/* context lost etc. */}try{if(warmVShader)gl.deleteShader(warmVShader);}catch(e){/* ditto */}try{if(warmFShader)gl.deleteShader(warmFShader);}catch(e){/* ditto */}};const WAIT_POLL_MS=50,WAIT_POLL_FAST_MS=16,WAIT_POLL_FAST_TICKS=6;const WAIT_TIMEOUT_MS=typeof timeoutMs==='number'&&timeoutMs>0?timeoutMs:15000;const __waitStart=performance.now();let timedOut=false;// isProgram() is the silent validity check: false for a
+try{if(warmProgram)gl.deleteProgram(warmProgram);}catch(e2){/* context lost etc. */}try{if(warmVShader)gl.deleteShader(warmVShader);}catch(e2){/* ditto */}try{if(warmFShader)gl.deleteShader(warmFShader);}catch(e2){/* ditto */}return'skipped';}if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] GL compile submit: '+(performance.now()-__warmPerfStart).toFixed(1)+'ms (target: '+label+')');}// Deleting at once cancels an abandoned parallel link so the next build's
+// first frame is not held up; ANGLE may log a harmless GL_INVALID_VALUE
+// glGetProgramiv for the cancelled program.
+const cleanup=()=>{try{if(warmProgram)gl.deleteProgram(warmProgram);}catch(e){/* context lost etc. */}try{if(warmVShader)gl.deleteShader(warmVShader);}catch(e){/* ditto */}try{if(warmFShader)gl.deleteShader(warmFShader);}catch(e){/* ditto */}};const WAIT_POLL_MS=50,WAIT_POLL_FAST_MS=16,WAIT_POLL_FAST_TICKS=6;const WAIT_TIMEOUT_MS=typeof timeoutMs==='number'&&timeoutMs>0?timeoutMs:15000;const __waitStart=performance.now();let timedOut=false;// isProgram() is the silent validity check: false for a
 // deleted/invalid handle WITHOUT a GL error (unlike getProgramParameter,
 // which logs "GL_INVALID_VALUE" once per pre-warm on Chrome).
 const isWarmDone=()=>{try{if(gl.isContextLost())return true;if(!gl.isProgram(warmProgram))return true;const v=gl.getProgramParameter(warmProgram,ext.COMPLETION_STATUS_KHR);// A GL error (invalid/deleted program) returns null WITHOUT
@@ -2015,9 +2108,9 @@ const DISPLACEMENT_PREWARM_KEY='mtlx_displacement_prewarm';const readDisplacemen
 // generates, and pre-compiles inside ONE mxExclusive hold (so a transient
 // __pv_* wrapper is never observable by a concurrent op). NEVER call from
 // inside an existing mxExclusive (deadlock).
-const prewarmPreviewTarget=async({mx,gen,genContext,buildRenderable,label,isMounted=()=>true})=>{// No warm context (no WebGL2 / no KHR_parallel_shader_compile) means
+const prewarmPreviewTarget=async({mx,gen,genContext,buildRenderable,label,isMounted=()=>true,surface=null})=>{// No warm context (no WebGL2 / no KHR_parallel_shader_compile) means
 // generating sources here would only be thrown away, skip the work.
-if(!getWarmContext())return'skipped';let srcs=null;try{srcs=await mxExclusive(()=>{const built=buildRenderable();if(!built||!built.renderable)return null;try{return generatePreviewSourcesUnlocked({mx,gen,genContext,renderable:built.renderable,label,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:PREVIEW_FEATURE_OPTIONS});}finally{// Best-effort, ALWAYS: the transient __pv_* wrappers must
+if(!getWarmContext())return'skipped';let srcs=null;try{srcs=await mxExclusive(()=>{const built=buildRenderable();if(!built||!built.renderable)return null;try{return generatePreviewSourcesUnlocked({mx,gen,genContext,renderable:built.renderable,label,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:previewFeatureOptions(surface),transmission:getPreviewTransmission(surface)});}finally{// Best-effort, ALWAYS: the transient __pv_* wrappers must
 // never survive past this hold (same single-hold rule),
 // including when generation itself threw.
 try{built.cleanup();}catch(e){/* best-effort */}}});}catch(e){// Silent by design (see the doc comment above): a generation
@@ -2065,11 +2158,14 @@ const bound=vecToArray(mxSafe(()=>node.getInputs(),[])).some(input=>mxElHasAttr(
 // letting tryRefreshRenderView diff sources without a full rebuild.
 // Frees mxShader before returning, so nothing holds a live wasm handle.
 // ------------------------------------------------------------------
-const generatePreviewSourcesUnlocked=({mx,gen,genContext,renderable,label,materialName=null,isMounted=()=>true,document:documentArg=null,sceneRgbt=false,lightTransport=false,sceneFeatureOptions=null,stageLightCount=null,allowConstInputs=true})=>{// Sampler-budget drops, requested only by compileMtlxSceneMaterial's
+const generatePreviewSourcesUnlocked=({mx,gen,genContext,renderable,label,materialName=null,isMounted=()=>true,document:documentArg=null,sceneRgbt=false,transmission='scalar',lightTransport=false,sceneFeatureOptions=null,stageLightCount=null,allowConstInputs=true})=>{// The Scene's RGB-T transmission model (payload + thin-wall correction);
+// previews opt in with transmission 'rgbt' (preview Quality).
+const rgbtPayload=sceneRgbt||transmission==='rgbt';// Sampler-budget drops, requested only by compileMtlxSceneMaterial's
 // recompile loop; every other caller keeps the full feature set.
 const skipSkyVis=!!(sceneFeatureOptions&&sceneFeatureOptions.skipSkyVis);const skipAoVolume=!!(sceneFeatureOptions&&sceneFeatureOptions.skipAoVolume);const skipBounce=!!(sceneFeatureOptions&&sceneFeatureOptions.skipBounce);const dropThicknessMap=!!(sceneFeatureOptions&&sceneFeatureOptions.dropThicknessMap);const skipTransmittance=!!(sceneFeatureOptions&&sceneFeatureOptions.skipTransmittance);const skipRefraction=!!(sceneFeatureOptions&&sceneFeatureOptions.skipRefraction);// Feature gating: a feature that is off, or impossible in this tool, is
 // never generated. The kill switch forces both back to "generate".
-const featureGated=readFeatureGated();const skipShadowMap=featureGated&&!!(sceneFeatureOptions&&sceneFeatureOptions.skipShadowMap);const skipOcclusion=featureGated&&!!(sceneFeatureOptions&&sceneFeatureOptions.skipOcclusion);// Screen-space reflections are parked (see SCENE_SSR_PARKED in the renderer): skip the patch.
+const featureGated=readFeatureGated();const skipShadowMap=featureGated&&!!(sceneFeatureOptions&&sceneFeatureOptions.skipShadowMap);// skipSsao: the preview's budget drop of its only occlusion term (sky/volume are skipped there).
+const skipOcclusion=featureGated&&!!(sceneFeatureOptions&&sceneFeatureOptions.skipOcclusion)||!!(sceneFeatureOptions&&sceneFeatureOptions.skipSsao);// Screen-space reflections are parked (see SCENE_SSR_PARKED in the renderer): skip the patch.
 const skipSsr=true||!!(sceneFeatureOptions&&sceneFeatureOptions.skipSsr);const skipLocalEnv=!!(sceneFeatureOptions&&sceneFeatureOptions.skipLocalEnv);// Off by default (Viewer/Compare/Builder/Graph previews and every
 // embed leave sceneFeatureOptions.specularAA unset); the Scene's own
 // compile path (compileMtlxSceneMaterial) is the only caller that
@@ -2124,7 +2220,7 @@ const VERTEX_STAGE=mx.Stage&&mx.Stage.VERTEX||'vertex';const PIXEL_STAGE=mx.Stag
 // shader string false-positives.
 let fs=stripVersion(mxShader.getSourceCode(PIXEL_STAGE));fs=patchMaterialPowerNodes(fs,powerNodeNames);({vs,fs}=patchGeompropVaryings(vs,fs));const vertexInputs=parseVertexInputs(vs);// geompropvalue nodes carry a `default` for when the stream is absent;
 // collect it so binding can use it instead of zeros.
-const geompropDefaults=materialGeompropDefaults(colorspaceDoc);const geomprops=vertexInputs.filter(v=>v.name.startsWith('i_geomprop_')).map(v=>{const name=v.name.slice('i_geomprop_'.length);const defaultValue=geompropDefaults.get(name)||null;return defaultValue?{name,type:v.type,defaultValue}:{name,type:v.type};});const notices=[];if(colorspaceAliasResult){for(const[key,count]of colorspaceAliasResult.rewrites){const[from,to]=key.split(' -> ');notices.push(`Colorspace "${from}" is not a MaterialX 1.39 name; ${count} inputs treated as `+(to==='(removed)'?'no conversion':to));}}if(colorspaceTransformResult){for(const[cs,count]of colorspaceTransformResult.converted){notices.push(`Colorspace "${cs}": ${count} texture(s) converted to lin_rec709 in the shader`);}for(const cs of colorspaceTransformResult.unsupported){notices.push(`Colorspace "${cs}" has no conversion available; those textures are sampled unconverted`);}}fs=patchUnlitLightingRefs(fs);fs=patchScenePhysicalLightFalloff(fs,sceneRgbt);fs=patchSceneThinWalledTransmission(fs,sceneRgbt,notices);const outDeclMatch=fs.match(/\bout\s+vec4\s+(\w+)\s*;/);const outVar=outDeclMatch?outDeclMatch[1]:null;const outAssignments=outVar?fs.match(new RegExp('\\b'+outVar+'\\s*=[^;]*;','g')):null;if(!outVar||!outAssignments||!outAssignments.length){mtlxWarn(`mtlx-engine: could not locate the fragment output assignment for "${label}", skipping encodeDisplay() as a fail-safe (cannot verify it's safe to inject ACES+sRGB without double-encoding).`);}else if(/srgb/i.test(outAssignments.join('\n'))){// Self-encoding materials skip the epilogue entirely (no
+const geompropDefaults=materialGeompropDefaults(colorspaceDoc);const geomprops=vertexInputs.filter(v=>v.name.startsWith('i_geomprop_')).map(v=>{const name=v.name.slice('i_geomprop_'.length);const defaultValue=geompropDefaults.get(name)||null;return defaultValue?{name,type:v.type,defaultValue}:{name,type:v.type};});const notices=[];if(colorspaceAliasResult){for(const[key,count]of colorspaceAliasResult.rewrites){const[from,to]=key.split(' -> ');notices.push(`Colorspace "${from}" is not a MaterialX 1.39 name; ${count} inputs treated as `+(to==='(removed)'?'no conversion':to));}}if(colorspaceTransformResult){for(const[cs,count]of colorspaceTransformResult.converted){notices.push(`Colorspace "${cs}": ${count} texture(s) converted to lin_rec709 in the shader`);}for(const cs of colorspaceTransformResult.unsupported){notices.push(`Colorspace "${cs}" has no conversion available; those textures are sampled unconverted`);}}fs=patchUnlitLightingRefs(fs);fs=patchScenePhysicalLightFalloff(fs,sceneRgbt);fs=patchSceneThinWalledTransmission(fs,rgbtPayload,notices);const outDeclMatch=fs.match(/\bout\s+vec4\s+(\w+)\s*;/);const outVar=outDeclMatch?outDeclMatch[1]:null;const outAssignments=outVar?fs.match(new RegExp('\\b'+outVar+'\\s*=[^;]*;','g')):null;if(!outVar||!outAssignments||!outAssignments.length){mtlxWarn(`mtlx-engine: could not locate the fragment output assignment for "${label}", skipping encodeDisplay() as a fail-safe (cannot verify it's safe to inject ACES+sRGB without double-encoding).`);}else if(/srgb/i.test(outAssignments.join('\n'))){// Self-encoding materials skip the epilogue entirely (no
 // u_peelLinear gate to attach to), so the linear peel/tail passes
 // treat their output as already display-encoded, a pre-existing
 // approximation, sharper now that peeling can otherwise be linear.
@@ -2134,7 +2230,7 @@ mtlxWarn(`mtlx-engine: the fragment output assignment for "${label}" already cal
 fs=patchLocalEnvironmentRadiance(fs,{skipLocalEnv,notices});// Screen-space reflections wrap the generated IBL call before the
 // refraction/peel patches touch the shader.
 fs=patchScreenSpaceReflection(fs,{skipSsr,notices});// Folds transmission into peel-pass alpha; must precede injectPeelDiscard (see its u_peelMode guard).
-fs=patchTransmissionAlpha(fs,{skipRefraction});let payloadSupported=false;if(sceneRgbt){fs=patchRgbtPayload(fs);payloadSupported=fs.indexOf('/* MX_RGBT_PAYLOAD_SUPPORTED */')!==-1;}let lightTransportSupported=false;if(lightTransport){fs=patchLightTransportPayload(fs,notices,lightTransport);lightTransportSupported=fs.indexOf('MX_LIGHT_TRANSPORT_TERMINAL_RETURN')!==-1;}fs=patchShadowBounds(fs);fs=patchShadowLightScope(fs,{skipTransmittance});fs=patchLightSourceKindStruct(fs);fs=patchAreaLightSourceCosine(fs);// skipOcclusion drops the whole block (screen-space AO included), which
+fs=patchTransmissionAlpha(fs,{skipRefraction});let payloadSupported=false;if(rgbtPayload){fs=patchRgbtPayload(fs);payloadSupported=fs.indexOf('/* MX_RGBT_PAYLOAD_SUPPORTED */')!==-1;}let lightTransportSupported=false;if(lightTransport){fs=patchLightTransportPayload(fs,notices,lightTransport);lightTransportSupported=fs.indexOf('MX_LIGHT_TRANSPORT_TERMINAL_RETURN')!==-1;}fs=patchShadowBounds(fs);const shadowFaceSlots=sceneFeatureOptions&&sceneFeatureOptions.shadowFaceSlots||SHADOW_FACE_SLOTS;fs=patchShadowLightScope(fs,{skipTransmittance,faceSlots:shadowFaceSlots});fs=patchLightSourceKindStruct(fs);fs=patchAreaLightSourceCosine(fs);// skipOcclusion drops the whole block (screen-space AO included), which
 // only ever ran at strength 0 in a tool that cannot bind an AO pass.
 if(!skipOcclusion)fs=patchAmbientOcclusion(fs,{skipSkyVis,skipAoVolume});fs=patchDiffuseBounceAdd(fs,{skipSkyVis,skipBounce});fs=patchSpecularAA(fs,{specularAA});fs=patchTransmissionThickness(fs,{dropThicknessMap});// Depth-peel machinery: baked into every fragment shader
 // UNCONDITIONALLY (not just when Force Transparency is on), see
@@ -2160,7 +2256,9 @@ try{mxShader.delete();}catch(e){/* already deleted */}// Displacement is generat
 // a notice on the returned sources instead of a throw.
 let displacement=null;try{const __dispGenStart=window.MTLX_PERF_LOG?performance.now():0;displacement=generateDisplacementSourcesUnlocked({mx,gen,genContext,renderable,materialName,allowConstInputs});if(displacement&&window.MTLX_PERF_LOG)displacement.genMs=performance.now()-__dispGenStart;if(displacement&&displacement.notices&&displacement.notices.length){notices.push(...displacement.notices);}}catch(e){notices.push('Displacement skipped: '+(e&&e.message?e.message:String(e)));displacement=null;}// What this source does NOT contain, so uniform seeding can skip the
 // same features instead of binding samplers no program declares.
-const featureSkips={shadowMap:skipShadowMap,occlusion:skipOcclusion,skyVis:skipOcclusion||skipSkyVis,aoVolume:skipOcclusion||skipSkyVis||skipAoVolume};return{vs,fs,introspected,transparent,vertexInputs,geomprops,notices,payloadSupported,lightTransportSupported,displacement,maxLights,constInputs,featureSkips};};// Follows one displacementshader-typed input to the element to generate
+const featureSkips={shadowMap:skipShadowMap,occlusion:skipOcclusion,skyVis:skipOcclusion||skipSkyVis,aoVolume:skipOcclusion||skipSkyVis||skipAoVolume,// Diagnostics only: bindEnvironmentSamplers/createMtlxSceneUniforms
+// still gate on declared uniforms, not these two.
+localEnv:skipLocalEnv,bounce:skipBounce};return{vs,fs,introspected,transparent,vertexInputs,geomprops,notices,payloadSupported,lightTransportSupported,displacement,maxLights,constInputs,featureSkips,shadowFaceSlots};};// Follows one displacementshader-typed input to the element to generate
 // from: the connected node, or the connected nodegraph's Output element
 // when the input names a nodegraph and output.
 const mxFollowDisplacementInput=(input,doc)=>{if(!input)return null;const nodeName=mxElAttr(input,'nodename');if(nodeName)return mxSafe(()=>input.getConnectedNode(),null);const graphName=mxElAttr(input,'nodegraph');if(graphName){const ng=mxSafe(()=>doc.getNodeGraph(graphName),null);const outName=mxElAttr(input,'output');return ng&&outName?mxSafe(()=>ng.getOutput(outName),null):null;}return null;};// resolveDisplacementSource: finds the element to generate the standalone
@@ -2190,16 +2288,22 @@ const DEFAULT_SAMPLER_BUDGET=16;// Drop order when a program exceeds the sampler
 // is a sceneFeatureOptions flag of generatePreviewSourcesUnlocked. Append
 // future samplers here.
 // "a", "a and b", "a, b and c" for user-facing lists.
-const joinWithAnd=items=>items.length<=1?items.join(''):items.slice(0,-1).join(', ')+' and '+items[items.length-1];const SAMPLER_BUDGET_DROP_ORDER=[// Parked with screen-space reflections (always skipped for now).
+const joinWithAnd=items=>items.length<=1?items.join(''):items.slice(0,-1).join(', ')+' and '+items[items.length-1];const SAMPLER_BUDGET_DROP_ORDER=[// Preview Quality SSAO goes first; the Scene's loop skips previewOnly entries.
+{key:'skipSsao',label:'screen-space AO (u_ssaoMap)',userLabel:'ambient occlusion',previewOnly:true},// Parked with screen-space reflections (always skipped for now).
 // { key: 'skipSsr', label: 'screen-space reflection (u_opaqueColor)' },
-{key:'skipLocalEnv',label:'local reflection capture (u_localEnvRadiance)',userLabel:'local reflections'},{key:'skipBounce',label:'bounce volume (u_skyBounceMap)',userLabel:'diffuse bounce'},{key:'skipAoVolume',label:'occlusion volume (u_aoVolumeMap)',userLabel:'ambient occlusion'},{key:'skipSkyVis',label:'sky visibility (u_skyVisMap)',userLabel:'sky visibility'},{key:'dropThicknessMap',label:'thickness map (u_thicknessMap)',userLabel:'transmission thickness'},{key:'skipTransmittance',label:'shadow transmittance (u_shadowTransmittance)',userLabel:'colored shadows through transparent materials'},{key:'skipRefraction',label:'refraction colour (u_opaqueColor)',userLabel:'refraction'}];// One accurate sentence for a material that ran out of texture units:
+{key:'skipLocalEnv',label:'local reflection capture (u_localEnvRadiance)',userLabel:'local reflections'},{key:'skipBounce',label:'bounce volume (u_skyBounceMap)',userLabel:'diffuse bounce'},{key:'skipAoVolume',label:'occlusion volume (u_aoVolumeMap)',userLabel:'ambient occlusion'},{key:'skipSkyVis',label:'sky visibility (u_skyVisMap)',userLabel:'sky visibility'},{key:'dropThicknessMap',label:'thickness map (u_thicknessMap)',userLabel:'transmission thickness'},{key:'skipTransmittance',label:'shadow transmittance (u_shadowTransmittance)',userLabel:'colored shadows through transparent materials'},{key:'skipRefraction',label:'refraction colour (u_opaqueColor)',userLabel:'refraction'}];const SCENE_SAMPLER_DROPS=SAMPLER_BUDGET_DROP_ORDER.filter(d=>!d.previewOnly);// One accurate sentence for a material that ran out of texture units:
 // what it needed, where those samplers came from, and what was turned off.
 const samplerBudgetNotice=({needed,limit,effects,plural})=>'needs '+needed.count+' texture samplers ('+needed.material+' from the material, '+needed.scene+' from the scene) but this GPU allows '+limit+', so '+effects+(plural?' are':' is')+' turned off for it';// Viewer-path generation with the same sampler budget as the Scene: drops
 // optional samplers in SAMPLER_BUDGET_DROP_ORDER until the fragment fits
 // the texture unit limit, and notes every drop on srcs.notices.
-const generatePreviewSourcesWithinBudget=async args=>{const overrideBudget=typeof window!=='undefined'?window.__mtlxSamplerBudgetOverride:undefined;const budget=Number.isFinite(overrideBudget)?overrideBudget:DEFAULT_SAMPLER_BUDGET;const dropped=[];let srcs=null;let neededInfo=null;// the full-feature count, what the notice reports
-for(let attempt=0;;attempt++){// The caller's feature gating is the base; budget drops add to it.
-const sceneFeatureOptions=Object.assign({},args.sceneFeatureOptions||null);for(const d of dropped)sceneFeatureOptions[d.key]=true;srcs=await generatePreviewSources(Object.assign({},args,{sceneFeatureOptions}));if(!srcs)return null;const info=countFragmentSamplers(srcs.fs);if(!neededInfo)neededInfo=info;if(info.count<=budget)break;if(attempt>=SAMPLER_BUDGET_DROP_ORDER.length)break;dropped.push(SAMPLER_BUDGET_DROP_ORDER[attempt]);}if(dropped.length){const info=countFragmentSamplers(srcs.fs);const effects=joinWithAnd(dropped.map(d=>d.userLabel));const needed=samplerBudgetNotice({needed:neededInfo||info,limit:budget,effects,plural:dropped.length>1});srcs.notices=(srcs.notices||[]).concat(['Texture slots: this material '+needed]);srcs.samplerBudget={limit:budget,count:info.count,material:info.material,scene:info.scene,needed:(neededInfo||info).count,notice:needed,dropped:dropped.map(d=>d.label),droppedLabels:dropped.map(d=>d.userLabel)};}return srcs;};// Scene-view material compiler. This deliberately exposes the preview shader
+const generatePreviewSourcesWithinBudget=async args=>{const overrideBudget=typeof window!=='undefined'?window.__mtlxSamplerBudgetOverride:undefined;const budget=Number.isFinite(overrideBudget)?overrideBudget:DEFAULT_SAMPLER_BUDGET;const baseFeatureOptions=args.sceneFeatureOptions||null;// A key the caller already gated off (e.g. PREVIEW_FEATURE_OPTIONS'
+// skipLocalEnv/skipBounce) is a no-op drop here: trying it again wastes
+// a regeneration and would name a feature the preview never had.
+const candidates=SAMPLER_BUDGET_DROP_ORDER.filter(d=>!(baseFeatureOptions&&baseFeatureOptions[d.key])// skipSsao only means something while the occlusion block is generated.
+&&!(d.key==='skipSsao'&&(!baseFeatureOptions||baseFeatureOptions.skipOcclusion)));const appliedOptions=Object.assign({},baseFeatureOptions);let srcs=await generatePreviewSources(Object.assign({},args,{sceneFeatureOptions:appliedOptions}));if(!srcs)return null;let info=countFragmentSamplers(srcs.fs);const neededInfo=info;// the full-feature count, what the notice reports
+const dropped=[];for(let i=0;info.count>budget&&i<candidates.length;i++){const trialOptions=Object.assign({},appliedOptions,{[candidates[i].key]:true});const trialSrcs=await generatePreviewSources(Object.assign({},args,{sceneFeatureOptions:trialOptions}));if(!trialSrcs)return null;const trialInfo=countFragmentSamplers(trialSrcs.fs);// Keep and record this drop only when it actually shrank the
+// sampler count; an inert key never enters the notice.
+if(trialInfo.count<info.count){dropped.push(candidates[i]);appliedOptions[candidates[i].key]=true;srcs=trialSrcs;info=trialInfo;}}if(dropped.length){const effects=joinWithAnd(dropped.map(d=>d.userLabel));const needed=samplerBudgetNotice({needed:neededInfo,limit:budget,effects,plural:dropped.length>1});srcs.notices=(srcs.notices||[]).concat(['Texture slots: this material '+needed]);srcs.samplerBudget={limit:budget,count:info.count,material:info.material,scene:info.scene,needed:neededInfo.count,notice:needed,dropped:dropped.map(d=>d.label),droppedLabels:dropped.map(d=>d.userLabel)};}return srcs;};// Scene-view material compiler. This deliberately exposes the preview shader
 // generation slice without allocating a renderer, scene, or canvas. Scene
 // renderers can compile a unique source once, then create independent uniform
 // instances for each object that uses that source.
@@ -2207,28 +2311,34 @@ const DEFAULT_UNIFORM_VECTOR_BUDGET=1024;const compileMtlxSceneMaterial=async({m
 // spec can force a tight budget without a real ANGLE context.
 const overrideBudget=typeof window!=='undefined'?window.__mtlxSamplerBudgetOverride:undefined;const budget=Number.isFinite(overrideBudget)?overrideBudget:Number.isFinite(samplerBudget)?samplerBudget:DEFAULT_SAMPLER_BUDGET;const uniformLimit=Number.isFinite(uniformVectorBudget)?uniformVectorBudget:DEFAULT_UNIFORM_VECTOR_BUDGET;const dropped=[];let srcs=null;let samplerInfo=null;let neededInfo=null;// the full-feature count, what the notice reports
 let budgetAttempts=0;for(let attempt=0;;attempt++){budgetAttempts=attempt+1;// The scene's live feature set is the base; budget drops add to it.
-const sceneFeatureOptions=Object.assign({materialWorkspace,specularAA},featureOptions||null);for(const d of dropped)sceneFeatureOptions[d.key]=true;srcs=await generatePreviewSources({mx,gen,genContext,renderable,label,materialName,isMounted,document:documentArg,sceneRgbt,lightTransport,sceneFeatureOptions,stageLightCount});if(!srcs)return null;samplerInfo=countFragmentSamplers(srcs.fs);if(!neededInfo)neededInfo=samplerInfo;if(samplerInfo.count<=budget)break;if(attempt>=SAMPLER_BUDGET_DROP_ORDER.length)break;// hooks exhausted, still over
-dropped.push(SAMPLER_BUDGET_DROP_ORDER[attempt]);}const declared=parseUniforms(srcs.vs).concat(parseUniforms(srcs.fs));const overBudget=samplerInfo.count>budget;const uniformInfo=estimateFragmentUniformVectors(srcs.fs);return{...srcs,declared,// Program identity excludes uniforms and object transforms. Source
+const sceneFeatureOptions=Object.assign({materialWorkspace,specularAA},featureOptions||null);for(const d of dropped)sceneFeatureOptions[d.key]=true;srcs=await generatePreviewSources({mx,gen,genContext,renderable,label,materialName,isMounted,document:documentArg,sceneRgbt,lightTransport,sceneFeatureOptions,stageLightCount});if(!srcs)return null;samplerInfo=countFragmentSamplers(srcs.fs);if(!neededInfo)neededInfo=samplerInfo;if(samplerInfo.count<=budget)break;if(attempt>=SCENE_SAMPLER_DROPS.length)break;// hooks exhausted, still over
+dropped.push(SCENE_SAMPLER_DROPS[attempt]);}const declared=parseUniforms(srcs.vs).concat(parseUniforms(srcs.fs));const overBudget=samplerInfo.count>budget;const uniformInfo=estimateFragmentUniformVectors(srcs.fs);return{...srcs,declared,// Program identity excludes uniforms and object transforms. Source
 // text is already fully adapted by generatePreviewSources.
 programKey:srcs.vs+'\\n/* scene-fs */\\n'+srcs.fs+'\\n/* displacement */\\n'+(srcs.displacement?srcs.displacement.key:'')+'\\n/* material-workspace */\\n'+materialWorkspace,sceneRgbt,lightTransport:lightTransport===true||lightTransport===4||lightTransport==='transfer'?4:0,lightTransportSupported:!!srcs.lightTransportSupported,payloadSupported:!!srcs.payloadSupported,label,samplerCount:samplerInfo.count,samplerNames:samplerInfo.names,samplerBudget:{limit:budget,count:samplerInfo.count,material:samplerInfo.material,scene:samplerInfo.scene,needed:(neededInfo||samplerInfo).count,dropped:dropped.map(d=>d.label),droppedLabels:dropped.map(d=>d.userLabel),// Ready-made sentence for the scene's warnings list, so the
 // count and its material/scene split stay together.
 notice:dropped.length?samplerBudgetNotice({needed:neededInfo||samplerInfo,limit:budget,effects:joinWithAnd(dropped.map(d=>d.userLabel)),plural:dropped.length>1}):null},samplerOverBudget:overBudget,budgetAttempts,fragmentUniformVectors:{estimate:uniformInfo.estimate,limit:uniformLimit,largest:uniformInfo.largest},fragmentUniformOverBudget:uniformInfo.estimate>uniformLimit};};// Create a detached uniform map for one scene object. Every call returns a
 // fresh map, so meshes may share the compiled Three.js program while retaining
 // independent world/normal matrices and MaterialX values.
-const createMtlxSceneUniforms=({compiled,env=null,lightData=[],stageLights=null,shadowMap=null,shadowMatrix=null,ssaoMap=null,ssaoTexel=null,ssaoStrength=1,thicknessMap=null,thicknessTexel=null,thicknessScale=1,refractionTwoSided=false,sceneRadius=1,envTilt=null,envRotationRad=0,envExposure=1,environmentIndirectScale=1,environmentKeyScale=1,lightScales=null,shadowDiagnosticVisibilityScale=1,displayTransform=null,shadowAtlas=null,shadowMatrices=null,shadowTiles=null,shadowDepthPlanes=null,shadowDepthRanges=null,shadowSourceRadii=null,shadowTexelSizes=null,shadowFaceOrigins=null,shadowFaceValid=null,shadowFaceBasisX=null,shadowFaceBasisY=null,shadowFaceBasisZ=null,shadowSlotFace=null,shadowSlotFaceCount=null,shadowTransmittance=null,shadowRecordCells=null,skyVisMap=null,skyVisMin=null,skyVisSize=null,skyVisStrength=1,skyVisCell=0,aoVolumeMap=null,aoVolumeMin=null,aoVolumeSize=null,aoVolumeStrength=1,aoVolumeCell=0,skyBounceMap=null,skyBounceMin=null,skyBounceSize=null,skyBounceStrength=0,skyBounceCell=0,bounceScale=0,bounceTint=null,localEnvMap=null,localEnvMips=1,localEnvStrength=0,localEnvProbe=null,localEnvBoxMin=null,localEnvBoxMax=null,localEnvParallax=0})=>{if(!compiled)throw new Error('Cannot create scene uniforms without compiled MaterialX source.');const uniforms={u_worldMatrix:{value:new THREE.Matrix4()},u_viewProjectionMatrix:{value:new THREE.Matrix4()},u_worldInverseTransposeMatrix:{value:new THREE.Matrix4()},u_viewPosition:{value:new THREE.Vector3()},u_peelMode:{value:0},u_peelHasPrev:{value:0},u_peelPrevDepth:{value:getDummyTex()},u_opaqueDepth:{value:getDummyTexWhite()},u_peelLinear:{value:0},// Injected by encodeDisplay, so these are never in MaterialX's own
+// Binds env radiance/irradiance to every declared sampler matching env
+// naming; skips u_localEnv* (bound separately, gated by strength). Shared
+// by createMtlxSceneUniforms and the Material Viewer's setEnvironment.
+const bindEnvironmentSamplers=(uniforms,declared,env,diffuseMethod)=>{const has=name=>declared.some(u=>u.name===name);const radiance=envRadianceForShading(env)||getDummyTex();const irradiance=envIrradianceForShading(env,diffuseMethod)||radiance;if(has('u_envRadiance'))uniforms.u_envRadiance={value:radiance};if(has('u_envIrradiance'))uniforms.u_envIrradiance={value:irradiance};for(const u of declared){if(!/sampler/i.test(u.type)||!/env/i.test(u.name)||/^u_localEnv/.test(u.name))continue;// "u_envIrradiance" contains "radiance", so the irradiance test
+// must run first or the diffuse term binds the sharp radiance map.
+if(/irradiance|diffuse/i.test(u.name))uniforms[u.name]={value:irradiance};else if(/radiance|specular|prefilter/i.test(u.name))uniforms[u.name]={value:radiance};}return{radiance,irradiance};};const createMtlxSceneUniforms=({compiled,env=null,lightData=[],stageLights=null,shadowMap=null,shadowMatrix=null,ssaoMap=null,ssaoTexel=null,ssaoStrength=1,thicknessMap=null,thicknessTexel=null,thicknessScale=1,refractionTwoSided=false,sceneRadius=1,envTilt=null,envRotationRad=0,envExposure=1,environmentIndirectScale=1,environmentKeyScale=1,lightScales=null,shadowDiagnosticVisibilityScale=1,displayTransform=null,shadowAtlas=null,shadowMatrices=null,shadowTiles=null,shadowDepthPlanes=null,shadowDepthRanges=null,shadowSourceRadii=null,shadowTexelSizes=null,shadowFaceOrigins=null,shadowFaceValid=null,shadowFaceBasisX=null,shadowFaceBasisY=null,shadowFaceBasisZ=null,shadowSlotFace=null,shadowSlotFaceCount=null,shadowTransmittance=null,shadowRecordCells=null,skyVisMap=null,skyVisMin=null,skyVisSize=null,skyVisStrength=1,skyVisCell=0,aoVolumeMap=null,aoVolumeMin=null,aoVolumeSize=null,aoVolumeStrength=1,aoVolumeCell=0,skyBounceMap=null,skyBounceMin=null,skyBounceSize=null,skyBounceStrength=0,skyBounceCell=0,bounceScale=0,bounceTint=null,localEnvMap=null,localEnvMips=1,localEnvStrength=0,localEnvProbe=null,localEnvBoxMin=null,localEnvBoxMax=null,localEnvParallax=0,diffuseEnvMethod=null,displayExposureScaleOverride=null})=>{if(!compiled)throw new Error('Cannot create scene uniforms without compiled MaterialX source.');// Face arrays follow the generated size (sceneFeatureOptions.shadowFaceSlots).
+const faceSlots=compiled.shadowFaceSlots||SHADOW_FACE_SLOTS;const uniforms={u_worldMatrix:{value:new THREE.Matrix4()},u_viewProjectionMatrix:{value:new THREE.Matrix4()},u_worldInverseTransposeMatrix:{value:new THREE.Matrix4()},u_viewPosition:{value:new THREE.Vector3()},u_peelMode:{value:0},u_peelHasPrev:{value:0},u_peelPrevDepth:{value:getDummyTex()},u_opaqueDepth:{value:getDummyTexWhite()},u_peelLinear:{value:0},// Injected by encodeDisplay, so these are never in MaterialX's own
 // introspection and cannot be gated on has() like the rest. The
 // transform defaults to the caller's, letting the Scene run a filmic
 // curve while the Material Viewer stays on plain sRGB for parity.
-u_displayExposure:{value:displayExposureScale()},u_displayTransform:{value:displayTransformId(displayTransform||getDisplayTransform())}};// A feature this source never generated declares no uniform for it, so
+u_displayExposure:{value:displayExposureScaleOverride!=null?displayExposureScaleOverride:displayExposureScale()},u_displayTransform:{value:displayTransformId(displayTransform||getDisplayTransform())}};// A feature this source never generated declares no uniform for it, so
 // seeding one would only allocate. featureSkips carries what was gated
 // out, which has()/parseUniforms cannot see for a highp sampler3D.
 const featureSkips=compiled&&compiled.featureSkips||{};if(!featureSkips.shadowMap)Object.assign(uniforms,{// Shadow atlas. Seeded whenever the source carries shadow sampling,
 // for the same sampler-unit reason as the sky volume below, and
 // defaulted to "no caster on any slot": an exact no-op.
-u_shadowAtlas:{value:shadowAtlas||getDummyTexWhite()},u_shadowMatrices:{value:shadowMatrices&&shadowMatrices.length===SHADOW_FACE_SLOTS?shadowMatrices:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Matrix4())},u_shadowTiles:{value:shadowTiles&&shadowTiles.length===SHADOW_FACE_SLOTS?shadowTiles:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4(0,0,1,1))},u_shadowDepthPlanes:{value:shadowDepthPlanes&&shadowDepthPlanes.length===SHADOW_FACE_SLOTS?shadowDepthPlanes:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4(0,0,0,1))},u_shadowDepthRanges:{value:shadowDepthRanges&&shadowDepthRanges.length===SHADOW_FACE_SLOTS?shadowDepthRanges:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector2(0,1))},u_shadowSourceRadii:{value:shadowSourceRadii&&shadowSourceRadii.length===SHADOW_FACE_SLOTS?shadowSourceRadii:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4())},u_shadowTexelWorldSize:{value:shadowTexelSizes&&shadowTexelSizes.length===SHADOW_FACE_SLOTS?shadowTexelSizes:new Array(SHADOW_FACE_SLOTS).fill(0)},// Light position for a cube-group face, and whether a face actually
+u_shadowAtlas:{value:shadowAtlas||getDummyTexWhite()},u_shadowMatrices:{value:shadowMatrices&&shadowMatrices.length===faceSlots?shadowMatrices:Array.from({length:faceSlots},()=>new THREE.Matrix4())},u_shadowTiles:{value:shadowTiles&&shadowTiles.length===faceSlots?shadowTiles:Array.from({length:faceSlots},()=>new THREE.Vector4(0,0,1,1))},u_shadowDepthPlanes:{value:shadowDepthPlanes&&shadowDepthPlanes.length===faceSlots?shadowDepthPlanes:Array.from({length:faceSlots},()=>new THREE.Vector4(0,0,0,1))},u_shadowDepthRanges:{value:shadowDepthRanges&&shadowDepthRanges.length===faceSlots?shadowDepthRanges:Array.from({length:faceSlots},()=>new THREE.Vector2(0,1))},u_shadowSourceRadii:{value:shadowSourceRadii&&shadowSourceRadii.length===faceSlots?shadowSourceRadii:Array.from({length:faceSlots},()=>new THREE.Vector4())},u_shadowTexelWorldSize:{value:shadowTexelSizes&&shadowTexelSizes.length===faceSlots?shadowTexelSizes:new Array(faceSlots).fill(0)},// Light position for a cube-group face, and whether a face actually
 // holds rendered data (the renderer always reserves six per group,
 // but only allocates a cell where geometry actually falls in it).
-u_shadowFaceOrigin:{value:shadowFaceOrigins&&shadowFaceOrigins.length===SHADOW_FACE_SLOTS?shadowFaceOrigins:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3())},u_shadowFaceValid:{value:shadowFaceValid&&shadowFaceValid.length===SHADOW_FACE_SLOTS?shadowFaceValid:new Array(SHADOW_FACE_SLOTS).fill(0)},u_shadowFaceBasisX:{value:shadowFaceBasisX&&shadowFaceBasisX.length===SHADOW_FACE_SLOTS?shadowFaceBasisX:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3(1,0,0))},u_shadowFaceBasisY:{value:shadowFaceBasisY&&shadowFaceBasisY.length===SHADOW_FACE_SLOTS?shadowFaceBasisY:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3(0,1,0))},u_shadowFaceBasisZ:{value:shadowFaceBasisZ&&shadowFaceBasisZ.length===SHADOW_FACE_SLOTS?shadowFaceBasisZ:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3(0,0,1))},// Cloned, not aliased: applyShadowMatrix() writes into this uniform's
+u_shadowFaceOrigin:{value:shadowFaceOrigins&&shadowFaceOrigins.length===faceSlots?shadowFaceOrigins:Array.from({length:faceSlots},()=>new THREE.Vector3())},u_shadowFaceValid:{value:shadowFaceValid&&shadowFaceValid.length===faceSlots?shadowFaceValid:new Array(faceSlots).fill(0)},u_shadowFaceBasisX:{value:shadowFaceBasisX&&shadowFaceBasisX.length===faceSlots?shadowFaceBasisX:Array.from({length:faceSlots},()=>new THREE.Vector3(1,0,0))},u_shadowFaceBasisY:{value:shadowFaceBasisY&&shadowFaceBasisY.length===faceSlots?shadowFaceBasisY:Array.from({length:faceSlots},()=>new THREE.Vector3(0,1,0))},u_shadowFaceBasisZ:{value:shadowFaceBasisZ&&shadowFaceBasisZ.length===faceSlots?shadowFaceBasisZ:Array.from({length:faceSlots},()=>new THREE.Vector3(0,0,1))},// Cloned, not aliased: applyShadowMatrix() writes into this uniform's
 // own array in place, and a diagnostic swap must never corrupt the
 // renderer's live shadowSlotFace/shadowSlotFaceCount state.
 u_shadowSlotFace:{value:shadowSlotFace&&shadowSlotFace.length===SHADOW_LIGHT_SLOTS_MAX?new Int32Array(shadowSlotFace):new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1)},u_shadowSlotFaceCount:{value:shadowSlotFaceCount&&shadowSlotFaceCount.length===SHADOW_LIGHT_SLOTS_MAX?new Int32Array(shadowSlotFaceCount):new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(0)},u_shadowDiagnosticVisibilityScale:{value:Number.isFinite(Number(shadowDiagnosticVisibilityScale))?Math.max(0,Number(shadowDiagnosticVisibilityScale)):1}});if(!featureSkips.occlusion)Object.assign(uniforms,{// Baked sky visibility. Seeded whenever the occlusion block was
@@ -2253,9 +2363,10 @@ u_skyBounceMap:{value:skyBounceMap||getDummyTex3DWhite()},u_skyBounceMin:{value:
 // strength or the baked volume's readiness.
 u_bounceScale:{value:Number.isFinite(bounceScale)?Math.max(0,bounceScale):0},u_bounceTint:{value:bounceTint?bounceTint.clone():new THREE.Vector3(1,1,1)}});if(compiled.payloadSupported){// Scene RGB-T is opt-in at compile time and remains inactive until
 // the compositor sets these selectors.
-uniforms.u_peelRgbt={value:0};uniforms.u_peelRgbtPass={value:0};uniforms.u_peelRgbtLayer={value:0};}applyIntrospectedUniformDefaults(uniforms,compiled.introspected||[]);const declared=new Set((compiled.declared||[]).map(u=>u.name));const has=name=>declared.has(name);const radiance=envRadianceForShading(env)||getDummyTex();const irradiance=envIrradianceForShading(env)||radiance;const mips=env&&env.mips!=null?env.mips:1;if(has('u_time'))uniforms.u_time={value:MTLX_CLOCK.time};if(has('u_frame'))uniforms.u_frame={value:MTLX_CLOCK.frame};if(has('u_envRadiance'))uniforms.u_envRadiance={value:radiance};if(has('u_envIrradiance'))uniforms.u_envIrradiance={value:irradiance};for(const u of compiled.declared||[]){if(!/sampler/i.test(u.type)||!/env/i.test(u.name))continue;// "u_envIrradiance" contains "radiance", so the irradiance test
-// must run first or the diffuse term binds the sharp radiance map.
-if(/irradiance|diffuse/i.test(u.name))uniforms[u.name]={value:irradiance};else if(/radiance|specular|prefilter/i.test(u.name))uniforms[u.name]={value:radiance};}// envTilt carries a dome light's non-vertical orientation. The rotation
+uniforms.u_peelRgbt={value:0};uniforms.u_peelRgbtPass={value:0};uniforms.u_peelRgbtLayer={value:0};}applyIntrospectedUniformDefaults(uniforms,compiled.introspected||[]);// Some callers (the Material Viewer's preview sources) never carry a
+// pre-parsed `declared` list, so fall back to parsing the generated
+// source directly; the Scene always passes `declared`.
+const declaredList=compiled.declared||parseUniforms(compiled.fs||'').concat(parseUniforms(compiled.vs||''));const declared=new Set(declaredList.map(u=>u.name));const has=name=>declared.has(name);const mips=env&&env.mips!=null?env.mips:1;if(has('u_time'))uniforms.u_time={value:MTLX_CLOCK.time};if(has('u_frame'))uniforms.u_frame={value:MTLX_CLOCK.frame};bindEnvironmentSamplers(uniforms,declaredList,env,diffuseEnvMethod);// envTilt carries a dome light's non-vertical orientation. The rotation
 // slider stays a pure yaw, so the dome's yaw is decomposed out of the tilt
 // and re-applied here: with the slider at the dome's own yaw this
 // reproduces the authored orientation exactly.
@@ -2264,7 +2375,7 @@ if(has('u_envMatrix')){const m=new THREE.Matrix4().makeRotationY(Math.PI/2+envRo
 // matrix here is a raw world-to-light-clip transform. A white AO map at
 // strength 0 and a white transmittance record (an empty cell's clear
 // color, see mx_shadow_transmittance) are exact no-ops the same way.
-if(has('u_shadowTransmittance'))uniforms.u_shadowTransmittance={value:shadowTransmittance||getDummyTexWhite()};if(has('u_shadowRecordCells')){uniforms.u_shadowRecordCells={value:shadowRecordCells&&shadowRecordCells.length===SHADOW_FACE_SLOTS?shadowRecordCells:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4(0,0,0,0))};}// Local environment reflections: a plain sampler2D, visible to has()
+if(has('u_shadowTransmittance'))uniforms.u_shadowTransmittance={value:shadowTransmittance||getDummyTexWhite()};if(has('u_shadowRecordCells')){uniforms.u_shadowRecordCells={value:shadowRecordCells&&shadowRecordCells.length===faceSlots?shadowRecordCells:Array.from({length:faceSlots},()=>new THREE.Vector4(0,0,0,0))};}// Local environment reflections: a plain sampler2D, visible to has()
 // unlike the sampler3D volumes above, so this stays gated exactly like
 // u_ssaoMap. White at strength 0 (or coverage 0, see mx_local_env_mix's
 // own early return) is an exact no-op.
@@ -2348,7 +2459,7 @@ for(const u of introspected){if(u.type!=='filename')continue;const slot=uniforms
 // True only for a REAL authored file reference (u.data is a path string),
 // not just any 'filename'-typed uniform (library samplers like
 // u_shadowMap use that type too, with no data).
-const hasDisplacementFileRef=displacement=>!!displacement&&(displacement.introspected||[]).some(u=>u.type==='filename'&&typeof u.data==='string'&&u.data);const evaluateDisplacement=async({renderer,displacement,geometry,worldMatrix,fileMap,textureCache,textureQueue,maxTextureSize,isAlive,time=0})=>{if(!renderer||!displacement||!geometry)return null;const notices=[];const mode=displacement.mode||'auto';if(typeof window!=='undefined'&&window.__mtlxForceDisplacementFailure===true){notices.push('Displacement evaluation forced to fail (test hook)');return{offsets:null,mode,notices};}const alive=()=>typeof isAlive!=='function'||isAlive();let evalGeometry=null,material=null,target=null;try{let baseGeometry=geometry;if(!baseGeometry.getAttribute('i_position'))baseGeometry=prepGeometry(baseGeometry);const position=baseGeometry.getAttribute('position');if(!position){notices.push('Displacement evaluation failed: geometry has no position attribute');return{offsets:null,mode,notices};}const N=position.count;const gl=renderer.getContext();const W=Math.min(4096,gl.getParameter(gl.MAX_TEXTURE_SIZE),gl.getParameter(gl.MAX_RENDERBUFFER_SIZE));const H=Math.ceil(N/W);if(H>W){notices.push('Displacement evaluation failed: '+N+' vertices exceed the readback grid limit');return{offsets:null,mode,notices};}const texel=new Float32Array(N*2);for(let i=0;i<N;i++){texel[i*2]=(i%W+0.5)/W*2-1;texel[i*2+1]=(Math.floor(i/W)+0.5)/H*2-1;}evalGeometry=new THREE.BufferGeometry();for(const name of Object.keys(baseGeometry.attributes)){evalGeometry.setAttribute(name,baseGeometry.attributes[name]);}evalGeometry.setAttribute('i_dispTexel',new THREE.BufferAttribute(texel,2));const uniforms={};applyIntrospectedUniformDefaults(uniforms,displacement.introspected||[]);const declared=parseUniforms(displacement.vs).concat(parseUniforms(displacement.fs));const has=n=>declared.some(d=>d.name===n);const wm=worldMatrix||new THREE.Matrix4();if(has('u_worldMatrix'))uniforms.u_worldMatrix={value:wm};const normalMatName=has('u_worldInverseTransposeMatrix')?'u_worldInverseTransposeMatrix':(declared.find(d=>/normal.*matrix|matrix.*normal|inversetranspose/i.test(d.name))||{}).name;if(normalMatName)uniforms[normalMatName]={value:new THREE.Matrix3().getNormalMatrix(wm)};if(has('u_viewProjectionMatrix'))uniforms.u_viewProjectionMatrix={value:new THREE.Matrix4()};if(has('u_time'))uniforms.u_time={value:time};if(has('u_frame'))uniforms.u_frame={value:0};uniforms.u_dispComponent={value:0};if(fileMap&&(displacement.introspected||[]).some(u=>u.type==='filename')){const bindResult=bindDroppedTextures({uniforms,introspected:displacement.introspected,textureCache:textureCache||TEXTURE_CACHE,textureQueue,maxTextureSize,isAlive,notices},fileMap);if(bindResult.missing.length){notices.push('Displacement: texture not found for '+bindResult.missing.join(', ')+', using the node default');}if(bindResult.pending.length)await Promise.all(bindResult.pending);}if(!alive())return null;material=new THREE.RawShaderMaterial({vertexShader:displacement.vs,fragmentShader:displacement.fs,glslVersion:THREE.GLSL3,uniforms,depthTest:false,depthWrite:false});const points=new THREE.Points(evalGeometry,material);points.frustumCulled=false;const scene=new THREE.Scene();scene.add(points);const camera=new THREE.OrthographicCamera(-1,1,1,-1,0,1);// The analytic-normal frame differences two displacement evaluations
+const hasDisplacementFileRef=displacement=>!!displacement&&(displacement.introspected||[]).some(u=>u.type==='filename'&&typeof u.data==='string'&&u.data);const evaluateDisplacement=async({renderer,displacement,geometry,worldMatrix,fileMap,textureCache,textureQueue,maxTextureSize,textureSession,isAlive,time=0})=>{if(!renderer||!displacement||!geometry)return null;const notices=[];const mode=displacement.mode||'auto';if(typeof window!=='undefined'&&window.__mtlxForceDisplacementFailure===true){notices.push('Displacement evaluation forced to fail (test hook)');return{offsets:null,mode,notices};}const alive=()=>typeof isAlive!=='function'||isAlive();let evalGeometry=null,material=null,target=null;try{let baseGeometry=geometry;if(!baseGeometry.getAttribute('i_position'))baseGeometry=prepGeometry(baseGeometry);const position=baseGeometry.getAttribute('position');if(!position){notices.push('Displacement evaluation failed: geometry has no position attribute');return{offsets:null,mode,notices};}const N=position.count;const gl=renderer.getContext();const W=Math.min(4096,gl.getParameter(gl.MAX_TEXTURE_SIZE),gl.getParameter(gl.MAX_RENDERBUFFER_SIZE));const H=Math.ceil(N/W);if(H>W){notices.push('Displacement evaluation failed: '+N+' vertices exceed the readback grid limit');return{offsets:null,mode,notices};}const texel=new Float32Array(N*2);for(let i=0;i<N;i++){texel[i*2]=(i%W+0.5)/W*2-1;texel[i*2+1]=(Math.floor(i/W)+0.5)/H*2-1;}evalGeometry=new THREE.BufferGeometry();for(const name of Object.keys(baseGeometry.attributes)){evalGeometry.setAttribute(name,baseGeometry.attributes[name]);}evalGeometry.setAttribute('i_dispTexel',new THREE.BufferAttribute(texel,2));const uniforms={};applyIntrospectedUniformDefaults(uniforms,displacement.introspected||[]);const declared=parseUniforms(displacement.vs).concat(parseUniforms(displacement.fs));const has=n=>declared.some(d=>d.name===n);const wm=worldMatrix||new THREE.Matrix4();if(has('u_worldMatrix'))uniforms.u_worldMatrix={value:wm};const normalMatName=has('u_worldInverseTransposeMatrix')?'u_worldInverseTransposeMatrix':(declared.find(d=>/normal.*matrix|matrix.*normal|inversetranspose/i.test(d.name))||{}).name;if(normalMatName)uniforms[normalMatName]={value:new THREE.Matrix3().getNormalMatrix(wm)};if(has('u_viewProjectionMatrix'))uniforms.u_viewProjectionMatrix={value:new THREE.Matrix4()};if(has('u_time'))uniforms.u_time={value:time};if(has('u_frame'))uniforms.u_frame={value:0};uniforms.u_dispComponent={value:0};if(fileMap&&(displacement.introspected||[]).some(u=>u.type==='filename')){const bindResult=bindDroppedTextures({uniforms,introspected:displacement.introspected,textureCache:textureCache||TEXTURE_CACHE,textureQueue,maxTextureSize,textureSession,isAlive,notices},fileMap);if(bindResult.missing.length){notices.push('Displacement: texture not found for '+bindResult.missing.join(', ')+', using the node default');}if(bindResult.pending.length)await Promise.all(bindResult.pending);}if(!alive())return null;material=new THREE.RawShaderMaterial({vertexShader:displacement.vs,fragmentShader:displacement.fs,glslVersion:THREE.GLSL3,uniforms,depthTest:false,depthWrite:false});const points=new THREE.Points(evalGeometry,material);points.frustumCulled=false;const scene=new THREE.Scene();scene.add(points);const camera=new THREE.OrthographicCamera(-1,1,1,-1,0,1);// The analytic-normal frame differences two displacement evaluations
 // eps apart (eps ~0.15mm at level 1, giving deltas ~3e-5 at a 0.2
 // slope on egg_normals). The bit-pack readback below reconstructs a
 // full float32 from an RGBA8 target's bytes, but those bytes still
@@ -2364,7 +2475,7 @@ const previousTarget=renderer.getRenderTarget();const previousClearColor=rendere
 const perf=window.MTLX_PERF_LOG?{compileMs:0,readbackMs:0}:null;const __compileStart=perf?performance.now():0;try{compileFilteringDriverNoise(renderer,scene,camera);if(perf)perf.compileMs=performance.now()-__compileStart;// Attribute to THIS material's own program, not the first broken
 // program anywhere in the shared renderer (an unrelated material
 // would otherwise blame every displacement evaluation). Mirrors
-// reportBadPrograms in js/usd-scene-renderer.js. Falls back to the
+// MtlxRender.findUnrunnableMaterials (render-session.js). Falls back to the
 // old scan if r128 hasn't recorded a currentProgram yet.
 const props=renderer.properties.get(material);const ownProgram=props&&props.currentProgram;const badProg=ownProgram?ownProgram.diagnostics&&ownProgram.diagnostics.runnable===false?ownProgram:null:(renderer.info.programs||[]).find(p=>p.diagnostics&&p.diagnostics.runnable===false);if(badProg){const d=badProg.diagnostics;const log=(d.programLog||'')+(d.vertexShader&&d.vertexShader.log?' VERT: '+d.vertexShader.log:'')+(d.fragmentShader&&d.fragmentShader.log?' FRAG: '+d.fragmentShader.log:'');notices.push('Displacement evaluation failed: '+(log.split('\n')[0]||'program not runnable').slice(0,200));return{offsets:null,mode,notices};}// rgba32f: readRenderTargetPixels wants a Float32Array and hands
 // back the exact bytes the shader wrote (0..1, no UNORM8 clamp);
@@ -2374,6 +2485,75 @@ const pixels=readbackFormat==='rgba32f'?new Float32Array(W*H*4):new Uint8Array(W
 // normal frame below rebinds i_position twice more to sample
 // the same network at two tangent-offset positions.
 const runPass=()=>{const passOffsets=new Float32Array(N*3);for(let c=0;c<3;c++){uniforms.u_dispComponent.value=c;renderer.setRenderTarget(target);renderer.setClearColor(0x000000,0);renderer.clear(true,true,true);renderer.render(scene,camera);renderer.readRenderTargetPixels(target,0,0,W,H,pixels);for(let i=0;i<N;i++){const p=i*4;if(readbackFormat==='rgba32f'){byteView.setUint8(0,Math.round(pixels[p]*255)&0xFF);byteView.setUint8(1,Math.round(pixels[p+1]*255)&0xFF);byteView.setUint8(2,Math.round(pixels[p+2]*255)&0xFF);byteView.setUint8(3,Math.round(pixels[p+3]*255)&0xFF);}else{byteView.setUint8(0,pixels[p]);byteView.setUint8(1,pixels[p+1]);byteView.setUint8(2,pixels[p+2]);byteView.setUint8(3,pixels[p+3]);}passOffsets[i*3+c]=byteView.getFloat32(0,true);}}return passOffsets;};const offsets=runPass();let offsetsTangent=null,offsetsBitangent=null,analyticFrame=null;if(wantAnalytic){try{const posAttr2=evalGeometry.getAttribute('i_position')||evalGeometry.getAttribute('position');const normAttr2=evalGeometry.getAttribute('i_normal')||evalGeometry.getAttribute('normal');const tanAttr2=evalGeometry.getAttribute('i_tangent');const bitanAttr2=evalGeometry.getAttribute('i_bitangent');const idx2=baseGeometry.getIndex();if(posAttr2&&normAttr2&&posAttr2.count===N){analyticFrame=MtlxMeshDisplacement.computeAnalyticNormalFrame({positions:posAttr2.array,normals:normAttr2.array,tangents:tanAttr2?tanAttr2.array:null,bitangents:bitanAttr2?bitanAttr2.array:null,indices:idx2?idx2.array:null});const basePos=posAttr2.array;const posName=evalGeometry.getAttribute('i_position')?'i_position':'position';const buildOffsetPositions=dir=>{const out=new Float32Array(N*3);for(let i=0;i<N;i++){const e=analyticFrame.eps[i];out[i*3]=basePos[i*3]+dir[i*3]*e;out[i*3+1]=basePos[i*3+1]+dir[i*3+1]*e;out[i*3+2]=basePos[i*3+2]+dir[i*3+2]*e;}return out;};evalGeometry.setAttribute(posName,new THREE.BufferAttribute(buildOffsetPositions(analyticFrame.tangent),3));offsetsTangent=runPass();evalGeometry.setAttribute(posName,new THREE.BufferAttribute(buildOffsetPositions(analyticFrame.bitangent),3));offsetsBitangent=runPass();evalGeometry.setAttribute(posName,new THREE.BufferAttribute(basePos,3));}}catch(e){offsetsTangent=null;offsetsBitangent=null;analyticFrame=null;notices.push('Analytic displacement normals unavailable, using the mesh recompute: '+(e&&e.message?e.message:String(e)));}}if(perf)perf.readbackMs=performance.now()-__compileStart-perf.compileMs;return{offsets,offsetsTangent,offsetsBitangent,analyticFrame,mode,notices,readbackFormat,perf};}finally{restore();}}catch(error){notices.push('Displacement evaluation failed: '+(error&&error.message?error.message:String(error)));return{offsets:null,mode,notices};}finally{if(target)target.dispose();if(material)material.dispose();if(evalGeometry)evalGeometry.dispose();}};// ------------------------------------------------------------------
+// createTriangleBudget / prepareDisplacementBase / buildDisplacedGeometry /
+// createDisplacementRunner: displacement pipeline pieces shared out of the
+// preview's createMtlxRenderView (P4d stage 1). Stateless helpers first,
+// the stateful runner last; a future per-tile evaluate (UDIM, P4d stage 2)
+// and the Scene (P6) reuse these instead of their own copies.
+// ------------------------------------------------------------------
+// Highest level <= requestedLevel keeping baseTriangles*4^level inside a
+// per-mesh cap AND a running whole-scene total (mirrors the Scene's
+// resolveDisplacementLevel, js/usd-scene-renderer.js ~4006-4022); the
+// preview passes total: Infinity, so only perMesh applies. reset() clears
+// the running total between rebuilds (a fresh preview or a fresh stage).
+const createTriangleBudget=({perMesh=PREVIEW_TRIANGLE_BUDGET,total=Infinity,enabled=true}={})=>{let used=0;const pick=(baseTriangles,requestedLevel)=>{if(!enabled)return pickSubdivisionLevel(baseTriangles,requestedLevel,Infinity);const budget=Math.min(perMesh,total-used);const result=pickSubdivisionLevel(baseTriangles,requestedLevel,budget);if(result.allowed)used+=result.triangles;return result;};const reset=()=>{used=0;};return{pick,reset,perMesh};};// Loop-subdivides `source` (a BufferGeometry: non-indexed corners then
+// welded back into an indexed one; other attributes are dropped, reported
+// in `dropped`) or a plain { positions, normals, uvs, geomprops } arrays
+// object (per-tile UDIM use), at `level`. Returns { geometry, dropped } /
+// { arrays, dropped }, or null when there is no position data.
+const prepareDisplacementBase=(source,level,{creaseByNormals=true}={})=>{const isGeom=!!(source&&typeof source.getAttribute==='function');let meshIn,sourceAttrNames;if(isGeom){const nonIndexed=source.index?source.toNonIndexed():source;const posAttr=nonIndexed.getAttribute('position');const normAttr=nonIndexed.getAttribute('normal');const uvAttr=nonIndexed.getAttribute('uv');const toArr=attr=>attr?attr.array instanceof Float32Array?attr.array:Float32Array.from(attr.array):null;const geomprops=Object.keys(nonIndexed.attributes).filter(name=>name.startsWith('i_geomprop_')).map(name=>({name:name.slice('i_geomprop_'.length),itemSize:nonIndexed.getAttribute(name).itemSize,data:toArr(nonIndexed.getAttribute(name))}));meshIn={positions:toArr(posAttr),normals:toArr(normAttr),uvs:toArr(uvAttr),geomprops};if(nonIndexed!==source)nonIndexed.dispose();sourceAttrNames=Object.keys(source.attributes);}else{meshIn=source;sourceAttrNames=Object.keys(source&&source.attributes||{});}if(!meshIn.positions)return null;const subdivided=MtlxMeshSubdivision.subdivideMesh(meshIn,level,{creaseByNormals});if(!subdivided)return null;const welded=MtlxMeshSubdivision.weldMesh(subdivided);if(!isGeom)return{arrays:welded,dropped:[]};const out=new THREE.BufferGeometry();out.setAttribute('position',new THREE.BufferAttribute(welded.positions,3));out.setAttribute('normal',new THREE.BufferAttribute(welded.normals,3));if(welded.uvs)out.setAttribute('uv',new THREE.BufferAttribute(welded.uvs,2));for(const stream of welded.geomprops||[]){out.setAttribute('i_geomprop_'+stream.name,new THREE.BufferAttribute(stream.data,stream.itemSize));}out.setIndex(new THREE.BufferAttribute(welded.indices,1));prepGeometry(out);// prepGeometry, aliasUvGeomprops and computeTangents rebuild these on
+// the subdivided mesh, so only genuinely lost attributes are reported.
+const rebuilt=new Set(['position','normal','uv','i_position','i_normal','i_texcoord_0','tangent','i_tangent','i_bitangent',...UV_GEOMPROP_ALIASES,...(welded.geomprops||[]).map(stream=>'i_geomprop_'+stream.name)]);const dropped=sourceAttrNames.filter(n=>!rebuilt.has(n));return{geometry:out,dropped};};// Computes displaced positions/normals from `base` (an undisplaced,
+// subdivided geometry) and an evaluateDisplacement() result, cloning them
+// into a fresh geometry; null with no position data.
+const buildDisplacedGeometry=(base,result)=>{const posAttr=base.getAttribute('position');if(!posAttr)return null;const normAttr=base.getAttribute('normal');const tanAttr=base.getAttribute('i_tangent');const bitanAttr=base.getAttribute('i_bitangent');const idxAttr=base.getIndex();const computed=MtlxMeshDisplacement.computeDisplacedAttributes({positions:posAttr.array,normals:normAttr?normAttr.array:null,tangents:tanAttr?tanAttr.array:null,bitangents:bitanAttr?bitanAttr.array:null,indices:idxAttr?idxAttr.array:null,offsets:result.offsets,mode:result.mode,offsetsTangent:result.offsetsTangent||null,offsetsBitangent:result.offsetsBitangent||null,analyticFrame:result.analyticFrame||null,displacementNormals:getDisplacementNormalsMode()});const out=base.clone();out.setAttribute('position',new THREE.BufferAttribute(computed.positions,3));out.setAttribute('normal',new THREE.BufferAttribute(computed.normals,3));out.deleteAttribute('i_position');out.deleteAttribute('i_normal');out.deleteAttribute('i_tangent');out.deleteAttribute('i_bitangent');out.deleteAttribute('i_texcoord_0');prepGeometry(out);out.computeBoundingBox();out.computeBoundingSphere();return out;};// Stateful displacement pipeline: subdivide-to-budget (build), evaluate the
+// displacement program and land a displaced geometry (evaluate), with the
+// same token/debounce/settle bookkeeping the preview used inline before.
+// cacheKey(level) -> BASE_GEOM_CACHE key string, matching baseGeomCacheKey.
+// onGeometry(builtGeometryOrNull) lands the result (null = fall back to the
+// caller's original geometry); onStatus(state, notices) mirrors the old
+// dispDispatchStatus/syncHandleNotices pair. Name the settle method
+// `settled`, not `whenSettled`: that name is a HANDLE_CONTRACT reserved
+// word (guard (g) in scripts/check-render-parity.mjs).
+const createDisplacementRunner=({renderer,isAlive,budget,textureSession,cacheKey,creaseByNormals=true,firstBuildTimeoutMs=4000,debounceMs=150,onGeometry,onStatus,getWorldMatrix}={})=>{let source=null,sourceKey=null,fileMap=null;let baseGeometry=null,subdivLevel=null,triangles=0,withinBudget=true;let cappedNotice=null,droppedNotice=null,evalNotices=[];let token=0,state='none',runInFlight=false;let settlePromise=null,settleResolve=null;let debounceGen=0;const currentNotices=()=>[cappedNotice,droppedNotice].filter(Boolean).concat(evalNotices);const emitStatus=()=>{if(onStatus)onStatus(state,currentNotices());};const alive=t=>(typeof isAlive!=='function'||isAlive())&&t===token;const cancel=()=>{token++;debounceGen++;runInFlight=false;if(settleResolve){settleResolve();settleResolve=null;settlePromise=null;}};// Direct state writes, bypassing evaluate: the 'off'/'none' teardown
+// paths the preview drives from its own settings toggles.
+const setState=s=>{state=s;};const reset=()=>{state='none';sourceKey=null;evalNotices=[];};const pushNotice=text=>{if(!evalNotices.includes(text))evalNotices.push(text);};// Ensures baseGeometry reflects `requestedLevel` capped to `budget`,
+// rebuilding (or pulling from BASE_GEOM_CACHE) only when the resolved
+// level changed.
+const build=(originalGeometry,requestedLevel)=>{const posAttr=originalGeometry.getAttribute('position');const idx=originalGeometry.getIndex();const baseTriangleCount=Math.max(1,Math.round((idx?idx.count:posAttr?posAttr.count:3)/3));const overrideBudget=typeof window!=='undefined'?window.__mtlxTriangleBudgetOverride:undefined;const appliedBudget=Number.isFinite(overrideBudget)?overrideBudget:budget.perMesh;const{level,capped,triangles:t,allowed}=Number.isFinite(overrideBudget)?pickSubdivisionLevel(baseTriangleCount,requestedLevel,overrideBudget):budget.pick(baseTriangleCount,requestedLevel);if(subdivLevel===level&&baseGeometry)return{level,capped,triangles:t,allowed};let built=originalGeometry;let dropped=[];if(level>0){const key=cacheKey(level);const cached=baseGeomCacheGet(key);if(cached){built=cached.clone();}else{const result=prepareDisplacementBase(originalGeometry,level,{creaseByNormals});if(result){dropped=result.dropped;baseGeomCacheSet(key,result.geometry);built=result.geometry.clone();}}}if(baseGeometry&&baseGeometry!==originalGeometry){try{baseGeometry.dispose();}catch(e){/* already disposed/invalid */}}baseGeometry=built;subdivLevel=level;triangles=t;withinBudget=allowed;cappedNotice=!allowed?'Displacement skipped: base mesh has '+t+' triangles, above the '+appliedBudget+' triangle budget':capped?'Subdivision capped at level '+level+' ('+t+' triangles) to stay under the budget':null;droppedNotice=dropped.length?'Subdivision dropped extra vertex attributes: '+dropped.join(', '):null;return{level,capped,triangles:t,allowed};};// Lands one evaluateDisplacement() result: a superseded token stops
+// without swapping; a null/failed result falls all the way back to
+// the caller's original geometry (onGeometry(null)), never a partial one.
+const land=(evalToken,result,failState)=>{if(evalToken!==token||typeof isAlive==='function'&&!isAlive())return;runInFlight=false;if(settleResolve){settleResolve();settleResolve=null;settlePromise=null;}evalNotices=result&&result.notices||[];if(!result||!result.offsets){state=failState||'failed';if(onGeometry)onGeometry(null);emitStatus();return;}const built=baseGeometry?buildDisplacedGeometry(baseGeometry,result):null;if(!built){state='failed';if(onGeometry)onGeometry(null);emitStatus();return;}state='applied';if(onGeometry)onGeometry(built);emitStatus();};// Evaluates the current source/baseGeometry and lands the result;
+// shared by settings toggles, a material debounce and an arriving file map.
+const evaluate=async()=>{if(!source||!baseGeometry)return;const evalToken=++token;if(!withinBudget){land(evalToken,{offsets:null,notices:[cappedNotice]},'skipped');return;}state='pending';runInFlight=true;if(!settlePromise)settlePromise=new Promise(res=>{settleResolve=res;});emitStatus();const posAttr=baseGeometry.getAttribute('position');if(!posAttr||posAttr.count<3){land(evalToken,{offsets:null,notices:['Displacement skipped: geometry has too few vertices']},'skipped');return;}let result=null;try{result=await evaluateDisplacement({renderer,displacement:source,geometry:baseGeometry,worldMatrix:getWorldMatrix?getWorldMatrix():new THREE.Matrix4(),fileMap,textureCache:undefined,textureSession,isAlive:()=>alive(evalToken)});}catch(e){result={offsets:null,notices:['Displacement evaluation failed: '+(e&&e.message?e.message:String(e))]};}land(evalToken,result,'failed');};// First build only: evaluate before the first apply so the first frame
+// shows the final geometry; a filename-driven or slow (> firstBuildTimeoutMs)
+// program lands later instead, in the background.
+const runFirstBuild=async()=>{if(!source||!baseGeometry)return;if(!withinBudget){const t=++token;land(t,{offsets:null,notices:[cappedNotice]},'skipped');return;}if(hasDisplacementFileRef(source))return;// filename-driven, wait for setFileMap
+const t=++token;state='pending';runInFlight=true;if(!settlePromise)settlePromise=new Promise(res=>{settleResolve=res;});const evalPromise=evaluateDisplacement({renderer,displacement:source,geometry:baseGeometry,worldMatrix:getWorldMatrix?getWorldMatrix():new THREE.Matrix4(),fileMap,textureCache:undefined,textureSession,isAlive:()=>alive(t)}).catch(e=>({offsets:null,notices:['Displacement evaluation failed: '+(e&&e.message?e.message:String(e))]}));const timedOut=Symbol('mtlx-disp-timeout');const raced=await Promise.race([evalPromise,new Promise(resolve=>setTimeout(()=>resolve(timedOut),firstBuildTimeoutMs))]);if(raced===timedOut){// Keep waiting in the background; the caller's own setup is
+// synchronous, so mesh/handle both exist well before this resolves.
+evalPromise.then(result=>land(t,result,'failed'));}else{land(t,raced,'failed');}};// Debounced evaluate: used when the displacement PROGRAM changes (a
+// material swap), so a rapid regeneration burst does not re-evaluate
+// every intermediate value. `prepare` runs just before evaluate, once
+// this call is still the latest debounced call, and may return false
+// to skip the evaluate (e.g. displacement got disabled meanwhile).
+const debouncedEvaluate=prepare=>{const gen=++debounceGen;return new Promise(resolve=>{setTimeout(()=>{if(gen!==debounceGen){resolve();return;}const proceed=prepare?prepare():true;if(proceed===false){resolve();return;}Promise.resolve(evaluate()).then(resolve);},debounceMs);});};return{setSource:newSource=>{source=newSource||null;sourceKey=source?source.key:null;},getSourceKey:()=>sourceKey,setFileMap:map=>{fileMap=map||null;},setState,reset,off:()=>setState('off'),pushNotice,build,getBaseGeometry:()=>baseGeometry,evaluate,runFirstBuild,debouncedEvaluate,cancel,getState:()=>({state,mode:source?source.mode:null,level:subdivLevel||0,capped:!!cappedNotice,triangles,notices:currentNotices()}),settled:()=>runInFlight?settlePromise||Promise.resolve():Promise.resolve(),dispose:()=>{cancel();},// P4d stage 2: per-call evaluate for a caller-supplied geometry
+// (a UDIM tile's vertex subset), independent of build()/evaluate()'s
+// own token/state bookkeeping. The caller scatters the returned
+// offsets back onto the shared base and runs buildDisplacedGeometry
+// once on the whole thing (no cracks). Uses this runner's own
+// renderer/textureSession/isAlive.
+evaluateGeometry:({geometry,displacement,worldMatrix,fileMap,time}={})=>evaluateDisplacement({renderer,displacement,geometry,worldMatrix,fileMap,textureCache:undefined,textureSession,isAlive,time})};};// findUdimRefs: filename-typed introspected uniforms whose authored path
+// contains a <UDIM> marker (case-insensitive), mirroring the Scene's
+// sceneUdimRefs (js/usd-scene-renderer.js ~1264) but over a plain
+// `introspected` array instead of a `{introspected}` wrapper.
+const findUdimRefs=introspected=>(introspected||[]).filter(u=>u.type==='filename'&&typeof u.data==='string'&&/<UDIM>/i.test(u.data));// createUdimVariantUniforms: a per-tile uniforms object derived from
+// `base`, overriding only the UDIM sampler name(s) in `tileBindings`
+// (name -> texture). shareSlots true (Preview): every OTHER slot object is
+// the SAME reference as base's, so setUniforms/env setters/peel/tryRefresh/
+// sliders that mutate a slot's `.value` in place reach every variant for
+// free. shareSlots false (Scene, P6): sceneCloneUniforms behavior instead
+// (js/usd-scene-renderer.js ~1287): value objects cloned, textures shared.
+const createUdimVariantUniforms=(base,tileBindings,{shareSlots=true}={})=>{const names=Object.keys(tileBindings||{});const out=shareSlots?Object.assign({},base):Object.fromEntries(Object.entries(base||{}).map(([name,slot])=>{const value=slot&&slot.value;let cloned=value;if(value&&!value.isTexture&&typeof value.clone==='function')cloned=value.clone();else if(Array.isArray(value))cloned=value.slice();return[name,Object.assign({},slot,{value:cloned})];}));for(const name of names)out[name]={value:tileBindings[name]};return out;};// ------------------------------------------------------------------
 // tryRefreshRenderView, attempts a cheap in-place refresh of an
 // existing view instead of a full rebuild: regenerates sources and, if
 // byte-identical to the live view's, re-uploads only uniform defaults.
@@ -2382,7 +2562,7 @@ const runPass=()=>{const passOffsets=new Float32Array(N*3);for(let c=0;c<3;c++){
 // ------------------------------------------------------------------
 const tryRefreshRenderView=async({view,mx,gen,genContext,renderable,label,materialName=null,isMounted=()=>true})=>{const __t=window.MTLX_PERF_LOG?performance.now():0;let srcs;try{// Same generation options the live view was built with, else the
 // byte compare below can never match.
-srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,materialName,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:PREVIEW_FEATURE_OPTIONS,allowConstInputs:view?view.allowConstInputs!==false:true});}catch(e){return{refreshed:false,srcs:null};}if(!srcs)return{refreshed:false,srcs:null};// Belt-and-suspenders: compare the transparency verdict explicitly
+srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,materialName,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:previewFeatureOptions(view&&view.renderSurface),transmission:getPreviewTransmission(view&&view.renderSurface),allowConstInputs:view?view.allowConstInputs!==false:true});}catch(e){return{refreshed:false,srcs:null};}if(!srcs)return{refreshed:false,srcs:null};// Belt-and-suspenders: compare the transparency verdict explicitly
 // rather than relying on srcs.vs/fs alone. Gated on FORCE_TRANSPARENCY:
 // when off, a verdict flip is irrelevant and forcing rebuild is pointless.
 if(srcs.vs!==view.vs||srcs.fs!==view.fs||FORCE_TRANSPARENCY&&!!srcs.transparent!==!!view.isTransparent)return{refreshed:false,srcs};// A filename value can change without the GLSL text changing, so
@@ -2397,14 +2577,7 @@ if(typeof view.syncDisplacementSources==='function')view.syncDisplacementSources
 // preview surface: renderer/scene/camera/env/geometry built ONCE;
 // every edit calls applyMaterial() to swap materials on the SAME shell.
 // ------------------------------------------------------------------
-// Skybox <-> IBL rotation calibration, read at shell init (rotation 0
-// there) and by setEnvRotation(). Derivation: u_envMatrix rotates env
-// queries by RotationY(PI/2 + rad), and MaterialX's longitude is
-// atan2(x,-z)/2PI + 0.5, so the IBL shows data column U at world angle
-// 2PI*U - PI + rad; the mirrored sphere (phi = 2PI*uv.x) rotated by b
-// shows column U at 2PI*U - b. Matching gives rotation.y = PI - rad.
-// If the backdrop is 180 degrees out of phase, adjust BG_BASE; if it counter-rotates, flip BG_SIGN.
-const BG_BASE=Math.PI;const BG_SIGN=-1;// Neutral-material env rotation: r128 lacks a scene.environment rotation knob (arrives r162+), so
+// Neutral-material env rotation: r128 lacks a scene.environment rotation knob (arrives r162+), so
 // onBeforeCompile patches every neutral glTF material's shader to rotate its env queries via a live
 // uEnvRotation uniform. The chunk is r128's own envmap_physical_pars_fragment plus exactly three
 // lines: `uniform mat3 uEnvRotation;` and one `uEnvRotation *` rotation in each of
@@ -2468,134 +2641,7 @@ const NEUTRAL_ENV_ROTATION_CHUNK=`#if defined( USE_ENVMAP )
 // Full-scene mode: the GLB's camera has a FIXED vertical FOV sized for
 // its authored 16:9 aspect; a NARROWER canvas would crop the sides. Fix:
 // widen the vertical fov to preserve the authored horizontal half-fov.
-const effectiveFullSceneVFov=(authoredFovDeg,authoredAspect,canvasAspect)=>{if(canvasAspect>=authoredAspect)return authoredFovDeg;const authoredHalfVFov=authoredFovDeg*Math.PI/180/2;const authoredHalfHFov=Math.atan(Math.tan(authoredHalfVFov)*authoredAspect);const effHalfVFov=Math.atan(Math.tan(authoredHalfHFov)/canvasAspect);return effHalfVFov*2*180/Math.PI;};// ------------------------------------------------------------------
-// Studio backdrop: procedural cyclorama (light or dark) + contact
-// shadow, the third mode of the background switch alongside bgMesh's
-// 'environment'/'none'. Tunables gathered here for one-place tuning.
-// ------------------------------------------------------------------
-const STUDIO_MAX_ORBIT_DISTANCE=9;// OrbitControls.maxDistance in studio mode
-const STUDIO_WALL_R=16;// must exceed STUDIO_MAX_ORBIT_DISTANCE
-const STUDIO_WALL_H=10;// must clear the top of frame at the polar clamp
-const STUDIO_FLOOR_R=13;// flat floor radius, before the fillet starts
-const STUDIO_FILLET_R=3;// STUDIO_FLOOR_R + STUDIO_FILLET_R == STUDIO_WALL_R, for a tangent join
-const STUDIO_SHADOW_OPACITY=0.28;const STUDIO_SHADOW_OPACITY_DARK=0.4;// dark backdrop needs a denser catcher to read against it
-const STUDIO_MAX_POLAR=Math.PI*0.54;// ceiling on the dip below the horizon
-const STUDIO_FLOOR_CLEARANCE=0.25;// world units the eye keeps above the floor
-const STUDIO_PROFILE_STEP=0.4;// world units between profile points, see getStudioGeometry
-const STUDIO_LIGHT_DISTANCE=7.5;// fixed light-to-floor-point distance, see placeStudioLight
-const STUDIO_LIGHT_CONE_R=5;// world-unit radius the spot cone should cover at the floor; must fit the min-elevation worst case below
-const STUDIO_LIGHT_MIN_ELEV_RAD=0.61;// ~35deg; a near-horizon key would stretch the shadow past any reasonable catcher footprint
-const STUDIO_BACKDROP_OFFSET=0.02;// world units the backdrop sits behind the shadow catcher
-// VSM (not PCFSoft) honors shadow.radius for a real blur pass, so map
-// size trades resolution for cost here, not softness; see
-// studioLight's radius/bias for the actual softness knobs.
-const STUDIO_SHADOW_MAP_SIZE=1024;// Procedural gradient shader, replacing a baked canvas texture: pixel-
-// perfect, no 8-bit banding from a rasterized ramp. Stop/hotspot values
-// are the exact sRGB byte-space colors the old canvas gradient used;
-// raw gl_FragColor output matches the old toneMapped:false + sRGB-texture path.
-const hexToVec3=hex=>{const n=parseInt(hex.slice(1),16);return new THREE.Vector3((n>>16&255)/255,(n>>8&255)/255,(n&255)/255);};// Light mirrors a paper cyclorama, dark mirrors the site's own
-// background family (Tailwind gray-900, #111827).
-const STUDIO_GRADIENT_STOPS={light:[hexToVec3('#f6f6f6'),hexToVec3('#ffffff'),hexToVec3('#e3e3e3'),hexToVec3('#c8c8c8')],dark:[hexToVec3('#1d2635'),hexToVec3('#242e40'),hexToVec3('#131a28'),hexToVec3('#0c1220')]};// Soft hotspot high on the wall, reads as a key-light wash with no
-// actual scene light. Position/radius are baked into the fragment shader below.
-const STUDIO_HOTSPOT={light:{color:new THREE.Vector3(1,1,1),alpha:0.55},dark:{color:new THREE.Vector3(151/255,170/255,200/255),alpha:0.18}};const STUDIO_GRADIENT_VERTEX_SHADER=`
-varying vec2 vUv;
-void main() {
-    vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-}
-`;// Studio backdrop's inverse of ACES_SRGB_GLSL for the given mode: undoes
-// finalMat's forward transform so the backdrop's authored color survives
-// the peel composite's real pass unchanged. 'srgb' has no tone mapping to undo, so its inverse is just srgbToLinear.
-// lin_rec709's forward transform is identity (no OETF, no tone map), so
-// its exact inverse is identity too: the round trip must hand back the
-// authored color unchanged, not a linearized one.
-const studioInverseAcesSrgbGlsl=mode=>{if(mode==='lin_rec709')return'vec3 inverseAcesSrgb(vec3 col) { return col; }\n';if(mode==='srgb')return'vec3 inverseAcesSrgb(vec3 col) { return srgbToLinear(col); }\n';return'vec3 inverseAcesSrgb(vec3 col) {\n'+'    const mat3 acesInInv = mat3(\n'+'        vec3(1.76474097, -0.14702785, -0.03633683), vec3(-0.67577768, 1.16025151, -0.16243644),\n'+'        vec3(-0.08896329, -0.01322366, 1.19877327)\n'+'    );\n'+'    const mat3 acesOutInv = mat3(\n'+'        vec3(0.64303825, 0.05926869, 0.00596190), vec3(0.31118675, 0.93143649, 0.06392902),\n'+'        vec3(0.04577546, 0.00929492, 0.93011838)\n'+'    );\n'+'    vec3 y = acesOutInv * srgbToLinear(col);\n'+// FIXME: the per-channel quadratic inverse of the ACES fit is only valid for
-// colors the tonemap can reach. Near-neutral stops round-trip at ~1e-9 error,
-// but saturated hues fail badly (pure cyan misses by up to 0.93); rework before authoring a colorful backdrop.
-'    vec3 qa = vec3(1.0) - 0.983729 * y;\n'+'    vec3 qb = vec3(0.0245786) - 0.4329510 * y;\n'+'    vec3 qc = vec3(-0.000090537) - 0.238081 * y;\n'+'    vec3 x = (-qb + sqrt(max(qb * qb - 4.0 * qa * qc, vec3(0.0)))) / (2.0 * qa);\n'+'    return acesInInv * x;\n'+'}\n';};const STUDIO_GRADIENT_FRAGMENT_SHADER=mode=>`
-varying vec2 vUv;
-uniform vec3 uStop0;
-uniform vec3 uStop1;
-uniform vec3 uStop2;
-uniform vec3 uStop3;
-uniform vec3 uHotspotColor;
-uniform float uHotspotA;
-uniform float uLinearOut;
-
-vec3 srgbToLinear(vec3 c) {
-    vec3 lo = c / 12.92;
-    vec3 hi = pow((c + 0.055) / 1.055, vec3(2.4));
-    return mix(hi, lo, vec3(lessThanEqual(c, vec3(0.04045))));
-}
-
-${studioInverseAcesSrgbGlsl(mode)}
-
-void main() {
-    // The old CanvasTexture's flipY made uv.y=1 the canvas top, so this
-    // reproduces the canvas's top-down gradient position from the lathe's v.
-    float t = clamp(1.0 - vUv.y, 0.0, 1.0);
-    vec3 col;
-    if (t < 0.35) {
-        col = mix(uStop0, uStop1, t / 0.35);
-    } else if (t < 0.78) {
-        col = mix(uStop1, uStop2, (t - 0.35) / (0.78 - 0.35));
-    } else {
-        col = mix(uStop2, uStop3, (t - 0.78) / (1.0 - 0.78));
-    }
-
-    float d = length(vec2(vUv.x - 0.5, t - 0.28));
-    float a = uHotspotA * clamp(1.0 - d / 0.55, 0.0, 1.0);
-    col = mix(col, uHotspotColor, a);
-
-    // Breaks 8-bit banding on the shallow ramp.
-    float n = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
-    col += (n - 0.5) * (1.5 / 255.0);
-
-    // The peel composite applies its one display transform here (see
-    // ACES_SRGB_GLSL), so pre-apply that transform's exact inverse to land
-    // back on this same display color once composited.
-    if (uLinearOut > 0.5) col = inverseAcesSrgb(col);
-
-    gl_FragColor = vec4(col, 1.0);
-}
-`;// Single source of truth for the two gradient variants; called at build
-// time below and again from applyBackdrop when the mode flips.
-const applyStudioVariantUniforms=(material,dark)=>{const stops=dark?STUDIO_GRADIENT_STOPS.dark:STUDIO_GRADIENT_STOPS.light;const hotspot=dark?STUDIO_HOTSPOT.dark:STUDIO_HOTSPOT.light;material.uniforms.uStop0.value.copy(stops[0]);material.uniforms.uStop1.value.copy(stops[1]);material.uniforms.uStop2.value.copy(stops[2]);material.uniforms.uStop3.value.copy(stops[3]);material.uniforms.uHotspotColor.value.copy(hotspot.color);material.uniforms.uHotspotA.value=hotspot.alpha;};// Shared lathe profile, a CLOSED room: floor centre, flat floor, fillet,
-// wall, then mirrored back over the top to a ceiling centre. Points
-// only, reused by getStudioGeometry and getStudioCatcherGeometry below.
-const buildStudioProfile=()=>{// LatheGeometry sets uv.y from the point INDEX, not arc length, so
-// the profile is emitted at a uniform step. A coarse floor/wall
-// would otherwise squeeze the whole gradient into the fillet.
-const wallH=STUDIO_WALL_H-STUDIO_FILLET_R;const filletLen=Math.PI/2*STUDIO_FILLET_R;const segsFor=len=>Math.max(1,Math.round(len/STUDIO_PROFILE_STEP));const floorSegs=segsFor(STUDIO_FLOOR_R);const filletSegs=segsFor(filletLen);const wallSegs=segsFor(wallH);const points=[];for(let i=0;i<=floorSegs;i++){points.push(new THREE.Vector2(i/floorSegs*STUDIO_FLOOR_R,0));}for(let i=1;i<=filletSegs;i++){const t=i/filletSegs*(Math.PI/2);points.push(new THREE.Vector2(STUDIO_FLOOR_R+Math.sin(t)*STUDIO_FILLET_R,(1-Math.cos(t))*STUDIO_FILLET_R));}for(let i=1;i<=wallSegs;i++){points.push(new THREE.Vector2(STUDIO_WALL_R,STUDIO_FILLET_R+i/wallSegs*wallH));}// Ceiling: the floor's fillet and disc mirrored, closing the room
-// so no camera angle inside it can see past the rim to the page.
-const ceilY=STUDIO_WALL_H+STUDIO_FILLET_R;for(let i=1;i<=filletSegs;i++){const t=i/filletSegs*(Math.PI/2);points.push(new THREE.Vector2(STUDIO_FLOOR_R+Math.cos(t)*STUDIO_FILLET_R,STUDIO_WALL_H+Math.sin(t)*STUDIO_FILLET_R));}for(let i=1;i<=floorSegs;i++){points.push(new THREE.Vector2((1-i/floorSegs)*STUDIO_FLOOR_R,ceilY));}return points;};// Offsets a profile inward by `inset`, from the local tangent at each
-// point (forward diff at the first, backward at the last, central
-// elsewhere) rotated +90 degrees: (x,y) -> (-y,x). Points into the room.
-const insetStudioProfile=(points,inset)=>{const last=points.length-1;return points.map((p,i)=>{const prev=points[Math.max(0,i-1)];const next=points[Math.min(last,i+1)];const tx=next.x-prev.x;const ty=next.y-prev.y;const len=Math.hypot(tx,ty)||1;return new THREE.Vector2(p.x+-ty/len*inset,p.y+tx/len*inset);});};// Shared bowl geometry, guarded so a missing THREE.LatheGeometry can't
-// throw here.
-let studioLatheGeometry=null;const getStudioGeometry=()=>{if(studioLatheGeometry)return studioLatheGeometry;try{if(!THREE.LatheGeometry)return null;studioLatheGeometry=new THREE.LatheGeometry(buildStudioProfile(),64);}catch(e){studioLatheGeometry=null;// no studio backdrop this session; bgMesh/no-backdrop modes still work
-}return studioLatheGeometry;};// The BACKDROP gets its own copy, pushed OUTWARD off the true bowl, so the
-// catcher can keep the exact floor the model rests on. Offsetting the catcher
-// instead floated the shadow above the contact point.
-let studioBackdropLatheGeometry=null;const getStudioBackdropGeometry=()=>{if(studioBackdropLatheGeometry)return studioBackdropLatheGeometry;try{if(!THREE.LatheGeometry)return null;const outset=insetStudioProfile(buildStudioProfile(),-STUDIO_BACKDROP_OFFSET);studioBackdropLatheGeometry=new THREE.LatheGeometry(outset,64);}catch(e){studioBackdropLatheGeometry=null;// caller degrades along with getStudioGeometry
-}return studioBackdropLatheGeometry;};// Small public bridge for the USD scene view. The scene renderer must use the
-// same cyclorama profile, gradient stops, and display-transform shader as the
-// material viewer, but it owns a clone of the cached geometry and its
-// material lifetime. Kept beside the source helpers so the two views cannot
-// drift into subtly different studio backgrounds.
-const createUsdSceneStudioMaterial=(dark=false)=>{const material=new THREE.ShaderMaterial({uniforms:{uStop0:{value:new THREE.Vector3()},uStop1:{value:new THREE.Vector3()},uStop2:{value:new THREE.Vector3()},uStop3:{value:new THREE.Vector3()},uHotspotColor:{value:new THREE.Vector3()},uHotspotA:{value:0},uLinearOut:{value:0}},vertexShader:STUDIO_GRADIENT_VERTEX_SHADER,fragmentShader:STUDIO_GRADIENT_FRAGMENT_SHADER(getDisplayTransform()),side:THREE.BackSide,fog:false});applyStudioVariantUniforms(material,!!dark);return material;};// Refresh the display-baked fragment stage on an existing USD backdrop. The
-// scene owns the material, so this only replaces its shader source and keeps
-// the shared studio geometry and variant uniforms alive.
-const refreshUsdSceneStudioMaterial=(material,dark=false)=>{if(!material)return false;material.fragmentShader=STUDIO_GRADIENT_FRAGMENT_SHADER(getDisplayTransform());applyStudioVariantUniforms(material,!!dark);material.needsUpdate=true;return true;};const getUsdSceneStudioGeometry=()=>{const geometry=getStudioBackdropGeometry();return geometry&&geometry.clone?geometry.clone():geometry;};const getUsdSceneStudioCatcherGeometry=()=>{const geometry=getStudioGeometry();return geometry&&geometry.clone?geometry.clone():geometry;};// Shared studio shadow rig for the USD Scene Viewer, so its cast shadow
-// gets the same VSM softness and depth bracket as the studioLight block
-// above (js/mtlx-engine.js:4721-4736), instead of a hand copy that drifts.
-const createUsdSceneStudioLight=(scale=1)=>{const light=new THREE.SpotLight(0xffffff,0);const target=new THREE.Object3D();light.target=target;light.castShadow=true;light.angle=Math.atan(STUDIO_LIGHT_CONE_R/STUDIO_LIGHT_DISTANCE);light.penumbra=0.5;light.shadow.camera.near=(STUDIO_LIGHT_DISTANCE-4)*scale;light.shadow.camera.far=(STUDIO_LIGHT_DISTANCE+STUDIO_WALL_R+2)*scale;light.shadow.mapSize.set(STUDIO_SHADOW_MAP_SIZE,STUDIO_SHADOW_MAP_SIZE);// Stage meshes rest on the floor, so the contact shadow must start at
-// the base: a smaller blur and normal bias than the shaderball rig.
-light.shadow.radius=6;light.shadow.bias=-0.0005;light.shadow.normalBias=0.004*scale;return{light,target};};// Mirrors placeStudioLight (js/mtlx-engine.js:4657-4678) but relative to
-// an arbitrary floor center/scale instead of the viewer's fixed origin
-// bowl. `direction` uses the same convention as usd-scene-environment.js's
-// rotatedEnvDirection(): it points from the light toward the target.
-const placeUsdSceneStudioLight=(light,center,direction,scale=1)=>{if(!light)return;const toLightDir=direction.clone().negate();const minY=Math.sin(STUDIO_LIGHT_MIN_ELEV_RAD);if(toLightDir.y<minY){const horizLen=Math.hypot(toLightDir.x,toLightDir.z);if(horizLen>1e-6){const s=Math.sqrt(Math.max(0,1-minY*minY))/horizLen;toLightDir.x*=s;toLightDir.z*=s;toLightDir.y=minY;}}light.position.copy(center).addScaledVector(toLightDir,STUDIO_LIGHT_DISTANCE*scale);if(light.target)light.target.position.copy(center);light.shadow.camera.near=(STUDIO_LIGHT_DISTANCE-4)*scale;light.shadow.camera.far=(STUDIO_LIGHT_DISTANCE+STUDIO_WALL_R+2)*scale;if(light.shadow.camera.updateProjectionMatrix)light.shadow.camera.updateProjectionMatrix();};window.MtlxStudio=Object.assign(window.MtlxStudio||{},{createUsdSceneStudioMaterial,refreshUsdSceneStudioMaterial,applyUsdSceneStudioVariant:applyStudioVariantUniforms,getUsdSceneStudioGeometry,getUsdSceneStudioCatcherGeometry,createUsdSceneStudioLight,placeUsdSceneStudioLight,backdropBaseRotation:BG_BASE,backdropRotationSign:BG_SIGN,keyLightRotationMatrix:rad=>keyLightRotationMatrix(rad),studioMaxPolar:STUDIO_MAX_POLAR,studioMaxOrbitDistance:STUDIO_MAX_ORBIT_DISTANCE,studioFloorClearance:STUDIO_FLOOR_CLEARANCE});// applyPeelMaterialMode(material, active): blend/depth flags for one
+const effectiveFullSceneVFov=(authoredFovDeg,authoredAspect,canvasAspect)=>{if(canvasAspect>=authoredAspect)return authoredFovDeg;const authoredHalfVFov=authoredFovDeg*Math.PI/180/2;const authoredHalfHFov=Math.atan(Math.tan(authoredHalfVFov)*authoredAspect);const effHalfVFov=Math.atan(Math.tan(authoredHalfHFov)/canvasAspect);return effHalfVFov*2*180/Math.PI;};// applyPeelMaterialMode(material, active): blend/depth flags for one
 // material's peel-graph participation, mirrors createMtlxRenderView's
 // original syncMeshMaterialMode. `active` is the caller's own peel
 // verdict (e.g. viewIsTransparent && FORCE_TRANSPARENCY); u_peelMode is
@@ -2749,274 +2795,48 @@ const saved=new Map();for(const m of meshes){const mat=m.material;if(saved.has(m
 // above), disabled explicitly anyway for defensiveness.
 mat.depthTest=false;}renderer.setRenderTarget(peel.accumRT);renderer.render(scene,camera);saved.forEach((state,mat)=>{Object.assign(mat,state);mat.uniforms.u_peelMode.value=0;});hidden.forEach(o=>{o.visible=true;});hidden.length=0;// 5. composite accum (+opaqueRT, linear mode) onto the caller's target.
 restoreRenderDestination(renderer,outputDestination);peel.quadMesh.material=peel.finalMat;peel.finalMat.uniforms.tAccum.value=peel.accumRT.texture;if(peelLinearOk){peel.finalMat.uniforms.tOpaque.value=peel.opaqueRT.texture;peel.finalMat.uniforms.u_displayTransform.value=opts.outputLinear?2:displayTransformId(getDT());peel.finalMat.uniforms.u_displayExposure.value=opts.outputLinear?1:getExposure();}renderer.render(peel.quadScene,peel.quadCam);}finally{// restore GL state even if a pass above threw
-restoreRenderDestination(renderer,outputDestination);renderer.autoClear=prevAutoClear;renderer.setClearColor(prevClearColor,prevClearAlpha);renderer.shadowMap.autoUpdate=prevShadowAutoUpdate;meshes.forEach(m=>{if(m.material.uniforms&&m.material.uniforms.u_peelMode)m.material.uniforms.u_peelMode.value=0;});linearUniforms.forEach((value,uniform)=>{uniform.value=value;});if(hidden.length){hidden.forEach(o=>{o.visible=true;});hidden.length=0;}}};return{render,setMeshMode:applyPeelMaterialMode,peelLinearOk,dispose:()=>{freePeel();}};};const createMtlxRenderView=async({canvas,mx,gen,genContext,renderable,lightData,label,needsLighting,geomName,autoRotate=true,envBackground=false,// Background switch: 'studio' | 'studio-dark' | 'environment' |
-// 'none'. No default here (see backdropMode below), undefined lets
-// envBackground's back-compat rule decide the initial mode.
-backdrop,// 'zoom' (default): plain wheel zooms. 'scroll': plain wheel is gated
-// (page scrolls), Ctrl/Cmd+wheel zooms; see the wheel-gate block below.
-// 'none': no zoom at all (wheel, Ctrl+wheel, pinch), orbit still works.
-wheelMode='zoom',// isMounted: PERMANENT lifecycle bail (component unmounted). isActive:
-// TEMPORARY visibility (backgrounded view skips render, keeps looping).
-// isAlive: OPTIONAL, read only by animate() via `aliveFn` below.
-isMounted=()=>true,isActive=()=>true,isAlive=null,debugKind='',// Opt-out for views whose sliders write uniforms with no regeneration
+restoreRenderDestination(renderer,outputDestination);renderer.autoClear=prevAutoClear;renderer.setClearColor(prevClearColor,prevClearAlpha);renderer.shadowMap.autoUpdate=prevShadowAutoUpdate;meshes.forEach(m=>{if(m.material.uniforms&&m.material.uniforms.u_peelMode)m.material.uniforms.u_peelMode.value=0;});linearUniforms.forEach((value,uniform)=>{uniform.value=value;});if(hidden.length){hidden.forEach(o=>{o.visible=true;});hidden.length=0;}}};return{render,setMeshMode:applyPeelMaterialMode,peelLinearOk,dispose:()=>{freePeel();}};};// ------------------------------------------------------------------
+// createPreviewContent: the preview content adapter driven by
+// MtlxRender.createRenderSession (js/shared/render-session.js, P6-CONTRACT.md):
+// codegen, the GLB shaderball scene, framing, geometry, displacement, UDIM, material binding.
+// ------------------------------------------------------------------
+const createPreviewContent=({canvas,mx,gen,genContext,renderable,lightData,label,needsLighting,geomName,isMounted=()=>true,debugKind='',// Opt-out for views whose sliders write uniforms with no regeneration
 // path (the docs node preview); see constifyInputUniforms.
-allowConstInputs=true,// Initial camera pull-back. 3.6 is roomy framing; ~2.55 fills the
-// frame for small square previews. IGNORED in full-scene mode, the
-// camera there is copied verbatim from the GLB's own embedded camera.
-cameraDistance=3.6,// false (default) = fixed, non-interactive authored GLB camera (graph
+allowConstInputs=true,// false (default) = fixed, non-interactive authored GLB camera (graph
 // editor); true (docs/viewer) = OrbitControls with pivot/zoom/polar
 // clamp and Box3 containment. Ignored outside full-scene mode.
-sceneOrbit=false,// Caps setPixelRatio; lower it for cheap side-by-side/compare views.
-maxPixelRatio=2,// Names the <material> element whose displacementshader input to
+sceneOrbit=false,// Names the <material> element whose displacementshader input to
 // follow (see resolveDisplacementSource); null scans the document.
-materialName=null,// Highest triangle count this view's subdivided preview mesh may
-// reach; window.__mtlxTriangleBudgetOverride (test hook) wins over
-// this at each use, mirroring the sampler-budget override pattern above.
-triangleBudget=PREVIEW_TRIANGLE_BUDGET})=>{// See the isAlive doc above: defaulting to isMounted here preserves
-// today's exact behavior for every caller that doesn't pass isAlive.
-const aliveFn=isAlive||isMounted;// Mode derived from geomName: 'shaderball-scene' -> full authored GLB
-// scene with detached embedded camera; 'shaderball' -> simple
-// (ball-only) GLB; anything else -> null (ordinary sphere/cube path).
+materialName=null,// Highest triangle count this view's subdivided preview mesh may reach;
+// window.__mtlxTriangleBudgetOverride (test hook) wins at each use.
+triangleBudget=PREVIEW_TRIANGLE_BUDGET,// Settings surface whose quality level this view follows (viewer, compare,
+// docs, graph, embed); defaults from the host.
+surface=null})=>{const renderSurface=surface||previewLevelSurface();// 'shaderball-scene' -> full authored GLB scene with its detached camera;
+// 'shaderball' -> ball-only GLB; anything else -> sphere/cube path.
 const sceneMode=geomName==='shaderball-scene'?'full':geomName==='shaderball'?'simple':null;// 'buffer2d': Shadertoy-style fullscreen quad, fixed ortho camera,
-// no controls/spin, no visible backdrop. Orthogonal to sceneMode
-// (null there, so the ordinary buildPreviewGeometry path runs).
-const flat2d=geomName==='buffer2d';// Known before the renderer exists, so the shadow map can be configured
-// up front. Flipping shadowMap.enabled after the PMREM and the materials
-// are built invalidated program state and blacked out scene.environment.
-const wantsStudio=!flat2d&&sceneMode!=='full';// Unrecognized/missing values fall back to 'studio'. envBackground
-// back-compat only applies when `backdrop` itself was never passed
-// at all; an explicit `backdrop` (even 'studio') always wins.
-const normalizeBackdropMode=v=>v==='environment'||v==='none'||v==='studio-dark'?v:'studio';let backdropMode=normalizeBackdropMode(backdrop!==undefined?backdrop:envBackground?'environment':'studio');let reqId=null;let renderer=null;// Declared here (not inside the try block below) so disposePartial,
-// defined outside that block, can still remove them on every teardown path.
-let onGlLost=null,onGlRestored=null;let resizeObs=null;// While true the canvas keeps its current drawing buffer and the
-// browser scales it to the CSS box. Lets a pane drag rescale the
-// image smoothly instead of reallocating GL every frame.
-let resizeSuspended=false;let syncSizeRef=function(){/* set once the canvas sizing closure exists */};// setUniforms/renderFrame are declared later in this same function,
-// after an await point; a ResizeObserver firing before then would
-// hit their TDZ, so syncSize's resize-frame render checks this first.
-let renderPathReady=false;// Turntable/GIF capture state: non-null while beginCapture()/endCapture()
-// bracket an off-screen render at a caller-chosen fixed resolution.
-let captureState=null;let __captureCanvas=null,__captureCtx=null;let controls=null;let stopped=false;// Reused by snapshotPixels below, avoids a fresh canvas/2D-context
-// allocation on every readback call.
-let __snapshotCanvas=null,__snapshotCtx=null;// Shell-level material/geometry/uniforms state, reassigned by
-// applyMaterialInternal() on every swap so one shell backs many edits.
-// `uniforms` MUST be `let`: every closure below shares this binding.
-let mesh=null,material=null,geometry=null,uniforms=null;// Displacement (P5) state: originalGeometry as built (kept until
-// teardown), baseGeometry subdivided-but-undisplaced, displacedGeometry
-// the CPU-displaced result on `mesh` (null when nothing is displaced).
-let originalGeometry=null,baseGeometry=null,displacedGeometry=null;let displacementSources=null,dispKey=null,dispToken=0;// dispState: 'none' | 'pending' | 'applied' | 'skipped' | 'failed' | 'off'.
-let dispState='none',dispSubdivLevel=null,dispTriangles=0;let dispWithinBudget=true;let dispCappedNotice=null,dispDroppedNotice=null,dispEvalNotices=[];let materialNotices=[];let dispFileMap=null,dispRunInFlight=false;let dispSettlePromise=null,dispSettleResolve=null;let applyDispDebounceToken=0;// Reassigned once, below, to the real handle object literal; declared
-// here (with the rest of this shell's state) so displacement closures
-// defined ahead of it can still dispatch { view: handle } once it exists.
-let handle=null;// Scene-mode state, null/empty when sceneMode is null (sphere/cube
-// path guards with `if (sceneGroup)`). sceneGroup: instantiated GLB
-// root. sceneOwnedMaterials/pmremRT: disposed by disposePartial below.
-let sceneGroup=null,sceneOwnedMaterials=[],pmremRT=null;// Depth-peel shell state (see the FORCE_TRANSPARENCY flag's header
-// comment above and createPeelPipeline/renderFrame further down).
-// viewIsTransparent: a shell-local MIRROR of the handle's
-// isTransparent (raw srcs.transparent from generation), needed
-// because renderFrame() is invoked synchronously by the FIRST
-// animate() call below, which runs BEFORE `handle` exists (the
-// object literal is constructed further down, after animate() has
-// already been called once), renderFrame can't read
-// handle.isTransparent yet, so it reads this instead. Kept in sync
-// with handle.isTransparent at every point that field is set.
-let viewIsTransparent=false;// Tracks whether the scene's built-in materials are currently
-// detoned for the linear-peel opaque pass (see setSceneLinear below).
-let sceneLinearOn=false;// Outer-scope binding for the createPeelPipeline instance (created
-// deep inside the try block below, out of disposePartial's reach):
-// every call site resolves this instead, assigned once it's built.
-let peelPipeline=null;// The radiance texture, kept so the caller can toggle it as the
-// visible backdrop (setEnvBackground) via bgMesh below; the IBL
-// uniforms are bound regardless.
-let envBgTexture=null;let envRadSamplerName=null,envIrrSamplerName=null,envRotationRad=0;// See NEUTRAL_ENV_ROTATION_CHUNK's header comment above for the full
+// no controls/spin, no visible backdrop.
+const flat2d=geomName==='buffer2d';// Known before the renderer exists, so the session can configure the
+// shadow map up front (flipping it later blacked out scene.environment).
+const wantsStudio=!flat2d&&sceneMode!=='full';// Session objects, handed over by the lifecycle hooks below.
+let host=null,renderer=null,scene=null,camera=null,controls=null;let stopped=false;// First-build sources from prepare(); build() applies them.
+let firstSrcs=null;// Reassigned by applyMaterialInternal() on every swap; `uniforms` MUST be
+// `let`: every closure below shares this binding.
+let mesh=null,material=null,geometry=null,uniforms=null;// Displacement: originalGeometry as built (kept until teardown),
+// baseGeometry subdivided-but-undisplaced, displacedGeometry on `mesh`.
+let originalGeometry=null,baseGeometry=null,displacedGeometry=null;let displacementSources=null;let materialNotices=[];let dispRunner=null;// Custom-geometry UDIM split: child meshes per tile beyond the lowest,
+// the original index, partitionTriangles() cached per (epoch, ref), and
+// the one notice covering crossing/missing/over-cap tiles.
+let udimParts=[],udimFullIndex=null,udimSplitActive=false;let udimBucketsKey=null,udimBuckets=null,udimFileMap=null;let udimNoticeText=null,udimTileCount=0;const PREVIEW_UDIM_MAX_TILES=64;// This view's refcounted texture session (F3); disposed before the renderer.
+let textureSession=null;let unsubTextureAnisotropy=null;// Scene-mode state: instantiated GLB root and its per-view material clones.
+let sceneInst=null,sceneGroup=null,sceneOwnedMaterials=[];let fullScene=false;// Raw srcs.transparent of the live material (peel verdict input).
+let viewIsTransparent=false;// Full-scene framing: authored fov/aspect/pose, fullscreen fit, cached
+// ball sphere, scene-orbit containment box and fit distance/radius.
+let fullSceneAuthoredFov=null,fullSceneAuthoredAspect=null,sceneAuthoredPose=null;let fullscreenFit=false,ballBoundingSphere=null,sceneOrbitClampBox=null;let sceneOrbitFitDist=null,sceneOrbitFitRadius=null;const rigCount=lightData&&lightData.length||0;const handleRef=()=>host?host.handle():null;// See NEUTRAL_ENV_ROTATION_CHUNK's header comment above for the full
 // derivation of why this is a bare RotationY(rad), no extra PI/2.
-const envRotationMatrix3=rad=>new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeRotationY(rad));// Attaches the live-rotatable env patch to one neutral glTF PBR
-// material. Nested here so onBeforeCompile reads `envRotationRad`
-// fresh at ACTUAL compile time, not a value snapshotted at attach time.
-const patchNeutralMaterialEnvRotation=material=>{material.onBeforeCompile=shader=>{shader.uniforms.uEnvRotation={value:envRotationMatrix3(envRotationRad)};shader.fragmentShader=shader.fragmentShader.replace('#include <envmap_physical_pars_fragment>',NEUTRAL_ENV_ROTATION_CHUNK);material.userData.envRotationUniform=shader.uniforms.uEnvRotation;};// r128's Material default already derives customProgramCacheKey
-// from onBeforeCompile.toString(), which already keys these apart;
-// set explicitly anyway as insurance against a future edit.
-material.customProgramCacheKey=()=>'neutralEnvRotation';};// Shell-owned skybox mesh, replacing scene.background: r128's
-// WebGLBackground caches an equirect texture as a cubemap, ignoring
-// texture.offset/matrix (a per-frame offset write was a silent no-op).
-let bgMesh=null;// Studio backdrop group (wall/floor lathe + shadow catcher + zero-
-// intensity spotlight), null for flat2d/full-scene, where the
-// studio mode is never built (see its construction further down).
-let studioGroup=null,studioMesh=null,studioCatcher=null,studioLight=null;// Shell-level env (IBL) state, fetched ONCE (not per material
-// apply) since env textures never change across a document edit.
-// bindMaterialUniforms() reads these on every apply.
-let envRadiance=null,envIrradiance=null,envMips=0,envExposure=1.0;// envHasFile/envPrefilteredIrr: used only by the DEBUG_SHADERS log
-// in bindMaterialUniforms, to reproduce the old descriptive message
-// now that `env` no longer lives past the one-time shell-level fetch.
-let envHasFile=false,envPrefilteredIrr=false;// The active env's auto-extracted key light (null = none), see
-// extractKeyLight/currentLights. rigCount fixes u_lightData's length.
-let envKeyLight=null;// Cheaper fallback direction for the studio shadow ONLY (no direct
-// light emitted) when there's no strong-enough sun for envKeyLight;
-// see extractSoftKeyDir/placeStudioLight.
-let envSoftKeyDir=null;const rigCount=lightData&&lightData.length||0;// Per-view state for the handle's setEnvMap(url): the textures from
-// the last URL this view privately fetched, never shared with other
-// views, so a later swap or teardown can free them safely.
-let fetchedEnvMap=null;let envMapCallId=0;// guards latest-call-wins in setEnvMap()
-// Frees a privately-fetched env's textures. Never call this on the
-// shared default/override env from getEnvironment()/envOverride.
-const disposeFetchedEnv=env=>{if(!env)return;try{if(env.radiance)env.radiance.dispose();}catch(e){/* already disposed/invalid */}try{if(env.irradiance&&env.irradiance!==env.radiance)env.irradiance.dispose();}catch(e){/* ditto */}try{if(env.irradianceConvolved&&env.irradianceConvolved!==env.irradiance&&env.irradianceConvolved!==env.radiance)env.irradianceConvolved.dispose();}catch(e){/* ditto */}try{if(env.radiancePrefiltered)env.radiancePrefiltered.dispose();}catch(e){/* ditto */}try{if(env.background)env.background.dispose();}catch(e){/* ditto */}};// No-OrbitControls fallback only (script blocked): mirrors the
-// autoRotate state so the fallback spin can be toggled too.
-let fallbackSpin=!!autoRotate;// wheelMode 'scroll' state: the canvas wheel-gate listener plus the
-// lazily-created zoom-hint overlay and its fade timer, all torn
-// down in disposePartial below.
-let wheelGateHandler=null;let wheelHintEl=null,wheelHintTimer=null;const isWheelHintMac=/Mac|iPhone|iPad|iPod/.test(navigator.platform||navigator.userAgent||'');// Shows (or refreshes) the "Use Ctrl/⌘ + scroll to zoom" pill,
-// centered over the canvas's positioned parent; fades ~1.2s after
-// the last gated wheel event. The node is created lazily, once.
-const showWheelHint=()=>{if(!wheelHintEl){const parent=canvas.parentElement;if(!parent)return;wheelHintEl=document.createElement('div');wheelHintEl.textContent=isWheelHintMac?'Use ⌘ + scroll to zoom':'Use Ctrl + scroll to zoom';wheelHintEl.style.cssText='position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);'+'padding:6px 14px;border-radius:9999px;background:rgba(17,24,39,0.85);'+'color:#f3f4f6;font:13px system-ui,sans-serif;pointer-events:none;'+'opacity:0;transition:opacity 200ms ease;z-index:30;white-space:nowrap;';parent.appendChild(wheelHintEl);}wheelHintEl.style.opacity='1';if(wheelHintTimer)clearTimeout(wheelHintTimer);wheelHintTimer=setTimeout(()=>{if(wheelHintEl)wheelHintEl.style.opacity='0';},1200);};const disposePartial=()=>{stopped=true;dispToken++;dispRunInFlight=false;if(dispSettleResolve){dispSettleResolve();dispSettleResolve=null;dispSettlePromise=null;}if(reqId)cancelAnimationFrame(reqId);if(resizeObs)resizeObs.disconnect();if(controls)controls.dispose();// wheelMode 'scroll' teardown: the capture listener and the
-// hint overlay (plus its pending fade timer), if either exists.
-if(wheelGateHandler)canvas.removeEventListener('wheel',wheelGateHandler,{capture:true});if(wheelHintTimer)clearTimeout(wheelHintTimer);if(wheelHintEl&&wheelHintEl.parentElement)wheelHintEl.parentElement.removeChild(wheelHintEl);// Best-effort: renderer.dispose() below only frees the
-// renderer's OWN GL state, not material/geometry, dispose those
-// too (each swap already disposes its own previous ones).
-try{if(material)material.dispose();}catch(e){/* already disposed/invalid */}try{if(geometry)geometry.dispose();}catch(e){/* ditto */}// Displacement (P5): `geometry` (just disposed) is whichever of
-// these three is active; a Set dedupes by reference so the other
-// two are each disposed exactly once, never twice.
-try{const dispGeoms=new Set([originalGeometry,baseGeometry,displacedGeometry].filter(Boolean));dispGeoms.delete(geometry);dispGeoms.forEach(g=>{try{g.dispose();}catch(e2){/* already disposed/invalid */}});}catch(e){/* best-effort */}// bgMesh: dispose its own geometry/material and drop it from
-// the scene. Do NOT dispose bgMesh.material.map (envBgTexture):
-// env textures are shared/cached across every live view.
-try{if(bgMesh){scene.remove(bgMesh);bgMesh.geometry.dispose();bgMesh.material.dispose();}}catch(e){/* already disposed/invalid, or scene never got this far */}// studioGroup: drop it, dispose its two per-view MATERIALS and
-// the spotlight's own shadow render target. Do NOT dispose the
-// two lathe geometries (reused everywhere).
-try{if(studioGroup){scene.remove(studioGroup);if(studioMesh)studioMesh.material.dispose();if(studioCatcher)studioCatcher.material.dispose();if(studioLight)studioLight.shadow.dispose();}}catch(e){/* already disposed/invalid, or scene never got this far */}// sceneGroup (scene-mode only): drops the GLB hierarchy and
-// disposes its per-view material CLONES (sceneOwnedMaterials).
-// Does NOT dispose geometries, shared with other cached views.
-try{if(sceneGroup){scene.remove(sceneGroup);sceneOwnedMaterials.forEach(m=>{try{m.dispose();}catch(e){/* already disposed/invalid */}});}}catch(e){/* already disposed/invalid, or scene never got this far */}// pmremRT: this view's OWN render target, safe to dispose.
-// Do NOT dispose the PMREMGenerator instance itself: r128 shares
-// its LOD-plane geometries at MODULE scope across all instances.
-try{if(pmremRT)pmremRT.dispose();}catch(e){/* already disposed/invalid */}// setEnvMap()'s privately-fetched env, if any: this view's own
-// textures (unlike bgMesh.material.map above), safe to dispose.
-try{if(fetchedEnvMap)disposeFetchedEnv(fetchedEnvMap);}catch(e){/* already disposed/invalid */}// Depth-peel render targets/quad materials, owned by the
-// createPeelPipeline instance, this view's OWN GPU resources,
-// same disposal rationale as pmremRT immediately above.
-try{if(peelPipeline)peelPipeline.dispose();}catch(e){/* already disposed/invalid */}if(canvas){canvas.removeEventListener('webglcontextlost',onGlLost);canvas.removeEventListener('webglcontextrestored',onGlRestored);}// No forceContextLoss() here: this same disposePartial() backs both
-// the superseded-rebuild bail AND the public handle.dispose(), and
-// every call site (viewer-app.jsx, node-preview.jsx, graph/preview.jsx)
-// disposes the old view then immediately builds a new one on the
-// SAME canvas ref. Forcing context loss would leave that reused
-// canvas's context stuck lost until an async restore, breaking the
-// very next build; the canvas is never actually discarded here.
-if(renderer)renderer.dispose();};// [mtlx-perf] whole-function total, from shader generation through
-// the GL compile. See the finer-grained timers further down for a
-// breakdown (gen.generate / WebGLRenderer init / GL compile).
-const __totalPerfStart=window.MTLX_PERF_LOG?performance.now():0;try{// Generates the shader from the renderable surface node.
-// See generatePreviewSources for the full breakdown;
-// extracted so tryRefreshRenderView can reuse it for a diff.
-const __srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,materialName,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:PREVIEW_FEATURE_OPTIONS,allowConstInputs});// Bail if this build was superseded while awaiting above:
-// nothing GL-side exists yet, so disposePartial() is a
-// safe, idempotent no-op beyond flagging `stopped`.
-if(!__srcs){disposePartial();return null;}// introspected: already plain JS, converted inside the
-// mxExclusive-locked generatePreviewSourcesUnlocked
-// before the lock released. No wasm reads left here.
-const{vs,fs,introspected,transparent,geomprops,notices,maxLights}=__srcs;// Pre-warms the driver compile BEFORE the display renderer
-// is created; the old after-renderer placement measured
-// 0.8-2.5s WebGLRenderer init stalls from queue contention.
-prewarmDisplacementSources(__srcs,isMounted,label);const warmResult=await prewarmShaderCompile({vs,fs,isMounted,label});if(warmResult==='bailed'||!isMounted()){disposePartial();return null;}// --- three.js scene (WebGL2) ---
-// clientWidth can be 0 before layout; fall back so the
-// viewport isn't 0×0 (which renders nothing → black).
-const cw=canvas.clientWidth||canvas.parentElement&&canvas.parentElement.clientWidth||400;const ch=canvas.clientHeight||256;// Bail before allocating the WebGL context if this build
-// was superseded during shader generation above,
-// disposePartial() is still a safe no-op here.
-if(!isMounted()){disposePartial();return null;}const __rendererPerfStart=window.MTLX_PERF_LOG?performance.now():0;// Acquire WebGL2 ourselves and pass it via `context`, so
-// three skips its own getContext('webgl2')-then-'webgl'
-// fallback: a transient failure throws instead of poisoning this canvas with WebGL1.
-const gl=canvas.getContext('webgl2',{antialias:true,alpha:true,depth:true,stencil:true,premultipliedAlpha:true,preserveDrawingBuffer:false,powerPreference:'default',failIfMajorPerformanceCaveat:false});if(!gl){throw new Error('WebGL2 context could not be created for this preview (the browser refused WebGL2). Reload the tab or check the browser GPU settings.');}renderer=new THREE.WebGLRenderer({canvas,context:gl,antialias:true,alpha:true});// A reused canvas still carries GL state left by the prior
-// renderer, but fresh r128 state caches assume defaults, so
-// leaked blending corrupts the PMREM bake below; resync both.
-renderer.resetState();// restored re-inits three's GL state but not render-target
-// contents (PMREM bake, shadow map), so owners of this view
-// must fully rebuild on restore, not just resume.
-onGlLost=()=>{window.dispatchEvent(new CustomEvent('mtlx-gl-context',{detail:{canvas,state:'lost'}}));};onGlRestored=()=>{window.dispatchEvent(new CustomEvent('mtlx-gl-context',{detail:{canvas,state:'restored'}}));};canvas.addEventListener('webglcontextlost',onGlLost);canvas.addEventListener('webglcontextrestored',onGlRestored);// GLOBAL flag keying every lit material's program cache, so set
-// ONCE here, before any material or PMREM work, and left at the
-// default (off) for views that never build a studio bowl.
-if(wantsStudio){renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.VSMShadowMap;}renderer.setSize(cw,ch,false);renderer.setPixelRatio(Math.min(window.devicePixelRatio,maxPixelRatio));renderer.debug.checkShaderErrors=true;// No-ops for the RawShaderMaterial surface (encodeDisplay bakes
-// its transform in); set here for the ordinary three materials
-// in the scene (skybox, backplanes, neutral glTF parts), kept in step with getDisplayTransform() so both match; a fresh renderer/materials each build means no needsUpdate is needed.
-const __displayMode=getDisplayTransform();// CustomToneMapping carries our own chunk (applyThreeToneMappingChunk),
-// so these materials run the SAME curve and exposure as the
-// MaterialX surface instead of only agreeing in 'aces'.
-const __customTone=applyThreeToneMappingChunk(__displayMode);if('outputEncoding'in renderer)renderer.outputEncoding=__displayMode==='lin_rec709'?THREE.LinearEncoding:THREE.sRGBEncoding;renderer.toneMapping=__customTone?THREE.CustomToneMapping:__displayMode==='aces'?THREE.ACESFilmicToneMapping:THREE.NoToneMapping;renderer.toneMappingExposure=displayExposureScale();if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] WebGLRenderer init: '+(performance.now()-__rendererPerfStart).toFixed(1)+'ms');}// Hoisted once renderer exists: gates u_peelLinear binding,
-// peel-layer/accum half-float storage, and finalMat's shader
-// choice, all from this one extension check (see allocPeel).
-const peelLinearOk=!!renderer.extensions.get('EXT_color_buffer_float');// This shell's OWN peel pipeline instance (see
-// createPeelPipeline above); renderFrame() below routes
-// every peeling frame through it.
-peelPipeline=createPeelPipeline(renderer,{getDisplayTransform});const scene=new THREE.Scene();// Instantiates the scene-mode GLB (if any) BEFORE the
-// camera: full-scene mode needs the GLB's embedded camera
-// to build the shell camera. isMounted bail is a safe no-op.
-const sceneInst=sceneMode?await instantiateShaderballScene(sceneMode):null;if(!isMounted()){disposePartial();return null;}if(sceneMode&&!sceneInst){// GLB missing/corrupt, no GLTFLoader, or the asset
-// lacks a material_surface mesh, degrade to the
-// plain sphere fallback with a warning, not a crash.
-console.warn('shaderball scene unavailable, falling back to sphere:',geomName);}if(sceneInst){sceneGroup=sceneInst.group;sceneOwnedMaterials=sceneInst.ownedMaterials;// Env-rotation patch: every neutral glTF PBR material
-// EXCEPT the backplanes' MeshBasicMaterial clones
-// (no envMap). Same duck-typing check as setEnvExposure.
-sceneOwnedMaterials.forEach(m=>{// BISECT: the env-rotation chunk is the only hand-injected
-// shader in the scene, and it is the last suspect for the
-// black neutral materials under an enabled shadow map.
-if('envMapIntensity'in m&&!wantsStudio)patchNeutralMaterialEnvRotation(m);});}// fullScene: the full authored preset (shaderball.glb),
-// fixed camera, no fallback spin by default; docs/viewer
-// opt into orbit/zoom via sceneOrbit. 'simple' is NOT fullScene.
-const fullScene=!!(sceneInst&&sceneMode==='full');// Populated only in the fullScene-adoption branch below;
-// read again by syncSize on every resize. null in every
-// other mode (fixed-45-degree camera untouched).
-let fullSceneAuthoredFov=null;let fullSceneAuthoredAspect=null;// Authored GLB camera pose cached at adoption time,
-// the scene-orbit config block restores it (OrbitControls
-// re-aims at (0,0,0)), and resetCamera() returns to it.
-let sceneAuthoredPose=null;// flat2d: ortho frustum whose x extent tracks the canvas
-// aspect (fitQuadToAspect rewrites left/right plus the
-// quad's positions/UVs), so the quad stays edge-to-edge
-// while pattern scale stays square in pixels. Head-on at
-// (0,0,1): the default camera orientation already faces
-// -Z, so no lookAt, and u_viewPosition becomes (0,0,1).
-const camera=flat2d?new THREE.OrthographicCamera(-1,1,1,-1,0.1,10):new THREE.PerspectiveCamera(45,cw/ch,0.1,100);if(flat2d){camera.position.set(0,0,1);}else{// Slightly elevated three-quarter framing; elevation
-// scales with distance so the viewing angle stays constant.
-// (fullScene overrides this wholesale immediately below.)
-camera.position.set(0,0.5*(cameraDistance/3.6),cameraDistance);}if(fullScene&&sceneInst.glbCamera){const gc=sceneInst.glbCamera;// DETACHED camera: the GLB's camera sits under a root
-// node baking a 0.01 scale, rendering it in-hierarchy
-// would inflate distances ~100x, clipping past zfar=10.
-sceneGroup.updateMatrixWorld(true);// sceneGroup isn't added to `scene` until below; compute its world matrices standalone first
-gc.getWorldPosition(camera.position);gc.getWorldQuaternion(camera.quaternion);sceneAuthoredPose={position:camera.position.clone(),quaternion:camera.quaternion.clone()};// gc.near/far are already in THREE.PerspectiveCamera's
-// units, copy verbatim. gc.fov is captured below
-// rather than copied straight, see effectiveFullSceneVFov.
-camera.near=gc.near;camera.far=gc.far;// Authored aspect: gc.aspect (this GLB authors
-// ~1.7778/16:9); the `|| 1.7778` fallback only matters
-// for a hypothetical GLB that omits aspectRatio.
-fullSceneAuthoredFov=gc.fov;fullSceneAuthoredAspect=gc.aspect||1.7778;// Aspect from the CANVAS, not the GLB's own, no
-// letterbox/pillarbox, same as every other preset.
-// effectiveFullSceneVFov widens the fov instead of cropping.
-camera.aspect=cw/ch;camera.fov=effectiveFullSceneVFov(fullSceneAuthoredFov,fullSceneAuthoredAspect,camera.aspect);camera.updateProjectionMatrix();}// wheelMode 'scroll': register the gate BEFORE OrbitControls
-// exists, so it runs first on the canvas and can starve its
-// wheel handler via stopImmediatePropagation. The `controls`
-// check inside skips flat2d/fixed-camera views (no rig, no zoom).
-if(wheelMode==='scroll'){wheelGateHandler=e=>{if(!controls||e.ctrlKey||e.metaKey)return;const fsEl=fullscreenElement();if(fsEl&&fsEl.contains(canvas))return;e.stopImmediatePropagation();showWheelHint();};canvas.addEventListener('wheel',wheelGateHandler,{capture:true,passive:false});}// Orbit + zoom + auto-rotate: rotating the CAMERA (not
-// the mesh) lets orbit/zoom/pause compose naturally.
-// Full-scene mode is FIXED by default; opt in with sceneOrbit.
-controls=null;if(THREE.OrbitControls&&!flat2d&&(!fullScene||sceneOrbit)){controls=new THREE.OrbitControls(camera,canvas);controls.enableDamping=true;controls.dampingFactor=0.08;controls.enablePan=false;controls.enableZoom=wheelMode!=='none';controls.minDistance=1.4;controls.maxDistance=STUDIO_MAX_ORBIT_DISTANCE;// Camera auto-orbit (off by default): pins the
-// specular highlight to the same spot on the model
-// (showcase look); the visible environment pans as a tradeoff.
-controls.autoRotate=!!autoRotate;controls.autoRotateSpeed=1.5;}// No-OrbitControls fallback spin must also stay off in
-// full-scene mode and for the fixed 2D buffer, no
-// controls instance exists to gate it, so force it here.
-if(fullScene||flat2d)fallbackSpin=false;// Fullscreen "fit to ball": keeps the ball's bounding
-// sphere inside the frame, only ever WIDENING the fov on
-// top of the everyday framing. fullScene-only; pure fov change.
-let fullscreenFit=false;// World-space bounding sphere of the whole ball assembly,
-// computed ONCE per scene and cached here, see
-// getBallBoundingSphere just below.
-let ballBoundingSphere=null;// Scene-orbit hard-containment box (sceneGroup bounds
-// inset 2%/axis, expanded so the default pose stays
-// legal); null in every other mode.
-let sceneOrbitClampBox=null;// Reference camera->ball distance for scene-orbit framing,
-// captured from the AUTHORED pose so recomputeCameraFov's
-// fit-to-ball fov stays constant while the user zooms.
-let sceneOrbitFitDist=null;// Radius of the framing target (the ball proper, see the
-// config block below), paired with sceneOrbitFitDist for the
-// scene-orbit fov fit. null in every other mode.
-let sceneOrbitFitRadius=null;// Finds (and caches) the ball assembly's world bounding
+const envRotationMatrix3=rad=>new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeRotationY(rad));// onBeforeCompile reads the session's env rotation at ACTUAL compile
+// time, not a value snapshotted at attach time.
+const patchNeutralMaterialEnvRotation=material=>{material.onBeforeCompile=shader=>{shader.uniforms.uEnvRotation={value:envRotationMatrix3(host.env().rotation)};shader.fragmentShader=shader.fragmentShader.replace('#include <envmap_physical_pars_fragment>',NEUTRAL_ENV_ROTATION_CHUNK);material.userData.envRotationUniform=shader.uniforms.uEnvRotation;};// Explicit cache key, insurance against a future onBeforeCompile edit.
+material.customProgramCacheKey=()=>'neutralEnvRotation';};// Finds (and caches) the ball assembly's world bounding
 // sphere: 'shader_ball' by name, falling back to
 // material_surface's parent, then sceneGroup (never throws).
 // Framing always measures the undisplaced mesh, so displacement
@@ -3053,149 +2873,50 @@ const fitFovDeg=Math.max(vFovForVertical,vFovForHorizontal)*180/Math.PI*FIT_MARG
 // so re-fitting at any previous aspect is idempotent.
 const fitQuadToAspect=aspect=>{camera.left=-aspect;camera.right=aspect;camera.updateProjectionMatrix();if(!geometry)return;const pos=geometry.getAttribute('position');const uv=geometry.getAttribute('uv');if(!pos||!uv)return;for(let i=0;i<pos.count;i++){pos.setX(i,pos.getX(i)>0?aspect:-aspect);uv.setX(i,uv.getX(i)>0?aspect:0);}pos.needsUpdate=true;uv.needsUpdate=true;// Frustum culling reads the bounding sphere; keep it
 // in sync with the rewritten positions.
-geometry.computeBoundingSphere();};// Applies a target drawing-buffer size to the renderer AND
-// the camera/quad-fit, shared by the layout path (syncSize)
-// and the fixed-resolution capture path (beginCapture).
-const applySize=(w,h)=>{renderer.setSize(w,h,false);// Depth-peel render targets are sized to the drawing
-// buffer (see createPeelPipeline's allocPeel), just
-// free them here; renderFrame() lazily reallocates at
-// the new size on its next peeling frame, so a resize
-// with peeling OFF costs nothing extra.
-if(peelPipeline)peelPipeline.dispose();if(flat2d){// OrthographicCamera has no .aspect/.fov, the
-// frustum/quad/UV fit tracks the aspect instead
-// (fitQuadToAspect updates the projection itself).
-fitQuadToAspect(w/h);return;}camera.aspect=w/h;// fullScene only: resize can flip which side of the
-// canvasAspect >= authoredAspect comparison we're on,
-// so this must be recomputed every resize, not once.
-recomputeCameraFov();camera.updateProjectionMatrix();};// Keeps the drawing buffer + aspect in sync with layout
-// (panel reflow, mobile rotation/resize), without this
-// the sphere stretches on any reflow.
-const syncSize=()=>{if(resizeSuspended||stopped)return;const w=canvas.clientWidth||cw;const h=canvas.clientHeight||ch;applySize(w,h);// setSize() above clears the drawing buffer
-// (preserveDrawingBuffer:false) and this callback runs
-// after the frame's rAF work, so without a render here
-// a cleared buffer gets composited: one visible flicker
-// frame per resize. Render through the SAME path as a
-// normal animate() tick, including paused/inactive
-// views (they'd otherwise stay blank until reactivated).
-// One extra render on top of animate()'s own next frame
-// is acceptable; there's no dedupe mechanism to hook into.
-if(!renderPathReady)return;setUniforms();renderFrame();};syncSizeRef=syncSize;if(window.ResizeObserver){resizeObs=new ResizeObserver(syncSize);resizeObs.observe(canvas);}// Image-based lighting for lit surfaces/BSDFs AND/OR
-// scene-mode's glTF meshes (always lit via PMREM, even
-// under an unlit material). Fetched ONCE at shell level.
-if(needsLighting||sceneInst){const env=envOverride||(await getEnvironment());if(!isMounted()){disposePartial();return null;}// Independent of envRadiance/etc. below: scene-mode's
-// PMREM further down needs A radiance source even
-// when this material is unlit and never touches u_env*.
-const radianceSrc=env?env.radiance:makeEnvTexture(256,128,false);if(needsLighting){if(env){const shaded=resolveShadingEnv(renderer,env);envRadiance=shaded.radiance;envIrradiance=shaded.irradiance;envMips=env.mips;envBgTexture=env.background;envHasFile=true;envPrefilteredIrr=!!env.prefilteredIrr;envKeyLight=env.keyLight||null;envSoftKeyDir=env.softKeyDir||null;}else{envRadiance=makeEnvTexture(256,128,false);envIrradiance=makeEnvTexture(64,32,true);envMips=Math.floor(Math.log2(256))+1;// Same convention gap as the HDR path: the
-// synthesized data is top-first too, so the
-// background needs its own flipY=true copy.
-envBgTexture=makeBackgroundTexture(envRadiance);envHasFile=false;}// Shell-owned skybox mesh (see bgMesh's declaration
-// above). depthWrite:false + a low renderOrder draws
-// it first, so draw order alone keeps it behind everything.
-// flat2d: never created, the quad occupies the whole
-// viewport and must have no backdrop. bgMesh stays
-// null, which setEnvBackground/setEnvironment already
-// guard, while the env textures above keep IBL lit.
-if(!flat2d){const bgGeometry=new THREE.SphereGeometry(50,64,32);bgGeometry.scale(-1,1,1);bgMesh=new THREE.Mesh(bgGeometry,new THREE.MeshBasicMaterial({map:envBgTexture,depthWrite:false}));bgMesh.renderOrder=-1000;bgMesh.rotation.y=BG_BASE+BG_SIGN*envRotationRad;bgMesh.visible=false;// real visibility set by applyBackdrop() below
-scene.add(bgMesh);}}if(sceneInst){// Scene-mode lighting: bakes radianceSrc into a
-// PMREM driving scene.environment. NEVER dispose
-// the PMREMGenerator, r128 shares state module-wide.
-// three's equirectUv puts +Y at v=1, opposite
-// MaterialX's v=0, so reading the same texture
-// v-mirrors scene reflections vs the surface (ok for now).
-pmremRT=new THREE.PMREMGenerator(renderer).fromEquirectangular(radianceSrc);scene.environment=pmremRT.texture;}}// Last resort (see placeStudioLight): the studio's original
-// hardcoded angle, still rotated by envRotationRad. Used
-// only when neither envKeyLight nor envSoftKeyDir is available.
-const STUDIO_LIGHT_FALLBACK_DIR=new THREE.Vector3(2.5,6,4).normalize();// Single source of truth for the spotlight's placement
-// (called here and by setEnvRotation), so the shadow tracks
-// envKeyLight, or failing that envSoftKeyDir, like u_lightData does.
-const placeStudioLight=()=>{if(!studioLight)return;const toLightDir=(envKeyLight?envKeyLight.direction.clone().negate():envSoftKeyDir?envSoftKeyDir.clone().negate():STUDIO_LIGHT_FALLBACK_DIR.clone()).applyMatrix4(keyLightRotationMatrix(envRotationRad)).normalize();// A near-horizon key light drags the contact shadow far
-// past the catcher footprint, so floor the elevation,
-// rescaling (x, z) to keep the vector normalized and the azimuth intact.
-const minY=Math.sin(STUDIO_LIGHT_MIN_ELEV_RAD);if(toLightDir.y<minY){const horizLen=Math.hypot(toLightDir.x,toLightDir.z);if(horizLen>1e-6){const scale=Math.sqrt(Math.max(0,1-minY*minY))/horizLen;toLightDir.x*=scale;toLightDir.z*=scale;toLightDir.y=minY;}}studioLight.position.copy(toLightDir).multiplyScalar(STUDIO_LIGHT_DISTANCE);};// Procedural studio cyclorama + contact shadow, the third
-// backdrop mode alongside bgMesh above (light/dark share
-// this same build). Skipped for flat2d and full-scene (its own authored room).
-if(wantsStudio){try{const studioGeom=getStudioGeometry();if(studioGeom){studioGroup=new THREE.Group();studioMesh=new THREE.Mesh(getStudioBackdropGeometry()||studioGeom,new THREE.ShaderMaterial({uniforms:{uStop0:{value:new THREE.Vector3()},uStop1:{value:new THREE.Vector3()},uStop2:{value:new THREE.Vector3()},uStop3:{value:new THREE.Vector3()},uHotspotColor:{value:new THREE.Vector3()},uHotspotA:{value:0},uLinearOut:{value:0}},vertexShader:STUDIO_GRADIENT_VERTEX_SHADER,fragmentShader:STUDIO_GRADIENT_FRAGMENT_SHADER(getDisplayTransform()),side:THREE.BackSide,fog:false}));applyStudioVariantUniforms(studioMesh.material,backdropMode==='studio-dark');studioMesh.renderOrder=-900;// BackSide like studioMesh: a FrontSide catcher
-// would be culled from inside and show no shadow.
-// It keeps the true bowl, so the shadow meets the model where it lands.
-studioCatcher=new THREE.Mesh(studioGeom,new THREE.ShadowMaterial({opacity:backdropMode==='studio-dark'?STUDIO_SHADOW_OPACITY_DARK:STUDIO_SHADOW_OPACITY,side:THREE.BackSide}));studioCatcher.receiveShadow=true;studioCatcher.material.depthWrite=false;studioCatcher.renderOrder=-800;// Zero intensity + castShadow: only the simple
-// GLB's neutral glTF meshes read lights, so this
-// casts a shadow while lighting nothing.
-studioLight=new THREE.SpotLight(0xffffff,0);studioLight.target.position.set(0,0,0);studioLight.castShadow=true;studioLight.angle=Math.atan(STUDIO_LIGHT_CONE_R/STUDIO_LIGHT_DISTANCE);studioLight.penumbra=0.5;// Near brackets tightly around the fixed light-
-// to-floor distance, but far must clear the whole
-// bowl or VSM blacks out the crossing band; VSM half-float handles the range fine.
-studioLight.shadow.camera.near=STUDIO_LIGHT_DISTANCE-4;studioLight.shadow.camera.far=STUDIO_LIGHT_DISTANCE+STUDIO_WALL_R+2;studioLight.shadow.mapSize.set(STUDIO_SHADOW_MAP_SIZE,STUDIO_SHADOW_MAP_SIZE);// VSM honors shadow.radius for a real blur pass;
-// PCFSoft ignores it and stair-steps instead.
-studioLight.shadow.radius=12;studioLight.shadow.bias=-0.0005;studioLight.shadow.normalBias=0.02;placeStudioLight();studioGroup.add(studioMesh,studioCatcher,studioLight,studioLight.target);scene.add(studioGroup);}}catch(e){// Build failure (e.g. no THREE.LatheGeometry) must
-// never take down the whole view, degrade to no
-// studio backdrop instead; bgMesh/'none' still work.
-studioGroup=null;studioMesh=null;studioCatcher=null;studioLight=null;}}// 'studio' and 'studio-dark' share the same bowl/light/
-// catcher, so every mode check below tests this instead of
-// a literal 'studio' equality.
-const isStudioBackdrop=m=>m==='studio'||m==='studio-dark';// Single source of truth for the four backdrop modes,
-// applied once below for the initial `backdrop` option,
-// and again by the handle's setBackdrop()/setEnvBackground().
-// The orbit target sits above the floor, so a fixed dip below
-// the horizon drops the eye THROUGH the floor once the
-// distance grows. Re-derived per frame from that distance.
-let studioPolarApplied=false;const applyStudioPolarClamp=()=>{if(!controls)return;if(!studioGroup||!isStudioBackdrop(backdropMode)){// Only ever restore a clamp we set: full-scene mode
-// has no studioGroup and owns its own orbit limits.
-if(studioPolarApplied){controls.maxPolarAngle=Math.PI;studioPolarApplied=false;}return;}const dist=camera.position.distanceTo(controls.target);const rel=studioGroup.position.y+STUDIO_FLOOR_CLEARANCE-controls.target.y;const limit=dist>1e-3?Math.acos(Math.max(-1,Math.min(1,rel/dist))):STUDIO_MAX_POLAR;controls.maxPolarAngle=Math.min(STUDIO_MAX_POLAR,limit);studioPolarApplied=true;};// Single source of truth for the four backdrop modes,
-// applied once below for the initial `backdrop` option,
-// and again by the handle's setBackdrop()/setEnvBackground().
-const applyBackdrop=mode=>{backdropMode=normalizeBackdropMode(mode);if(bgMesh)bgMesh.visible=backdropMode==='environment';if(studioGroup)studioGroup.visible=isStudioBackdrop(backdropMode);// Live variant swap: rewrite the gradient uniforms for
-// the now-active variant (light vs dark).
-if(studioMesh){applyStudioVariantUniforms(studioMesh.material,backdropMode==='studio-dark');}if(studioCatcher){studioCatcher.material.opacity=backdropMode==='studio-dark'?STUDIO_SHADOW_OPACITY_DARK:STUDIO_SHADOW_OPACITY;}applyStudioPolarClamp();};applyBackdrop(backdropMode);// Non-MaterialX materials (skybox + GLB clones), fixed
-// for this shell's lifetime, so cached once. setSceneLinear
-// detones them for the merged linear-opaque pass (sRGB needs
-// no flag: the RT's own texture.encoding gates that, r128-verified).
-const sceneBuiltinMaterials=(bgMesh?[bgMesh.material]:[]).concat(studioMesh?[studioMesh.material]:[],studioCatcher?[studioCatcher.material]:[]).concat(sceneOwnedMaterials);const setSceneLinear=on=>{sceneBuiltinMaterials.forEach(m=>{if(m.toneMapped===!on)return;m.toneMapped=!on;m.needsUpdate=true;});// Raw ShaderMaterial ignores toneMapped and RT encoding,
-// so the linear pass needs an explicit flag.
-if(studioMesh&&studioMesh.material&&studioMesh.material.uniforms&&studioMesh.material.uniforms.uLinearOut){studioMesh.material.uniforms.uLinearOut.value=on?1:0;}};// Selected preview geometry. Scene mode pre-assigns the
-// shell's `mesh`/`geometry` to material_surface, so the
-// first applyMaterialInternal() reuses it, not a fresh Mesh.
-if(sceneInst){scene.add(sceneGroup);mesh=sceneInst.surfaceMesh;geometry=mesh.geometry;// Forces sceneGroup's matrixWorld current NOW: the
-// first animate() tick reads mesh.matrixWorld in
-// setUniforms() before renderer.render() would sync it.
-sceneGroup.updateMatrixWorld(true);}else{geometry=prepGeometry(await buildPreviewGeometry(geomName));// Initial screen-proportional fit for the 2D buffer,
-// don't rely on the ResizeObserver's first fire
-// ordering against the first rendered frame.
-if(flat2d)fitQuadToAspect((canvas.clientWidth||cw)/(canvas.clientHeight||ch));}if(!isMounted()){disposePartial();return null;}// Displacement (P5): kept alive (never disposed) until
-// teardown; every geometry below derives from it, never
-// from a previous displaced result.
-originalGeometry=geometry;// Silhouette-bottom floor placement, factored out so a
+geometry.computeBoundingSphere();};// Silhouette-bottom floor placement, factored out so a
 // later geometry swap can re-run it too.
-const updateStudioFloor=()=>{if(!studioGroup)return;let floorY=-1;try{const box=new THREE.Box3().setFromObject(sceneGroup||mesh);if(isFinite(box.min.y))floorY=box.min.y;}catch(e){/* degenerate/empty box - keep the -1 fallback */}studioGroup.position.y=floorY;};// Current, complete set of displacement-derived notices
+const updateStudioFloor=()=>host.boundsChanged();// Current, complete set of displacement-derived notices
 // (subdivision cap/drop, plus the latest evaluation run's
-// own notices), for getDisplacementState() and the status event.
-const currentDispNotices=()=>[dispCappedNotice,dispDroppedNotice].filter(Boolean).concat(dispEvalNotices);// Rebuilt, never appended, so re-runs cannot stack stale copies.
-const syncHandleNotices=()=>{if(handle)handle.notices=materialNotices.concat(currentDispNotices());};const dispDispatchStatus=()=>{if(!handle)return;try{window.dispatchEvent(new CustomEvent('mtlx-displacement-status',{detail:{view:handle,state:dispState,notices:currentDispNotices()}}));}catch(e){/* best-effort */}};// Sets `mesh.geometry`/`geometry` to `g`; a genuine
+// own notices), for getDisplacementState() and the status
+// event; owned by dispRunner (P4d stage 1).
+const currentDispNotices=()=>dispRunner.getState().notices;// Rebuilt, never appended, so re-runs cannot stack stale copies.
+const syncHandleNotices=()=>{const handle=handleRef();if(handle)handle.notices=materialNotices.concat(currentDispNotices(),udimNoticeText?[udimNoticeText]:[]);};const dispDispatchStatus=()=>{const handle=handleRef();if(!handle)return;try{window.dispatchEvent(new CustomEvent('mtlx-displacement-status',{detail:{view:handle,state:dispRunner.getState().state,notices:currentDispNotices()}}));}catch(e){/* best-effort */}};// Sets `mesh.geometry`/`geometry` to `g`; a genuine
 // displaced result is disposed on the NEXT swap, the base/
 // original is left alone. Safe pre-`mesh` too (first build).
-const swapMeshGeometry=g=>{const prevDisplaced=displacedGeometry;displacedGeometry=g!==originalGeometry&&g!==baseGeometry?g:null;geometry=g;if(mesh){mesh.geometry=g;updateStudioFloor();}if(prevDisplaced&&prevDisplaced!==g){try{prevDisplaced.dispose();}catch(e){/* already disposed/invalid */}}};// Non-indexed corners, Loop-subdivided (creases at authored
-// normal breaks) then welded back into an indexed geometry;
-// other attributes are dropped (reported by the caller).
-const subdivideSourceGeometry=(source,level)=>{const nonIndexed=source.index?source.toNonIndexed():source;const posAttr=nonIndexed.getAttribute('position');const normAttr=nonIndexed.getAttribute('normal');const uvAttr=nonIndexed.getAttribute('uv');const toArr=attr=>attr?attr.array instanceof Float32Array?attr.array:Float32Array.from(attr.array):null;const geomprops=Object.keys(nonIndexed.attributes).filter(name=>name.startsWith('i_geomprop_')).map(name=>({name:name.slice('i_geomprop_'.length),itemSize:nonIndexed.getAttribute(name).itemSize,data:toArr(nonIndexed.getAttribute(name))}));const meshIn={positions:toArr(posAttr),normals:toArr(normAttr),uvs:toArr(uvAttr),geomprops};if(nonIndexed!==source)nonIndexed.dispose();if(!meshIn.positions)return null;const subdivided=MtlxMeshSubdivision.subdivideMesh(meshIn,level,{creaseByNormals:true});if(!subdivided)return null;const welded=MtlxMeshSubdivision.weldMesh(subdivided);const out=new THREE.BufferGeometry();out.setAttribute('position',new THREE.BufferAttribute(welded.positions,3));out.setAttribute('normal',new THREE.BufferAttribute(welded.normals,3));if(welded.uvs)out.setAttribute('uv',new THREE.BufferAttribute(welded.uvs,2));for(const stream of welded.geomprops||[]){out.setAttribute('i_geomprop_'+stream.name,new THREE.BufferAttribute(stream.data,stream.itemSize));}out.setIndex(new THREE.BufferAttribute(welded.indices,1));prepGeometry(out);// prepGeometry, aliasUvGeomprops and computeTangents rebuild these on
-// the subdivided mesh, so only genuinely lost attributes are reported.
-const rebuilt=new Set(['position','normal','uv','i_position','i_normal','i_texcoord_0','tangent','i_tangent','i_bitangent',...UV_GEOMPROP_ALIASES,...(welded.geomprops||[]).map(stream=>'i_geomprop_'+stream.name)]);const dropped=Object.keys(source.attributes).filter(n=>!rebuilt.has(n));return{geometry:out,dropped};};// Ensures baseGeometry reflects the current preview
+// dispRunner's onGeometry calls this with the built geometry
+// (or null, meaning "fall back to originalGeometry").
+const swapMeshGeometry=g=>{const prevDisplaced=displacedGeometry;displacedGeometry=g!==originalGeometry&&g!==baseGeometry?g:null;geometry=g;if(mesh){mesh.geometry=g;updateStudioFloor();}if(prevDisplaced&&prevDisplaced!==g){try{prevDisplaced.dispose();}catch(e){/* already disposed/invalid */}}};const bindDisplacementGeomprops=()=>{if(!baseGeometry||!displacementSources||!displacementSources.geomprops)return;bindGeompropAttributes(baseGeometry,displacementSources.geomprops,text=>{dispRunner.pushNotice(text);});};// Ensures baseGeometry reflects the current preview
 // subdivision setting (capped to the triangle budget),
-// rebuilding only when the resolved level changed.
-const ensureBaseGeometry=()=>{const posAttr=originalGeometry.getAttribute('position');const idx=originalGeometry.getIndex();const baseTriangleCount=Math.max(1,Math.round((idx?idx.count:posAttr?posAttr.count:3)/3));const overrideBudget=window.__mtlxTriangleBudgetOverride;const budget=Number.isFinite(overrideBudget)?overrideBudget:triangleBudget;const{level,capped,triangles,allowed}=pickSubdivisionLevel(baseTriangleCount,getPreviewSubdivisionLevel(),budget);if(dispSubdivLevel===level&&baseGeometry)return{level,capped,triangles,allowed};let built=originalGeometry;let dropped=[];if(level>0){const cacheKey=baseGeomCacheKey(geomName,sceneMode,level);const cached=baseGeomCacheGet(cacheKey);if(cached){built=cached.clone();}else{const result=subdivideSourceGeometry(originalGeometry,level);if(result){dropped=result.dropped;baseGeomCacheSet(cacheKey,result.geometry);built=result.geometry.clone();}}}if(baseGeometry&&baseGeometry!==originalGeometry){try{baseGeometry.dispose();}catch(e){/* already disposed/invalid */}}baseGeometry=built;dispSubdivLevel=level;dispTriangles=triangles;dispWithinBudget=allowed;dispCappedNotice=!allowed?'Displacement skipped: base mesh has '+triangles+' triangles, above the '+budget+' triangle budget':capped?'Subdivision capped at level '+level+' ('+triangles+' triangles) to stay under the budget':null;dispDroppedNotice=dropped.length?'Subdivision dropped extra vertex attributes: '+dropped.join(', '):null;syncHandleNotices();return{level,capped,triangles,allowed};};const bindDisplacementGeomprops=()=>{if(!baseGeometry||!displacementSources||!displacementSources.geomprops)return;bindGeompropAttributes(baseGeometry,displacementSources.geomprops,text=>{if(!dispEvalNotices.includes(text))dispEvalNotices.push(text);});};// Computes displaced positions/normals from `base` and
-// clones them into a fresh geometry; null with no position data.
-const buildDisplacedGeometry=(base,result)=>{const posAttr=base.getAttribute('position');if(!posAttr)return null;const normAttr=base.getAttribute('normal');const tanAttr=base.getAttribute('i_tangent');const bitanAttr=base.getAttribute('i_bitangent');const idxAttr=base.getIndex();const computed=MtlxMeshDisplacement.computeDisplacedAttributes({positions:posAttr.array,normals:normAttr?normAttr.array:null,tangents:tanAttr?tanAttr.array:null,bitangents:bitanAttr?bitanAttr.array:null,indices:idxAttr?idxAttr.array:null,offsets:result.offsets,mode:result.mode,offsetsTangent:result.offsetsTangent||null,offsetsBitangent:result.offsetsBitangent||null,analyticFrame:result.analyticFrame||null,displacementNormals:getDisplacementNormalsMode()});const out=base.clone();out.setAttribute('position',new THREE.BufferAttribute(computed.positions,3));out.setAttribute('normal',new THREE.BufferAttribute(computed.normals,3));out.deleteAttribute('i_position');out.deleteAttribute('i_normal');out.deleteAttribute('i_tangent');out.deleteAttribute('i_bitangent');out.deleteAttribute('i_texcoord_0');prepGeometry(out);out.computeBoundingBox();out.computeBoundingSphere();return out;};// Lands one evaluateDisplacement() result: a superseded
-// token stops without swapping; a null/failed result falls
-// all the way back to originalGeometry, never a partial one.
-const landDisplacementResult=(token,result,failState)=>{if(token!==dispToken||stopped)return;dispRunInFlight=false;if(dispSettleResolve){dispSettleResolve();dispSettleResolve=null;dispSettlePromise=null;}dispEvalNotices=result&&result.notices||[];syncHandleNotices();if(!result||!result.offsets){dispState=failState||'failed';swapMeshGeometry(originalGeometry);dispDispatchStatus();return;}const built=buildDisplacedGeometry(baseGeometry,result);if(!built){dispState='failed';swapMeshGeometry(originalGeometry);dispDispatchStatus();return;}swapMeshGeometry(built);dispState='applied';dispDispatchStatus();};const cancelDisplacementRun=()=>{dispToken++;dispRunInFlight=false;if(dispSettleResolve){dispSettleResolve();dispSettleResolve=null;dispSettlePromise=null;}};// Evaluates the current displacementSources/baseGeometry
+// rebuilding only when the resolved level changed; delegates
+// to dispRunner.build (BASE_GEOM_CACHE lookup, subdivision
+// via prepareDisplacementBase, notice strings).
+const ensureBaseGeometry=()=>{const result=dispRunner.build(originalGeometry,getPreviewSubdivisionLevel());baseGeometry=dispRunner.getBaseGeometry();syncHandleNotices();return result;};// Evaluates the current displacementSources/baseGeometry
 // and lands the result; shared by settings toggles, a
 // material debounce and an arriving file map.
-const runDisplacement=async()=>{if(stopped||flat2d||!displacementSources||!baseGeometry)return;bindDisplacementGeomprops();const token=++dispToken;if(!dispWithinBudget){landDisplacementResult(token,{offsets:null,notices:[dispCappedNotice]},'skipped');return;}dispState='pending';dispRunInFlight=true;if(!dispSettlePromise)dispSettlePromise=new Promise(res=>{dispSettleResolve=res;});dispDispatchStatus();const posAttr=baseGeometry.getAttribute('position');if(!posAttr||posAttr.count<3){landDisplacementResult(token,{offsets:null,notices:['Displacement skipped: geometry has too few vertices']},'skipped');return;}let result=null;try{result=await evaluateDisplacement({renderer,displacement:displacementSources,geometry:baseGeometry,worldMatrix:mesh?mesh.matrixWorld:new THREE.Matrix4(),fileMap:dispFileMap,textureCache:undefined,isAlive:()=>!stopped&&token===dispToken});}catch(e){result={offsets:null,notices:['Displacement evaluation failed: '+(e&&e.message?e.message:String(e))]};}landDisplacementResult(token,result,'failed');};// First build: subdivide + evaluate before the first apply
-// so the first frame shows the final geometry; a filename-
-// driven or slow (>4s) program lands later instead.
-displacementSources=__srcs.displacement;dispKey=displacementSources?displacementSources.key:null;if(!flat2d&&displacementSources&&getDisplacementEnabled()){ensureBaseGeometry();bindDisplacementGeomprops();geometry=baseGeometry;if(mesh)mesh.geometry=baseGeometry;// See hasDisplacementFileRef's header comment above.
-if(!dispWithinBudget){const token=++dispToken;landDisplacementResult(token,{offsets:null,notices:[dispCappedNotice]},'skipped');}else if(!hasDisplacementFileRef(displacementSources)){const token=++dispToken;dispState='pending';dispRunInFlight=true;if(!dispSettlePromise)dispSettlePromise=new Promise(res=>{dispSettleResolve=res;});const evalPromise=evaluateDisplacement({renderer,displacement:displacementSources,geometry:baseGeometry,worldMatrix:mesh?mesh.matrixWorld:new THREE.Matrix4(),fileMap:dispFileMap,textureCache:undefined,isAlive:()=>!stopped&&token===dispToken}).catch(e=>({offsets:null,notices:['Displacement evaluation failed: '+(e&&e.message?e.message:String(e))]}));const FIRST_BUILD_DISPLACEMENT_TIMEOUT_MS=4000;const timedOut=Symbol('mtlx-disp-timeout');const raced=await Promise.race([evalPromise,new Promise(resolve=>setTimeout(()=>resolve(timedOut),FIRST_BUILD_DISPLACEMENT_TIMEOUT_MS))]);if(raced===timedOut){// Keep waiting in the background; the rest of
-// this function is synchronous, so `mesh`/`handle`
-// both exist well before this resolves.
-evalPromise.then(result=>landDisplacementResult(token,result,'failed'));}else{landDisplacementResult(token,raced,'failed');}}// else: filename-driven, wait for onDisplacementFileMap.
-}if(fullScene&&sceneOrbit&&controls){// OrbitControls' constructor already ran update()
+const runDisplacement=async()=>{if(stopped||flat2d||!displacementSources||!baseGeometry)return;bindDisplacementGeomprops();await dispRunner.evaluate();};// P4d stage 2: custom-geometry UDIM split. Removes any
+// previous split's child meshes and restores mesh.geometry's
+// full index; a no-op when there is nothing to tear down.
+const teardownUdimParts=()=>{if(udimParts.length){udimParts.forEach(p=>{try{mesh.remove(p);}catch(e){/* mesh mid-teardown */}try{p.geometry.dispose();}catch(e){/* shares base attrs, index-only */}try{p.material.dispose();}catch(e){/* already disposed/invalid */}});udimParts=[];}if(udimSplitActive&&mesh&&mesh.geometry){if(udimFullIndex)mesh.geometry.setIndex(udimFullIndex);udimSplitActive=false;}if(udimNoticeText){udimNoticeText=null;syncHandleNotices();}};// A fresh BufferGeometry sharing baseGeom's attribute
+// OBJECTS (no data copy) with its own index over `triangles`
+// (design: "sub-geometry sharing the base BufferAttributes
+// with its own index"); .dispose() on it only frees that
+// OWN index buffer, never the shared attributes.
+const buildUdimPartGeometry=(baseGeom,triangles)=>{const g=new THREE.BufferGeometry();for(const name of Object.keys(baseGeom.attributes))g.setAttribute(name,baseGeom.attributes[name]);const flat=new Uint32Array(triangles.length*3);let w=0;for(const tri of triangles){flat[w]=tri[0];flat[w+1]=tri[1];flat[w+2]=tri[2];w+=3;}g.setIndex(new THREE.BufferAttribute(flat,1));g.boundingSphere=baseGeom.boundingSphere;g.boundingBox=baseGeom.boundingBox;return g;};// Called whenever a file map arrives (bindDroppedTextures,
+// for every live view) and whenever the material changes
+// (applyMaterialInternal below); splits `mesh` into one
+// sub-geometry per resolved UDIM tile when the CURRENT
+// material has UDIM refs and more than one tile is present
+// in the mesh's UVs. Built-in geometry (sceneMode/flat2d/
+// non-'custom') is unaffected: bindDroppedTextures's
+// existing first-tile binding still covers it.
+const applyUdimSplit=(introspected,fileMap)=>{if(stopped||flat2d||sceneMode||geomName!=='custom'||!mesh||!originalGeometry||!window.MtlxMeshUdim||!textureSession||displacementSources){teardownUdimParts();return;}const udimRefs=findUdimRefs(introspected);if(!udimRefs.length){teardownUdimParts();return;}const ref=udimRefs[0].data,uName=udimRefs[0].name;const baseGeom=mesh.geometry;const posAttr=baseGeom.getAttribute('position');if(!posAttr){teardownUdimParts();return;}const idxAttr=baseGeom.getIndex();const indices=idxAttr?idxAttr.array:Array.from({length:posAttr.count},(_,i)=>i);const uvAttr=baseGeom.getAttribute('uv');const cacheKey=CUSTOM_GEOM.epoch+'|'+ref;if(udimBucketsKey!==cacheKey){udimBuckets=window.MtlxMeshUdim.partitionTriangles({uvs:uvAttr?uvAttr.array:null,indices,vFlip:CUSTOM_GEOM.uvOrigin==='top'});udimBucketsKey=cacheKey;}const{buckets,crossingCount}=udimBuckets;const numericKeys=Array.from(buckets.keys()).filter(k=>k!=='crossing').sort((a,b)=>Number(a)-Number(b));if(numericKeys.length<2){teardownUdimParts();return;}const tileHits=textureSession.resolveTiles(fileMap,ref);if(!tileHits.length){teardownUdimParts();return;}const tileByCode=new Map(tileHits.map(h=>[h.code,h]));const lowestKey=numericKeys[0];teardownUdimParts();if(!udimFullIndex&&idxAttr)udimFullIndex=idxAttr.clone();// Everything that isn't a cleanly resolved higher tile
+// (the lowest bucket itself, UV-crossing triangles,
+// missing tiles, tiles past the cap) renders through
+// `mesh`'s own default/lowest-tile texture: no cracks,
+// degraded to the default look with one notice.
+const defaultTriangles=buckets.get(lowestKey).triangles.slice();const crossingBucket=buckets.get('crossing');if(crossingBucket)defaultTriangles.push(...crossingBucket.triangles);let overflowCount=0,missingCount=0,placed=0;for(const key of numericKeys){if(key===lowestKey)continue;const bucket=buckets.get(key);if(placed>=PREVIEW_UDIM_MAX_TILES-1){defaultTriangles.push(...bucket.triangles);overflowCount+=bucket.triangles.length;continue;}const hit=tileByCode.get(Number(key));if(!hit){defaultTriangles.push(...bucket.triangles);missingCount+=bucket.triangles.length;continue;}const acquired=textureSession.acquire(hit,{samplerModes:udimRefs[0].samplerModes||null});const bindVariant=result=>{if(!result||!result.texture||stopped||!mesh)return;const variantUniforms=createUdimVariantUniforms(uniforms,{[uName]:result.texture},{shareSlots:true});const variantMaterial=material.clone();variantMaterial.uniforms=variantUniforms;const partMesh=new THREE.Mesh(buildUdimPartGeometry(baseGeom,bucket.triangles),variantMaterial);partMesh.castShadow=mesh.castShadow;partMesh.receiveShadow=mesh.receiveShadow;partMesh.frustumCulled=false;mesh.add(partMesh);udimParts.push(partMesh);};if(acquired&&typeof acquired.then==='function')acquired.then(bindVariant);else bindVariant(acquired);placed+=1;}mesh.geometry=buildUdimPartGeometry(baseGeom,defaultTriangles);geometry=mesh.geometry;udimSplitActive=true;udimTileCount=placed+1;const badTriangles=crossingCount+overflowCount+missingCount;udimNoticeText=badTriangles>0?'UDIM: '+badTriangles+' triangle(s) had a crossing or unresolved tile and use the default tile':null;syncHandleNotices();};// Scene-orbit framing: pivot, distance limits, containment box and the
+// fit-to-ball fov, configured once the session has built the controls.
+const configureSceneOrbit=()=>{if(fullScene&&sceneOrbit&&controls){// OrbitControls' constructor already ran update()
 // against its placeholder (0,0,0) target and re-aimed
 // the camera, restore the authored pose first.
 if(sceneAuthoredPose){camera.position.copy(sceneAuthoredPose.position);camera.quaternion.copy(sceneAuthoredPose.quaternion);}const sphere=getBallBoundingSphere();// Pivot on the authored view ray at the ball's depth:
@@ -3216,93 +2937,15 @@ const back=camera.position.clone().sub(controls.target).normalize();const exit=b
 let fitCenter=null,fitRadius=null;if(mesh){mesh.updateMatrixWorld(true);const bb=withFramingGeometry(()=>new THREE.Box3().setFromObject(mesh));fitCenter=bb.getCenter(new THREE.Vector3());const bs=bb.getSize(new THREE.Vector3());fitRadius=Math.max(bs.x,bs.y,bs.z)/2;}else if(sphere){fitCenter=sphere.center;fitRadius=sphere.radius;}sceneOrbitFitRadius=fitRadius;sceneOrbitFitDist=fitCenter?camera.position.distanceTo(fitCenter):null;recomputeCameraFov();camera.updateProjectionMatrix();// Snapshot for resetCamera(): position0/target0 now
 // hold the authored pose + derived pivot, so
 // controls.reset() restores this exact framing.
-controls.saveState();}const vp=new THREE.Matrix4();// Hoisted above the first material apply: applyMaterialInternal
+controls.saveState();}};const vp=new THREE.Matrix4();// Hoisted above the first material apply: applyMaterialInternal
 // calls this after every swap, and animate() calls it every
 // frame. The guard is defensive only.
-const setUniforms=()=>{if(!mesh||!uniforms)return;mesh.updateMatrixWorld();camera.updateMatrixWorld();camera.matrixWorldInverse.copy(camera.matrixWorld).invert();uniforms.u_worldMatrix.value.copy(mesh.matrixWorld);vp.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);uniforms.u_viewProjectionMatrix.value.copy(vp);uniforms.u_worldInverseTransposeMatrix.value.copy(mesh.matrixWorld).invert().transpose();camera.getWorldPosition(uniforms.u_viewPosition.value);if(uniforms.u_time)uniforms.u_time.value=MTLX_CLOCK.time;if(uniforms.u_frame)uniforms.u_frame.value=MTLX_CLOCK.frame;};// ------------------------------------------------------
-// bindMaterialUniforms: builds a FRESH uniforms object
-// for ONE material apply, reading the shell-level env
-// state fetched once above rather than re-fetching. Returns
-// the object; does not touch the shell `uniforms` binding.
-// ------------------------------------------------------
-const bindMaterialUniforms=srcs=>{const{vs,fs,introspected}=srcs;// Shadow sampling and the occlusion block are gated out of
-// preview sources (nothing here can bind either), so their
-// no-op seeds are gated the same way.
-const featureSkips=srcs.featureSkips||{};// MaterialX-generated shaders expect their own attribute
-// names (i_position, i_normal, ...) and u_* transform
-// uniforms, so we use RawShaderMaterial and feed both manually.
-const newUniforms={u_worldMatrix:{value:new THREE.Matrix4()},u_viewProjectionMatrix:{value:new THREE.Matrix4()},u_worldInverseTransposeMatrix:{value:new THREE.Matrix4()},u_viewPosition:{value:new THREE.Vector3()},// Depth-peel uniforms (see injectPeelDiscard's header
-// comment above), declared on EVERY material
-// regardless of FORCE_TRANSPARENCY/hwTransparency, since
-// the shader itself always declares them now.
-// u_peelMode defaults to 0 (normal path, discard
-// block inert); renderFrame() (createMtlxRenderView)
-// flips these per-pass when peeling is active. The
-// two sampler uniforms default to a dummy texture so
-// they're never left pointing at "nothing" even
-// though they're only ever sampled while
-// u_peelMode != 0. u_opaqueDepth defaults to WHITE
-// (depth==1.0/far), a stale/missing binding then
-// reads as "nothing there", so `z >= _opaqueZ` never
-// spuriously discards (see getDummyTexWhite's header
-// comment). u_peelPrevDepth keeps the BLACK default
-// (depth==0.0) for the same fail-safe reason on its
-// own `z <= _prevZ + eps` comparison.
-u_peelMode:{value:0},u_peelHasPrev:{value:0},u_peelPrevDepth:{value:getDummyTex()},u_opaqueDepth:{value:getDummyTexWhite()},// Harmless when shadow sampling was gated out (no such
-// uniform then); with it generated the Viewer must bind
-// white moments (fully lit) or its materials render black.
-u_shadowMap:{value:getDummyTexWhite()},u_shadowMatrix:{value:shadowOffMatrix()},// encodeDisplay defers to finalMat only while the
-// peel pipeline draws a linear intermediate target.
-// Ordinary opaque frames must remain display encoded.
-u_peelLinear:{value:0},// Injected by encodeDisplay, so MaterialX never
-// introspects it and the defaults pass below cannot
-// supply it.
-u_displayExposure:{value:displayExposureScale()},u_displayTransform:{value:displayTransformId(getDisplayTransform())}};if(!featureSkips.shadowMap)Object.assign(newUniforms,{// No stage caster in the Viewer, so no slot is shadowed;
-// the white dummy moments map above says the same thing.
-// No stage caster in the Viewer: an all -1 slot map
-// makes the atlas lookup an exact no-op.
-u_shadowAtlas:{value:getDummyTexWhite()},u_shadowMatrices:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Matrix4())},u_shadowTiles:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4(0,0,1,1))},u_shadowDepthPlanes:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4(0,0,0,1))},u_shadowDepthRanges:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector2(0,1))},u_shadowSourceRadii:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector4())},u_shadowTexelWorldSize:{value:new Array(SHADOW_FACE_SLOTS).fill(0)},u_shadowFaceOrigin:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3())},u_shadowFaceValid:{value:new Array(SHADOW_FACE_SLOTS).fill(0)},u_shadowFaceBasisX:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3(1,0,0))},u_shadowFaceBasisY:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3(0,1,0))},u_shadowFaceBasisZ:{value:Array.from({length:SHADOW_FACE_SLOTS},()=>new THREE.Vector3(0,0,1))},u_shadowSlotFace:{value:new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(-1)},u_shadowSlotFaceCount:{value:new Int32Array(SHADOW_LIGHT_SLOTS_MAX).fill(0)},u_shadowDiagnosticVisibilityScale:{value:1}});if(!featureSkips.occlusion)Object.assign(newUniforms,{// Same sampler-unit hazard as the Scene: see
-// createMtlxSceneUniforms. No stage volume here, so
-// the white 1x1x1 dummy at strength 0 is the value.
-u_skyVisMap:{value:getDummyTex3DWhite()},u_skyVisMin:{value:new THREE.Vector3()},u_skyVisSize:{value:new THREE.Vector3(1,1,1)},u_skyVisCell:{value:0},u_skyVisStrength:{value:0},// No baked occlusion volume in the Viewer either;
-// same sampler-unit hazard as u_skyVisMap above.
-u_aoVolumeMap:{value:getDummyTex3DWhite()},u_aoVolumeMin:{value:new THREE.Vector3()},u_aoVolumeSize:{value:new THREE.Vector3(1,1,1)},u_aoVolumeCell:{value:0},u_aoVolumeStrength:{value:0}});// Baked diffuse bounce is patched in independently of the
-// occlusion gate, so it is seeded whatever that gate did.
-Object.assign(newUniforms,{// No baked diffuse bounce in the Viewer either; same
-// sampler-unit hazard as u_skyVisMap above.
-u_skyBounceMap:{value:getDummyTex3DWhite()},u_skyBounceMin:{value:new THREE.Vector3()},u_skyBounceSize:{value:new THREE.Vector3(1,1,1)},u_skyBounceCell:{value:0},u_skyBounceStrength:{value:0},u_bounceScale:{value:0},u_bounceTint:{value:new THREE.Vector3(1,1,1)}});// GLSL ES 3.0 forbids uniform initializers, so the app
-// must upload each default, an unset uniform reads as
-// 0 in WebGL, which blacked out every unlit/PBR preview.
-applyIntrospectedUniformDefaults(newUniforms,introspected);if(DEBUG_SHADERS){console.log('introspected uniforms:',introspected.map(u=>`${u.type} ${u.name}${u.data!=null?' (default uploaded)':''}`));if(!introspected.length){console.warn('Shader introspection found NO uniform blocks, defaults not uploaded; expect black. (Binding API mismatch, report the mxShader/stage method names used by generatePreviewSourcesUnlocked.)');}}// Discover what the generated shader actually declares,
-// so we bind by real names rather than assumptions.
-const declared=parseUniforms(fs).concat(parseUniforms(vs));const declaredNames=new Set(declared.map(u=>u.name));const has=n=>declaredNames.has(n);// MaterialX gives u_time/u_frame no default value, so the
-// introspected-defaults pass above never binds them.
-if(has('u_time'))newUniforms.u_time={value:MTLX_CLOCK.time};if(has('u_frame'))newUniforms.u_frame={value:MTLX_CLOCK.frame};// Finds a declared sampler by pattern, ALWAYS anchored
-// to /env/i first, without it, a material sampler
-// named e.g. "specular" could false-match (a real past bug).
-const findSampler=(re,exclude)=>declared.find(u=>/sampler/i.test(u.type)&&/env/i.test(u.name)&&re.test(u.name)&&!(exclude&&exclude.test(u.name)));if(DEBUG_SHADERS){console.group(`MaterialX preview: ${label}`);console.log('kind:',debugKind,'needsLighting:',needsLighting);console.log('declared uniforms:',declared.map(u=>`${u.type} ${u.name}`));console.log('VERTEX SHADER\n',vs);console.log('PIXEL SHADER\n',fs);console.groupEnd();}// Image-based lighting: binds the already-fetched,
-// shell-level env textures to whatever sampler names
-// THIS shader uses, matched loosely against version drift.
-if(needsLighting){// "u_envIrradiance" also matches /radiance/i, so the
-// radiance pattern must exclude it explicitly here.
-const radSampler=findSampler(/radiance|specular|prefilter/i,/irradiance/i);const irrSampler=findSampler(/irradiance|diffuse/i);if(radSampler)newUniforms[radSampler.name]={value:envRadiance};if(irrSampler)newUniforms[irrSampler.name]={value:envIrradiance};// Captured so the view-handle's setEnvironment()/
-// setEnvRotation()/setEnvExposure() methods below can
-// live-swap/mutate the right uniforms after creation.
-envRadSamplerName=radSampler&&radSampler.name;envIrrSamplerName=irrSampler&&irrSampler.name;// +90° Y is the official viewer's fixed base; the
-// user's rotation adds on top, seeded from
-// envRotationRad (not 0) so a material swap preserves it.
-if(has('u_envMatrix'))newUniforms.u_envMatrix={value:new THREE.Matrix4().makeRotationY(Math.PI/2+envRotationRad)};if(has('u_envRadianceMips'))newUniforms.u_envRadianceMips={value:envMips};if(has('u_envRadianceSamples'))newUniforms.u_envRadianceSamples={value:16};// Seeded from envExposure (not a literal 1.0) so a
-// material swap PRESERVES whatever exposure the
-// user already dialed in via setEnvExposure().
-if(has('u_envLightIntensity')&&!newUniforms.u_envLightIntensity)newUniforms.u_envLightIntensity={value:envExposure};// Generated ESSL declares u_refractionTwoSided (the name
-// the official viewer also binds). false matches upstream's
-// LightHandler default; true double-squares tinted transmission.
-if(has('u_refractionTwoSided'))newUniforms.u_refractionTwoSided={value:false};// Direct lights = rig (fixed) + auto-extracted env
-// key light (rotates live), ALWAYS bound at a FIXED
-// length (rigCount+1, see getMxEnv's
-// hwMaxActiveLightSources) so later updates can
-// mutate values in place without a rebuild.
-const nLights=activeLightCount(lightData,envKeyLight,null,srcs.maxLights);if(has('u_numActiveLightSources'))newUniforms.u_numActiveLightSources={value:nLights};if(has('u_lightData')){const entries=currentLights(lightData,envKeyLight,envRotationRad,null,undefined,null,srcs.maxLights);newUniforms.u_lightData={value:entries};}if(DEBUG_SHADERS){console.log('env bound → radiance:',radSampler&&radSampler.name,'| irradiance:',irrSampler&&irrSampler.name,envHasFile?envPrefilteredIrr?'(radiance + prefiltered irradiance files)':'(radiance file; irradiance SH-synthesized)':'(synthesized)','| direct lights:',nLights,'(rig '+rigCount+' + key '+(envKeyLight?1:0)+')');const envUnbound=declared.filter(u=>/sampler/i.test(u.type)&&/env/i.test(u.name)&&!newUniforms[u.name]);if(envUnbound.length)mtlxWarn('UNBOUND env samplers (likely cause of black):',envUnbound.map(u=>u.name));}}return newUniforms;};// syncMeshMaterialMode, derives the mesh material's
+const setUniforms=()=>{if(!mesh||!uniforms)return;mesh.updateMatrixWorld();camera.updateMatrixWorld();camera.matrixWorldInverse.copy(camera.matrixWorld).invert();uniforms.u_worldMatrix.value.copy(mesh.matrixWorld);vp.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);uniforms.u_viewProjectionMatrix.value.copy(vp);uniforms.u_worldInverseTransposeMatrix.value.copy(mesh.matrixWorld).invert().transpose();camera.getWorldPosition(uniforms.u_viewPosition.value);if(uniforms.u_time)uniforms.u_time.value=MTLX_CLOCK.time;if(uniforms.u_frame)uniforms.u_frame.value=MTLX_CLOCK.frame;};// Session env state in the shape createMtlxSceneUniforms expects; no
+// radiancePrefiltered/irradianceConvolved fields, so it binds as-is.
+const shadingEnv=()=>{const e=host.env();return{radiance:e.radiance,irradiance:e.irradiance,mips:e.mips,keyLight:e.keyLight};};// DEBUG_SHADERS logging the old bindMaterialUniforms fork
+// used to print inline; kept as its own helper so
+// createMtlxSceneUniforms stays free of console noise.
+const logPreviewUniformDebug=(srcs,newUniforms)=>{if(!DEBUG_SHADERS)return;const introspected=srcs.introspected||[];console.log('introspected uniforms:',introspected.map(u=>`${u.type} ${u.name}${u.data!=null?' (default uploaded)':''}`));if(!introspected.length){console.warn('Shader introspection found NO uniform blocks, defaults not uploaded; expect black. (Binding API mismatch, report the mxShader/stage method names used by generatePreviewSourcesUnlocked.)');}const declared=srcs.declared||parseUniforms(srcs.fs||'').concat(parseUniforms(srcs.vs||''));console.group(`MaterialX preview: ${label}`);console.log('kind:',debugKind,'needsLighting:',needsLighting);console.log('declared uniforms:',declared.map(u=>`${u.type} ${u.name}`));console.log('VERTEX SHADER\n',srcs.vs);console.log('PIXEL SHADER\n',srcs.fs);console.groupEnd();if(needsLighting){const{keyLight:envKeyLight,hasFile:envHasFile,prefilteredIrr:envPrefilteredIrr}=host.env();const nLights=activeLightCount(lightData,envKeyLight,null,srcs.maxLights);console.log('env bound →',envHasFile?envPrefilteredIrr?'(radiance + prefiltered irradiance files)':'(radiance file; irradiance SH-synthesized)':'(synthesized)','| direct lights:',nLights,'(rig '+rigCount+' + key '+(envKeyLight?1:0)+')');const envUnbound=declared.filter(u=>/sampler/i.test(u.type)&&/env/i.test(u.name)&&!newUniforms[u.name]);if(envUnbound.length)mtlxWarn('UNBOUND env samplers (likely cause of black):',envUnbound.map(u=>u.name));}};// syncMeshMaterialMode, derives the mesh material's
 // blend/depth flags from viewIsTransparent/
 // FORCE_TRANSPARENCY, in place (no shader rebuild, the
 // peel discard block is baked into every shader
@@ -3318,14 +2961,14 @@ const nLights=activeLightCount(lightData,envKeyLight,null,srcs.maxLights);if(has
 // duration of its peel loop.
 const syncMeshMaterialMode=()=>{if(!material)return;const peelOn=viewIsTransparent&&FORCE_TRANSPARENCY;// Idempotent transition (renderFrame's own check below is
 // the other call site), flips scene built-ins' toneMapped.
-const wantLinear=peelOn&&peelLinearOk;if(sceneLinearOn!==wantLinear){setSceneLinear(wantLinear);sceneLinearOn=wantLinear;}applyPeelMaterialMode(material,peelOn);};// ------------------------------------------------------
+host.syncLinear(peelOn);applyPeelMaterialMode(material,peelOn);};// ------------------------------------------------------
 // applyMaterialInternal: builds a new RawShaderMaterial
 // from `srcs` and swaps it onto the shell's mesh IN PLACE
 // (no renderer/scene/camera recreation). On a compile
 // error, restores the OLD material/uniforms and disposes
 // the bad one BEFORE throwing, see the badProg branch below.
 // ------------------------------------------------------
-const applyMaterialInternal=(srcs,applyLabel)=>{if(geometry&&srcs.geomprops&&srcs.geomprops.length){bindGeompropAttributes(geometry,srcs.geomprops,text=>{if(!srcs.notices)srcs.notices=[];if(!srcs.notices.includes(text))srcs.notices.push(text);});}const newUniforms=bindMaterialUniforms(srcs);// Transparency verdict is srcs.transparent, gated on
+const applyMaterialInternal=(srcs,applyLabel)=>{if(geometry&&srcs.geomprops&&srcs.geomprops.length){bindGeompropAttributes(geometry,srcs.geomprops,text=>{if(!srcs.notices)srcs.notices=[];if(!srcs.notices.includes(text))srcs.notices.push(text);});}const{rotation:envRotationRad,exposure:envExposure}=host.env();const newUniforms=createMtlxSceneUniforms({compiled:srcs,env:needsLighting?shadingEnv():null,lightData:needsLighting?lightData:null,envRotationRad,envExposure});logPreviewUniformDebug(srcs,newUniforms);// Transparency verdict is srcs.transparent, gated on
 // FORCE_TRANSPARENCY. When on, translucency is produced
 // by renderFrame()'s depth-peel passes (syncMeshMaterialMode,
 // above), not three.js blend state, STRAIGHT alpha
@@ -3349,7 +2992,9 @@ mesh=new THREE.Mesh(geometry,material);scene.add(mesh);}else{mesh.material=mater
 setUniforms();// [mtlx-perf] timing for renderer.compile() alone.
 // With the pre-warm completed beforehand, this is
 // typically an ANGLE cache hit (~15-25ms) vs. 2.5-2.9s cold.
-const __compilePerfStart=window.MTLX_PERF_LOG?performance.now():0;compileFilteringDriverNoise(renderer,scene,camera);if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] GL compile: '+(performance.now()-__compilePerfStart).toFixed(1)+'ms (target: '+applyLabel+')');}const badProg=(renderer.info.programs||[]).find(p=>p.diagnostics&&p.diagnostics.runnable===false);if(badProg){// LOAD-BEARING ORDER: restore OLD material/uniforms
+const __compilePerfStart=window.MTLX_PERF_LOG?performance.now():0;// host.compile(): driver-noise filtered compile plus the
+// bad-program detection; the rollback below stays here.
+const badProg=host.compile();if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] GL compile: '+(performance.now()-__compilePerfStart).toFixed(1)+'ms (target: '+applyLabel+')');}if(badProg){// LOAD-BEARING ORDER: restore OLD material/uniforms
 // FIRST, then dispose the BAD one, reordering this
 // leaves the bad program in renderer.info.programs forever.
 mesh.material=oldMaterial;material=oldMaterial;uniforms=oldUniforms;newMaterial.dispose();const d=badProg.diagnostics;const log=(d.programLog||'')+'\n'+(d.fragmentShader&&d.fragmentShader.log?'FRAG: '+d.fragmentShader.log:'')+(d.vertexShader&&d.vertexShader.log?' VERT: '+d.vertexShader.log:'');console.error('MaterialX shader compile error:',log);throw new Error(`Shader compile error for "${applyLabel}". See console. ${log.slice(0,160)}`);}// Success: the swap stuck; the OLD material/program
@@ -3364,149 +3009,62 @@ if(oldMaterial)oldMaterial.dispose();// Land the new material in the correct ren
 // Transparency setting take effect immediately
 // without waiting for a toggle event from the
 // Settings dialog.
-syncMeshMaterialMode();};// First build: routes through the exact same helper every
-// later applyMaterial() call uses, throwing the same styled
-// Error on failure, identical to today's first-build path.
-applyMaterialInternal({vs,fs,introspected,transparent,geomprops,notices,maxLights},label);// Contact-shadow casters, only when a studioGroup exists
-// to receive them. Full-scene mode has no catcher, so
-// `mesh`/sceneGroup meshes there are left untouched.
-if(studioGroup){// The whole model casts the contact shadow now: the
-// MaterialX surface plus, in scene mode, the neutral
-// glTF parts (same envMapIntensity duck-type as the env-rotation patch above).
-if(mesh)mesh.castShadow=true;if(sceneGroup){sceneGroup.traverse(obj=>{if(!obj.isMesh||!obj.material)return;const mats=Array.isArray(obj.material)?obj.material:[obj.material];if(mats.some(m=>'envMapIntensity'in m))obj.castShadow=true;});}// Factored out above as updateStudioFloor so a later
-// displacement swap can recompute it too.
-updateStudioFloor();}// renderFrame, the ONE render entry point for this view,
-// called by animate() below and by the handle's snapshot().
-// Byte-identical to the pre-feature `renderer.render(scene,
-// camera)` whenever depth peeling isn't active for this
-// frame; routes to peelPipeline.render([mesh]) otherwise
-// (see createPeelPipeline above for the 6-pass graph).
-const renderFrame=()=>{const peelActive=FORCE_TRANSPARENCY&&viewIsTransparent&&!!mesh;// Idempotent transition (syncMeshMaterialMode is the
-// other call site), flips scene built-ins' toneMapped.
-const wantLinear=peelActive&&peelLinearOk;if(sceneLinearOn!==wantLinear){setSceneLinear(wantLinear);sceneLinearOn=wantLinear;}if(!peelActive){renderer.render(scene,camera);return;}// byte-identical to the old path
-peelPipeline.render(scene,camera,[mesh]);};// From here on syncSize's resize-triggered render is safe
-// to call (setUniforms/renderFrame both exist above).
-renderPathReady=true;const animate=ts=>{if(stopped||!aliveFn())return;reqId=requestAnimationFrame(animate);// Idempotent per rAF timestamp: every view ticking this
-// frame reads the same MTLX_CLOCK value. Runs before
-// controls.update() (syncs a peer) and the paused return.
-clockTick(ts);if(controls){// Before update(): OrbitControls clamps phi in there,
-// so a zoom-out this frame is corrected in the same one.
-applyStudioPolarClamp();controls.update();// damping + autoRotate
-// Scene-orbit hard containment (null elsewhere):
-// the primary floor/side-wall enforcement, since
-// maxDistance is the only OrbitControls-native limit.
-if(sceneOrbitClampBox&&!sceneOrbitClampBox.containsPoint(camera.position)){sceneOrbitClampBox.clampPoint(camera.position,camera.position);camera.lookAt(controls.target);}}// Paused views must still track camera input (drag/damping);
-// compare's diff mode reads pixels on demand, not via this render.
-if(!isActive())return;if(!controls&&fallbackSpin){// OrbitControls script blocked → old behavior.
-// Spins the WHOLE assembled scene when present,
-// rotating just `mesh` would leave the backdrop static.
-(sceneGroup||mesh).rotation.y+=0.005;}setUniforms();renderFrame();};animate();if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] createMtlxRenderView total: '+(performance.now()-__totalPerfStart).toFixed(1)+'ms (target: '+label+')');}handle={uniforms,introspected,vs,fs,controls,renderer,allowConstInputs,// Displacement (P5): the first-build subdivide/evaluate run
-// above happened before `handle` existed, so any notice it
-// produced couldn't append here yet, fold it in now.
-notices:(materialNotices=notices||[]).concat(currentDispNotices()),isTransparent:!!transparent,// Live auto-orbit toggle (no regen needed). No-op in
-// full-scene mode by contract: every caller hides the rotate
-// button there, and fallbackSpin would rotate the authored scene.
-// Same contract for flat2d: no controls, and fallbackSpin
-// would spin the fullscreen quad.
-setAutoRotate:on=>{if(fullScene||flat2d)return;fallbackSpin=!!on;if(controls)controls.autoRotate=!!on;},// Fullscreen "fit to ball" toggle: keeps the whole shaderball
+syncMeshMaterialMode();};const content={// studio is read before the renderer exists; the rest after instantiate().
+capabilities:()=>({lit:!!needsLighting,threeD:!flat2d,studio:wantsStudio,sceneEnvironment:!!sceneInst,autoRotate:!fullScene&&!flat2d,camera:flat2d?'ortho':fullScene&&!sceneOrbit?'fixed':'orbit',// Settings surface the session reads its preview Quality effects from.
+surface:renderSurface}),// Codegen, then the driver pre-warm BEFORE the display renderer
+// exists (the old after-renderer placement stalled WebGLRenderer init).
+prepare:async h=>{host=h;const srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,materialName,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:previewFeatureOptions(renderSurface),allowConstInputs,transmission:getPreviewTransmission(renderSurface)});if(!srcs)return false;firstSrcs=srcs;prewarmDisplacementSources(srcs,isMounted,label);const warmResult=await prewarmShaderCompile({vs:srcs.vs,fs:srcs.fs,isMounted,label});if(warmResult==='bailed'||!isMounted())return false;return true;},attach:h=>{renderer=h.renderer;// F3: one texture session per preview handle (unbounded, like
+// today's preview loads); tiers/exact are the Scene's knobs.
+textureSession=createTextureSession({renderer,isAlive:()=>!stopped,anisotropy:getTextureAnisotropy()});unsubTextureAnisotropy=window.MtlxRenderSettings&&window.MtlxRenderSettings.subscribe?window.MtlxRenderSettings.subscribe(detail=>{// Stage-profile writes belong to the Scene's own sessions.
+if(detail&&detail.key==='textureAnisotropy'&&detail.profile!=='stage'&&textureSession)textureSession.setAnisotropy(detail.value);}):null;dispRunner=createDisplacementRunner({renderer,isAlive:()=>!stopped,budget:createTriangleBudget({perMesh:triangleBudget,total:Infinity,enabled:true}),textureSession,cacheKey:level=>baseGeomCacheKey(geomName,sceneMode,level),creaseByNormals:true,firstBuildTimeoutMs:4000,debounceMs:150,onGeometry:built=>swapMeshGeometry(built||originalGeometry),onStatus:()=>{syncHandleNotices();dispDispatchStatus();},getWorldMatrix:()=>mesh?mesh.matrixWorld:new THREE.Matrix4()});},// Instantiates the scene-mode GLB BEFORE the camera: full-scene mode
+// builds the camera from the GLB's embedded one.
+instantiate:h=>{scene=h.scene;const finish=inst=>{sceneInst=inst;if(!isMounted())return false;if(sceneMode&&!sceneInst){// Missing/corrupt GLB: plain sphere fallback with a warning.
+console.warn('shaderball scene unavailable, falling back to sphere:',geomName);}if(sceneInst){sceneGroup=sceneInst.group;sceneOwnedMaterials=sceneInst.ownedMaterials;// Env-rotation patch on every neutral glTF PBR material
+// except the backplanes' MeshBasicMaterial clones (no envMap).
+sceneOwnedMaterials.forEach(m=>{if('envMapIntensity'in m&&!wantsStudio)patchNeutralMaterialEnvRotation(m);});}fullScene=!!(sceneInst&&sceneMode==='full');return true;};if(!sceneMode)return finish(null);return instantiateShaderballScene(sceneMode).then(finish);},adoptCamera:(cam,{width:cw,height:ch})=>{camera=cam;if(fullScene&&sceneInst.glbCamera){const gc=sceneInst.glbCamera;// DETACHED camera: the GLB's camera sits under a root baking a
+// 0.01 scale; in-hierarchy it would clip past zfar=10.
+sceneGroup.updateMatrixWorld(true);gc.getWorldPosition(camera.position);gc.getWorldQuaternion(camera.quaternion);sceneAuthoredPose={position:camera.position.clone(),quaternion:camera.quaternion.clone()};camera.near=gc.near;camera.far=gc.far;// Authored aspect (this GLB authors ~16:9); the fallback only
+// matters for a GLB that omits aspectRatio.
+fullSceneAuthoredFov=gc.fov;fullSceneAuthoredAspect=gc.aspect||1.7778;// Canvas aspect; effectiveFullSceneVFov widens instead of cropping.
+camera.aspect=cw/ch;camera.fov=effectiveFullSceneVFov(fullSceneAuthoredFov,fullSceneAuthoredAspect,camera.aspect);camera.updateProjectionMatrix();}},// flat2d refits the quad (fitQuadToAspect owns its projection);
+// everything else re-aims the perspective camera.
+layout:(w,h)=>{if(flat2d){fitQuadToAspect(w/h);return;}camera.aspect=w/h;// fullScene: a resize can flip the authored-aspect comparison.
+recomputeCameraFov();camera.updateProjectionMatrix();},clampBox:()=>sceneOrbitClampBox,build:async h=>{controls=h.controls;// Scene mode pre-assigns `mesh`/`geometry` to material_surface, so
+// the first applyMaterialInternal() reuses it, not a fresh Mesh.
+if(sceneInst){scene.add(sceneGroup);mesh=sceneInst.surfaceMesh;geometry=mesh.geometry;// The first frame reads mesh.matrixWorld before render() syncs it.
+sceneGroup.updateMatrixWorld(true);}else{geometry=prepGeometry(await buildPreviewGeometry(geomName));// Initial 2D fit; don't rely on the ResizeObserver's first fire.
+if(flat2d)fitQuadToAspect((canvas.clientWidth||h.width)/(canvas.clientHeight||h.height));}if(!isMounted())return false;// Kept until teardown; every displaced geometry derives from it.
+originalGeometry=geometry;// First build: subdivide + evaluate before the first apply so the
+// first frame shows the final geometry; filename-driven or slow
+// (>4s) programs land later (dispRunner.runFirstBuild).
+displacementSources=firstSrcs.displacement;dispRunner.setSource(displacementSources);if(!flat2d&&displacementSources&&getDisplacementEnabled()){ensureBaseGeometry();bindDisplacementGeomprops();geometry=baseGeometry;if(mesh)mesh.geometry=baseGeometry;await dispRunner.runFirstBuild();}configureSceneOrbit();// Same helper every later applyMaterial() uses, same styled Error.
+// payloadSupported seeds the RGB-T selectors (false below preview Quality).
+const{vs,fs,introspected,transparent,geomprops,notices,maxLights,payloadSupported}=firstSrcs;applyMaterialInternal({vs,fs,introspected,transparent,geomprops,notices,maxLights,payloadSupported},label);return true;},// Spin target and floor bounds: the whole assembled scene when present.
+root:()=>sceneGroup||mesh,// The MaterialX surface plus, in scene mode, the neutral glTF parts.
+casters:()=>{const list=[];if(mesh)list.push(mesh);if(sceneGroup){sceneGroup.traverse(obj=>{if(!obj.isMesh||!obj.material)return;const mats=Array.isArray(obj.material)?obj.material:[obj.material];if(mats.some(m=>'envMapIntensity'in m))list.push(obj);});}return list;},builtinMaterials:()=>sceneOwnedMaterials,transparentMeshes:()=>viewIsTransparent&&mesh?[mesh]:[],beforeRender:()=>setUniforms(),// The session owns the env values; this rebinds what the material
+// and the neutral glTF parts read from them, in place.
+envChanged:(what,env)=>{const e=host.env();if(what==='rotation'){if(uniforms.u_envMatrix){uniforms.u_envMatrix.value=new THREE.Matrix4().makeRotationY(Math.PI/2+e.rotation);}// The extracted key light tracks the (clamped) sun; rig lights don't.
+updateKeyLightUniformEntry(uniforms,rigCount,e.keyLight,e.rotation,e.exposure);sceneOwnedMaterials.forEach(m=>{const u=m.userData.envRotationUniform;if(u)u.value=envRotationMatrix3(e.rotation);});}else if(what==='exposure'){// IBL-only multiplier; the key light is energy split out of the
+// env map (D5), so its bound intensity tracks it too.
+if(uniforms.u_envLightIntensity)uniforms.u_envLightIntensity.value=e.exposure;updateKeyLightUniformEntry(uniforms,rigCount,e.keyLight,e.rotation,e.exposure);if(sceneGroup){sceneGroup.traverse(obj=>{if(obj.isMesh&&obj!==mesh&&obj.material&&'envMapIntensity'in obj.material){obj.material.envMapIntensity=e.exposure;}});}}else if(what==='environment'){// Same shader source createMtlxSceneUniforms parsed at bind time.
+const declared=material?parseUniforms(material.fragmentShader).concat(parseUniforms(material.vertexShader)):[];bindEnvironmentSamplers(uniforms,declared,env);if(uniforms.u_envRadianceMips)uniforms.u_envRadianceMips.value=env.mips;updateKeyLightUniformEntry(uniforms,rigCount,e.keyLight,e.rotation,e.exposure);}},// Camera exposure and the transform id are uniforms: one write each.
+displayChanged:({scale,id})=>{const push=u=>{if(!u)return;if(u.u_displayExposure)u.u_displayExposure.value=scale;if(u.u_displayTransform)u.u_displayTransform.value=id;};push(uniforms);sceneOwnedMaterials.forEach(m=>push(m.uniforms));},// Re-derives blend/depth flags in place; returns the peel verdict.
+renderModeChanged:()=>{syncMeshMaterialMode();return viewIsTransparent&&FORCE_TRANSPARENCY;},// Called by the P3 setters through LIVE_VIEWS on every live
+// view; a no-op for flat2d or a material with no displacement.
+refreshDisplacement:()=>{if(flat2d||!displacementSources)return;if(!getDisplacementEnabled()){dispRunner.cancel();if(dispRunner.getState().state!=='off'){swapMeshGeometry(originalGeometry);dispRunner.off();dispDispatchStatus();}return;}const prevLevel=dispRunner.getState().level;const wasOff=dispRunner.getState().state==='off'||dispRunner.getState().state==='none';ensureBaseGeometry();if(wasOff||prevLevel!==dispRunner.getState().level)runDisplacement();},extras:{// Texture session stats (wrapper/source counts, reserved bytes,
+// current anisotropy). Not a core handle-contract name; the
+// Textures card UI itself is deferred (P4-DESIGN.md section 3).
+getTextureStats:()=>textureSession?textureSession.stats():null,// Fullscreen "fit to ball" toggle: keeps the whole shaderball
 // visible while fullscreen, FOV-only (camera position/
 // orientation untouched). No-op outside full-scene mode.
-setFullscreenFit:on=>{if(!fullScene)return;fullscreenFit=!!on;recomputeCameraFov();camera.updateProjectionMatrix();},// Resets the camera to this view's default. With OrbitControls,
-// saveState/reset does it uniformly. The graph's fixed-camera
-// full scene and the fixed-ortho 2D buffer have controls ===
-// null, nothing to do there.
-resetCamera:()=>{if(controls){controls.reset();return;}if(fullScene||flat2d)return;camera.position.set(0,0.5*(cameraDistance/3.6),cameraDistance);camera.lookAt(0,0,0);},// Current camera pose for URL/state persistence. null when
-// there is no OrbitControls rig (flat2d, fixed full-scene).
-// Rounded to 4 decimals, plenty of precision for a short URL.
-getCamera:()=>{if(!controls)return null;const r4=n=>Math.round(n*10000)/10000;return{position:[camera.position.x,camera.position.y,camera.position.z].map(r4),target:[controls.target.x,controls.target.y,controls.target.z].map(r4)};},// Applies a saved pose from getCamera(); invalid input is
-// silently ignored. makeDefault also rebases resetCamera()'s
-// saveState() snapshot onto this pose (default: off).
-setCamera:(pose,makeDefault)=>{if(!controls||!pose)return false;const isVec3=v=>Array.isArray(v)&&v.length===3&&v.every(n=>typeof n==='number'&&isFinite(n));if(pose.position!==undefined&&!isVec3(pose.position))return false;if(pose.target!==undefined&&!isVec3(pose.target))return false;if(pose.position)camera.position.set(pose.position[0],pose.position[1],pose.position[2]);if(pose.target)controls.target.set(pose.target[0],pose.target[1],pose.target[2]);controls.update();// Rebases position0/target0/zoom0 so a later resetCamera()
-// returns HERE instead of the original authored default.
-if(makeDefault)controls.saveState();return true;},// Background switch: 'studio'/'studio-dark' cyclorama /
-// 'environment' skybox / 'none', see applyBackdrop above.
-// Live, no view rebuild; setup already ran this once for the `backdrop` option.
-setBackdrop:mode=>applyBackdrop(mode),getBackdrop:()=>backdropMode,// Thin aliases kept for existing callers, on/off maps onto
-// the same two-mode slice of setBackdrop/getBackdrop.
-setEnvBackground:on=>applyBackdrop(on?'environment':'none'),// Pane drags: suspend buffer reallocation so the existing
-// frame just scales, then resync once on release.
-setResizeSuspended:on=>{const was=resizeSuspended;resizeSuspended=!!on;if(was&&!resizeSuspended)syncSizeRef();},// Capability, NOT current mode: whether this view has an env
-// texture to show at all. node-preview/graph preview call it
-// once at setup to gate the env control. getBackdrop() is state.
-hasEnvBackground:()=>!!envBgTexture,// Live rotation offset (radians) for the IBL environment,
-// takes effect next frame via uniform mutation, no rebuild.
-// Also fans out to sceneGroup's patched uEnvRotation uniforms.
-setEnvRotation:rad=>{if(uniforms.u_envMatrix){uniforms.u_envMatrix.value=new THREE.Matrix4().makeRotationY(Math.PI/2+rad);}envRotationRad=rad;// The extracted key light tracks the (clamped) sun's
-// position as the env rotates, rig lights don't.
-updateKeyLightUniformEntry(uniforms,rigCount,envKeyLight,rad,envExposure);// Studio spotlight follows the SAME rotated direction, so
-// the shadow agrees with the highlight; shadow.autoUpdate
-// defaults to true, so the shadow map redraws on its own.
-placeStudioLight();// Rotates the visible backdrop mesh to match (a real
-// geometry rotation, not a texture-offset, see bgMesh's
-// declaration above for why offset.x never worked on r128).
-if(bgMesh)bgMesh.rotation.y=BG_BASE+BG_SIGN*rad;// Scene-mode neutral parts: mirrors the SAME offset onto
-// every patched material's live uEnvRotation uniform, a
-// call before first compile is a safe no-op, seeded fresh.
-sceneOwnedMaterials.forEach(m=>{const u=m.userData.envRotationUniform;if(u)u.value=envRotationMatrix3(rad);});},// IBL-only exposure multiplier, direct lights are
-// unaffected, but IBL is the dominant light source in these
-// previews so this reads as a full exposure control.
-setEnvExposure:x=>{if(uniforms.u_envLightIntensity)uniforms.u_envLightIntensity.value=x;// Persist onto the shell too: bindMaterialUniforms seeds
-// a NEW material's u_envLightIntensity from envExposure,
-// so a future swap keeps the user's setting, not resetting to 1.0.
-envExposure=x;// Scene-mode's sceneGroup meshes are ordinary glTF PBR
-// materials lit via scene.environment/PMREM, their
-// envMapIntensity is the equivalent knob. Skip `mesh`.
-if(sceneGroup){sceneGroup.traverse(obj=>{if(obj.isMesh&&obj!==mesh&&obj.material&&'envMapIntensity'in obj.material){obj.material.envMapIntensity=x;}});}},// Re-derives the material's blend/depth flags from the stored
-// hwTransparency verdict + CURRENT FORCE_TRANSPARENCY, in
-// place, no shader change (syncMeshMaterialMode), so a
-// toggle never needs a rebuild. Broadcast to all live views
-// by setForceTransparency. Also frees this view's depth-peel
-// GPU resources the moment peeling is no longer active,
-// renderFrame() lazily reallocates them (allocPeel) next
-// time they're needed.
-refreshRenderMode:()=>{syncMeshMaterialMode();const peelOn=viewIsTransparent&&FORCE_TRANSPARENCY;if(!peelOn&&peelPipeline)peelPipeline.dispose();},// Camera exposure is a uniform (see ACES_SRGB_GLSL), so this costs
-// one write instead of the full regeneration a transform change
-// needs. Broadcast by setDisplayExposure through LIVE_VIEWS, which
-// is what keeps the docs node previews in sync too.
-refreshDisplaySettings:()=>{const scale=displayExposureScale();const id=displayTransformId(getDisplayTransform());const push=u=>{if(!u)return;if(u.u_displayExposure)u.u_displayExposure.value=scale;if(u.u_displayTransform)u.u_displayTransform.value=id;};push(uniforms);sceneOwnedMaterials.forEach(m=>push(m.uniforms));if('toneMappingExposure'in renderer)renderer.toneMappingExposure=scale;applyThreeToneMappingChunk(getDisplayTransform());scene.traverse(obj=>{if(obj.material&&obj.material.toneMapped)obj.material.needsUpdate=true;});renderFrame();},// Live-swaps the environment without a shader rebuild, used
-// by the Environment dialog's Import/Reset. Also regenerates
-// scene-mode's PMREM. No-op on views with no lighting/env.
-setEnvironment:env=>{if(!env)return;const shaded=resolveShadingEnv(renderer,env);if(envRadSamplerName&&uniforms[envRadSamplerName])uniforms[envRadSamplerName].value=shaded.radiance;if(envIrrSamplerName&&uniforms[envIrrSamplerName])uniforms[envIrrSamplerName].value=shaded.irradiance;if(uniforms.u_envRadianceMips)uniforms.u_envRadianceMips.value=env.mips;// Persist onto the SHELL env state too, not just the
-// current material's uniforms, otherwise a future swap
-// silently reverts to the stale env.
-envRadiance=shaded.radiance;envIrradiance=shaded.irradiance;envMips=env.mips;envBgTexture=env.background;// New env => possibly a new (or no) key light; refresh the
-// bound uniform entry in place, honoring current rotation.
-envKeyLight=env.keyLight||null;envSoftKeyDir=env.softKeyDir||null;updateKeyLightUniformEntry(uniforms,rigCount,envKeyLight,envRotationRad,envExposure);// Same refresh for the shadow: without this the studio light
-// would keep aiming along the PREVIOUS env's key light until
-// the next rotation change.
-placeStudioLight();// bgMesh is null for previews with no env, guard so
-// an Import/Reset broadcast (setEnvOverride's LIVE_VIEWS
-// loop) can't throw calling this standalone.
-if(bgMesh){bgMesh.material.map=envBgTexture;bgMesh.material.needsUpdate=true;}// Scene-mode PMREM regen: a PMREM render target is baked
-// from a source texture at generation time, no live-swap
-// API, so rebuild from scratch. try/catch is a pure backstop.
-if(sceneGroup){try{const oldPmremRT=pmremRT;// Fresh PMREMGenerator, never disposed, disposing
-// one would break every other PMREMGenerator
-// (r128 shares LOD-plane state module-wide).
-pmremRT=new THREE.PMREMGenerator(renderer).fromEquirectangular(env.radiance);scene.environment=pmremRT.texture;// The OLD render target IS this view's own,
-// ordinary GPU resource, safe to dispose once
-// superseded (unlike the generator that made it).
-if(oldPmremRT)oldPmremRT.dispose();}catch(e){console.warn('environment PMREM regeneration failed:',e);}}},// Fetches and applies an environment from a URL (decoder
-// chosen by extension, same pipeline as HDR import). Falsy
-// url restores the default; latest call always wins.
-setEnvMap:url=>{const callId=++envMapCallId;// Applies env to this view via setEnvironment() (rotation/
-// exposure/background all persist there already), then
-// frees whatever WE previously fetched, if superseded.
-const swapIn=(env,owned)=>{if(callId!==envMapCallId)return;// a newer call already won
-handle.setEnvironment(env);if(fetchedEnvMap)disposeFetchedEnv(fetchedEnvMap);fetchedEnvMap=owned?env:null;};if(!url){if(!fetchedEnvMap)return Promise.resolve(true);// already default
-return getEnvironment().then(def=>{if(def)swapIn(def,false);return true;});}const clean=String(url).split('?')[0].split('#')[0];const ext=clean.slice(clean.lastIndexOf('.')).toLowerCase();if(ext!=='.hdr'&&ext!=='.exr'){return Promise.reject(new Error('Unsupported environment URL "'+url+'". Expected .hdr or .exr.'));}if(ext==='.hdr'&&typeof THREE.RGBELoader==='undefined'){return Promise.reject(new Error('RGBELoader unavailable (script blocked/offline). Cannot load .hdr environments.'));}if(ext==='.exr'&&typeof THREE.EXRLoader==='undefined'){return Promise.reject(new Error('EXRLoader unavailable (script blocked/offline). Cannot load .exr environments.'));}return fetch(url).then(r=>{if(!r.ok)throw new Error('Failed to fetch environment "'+url+'" (HTTP '+r.status+').');return r.arrayBuffer();}).then(buf=>{const raw=parseEnvBuffer(buf,ext);if(!raw||!raw.image||!raw.image.data){throw new Error('Failed to parse the environment image "'+url+'".');}swapIn(buildEnvFromParsedTexture(raw),true);return true;});},// Applies a new (or already-generated) material into this
+setFullscreenFit:on=>{if(!fullScene)return;fullscreenFit=!!on;recomputeCameraFov();camera.updateProjectionMatrix();},// Applies a new (or already-generated) material into this
 // SAME shell, instead of calling createMtlxRenderView() again.
 // Returns null when superseded/bailed; throws on real compile failure.
 applyMaterial:async({mx,gen,genContext,renderable,srcs=null,label,materialName:applyMaterialName,isMounted=()=>true})=>{const __applyPerfStart=window.MTLX_PERF_LOG?performance.now():0;// `stopped` is disposePartial's flag, an apply arriving
 // after teardown must do nothing, not resurrect GL state
 // on an already-disposed renderer/context.
 if(stopped||!isMounted())return null;if(!srcs){// A caller switching materials passes the new material's name.
-const genMaterialName=applyMaterialName!==undefined?applyMaterialName:materialName;srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,materialName:genMaterialName,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:PREVIEW_FEATURE_OPTIONS,allowConstInputs});}// A thrown generation error is NOT caught here, it
+const genMaterialName=applyMaterialName!==undefined?applyMaterialName:materialName;srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,materialName:genMaterialName,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:previewFeatureOptions(renderSurface),allowConstInputs,transmission:getPreviewTransmission(renderSurface)});}// A thrown generation error is NOT caught here, it
 // propagates like a first-build failure, so the UI shows
 // the same overlay while the old material keeps rendering.
 if(!srcs||!isMounted()||stopped)return null;prewarmDisplacementSources(srcs,isMounted,label);const warmResult=await prewarmShaderCompile({vs:srcs.vs,fs:srcs.fs,isMounted,label});// 'bailed' or a lost isMounted(): must not touch the
@@ -3515,48 +3073,47 @@ if(!srcs||!isMounted()||stopped)return null;prewarmDisplacementSources(srcs,isMo
 if(warmResult==='bailed'||!isMounted()||stopped)return null;applyMaterialInternal(srcs,label);// Updates the handle's public fields IN PLACE: the
 // object-literal shorthand below captures a snapshot,
 // not a live binding, so every swap must re-assign these.
-handle.uniforms=uniforms;handle.introspected=srcs.introspected;handle.vs=srcs.vs;handle.fs=srcs.fs;materialNotices=srcs.notices||[];syncHandleNotices();handle.isTransparent=!!srcs.transparent;handle.syncDisplacementSources(srcs.displacement||null);if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] applyMaterial total: '+(performance.now()-__applyPerfStart).toFixed(1)+'ms (target: '+label+')');}return handle;},// Syncs geometry to a (possibly unchanged) displacement program. Called by
+const handle=handleRef();handle.uniforms=uniforms;handle.introspected=srcs.introspected;handle.vs=srcs.vs;handle.fs=srcs.fs;materialNotices=srcs.notices||[];syncHandleNotices();handle.isTransparent=!!srcs.transparent;handle.syncDisplacementSources(srcs.displacement||null);// P4d stage 2: a material swap can change which (if any)
+// UDIM refs are present; rebuild the split against the last
+// file map this view saw, if any.
+if(udimFileMap)applyUdimSplit(srcs.introspected,udimFileMap);if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] applyMaterial total: '+(performance.now()-__applyPerfStart).toFixed(1)+'ms (target: '+label+')');}return handle;},// Syncs geometry to a (possibly unchanged) displacement program. Called by
 // applyMaterial and by tryRefreshRenderView's in-place path; a changed key
 // is debounced so a slider drag does not re-evaluate every value.
-syncDisplacementSources:newDisplacement=>{if(stopped)return;displacementSources=newDisplacement||null;if(!displacementSources){applyDispDebounceToken++;cancelDisplacementRun();if(dispState!=='none'){swapMeshGeometry(originalGeometry);dispState='none';dispKey=null;dispEvalNotices=[];syncHandleNotices();dispDispatchStatus();}return;}if(displacementSources.key===dispKey)return;cancelDisplacementRun();dispKey=displacementSources.key;const debounceToken=++applyDispDebounceToken;setTimeout(()=>{if(debounceToken!==applyDispDebounceToken||stopped)return;if(flat2d||!getDisplacementEnabled())return;if(!baseGeometry)ensureBaseGeometry();runDisplacement();},150);},// PNG snapshot of the CURRENT view. The drawing buffer isn't
-// preserved between frames (preserveDrawingBuffer:false), so
-// render synchronously right before reading it back.
-snapshot:()=>{setUniforms();renderFrame();return renderer.domElement.toDataURL('image/png');},// Reads back the current view at caller-chosen dimensions:
-// syncs a render first, then resamples through a 2D canvas
-// so two compare views can be read at identical sizes.
-// The canvas/context are cached in the closure and only
-// resized when w/h change, instead of allocated per call.
-snapshotPixels:(w,h)=>{setUniforms();renderFrame();if(!__snapshotCanvas){__snapshotCanvas=document.createElement('canvas');__snapshotCtx=__snapshotCanvas.getContext('2d',{willReadFrequently:true});}if(__snapshotCanvas.width!==w||__snapshotCanvas.height!==h){__snapshotCanvas.width=w;__snapshotCanvas.height=h;}// Source is alpha:true, so drawImage's source-over would
-// blend it onto whatever this reused canvas held last,
-// only a size change reallocates (and thus clears) it.
-__snapshotCtx.clearRect(0,0,w,h);__snapshotCtx.drawImage(renderer.domElement,0,0,w,h);return __snapshotCtx.getImageData(0,0,w,h);},// Cheap same-frame render (no readback), used by camera sync
-// to remove one-frame lag between two mirrored views. Optional
-// ts: pass the driving rAF timestamp so several views read one tick.
-renderNow:ts=>{clockTick(ts);setUniforms();renderFrame();},// Fixed-resolution capture mode for the turntable recorder:
-// syncSize's buffer pinned to width x height, canvas hidden.
-// Returns false if the view is gone or already capturing.
-beginCapture:({width,height})=>{if(stopped||captureState)return false;captureState={prevPixelRatio:renderer.getPixelRatio(),prevVisibility:canvas.style.visibility,width,height};resizeSuspended=true;renderer.setPixelRatio(1);applySize(width,height);canvas.style.visibility='hidden';return true;},// Renders one frame at the capture resolution and reads it
-// back as ImageData, same cached-canvas path as snapshotPixels.
-captureFrame:()=>{if(!captureState)throw new Error('captureFrame() called with no active beginCapture().');setUniforms();renderFrame();const{width:w,height:h}=captureState;if(!__captureCanvas){__captureCanvas=document.createElement('canvas');__captureCtx=__captureCanvas.getContext('2d',{willReadFrequently:true});}if(__captureCanvas.width!==w||__captureCanvas.height!==h){__captureCanvas.width=w;__captureCanvas.height=h;}__captureCtx.clearRect(0,0,w,h);__captureCtx.drawImage(renderer.domElement,0,0,w,h);return __captureCtx.getImageData(0,0,w,h);},// Leaves capture mode: restores on-screen visibility, pixel
-// ratio and layout-driven sizing. Idempotent, safe to call twice.
-endCapture:()=>{if(!captureState)return;canvas.style.visibility=captureState.prevVisibility;renderer.setPixelRatio(captureState.prevPixelRatio);captureState=null;resizeSuspended=false;syncSizeRef();},// Reads the live `uniforms` closure binding (same one setUniforms
+syncDisplacementSources:newDisplacement=>{if(stopped)return;displacementSources=newDisplacement||null;if(!displacementSources){dispRunner.cancel();if(dispRunner.getState().state!=='none'){swapMeshGeometry(originalGeometry);dispRunner.setSource(null);dispRunner.reset();syncHandleNotices();dispDispatchStatus();}return;}if(displacementSources.key===dispRunner.getSourceKey())return;dispRunner.cancel();dispRunner.setSource(displacementSources);// 150ms debounce so a slider-driven regeneration burst
+// doesn't re-evaluate every intermediate value; mirrors the
+// old inline setTimeout's guard order exactly.
+dispRunner.debouncedEvaluate(()=>{if(stopped)return false;if(flat2d||!getDisplacementEnabled())return false;if(!baseGeometry)ensureBaseGeometry();bindDisplacementGeomprops();return true;});},// Reads the live `uniforms` closure binding (same one setUniforms
 // uses), so a material swap is reflected without a stale copy.
 isAnimated:()=>!!(uniforms&&(uniforms.u_time||uniforms.u_frame)),// Status snapshot: level/triangles/capped describe the current
 // baseGeometry (0 until one is built); notices merges the
 // subdivision and latest-evaluation notices.
-getDisplacementState:()=>({state:dispState,mode:displacementSources?displacementSources.mode:null,level:dispSubdivLevel||0,capped:!!dispCappedNotice,triangles:dispTriangles,notices:currentDispNotices()}),// Resolves once no evaluation is actively in flight (merely
+getDisplacementState:()=>dispRunner.getState(),// Resolves once no evaluation is actively in flight (merely
 // waiting on a file map does NOT count, that could hang forever).
-whenDisplacementSettled:()=>dispRunInFlight?dispSettlePromise||Promise.resolve():Promise.resolve(),// Called by the P3 setters through LIVE_VIEWS on every live
-// view; a no-op for flat2d or a material with no displacement.
-refreshDisplacement:()=>{if(flat2d||!displacementSources)return;if(!getDisplacementEnabled()){applyDispDebounceToken++;cancelDisplacementRun();if(dispState!=='off'){swapMeshGeometry(originalGeometry);dispState='off';dispDispatchStatus();}return;}const prevLevel=dispSubdivLevel;const wasOff=dispState==='off'||dispState==='none';ensureBaseGeometry();if(wasOff||prevLevel!==dispSubdivLevel)runDisplacement();},// bindDroppedTextures calls this once per drop for every live
+whenDisplacementSettled:()=>dispRunner.settled(),// bindDroppedTextures calls this once per drop for every live
 // view (see its header comment below); re-runs only when the
 // displacement program actually samples a file.
-onDisplacementFileMap:fileMap=>{dispFileMap=fileMap;if(!flat2d&&getDisplacementEnabled()&&hasDisplacementFileRef(displacementSources)){runDisplacement();}},// Wrapped (not disposePartial directly) so dispose() also
-// deregisters the handle from LIVE_VIEWS, otherwise
-// setEnvOverride's broadcast could touch a torn-down view.
-dispose:()=>{LIVE_VIEWS.delete(handle);disposePartial();},// Debug hook: raw GPU state for a headed diagnosis harness.
-// Not for production UI code.
-__debug:()=>({renderer,scene,camera,material:mesh?mesh.material:material,mesh,geometry})};LIVE_VIEWS.add(handle);return handle;}catch(err){disposePartial();throw err;}};// ---- public API ----
+onDisplacementFileMap:fileMap=>{dispRunner.setFileMap(fileMap);if(!flat2d&&getDisplacementEnabled()&&hasDisplacementFileRef(displacementSources)){runDisplacement();}},// P4d stage 2: bindDroppedTextures calls this once per drop for
+// every live view (same pattern as onDisplacementFileMap above);
+// splits custom geometry into per-UDIM-tile sub-meshes when the
+// current material has UDIM refs. Not a core handle-contract
+// name (guard (g) only reserves the HANDLE_CONTRACT list).
+bindTextureFileMap:fileMap=>{udimFileMap=fileMap;applyUdimSplit(handleRef().introspected,fileMap);},getUdimTileCount:()=>udimTileCount},// end extras
+// Handle data fields at publish time; the first-build displacement
+// notices ran before the handle existed, so fold them in now.
+fields:()=>({uniforms,introspected:firstSrcs.introspected,vs:firstSrcs.vs,fs:firstSrcs.fs,allowConstInputs,renderSurface,isTransparent:!!firstSrcs.transparent,notices:(materialNotices=firstSrcs.notices||[]).concat(currentDispNotices()),// bindDroppedTextures routes through the view's own session.
+textureSession}),// Debug hook: raw GPU state for a headed diagnosis harness.
+__debug:()=>({material:mesh?mesh.material:material,mesh,geometry,renderer}),// Content teardown; the session disposes the renderer afterwards.
+dispose:()=>{stopped=true;if(dispRunner)dispRunner.cancel();try{if(material)material.dispose();}catch(e){/* already disposed/invalid */}try{if(geometry)geometry.dispose();}catch(e){/* ditto */}// `geometry` is whichever of these is active; the Set disposes the
+// other two exactly once.
+try{const dispGeoms=new Set([originalGeometry,baseGeometry,displacedGeometry].filter(Boolean));dispGeoms.delete(geometry);dispGeoms.forEach(g=>{try{g.dispose();}catch(e2){/* already disposed/invalid */}});}catch(e){/* best-effort */}// UDIM part meshes own their material clones; their geometries
+// only own an index over shared attributes.
+try{udimParts.forEach(p=>{try{if(p.material)p.material.dispose();}catch(e2){/* already disposed/invalid */}});udimParts=[];}catch(e){/* best-effort */}// Per-view GLB material clones; geometries are shared with other views.
+try{if(sceneGroup){if(scene)scene.remove(sceneGroup);sceneOwnedMaterials.forEach(m=>{try{m.dispose();}catch(e){/* already disposed/invalid */}});}}catch(e){/* already disposed/invalid */}// F3: wrapper clones BEFORE the renderer (renderer.dispose clears
+// the properties map onTextureDispose needs).
+if(unsubTextureAnisotropy){unsubTextureAnisotropy();unsubTextureAnisotropy=null;}try{if(textureSession)textureSession.dispose();}catch(e){/* already disposed/invalid */}}};return content;};// createMtlxRenderView: persistent render-pipeline shell for one preview
+// surface (renderer/scene/camera/env built ONCE; applyMaterial() swaps
+// materials on the same shell) = render session + preview content.
+const createMtlxRenderView=async opts=>MtlxRender.createRenderSession(Object.assign({},opts,{content:createPreviewContent(opts)})).start();// ---- public API ----
 // ------------------------------------------------------------------
 // Fullscreen helpers: native requestFullscreen when available; else a
 // CSS-maximize fallback (position:fixed + synthesized 'fullscreenchange')
@@ -3611,4 +3168,7 @@ const watchFullscreen=cb=>{const h=()=>cb(fullscreenElement());document.addEvent
 (()=>{if(typeof document==='undefined'||document.getElementById('mtlx-shared-css'))return;const st=document.createElement('style');st.id='mtlx-shared-css';st.textContent=['.mtlx-loading-bar{position:relative;overflow:hidden;height:6px;border-radius:9999px;background:rgba(75,85,99,.45);}','.mtlx-loading-bar::after{content:"";position:absolute;top:0;bottom:0;left:0;width:40%;border-radius:9999px;','background:linear-gradient(90deg,transparent,#60a5fa,transparent);animation:mtlx-loading-slide 1.1s ease-in-out infinite;}','@keyframes mtlx-loading-slide{from{transform:translateX(-100%);}to{transform:translateX(350%);}}'].join('');document.head.appendChild(st);})();// Custom highlight.js theme for the XML "Document" dialog, matching the
 // site's dark gray-900/800 + blue-400 palette. Background is explicitly
 // transparent so it doesn't paint over the dialog's own panel.
-(()=>{if(typeof document==='undefined'||document.getElementById('mtlx-hljs-theme'))return;const st=document.createElement('style');st.id='mtlx-hljs-theme';st.textContent=['.hljs{color:#d1d5db;background:transparent;}','.hljs-tag,.hljs-punctuation{color:#6b7280;}','.hljs-name{color:#60a5fa;}','.hljs-attr{color:#9ca3af;}','.hljs-string{color:#4ade80;}','.hljs-comment{color:#6b7280;font-style:italic;}'].join('');document.head.appendChild(st);})();Object.assign(window,{getMxEnv,DEBUG_SHADERS,mtlxWarn,mxExclusive,MTLX_CLOCK,clockTick,getForceTransparency,setForceTransparency,getDisplacementEnabled,setDisplacementEnabled,getDisplacementNormalsMode,setDisplacementNormalsMode,getPreviewSubdivisionLevel,setPreviewSubdivisionLevel,PREVIEW_TRIANGLE_BUDGET,pickSubdivisionLevel,getHeightToNormalTexel,setHeightToNormalTexel,parseUniforms,parseVertexInputs,stripVersion,encodeDisplay,countFragmentSamplers,mergeDuplicateImageNodes,mxNodeSignature,mxErr,mxWriteValue,vecToArray,mxSafe,mxElName,mxElCat,mxElType,mxElAttr,mxSetAttr,mxRemoveAttr,mxSetColorspace,nextFrame,findConvertChain,ensureTypedInput,stripValuesFromConnectedInputs,listDocRenderables,normPath,readDroppedItems,expandZips,isHiddenSideFile,findFileForRef,findFilesForRef,preferKtx2Sibling,resolveIncludes,readMtlxText,readMtlxXml,isExportAttribution,splitXmlEnvelope,withXmlEnvelope,preserveSourceFormatting,TEXTURE_CACHE,textureCacheKey,textureCacheKeyAsync,hasBlobIdentity,samplerCacheKey,normalizeSamplerAddressMode,collectImageSamplerModes,annotateFilenameSamplerModes,bindDroppedTextures,loadExrTexture,loadHdrTexture,loadTifTexture,loadKtx2Texture,capKtx2MipLevels,runHeavyTextureDecode,loadBoundedBitmapTexture,resetTexturePerf,sceneTextureFastPathEnabled,readImageDimensions,boundDecodedTexture,collectMxUniforms,mxValueToThreeUniform,linToSrgb,srgbToLin,rgbToHex,hexToRgb,getFilenameDefaultTexture,rebindFilenameDefault,configureLoadedTexture,samplerHoldsDefault,prepGeometry,normalizeGeometry,buildPreviewGeometry,bindGeompropAttributes,loadCustomPreviewGeomFromFile,loadCustomPreviewGeomFromUrl,getCustomPreviewGeom,clearCustomPreviewGeom,getGlobalGeom,setGlobalGeom,getDisplayTransform,setDisplayTransform,getDisplayExposure,setDisplayExposure,displayExposureScale,applyThreeToneMappingChunk,getDisplayTransformValues,displayTransformId,sceneDisplayTransformGLSL:DISPLAY_TRANSFORM_SWITCH_GLSL,COLOR_VIEWABLE,resolveNodeKind,makeEnvTexture,getEnvironment,COLORSPACES,loadEnvironmentFromFile,loadEnvironmentFromBuffer,makeFlatEnvironment,setEnvOverride,getEnvOverride,getKeyLightEnabled,setKeyLightEnabled,prewarmShaderCompile,createMtlxRenderView,compileMtlxSceneMaterial,createMtlxSceneUniforms,createLightTransportUniforms,generatePreviewSources,generatePreviewSourcesWithinBudget,evaluateDisplacement,generateDisplacementSourcesUnlocked,detectDisplacementMode,ensurePrefilteredEnv,resolveShadingEnv,getSpecularEnvMethod,ensureConvolvedIrradiance,envIrradianceForShading,getDiffuseEnvMethod,setDiffuseEnvMethod,getDummyTexWhite,getDummyTex3DWhite,SHADOW_FACE_SLOTS,SHADOW_LIGHT_SLOTS_MAX,SHADOW_NORMAL_OFFSET_TEXELS,SHADOW_DEPTH_BIAS_TEXELS,createPeelPipeline,createRgbtPeelPipeline,applyPeelMaterialMode,registerLiveView,unregisterLiveView,tryRefreshRenderView,prewarmPreviewTarget,checkTargetTransparency,EXPORT_TARGETS,generateTargetSources,fullscreenElement,toggleFullscreen,watchFullscreen});
+(()=>{if(typeof document==='undefined'||document.getElementById('mtlx-hljs-theme'))return;const st=document.createElement('style');st.id='mtlx-hljs-theme';st.textContent=['.hljs{color:#d1d5db;background:transparent;}','.hljs-tag,.hljs-punctuation{color:#6b7280;}','.hljs-name{color:#60a5fa;}','.hljs-attr{color:#9ca3af;}','.hljs-string{color:#4ade80;}','.hljs-comment{color:#6b7280;font-style:italic;}'].join('');document.head.appendChild(st);})();Object.assign(window,{getMxEnv,DEBUG_SHADERS,mtlxWarn,mxExclusive,MTLX_CLOCK,clockTick,getForceTransparency,setForceTransparency,getPreviewTransmission,getDisplacementEnabled,setDisplacementEnabled,getTextureAnisotropy,setTextureAnisotropy,getDisplacementNormalsMode,setDisplacementNormalsMode,getPreviewSubdivisionLevel,setPreviewSubdivisionLevel,PREVIEW_TRIANGLE_BUDGET,pickSubdivisionLevel,createTriangleBudget,prepareDisplacementBase,createDisplacementRunner,getHeightToNormalTexel,setHeightToNormalTexel,parseUniforms,parseVertexInputs,stripVersion,encodeDisplay,countFragmentSamplers,mergeDuplicateImageNodes,mxNodeSignature,mxErr,mxWriteValue,vecToArray,mxSafe,mxElName,mxElCat,mxElType,mxElAttr,mxSetAttr,mxRemoveAttr,mxSetColorspace,nextFrame,findConvertChain,ensureTypedInput,stripValuesFromConnectedInputs,listDocRenderables,normPath,joinRefPath,readDroppedItems,expandZips,isHiddenSideFile,findFileForRef,findFilesForRef,preferKtx2Sibling,resolveIncludes,readMtlxText,readMtlxXml,isExportAttribution,splitXmlEnvelope,withXmlEnvelope,preserveSourceFormatting,TEXTURE_CACHE,TEXTURE_SOURCES,textureCacheKey,textureCacheKeyAsync,hasBlobIdentity,samplerCacheKey,normalizeSamplerAddressMode,collectImageSamplerModes,annotateFilenameSamplerModes,bindDroppedTextures,createTextureSession,createUdimVariantUniforms,loadExrTexture,loadHdrTexture,loadTifTexture,loadKtx2Texture,capKtx2MipLevels,runHeavyTextureDecode,loadBoundedBitmapTexture,resetTexturePerf,sceneTextureFastPathEnabled,readImageDimensions,boundDecodedTexture,collectMxUniforms,mxValueToThreeUniform,linToSrgb,srgbToLin,rgbToHex,hexToRgb,getFilenameDefaultTexture,rebindFilenameDefault,configureLoadedTexture,samplerHoldsDefault,prepGeometry,normalizeGeometry,buildPreviewGeometry,bindGeompropAttributes,loadCustomPreviewGeomFromFile,loadCustomPreviewGeomFromUrl,getCustomPreviewGeom,clearCustomPreviewGeom,getGlobalGeom,setGlobalGeom,getDisplayTransform,setDisplayTransform,getDisplayExposure,setDisplayExposure,displayExposureScale,applyThreeToneMappingChunk,getDisplayTransformValues,displayTransformId,sceneDisplayTransformGLSL:DISPLAY_TRANSFORM_SWITCH_GLSL,COLOR_VIEWABLE,resolveNodeKind,makeEnvTexture,getEnvironment,COLORSPACES,loadEnvironmentFromFile,loadEnvironmentFromBuffer,makeFlatEnvironment,setEnvOverride,getEnvOverride,getKeyLightEnabled,setKeyLightEnabled,envWithKeyLight,prewarmShaderCompile,createMtlxRenderView,compileMtlxSceneMaterial,createMtlxSceneUniforms,bindEnvironmentSamplers,createLightTransportUniforms,generatePreviewSources,generatePreviewSourcesWithinBudget,evaluateDisplacement,generateDisplacementSourcesUnlocked,detectDisplacementMode,ensurePrefilteredEnv,resolveShadingEnv,getSpecularEnvMethod,ensureConvolvedIrradiance,envIrradianceForShading,getDiffuseEnvMethod,setDiffuseEnvMethod,getDummyTexWhite,getDummyTex3DWhite,SHADOW_FACE_SLOTS,SHADOW_LIGHT_SLOTS_MAX,SHADOW_NORMAL_OFFSET_TEXELS,SHADOW_DEPTH_BIAS_TEXELS,createPeelPipeline,createRgbtPeelPipeline,applyPeelMaterialMode,registerLiveView,unregisterLiveView,snapshotRenderDestination,restoreRenderDestination,tryRefreshRenderView,prewarmPreviewTarget,checkTargetTransparency,EXPORT_TARGETS,generateTargetSources,fullscreenElement,toggleFullscreen,watchFullscreen});// Hands the render-session module (js/shared/render-session.js) the
+// engine internals it needs at call time; must run after every const
+// above is defined, so this stays the file's last line.
+MtlxRender.bindEngine({getDisplayTransform,applyThreeToneMappingChunk,displayExposureScale,clockTick,createPeelPipeline,getForceTransparency,getEnvironment,getEnvOverride,resolveShadingEnv,makeEnvTexture,makeBackgroundTexture,parseEnvBuffer,buildEnvFromParsedTexture,displayTransformId,fullscreenElement,registerLiveView,unregisterLiveView,compileFilteringDriverNoise});

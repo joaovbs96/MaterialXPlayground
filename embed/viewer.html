@@ -131,7 +131,19 @@
     <script src="js/shared/gif-encoder.js"></script>
     <script src="js/shared/mesh-subdivision.js"></script>
     <script src="js/shared/mesh-displacement.js"></script>
+    <script src="js/shared/mesh-udim.js"></script>
     <script src="js/shared/mtlx-turntable.js"></script>
+
+    <!-- Settings store: plain JS, no transform needed. Must precede
+         embed/gen/mtlx-engine.js, whose setters route through it. -->
+    <script src="js/shared/render-settings.js"></script>
+    <!-- Render session: plain JS, no transform needed. Studio backdrop
+         helpers are used lazily, at call time, so load order relative
+         to the engine below does not matter. -->
+    <script src="js/shared/render-environment.js"></script>
+    <!-- Renderer core: plain JS, no transform needed. Loaded after the
+         engine calls MtlxRender.bindEngine() on its own last line. -->
+    <script src="js/shared/render-session.js"></script>
 
     <script>
         // Loads the remaining precompiled scripts (scripts/build-embed.mjs)

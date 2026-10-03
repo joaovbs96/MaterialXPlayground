@@ -1,7 +1,8 @@
-/* Scene-linear HDR presentation for the existing USD renderer.
+/* Scene-linear HDR presentation (js/usd-scene-post.js until render parity P8):
+ * the Scene, and preview views at preview Quality (options.surface).
  * All scene paths, including both peel compositors, must honor the caller's
  * render target and outputLinear contract. This module never shades materials
- * or recognizes asset names. The Material Viewer is not opted into this path.
+ * or recognizes asset names.
  *
  * Transparent export: the final view premultiplies its output, and where the
  * source alpha is below 1 it raises alpha to at least the glow's luminance
@@ -18,7 +19,6 @@
     // These are inspection outputs, rather than creative looks. They must
     // never become a surprise persisted presentation choice on a later load.
     const DEBUG_VIEWS = Object.freeze(['final','linear','no-bloom','highlights','bloom','composite']);
-    const KEY = 'mtlx_scene_presentation';
     const vertex = 'in vec3 position; in vec2 uv; out vec2 vUv; void main(){vUv=uv;gl_Position=vec4(position.xy,0.0,1.0);}';
     const header = 'precision highp float; precision highp int; in vec2 vUv; out vec4 o;\n';
     const brightFunction = `
@@ -141,7 +141,23 @@
     function create(renderer, options = {}) {
         const THREE = root.THREE;
         let persisted = null;
-        try { if (root.top === root) persisted=JSON.parse(root.localStorage.getItem(KEY)||'null'); } catch (_) {}
+        // Settings surface: 'scene' (framed Scenes run on defaults) or a preview surface.
+        const surface = options.surface || 'scene';
+        try {
+            if ((root.top === root || surface !== 'scene') && root.MtlxRenderSettings) {
+                const S = root.MtlxRenderSettings;
+                persisted = {
+                    enabled: S.get('hdrPresentation', { surface }),
+                    bloom: S.get('bloom', { surface }),
+                    strength: S.get('bloomStrength', { surface }),
+                    threshold: S.get('bloomThreshold', { surface }),
+                    knee: S.get('bloomKnee', { surface }),
+                    radius: S.get('bloomRadius', { surface }),
+                    antialias: S.get('postAntialias', { surface }),
+                    samples: S.get('msaaSamples', { surface }),
+                };
+            }
+        } catch (_) {}
         let settings = sanitize(Object.assign({}, persisted, options.settings));
         let resources = null, permanentFailure = null, rendering = false, frames = 0, lastPasses = 0;
         const gl=renderer.getContext();
@@ -256,6 +272,9 @@
         const validateProgram=mat=>{
             if(validatedPrograms.has(mat))return;
             const program=renderer.properties.get(mat).currentProgram;
+            // A handle deleted by a swap/dispose is skipped silently (isProgram
+            // raises no GL error, getProgramParameter would) and checked next pass.
+            if(program && program.program && !gl.isProgram(program.program))return;
             if(!program || !gl.getProgramParameter(program.program,gl.LINK_STATUS))
                 throw new Error('HDR presentation shader did not link: '+(program?.diagnostics?.programLog||'unknown program'));
             validatedPrograms.add(mat);
@@ -352,7 +371,10 @@
                 if(oldSamples!==settings.samples||!settings.enabled)free();
                 // Persist only supported artistic/presentation controls. An
                 // active diagnostic must never survive a reload unnoticed.
-                if(next.persist!==false){try{if(root.top===root){const persisted=Object.assign({},settings);delete persisted.debugView;root.localStorage.setItem(KEY,JSON.stringify(persisted));}}catch(_) {}}
+                if(next.persist!==false){try{if(root.top===root&&root.MtlxRenderSettings){const S=root.MtlxRenderSettings;const o={surface};
+                    S.set('hdrPresentation',settings.enabled,o);S.set('bloom',settings.bloom,o);S.set('bloomStrength',settings.strength,o);
+                    S.set('bloomThreshold',settings.threshold,o);S.set('bloomKnee',settings.knee,o);S.set('bloomRadius',settings.radius,o);
+                    S.set('postAntialias',settings.antialias,o);S.set('msaaSamples',settings.samples,o);}}catch(_) {}}
                 return getSettings();
             },
             debug:()=>({settings:getSettings(),frames,lastPasses,size:resources?[resources.w,resources.h]:null,
@@ -365,4 +387,5 @@
         };
     }
     root.UsdScenePost={VERSION,DEFAULTS,create};
+    root.MtlxRender=Object.assign(root.MtlxRender||{},{createPostEffect:create});
 })(window);

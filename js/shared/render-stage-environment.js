@@ -1,28 +1,31 @@
-// USD scene environment bridge. The studio geometry/material is exported by
-// mtlx-engine.js so this view shares the material viewer's exact appearance.
-(() => {
-    const modes = new Set(['studio', 'studio-dark', 'environment', 'none']);
+// The Scene's stage environment bridge (dome, studio set, sky), split out of
+// render-environment.js in render parity P8 so the eager embed payload carries
+// no Scene-only code. Exports MtlxRender.createStageEnvironment.
+(function () {
+    'use strict';
 
-    // The ShadowMaterial catcher reads as fully shadowed wherever the spot's
-    // shadow map is missing, painting its frustum as a grey quad, so it only
-    // shows once three has actually drawn one. Pure: see
-    // tests/unit/usd-scene-studio-catcher.test.mjs.
-    const studioCatcherVisible = (studio, hasShadowMap) => !!(studio && hasShadowMap);
-
-    // Sky visibility and clear colour per backdrop mode. Pure: see
-    // tests/unit/usd-scene-environment-backdrop.test.mjs.
-    const environmentBackdrop = (mode, lightingEnabled, hasMap) => {
-        if (mode === 'environment' && !lightingEnabled) return { sky: false, clearColor: 0x000000, clearAlpha: 1 };
-        return { sky: mode === 'environment' && hasMap, clearColor: 0x111827, clearAlpha: mode === 'none' ? 0 : 1 };
-    };
-
-    const createUsdSceneEnvironment = ({ scene, renderer, camera, contentRoot, THREE = window.THREE } = {}) => {
+    // USD scene environment bridge (the Scene renderer calls this directly).
+    // getDisplayTransform (optional): the
+    // Scene's own mode getter; unset, the engine's global transform is used.
+    const createStageEnvironment = ({ scene, renderer, camera, contentRoot, THREE = window.THREE, getDisplayTransform } = {}) => {
+        // The studio helpers live in render-environment.js (window.MtlxStudio, MtlxRender).
+        const S = window.MtlxStudio || {}, R = window.MtlxRender || {};
+        const keyLightRotationMatrix = R.keyLightRotationMatrix, studioCatcherVisible = R.studioCatcherVisible, environmentBackdrop = R.environmentBackdrop;
+        const BG_BASE = S.backdropBaseRotation, STUDIO_MAX_POLAR = S.studioMaxPolar, STUDIO_MAX_ORBIT_DISTANCE = S.studioMaxOrbitDistance;
+        const STUDIO_FLOOR_CLEARANCE = S.studioFloorClearance, STUDIO_SHADOW_OPACITY = S.STUDIO_SHADOW_OPACITY, STUDIO_SHADOW_OPACITY_DARK = S.STUDIO_SHADOW_OPACITY_DARK;
+        const applyStudioVariantUniforms = S.applyUsdSceneStudioVariant, createUsdSceneStudioMaterial = S.createUsdSceneStudioMaterial;
+        const refreshUsdSceneStudioMaterial = S.refreshUsdSceneStudioMaterial, getUsdSceneStudioGeometry = S.getUsdSceneStudioGeometry;
+        const getUsdSceneStudioCatcherGeometry = S.getUsdSceneStudioCatcherGeometry, createUsdSceneStudioLight = S.createUsdSceneStudioLight;
+        const placeUsdSceneStudioLight = S.placeUsdSceneStudioLight;
         if (!scene || !renderer || !THREE) throw new Error('USD scene environment requires a Three.js scene and renderer.');
         const studio = window.MtlxStudio;
         if (!studio || typeof studio.createUsdSceneStudioMaterial !== 'function'
             || typeof studio.createUsdSceneStudioLight !== 'function' || typeof studio.placeUsdSceneStudioLight !== 'function') {
             throw new Error('MaterialX studio environment is unavailable in this build.');
         }
+        // Backdrop modes come from the 'backdrop' row in js/shared/render-settings.js.
+        const backdropRow = window.MtlxRenderSettings.ROWS.find((r) => r.key === 'backdrop');
+        const modes = new Set(backdropRow.options);
         if (renderer.shadowMap) {
             renderer.shadowMap.enabled = true;
             renderer.shadowMap.type = THREE.VSMShadowMap;
@@ -32,9 +35,11 @@
         root.userData.usdSceneEnvironment = true;
         root.userData.excludeFromFrame = true;
         const geometry = typeof studio.getUsdSceneStudioGeometry === 'function' ? studio.getUsdSceneStudioGeometry() : null;
-        const studioMesh = geometry ? new THREE.Mesh(geometry, studio.createUsdSceneStudioMaterial(false)) : null;
+        const studioMesh = geometry
+            ? new THREE.Mesh(geometry, studio.createUsdSceneStudioMaterial(false, typeof getDisplayTransform === 'function' ? getDisplayTransform() : undefined))
+            : null;
         const catcherGeometry = typeof studio.getUsdSceneStudioCatcherGeometry === 'function' ? studio.getUsdSceneStudioCatcherGeometry() : null;
-        const catcherMaterial = catcherGeometry && THREE.ShadowMaterial ? new THREE.ShadowMaterial({ opacity: 0.28, side: THREE.BackSide }) : null;
+        const catcherMaterial = catcherGeometry && THREE.ShadowMaterial ? new THREE.ShadowMaterial({ opacity: studio.STUDIO_SHADOW_OPACITY, side: THREE.BackSide }) : null;
         const studioCatcher = catcherGeometry && catcherMaterial ? new THREE.Mesh(catcherGeometry, catcherMaterial) : null;
         if (studioMesh) {
             studioMesh.name = '__usd-scene-studio-cyclorama';
@@ -55,7 +60,7 @@
 
         // Shared with the material viewer's studio backdrop so the cast
         // shadow gets the engine's VSM softness and depth bracket instead
-        // of a hand copy (js/mtlx-engine.js createUsdSceneStudioLight).
+        // of a hand copy (createUsdSceneStudioLight above).
         const { light: studioLight, target: studioLightTarget } = studio.createUsdSceneStudioLight(1);
         studioLight.name = '__usd-scene-studio-key';
         studioLight.userData.usdSceneEnvironment = true;
@@ -129,7 +134,7 @@
             if (studioMesh) {
                 if (typeof studio.applyUsdSceneStudioVariant === 'function') studio.applyUsdSceneStudioVariant(studioMesh.material, mode === 'studio-dark');
             }
-            if (studioCatcher) studioCatcher.material.opacity = mode === 'studio-dark' ? 0.4 : 0.28;
+            if (studioCatcher) studioCatcher.material.opacity = mode === 'studio-dark' ? studio.STUDIO_SHADOW_OPACITY_DARK : studio.STUDIO_SHADOW_OPACITY;
             applyVisibility();
             return mode;
         };
@@ -140,9 +145,8 @@
             updateLight();
             skyMaterial.map = env.background || env.radiance || null;
             skyMaterial.needsUpdate = true;
-            // Do not assign the shared equirect to scene.environment: r128's
-            // WebGLCubeMaps uploads it via fromEquirectangularTexture, which
-            // swaps minFilter to LinearFilter for that first upload and never
+            // Do not assign the shared equirect to scene.environment: r128
+            // swaps minFilter to LinearFilter on first upload and never
             // re-uploads, permanently stripping the mip chain FIS needs.
             applyVisibility();
             return true;
@@ -161,16 +165,14 @@
         };
         const setExposure = (value) => {
             exposure = Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 1;
-            // Exposure is applied exactly once, through u_envLightIntensity
-            // (usd-scene-renderer.js's applyMaterialEnvironment reads
-            // getEnvExposure() below), matching the Viewer, which pins this
-            // same property to 1.0 (js/mtlx-engine.js).
-            if ('toneMappingExposure' in renderer) renderer.toneMappingExposure = 1;
+            // Applied once, through u_envLightIntensity (getEnvExposure below).
+            // toneMappingExposure belongs to the renderer's camera exposure.
             return exposure;
         };
         const refreshDisplayTransform = () => {
             if (studioMesh && studio && typeof studio.refreshUsdSceneStudioMaterial === 'function') {
-                studio.refreshUsdSceneStudioMaterial(studioMesh.material, mode === 'studio-dark');
+                studio.refreshUsdSceneStudioMaterial(studioMesh.material, mode === 'studio-dark',
+                    typeof getDisplayTransform === 'function' ? getDisplayTransform() : undefined);
             }
         };
         const updateBounds = (box) => {
@@ -268,6 +270,5 @@
         };
     };
 
-    window.createUsdSceneEnvironment = createUsdSceneEnvironment;
-    window.UsdSceneEnvironment = { create: createUsdSceneEnvironment };
+    window.MtlxRender = Object.assign(window.MtlxRender || {}, { createStageEnvironment });
 })();

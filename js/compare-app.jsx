@@ -267,7 +267,7 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
                     mx: loaded.mx, gen: loaded.gen, genContext: loaded.genContext,
                     renderable: target.node,
                     lightData: loaded.lightData,
-                    label: 'compare-' + label,
+                    label: 'compare-' + label, surface: 'compare',
                     materialName: target.name,
                     needsLighting: true,
                     geomName: geom,
@@ -588,20 +588,26 @@ function MaterialCompareApp({ active = true } = {}) {
     const [envUI, setEnvUI] = React.useState({ rotation: 0, exposure: 1, backdrop: 'studio' });
     const [envImportError, setEnvImportError] = React.useState(null);
     const [envFileName, setEnvFileName] = React.useState('');
-    // Backs the Rendering card's transparency-forcing toggle: local mirror
-    // of the engine's persisted value, same as viewer-app.jsx's own state.
+    // Backs the Rendering card's summary text only now; the toggle itself
+    // is RenderSettingsSection, which writes straight through
+    // window.setForceTransparency; this stays synced by listening for the
+    // manifest's broadcast instead of owning the write.
     const [forceTransparency, setForceTransparency] = React.useState(
         () => !!(window.getForceTransparency && window.getForceTransparency())
     );
-    // Extract key light toggle: local mirror of the engine-wide
-    // window.getKeyLightEnabled/setKeyLightEnabled (js/mtlx-engine.js), one
-    // setting shared by both slots. Degrades to disabled like EnvDialog's
-    // own copy (js/shared/mtlx-ui.jsx) when the engine hasn't loaded it.
+    React.useEffect(() => {
+        const onRenderSetting = (e) => {
+            if (!e.detail || e.detail.key !== 'transparency') return;
+            setForceTransparency(!!e.detail.value);
+        };
+        window.addEventListener('mtlx-render-setting', onRenderSetting);
+        return () => window.removeEventListener('mtlx-render-setting', onRenderSetting);
+    }, []);
+    // The toggle itself is now RenderSettingsSection (key light is a true
+    // engine-wide global, safe to route through the shared store); this
+    // flag is kept only for the Reset button's guard.
     const keyLightAvail = typeof window.getKeyLightEnabled === 'function'
         && typeof window.setKeyLightEnabled === 'function';
-    const [keyLightOn, setKeyLightOn] = React.useState(() => (
-        keyLightAvail ? window.getKeyLightEnabled() : true
-    ));
     const envUIRef = React.useRef(envUI);
     envUIRef.current = envUI;
     const heatmapCanvasRef = React.useRef(null);
@@ -629,14 +635,7 @@ function MaterialCompareApp({ active = true } = {}) {
 
     const slotA = useCompareSlot();
     const slotB = useCompareSlot();
-    // Bumped when a lost-then-restored GL context needs a full dispose+
-    // rebuild (render-target contents like PMREM/VSM never come back on
-    // their own); see the mtlx-gl-context subscription below.
-    const [glEpochA, setGlEpochA] = React.useState(0);
-    const [glEpochB, setGlEpochB] = React.useState(0);
     const pendingCustomGeomRef = React.useRef(false);
-    const pendingGlRestoredARef = React.useRef(false);
-    const pendingGlRestoredBRef = React.useRef(false);
     const pendingGlobalGeomRef = React.useRef(false);
     const pendingDisplayTransformRef = React.useRef(false);
     function surfaceHidden() {
@@ -655,37 +654,16 @@ function MaterialCompareApp({ active = true } = {}) {
     // on screen) should rebuild either slot; imports made while some OTHER
     // geom is selected must not, so this stays 0 unless geom is 'custom'.
     const customKey = geom === 'custom' && customGeom ? customGeom.epoch : 0;
-    useCompareRenderEffect(slotA, 'A', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotB.viewRef, swipeDiffPosRef, customKey, glEpochA, displayTransform);
-    useCompareRenderEffect(slotB, 'B', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotA.viewRef, swipeDiffPosRef, customKey, glEpochB, displayTransform);
-
     // Restore re-inits GL state but not render-target contents, so a
     // glEpoch bump forces that slot's build effect to dispose and fully
     // rebuild (fresh PMREM bake, shadow map, etc).
-    React.useEffect(() => {
-        const onGlContext = (e) => {
-            const d = e.detail || {};
-            let which = null;
-            if (d.canvas === slotA.canvasRef.current) which = 'A';
-            else if (d.canvas === slotB.canvasRef.current) which = 'B';
-            if (!which) return;
-            const slot = which === 'A' ? slotA : slotB;
-            if (d.state === 'lost') {
-                if (!surfaceHidden()) {
-                    slot.setError('The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.');
-                }
-            } else if (d.state === 'restored') {
-                if (surfaceHidden()) {
-                    if (which === 'A') pendingGlRestoredARef.current = true; else pendingGlRestoredBRef.current = true;
-                } else if (which === 'A') {
-                    setGlEpochA((n) => n + 1);
-                } else {
-                    setGlEpochB((n) => n + 1);
-                }
-            }
-        };
-        window.addEventListener('mtlx-gl-context', onGlContext);
-        return () => window.removeEventListener('mtlx-gl-context', onGlContext);
-    }, []);
+    const [glEpochA, glEpochB] = useRenderContextRecovery({
+        groups: [[slotA.canvasRef], [slotB.canvasRef]],
+        isHidden: surfaceHidden,
+        onLost: (i) => (i === 0 ? slotA : slotB).setError(RENDER_CONTEXT_LOST_MESSAGE),
+    });
+    useCompareRenderEffect(slotA, 'A', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotB.viewRef, swipeDiffPosRef, customKey, glEpochA, displayTransform);
+    useCompareRenderEffect(slotB, 'B', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotA.viewRef, swipeDiffPosRef, customKey, glEpochB, displayTransform);
 
     // hashchange fires before/around the shell's display:none class flip,
     // so re-check visibility a tick later before flushing stashed work.
@@ -694,8 +672,6 @@ function MaterialCompareApp({ active = true } = {}) {
             requestAnimationFrame(() => {
                 if (surfaceHidden()) return;
                 if (pendingCustomGeomRef.current) { pendingCustomGeomRef.current = false; applyCustomGeom(); }
-                if (pendingGlRestoredARef.current) { pendingGlRestoredARef.current = false; setGlEpochA((n) => n + 1); }
-                if (pendingGlRestoredBRef.current) { pendingGlRestoredBRef.current = false; setGlEpochB((n) => n + 1); }
                 if (pendingGlobalGeomRef.current) { pendingGlobalGeomRef.current = false; applyGlobalGeom(); }
                 if (pendingDisplayTransformRef.current) { pendingDisplayTransformRef.current = false; applyDisplayTransform(); }
             });
@@ -873,17 +849,6 @@ function MaterialCompareApp({ active = true } = {}) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [slotA.viewEpoch, slotB.viewEpoch]);
 
-    // Re-read the key light global whenever either slot's view is rebuilt,
-    // mirroring EnvDialog's re-read on open since this row has no open event.
-    React.useEffect(() => {
-        setKeyLightOn(keyLightAvail ? window.getKeyLightEnabled() : true);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [slotA.viewEpoch, slotB.viewEpoch]);
-
-    const handleToggleKeyLight = (next) => {
-        setKeyLightOn(next);
-        if (keyLightAvail) window.setKeyLightEnabled(next);
-    };
 
     const setBackdrop = (mode) => {
         setEnvUI((s) => ({ ...s, backdrop: mode }));
@@ -943,11 +908,6 @@ function MaterialCompareApp({ active = true } = {}) {
         setGeom(g);
         window.setGlobalGeom(g);
     };
-    // Same global pick pattern as pickGeom.
-    const pickDisplayTransform = (mode) => {
-        setDisplayTransformState(mode);
-        if (window.setDisplayTransform) window.setDisplayTransform(mode);
-    };
     const resetEnv = () => {
         setEnvOverride(null);
         setEnvImportError(null);
@@ -964,7 +924,6 @@ function MaterialCompareApp({ active = true } = {}) {
         // Key light back to the engine default (on). Guarded: the setter
         // rebuilds the active environment, so only call it when off.
         if (keyLightAvail && !window.getKeyLightEnabled()) window.setKeyLightEnabled(true);
-        setKeyLightOn(true);
         statsDirtyRef.current = true; diffDirtyRef.current = true;
     };
 
@@ -1741,47 +1700,46 @@ function MaterialCompareApp({ active = true } = {}) {
                                 onClear={clearEnvOverride}
                             />
                             {envImportError && <div className="text-xs text-red-400">{envImportError}</div>}
+                            {/* Rotation/exposure/backdrop stay caller-driven
+                                (real state shared by both panes, applied to
+                                both live views directly) but pull their
+                                label/range/options from the manifest via
+                                rowMeta so the numbers can't drift. */}
                             <SliderField
-                                label="Environment rotation" unit="deg"
+                                label={(rowMeta('envRotation', 'compare') || {}).label || 'Environment rotation'}
+                                unit={(rowMeta('envRotation', 'compare') || {}).unit || 'deg'}
                                 value={envUI.rotation} min={0} max={360} step={1}
                                 defaultValue={0}
                                 onSlider={(v) => setEnvRotationDeg(Number(v))}
                                 onNumber={(v) => setEnvRotationDeg(Number(v))}
                             />
                             <SliderField
-                                label="Exposure" unit="EV"
+                                label={(rowMeta('envExposure', 'compare') || {}).label || 'Environment exposure'}
+                                unit={(rowMeta('envExposure', 'compare') || {}).unit || 'EV'}
                                 value={linearToEv(envUI.exposure)} min={EV_MIN} max={EV_MAX} step={EV_STEP}
                                 defaultValue={0}
                                 onSlider={(v) => setEnvExposureVal(evToLinear(v))}
                                 onNumber={(v) => setEnvExposureVal(evToLinear(v))}
                             />
                             <div className="flex items-center justify-between gap-2">
-                                <span className="text-xs font-medium text-gray-400">Backdrop</span>
+                                <span className="text-xs font-medium text-gray-400">{(rowMeta('backdrop', 'compare') || {}).label || 'Backdrop'}</span>
                                 <MtlxSelect
                                     value={envUI.backdrop}
-                                    options={['studio', 'studio-dark', 'environment', 'none']}
-                                    labels={{ studio: 'Studio', 'studio-dark': 'Studio (Dark)', environment: 'Environment', none: 'None' }}
+                                    options={rowMeta('backdrop', 'compare').options}
+                                    labels={(rowMeta('backdrop', 'compare') || {}).optionLabels || {}}
                                     onChange={setBackdrop}
                                     defValue="studio"
                                     disabled={geom === 'shaderball-scene'}
-                                    title={geom === 'shaderball-scene' ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : undefined}
+                                    title={geom === 'shaderball-scene' ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : ((rowMeta('backdrop', 'compare') || {}).hint)}
                                     size="sm"
                                 />
                             </div>
-                            <label
-                                className="flex items-center justify-between cursor-pointer"
-                                title={keyLightOn ? 'Disable key light extraction' : 'Enable key light extraction'}
-                            >
-                                <span className="text-xs font-medium text-gray-400">Extract key light</span>
-                                <Toggle
-                                    checked={keyLightOn}
-                                    onChange={handleToggleKeyLight}
-                                    disabled={!keyLightAvail}
-                                />
-                            </label>
-                            <div className="mt-1 text-[11px] text-gray-400">
-                                Pull a sun-like light out of the HDRI for crisp highlights.
-                            </div>
+                            <RenderSettingsSection
+                                surface="compare"
+                                keys={['keyLight', 'diffuseEnv']}
+                                variant="sidebar"
+                                labelClassName="text-xs font-medium text-gray-400"
+                            />
                             <button
                                 onClick={resetEnv}
                                 title="Also clears an imported .hdr/.exr and restores the default environment"
@@ -1792,38 +1750,12 @@ function MaterialCompareApp({ active = true } = {}) {
                         </SectionCard>
 
                         <SectionCard icon="settings-cog" title="Rendering" summary={forceTransparency ? 'Transparency forced' : 'Default'} defaultOpen>
-                            <div className="flex items-center justify-between gap-2">
-                                <span className="text-xs font-medium text-gray-400">View Transform</span>
-                                <MtlxSelect
-                                    value={displayTransform}
-                                    options={['srgb', 'aces', 'lin_rec709']}
-                                    labels={{ srgb: 'sRGB', aces: 'ACES', lin_rec709: 'lin_rec709' }}
-                                    onChange={pickDisplayTransform}
-                                    defValue="srgb"
-                                    title="How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping)."
-                                    size="sm"
-                                />
-                            </div>
-                            <label
-                                className="flex items-center justify-between cursor-pointer"
-                                title={forceTransparency ? 'Disable forced transparency' : 'Enable forced transparency'}
-                            >
-                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-400">
-                                    Force Transparency
-                                    <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
-                                </span>
-                                <Toggle
-                                    checked={forceTransparency}
-                                    onChange={(next) => {
-                                        setForceTransparency(next);
-                                        window.setForceTransparency && window.setForceTransparency(next);
-                                    }}
-                                />
-                            </label>
-                            <div className="mt-1 text-[11px] text-gray-400">
-                                Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.
-                            </div>
-                            <DisplacementSettingsRows labelClassName="text-xs font-medium text-gray-400" />
+                            <RenderSettingsSection
+                                surface="compare"
+                                keys={['displayTransform', 'displayExposure', 'transparency', 'displacement', 'previewSubdivision']}
+                                variant="sidebar"
+                                labelClassName="text-xs font-medium text-gray-400"
+                            />
                         </SectionCard>
                     </div>
 

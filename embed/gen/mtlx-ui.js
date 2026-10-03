@@ -1,4 +1,5 @@
 ;(function () {
+function _extends() { return _extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, _extends.apply(null, arguments); }
 // js/shared/mtlx-ui.jsx — shared UI-glue library for the docs/viewer/graph
 // views (extracted from near-identical copies in js/viewer-app.jsx and
 // js/node-preview.jsx; no behavior change). Loaded FIRST in each view's
@@ -773,61 +774,297 @@ const fullscreenPortalRoot = () => document.fullscreenElement || document.body;
 // block; the cog sits at the top of the strip so the flip branch effectively never fires.
 const SETTINGS_DIALOG_W = 288,
   SETTINGS_DIALOG_H = 420;
-const DISPLACEMENT_SUBDIV_LABELS = {
-  0: 'Off',
-  1: '1',
-  2: '2',
-  3: '3'
+
+// Manifest row for `key` when `surface` carries it, else null. Lets controls
+// driven by per-view state (env rotation/exposure) take label and range from it.
+const rowMeta = (key, surface) => {
+  try {
+    const RS = window.MtlxRenderSettings;
+    const row = RS.ROWS.find(r => r.key === key);
+    if (!row || !surface || row.surfaces[surface] !== 'yes') return null;
+    return row;
+  } catch (e) {
+    return null;
+  }
 };
-// labelClassName lets callers match the surrounding row style: the
-// SettingsDialog popover uses the default, the Viewer/Compare sidebars
-// pass the same class as their neighbouring View Transform/Force
-// Transparency rows.
-const DisplacementSettingsRows = ({
-  labelClassName = 'text-gray-200'
-}) => {
-  const [enabled, setEnabled] = React.useState(() => !!(window.getDisplacementEnabled && window.getDisplacementEnabled()));
-  const [level, setLevel] = React.useState(() => window.getPreviewSubdivisionLevel ? window.getPreviewSubdivisionLevel() : 2);
+
+// Scene settings rows carry a quality-level dirty dot and a cost badge.
+const SETTINGS_EXP_BADGE = /*#__PURE__*/React.createElement("span", {
+  className: "text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300"
+}, "Experimental");
+const SettingsDirtyDot = ({
+  show
+}) => show ? /*#__PURE__*/React.createElement("span", {
+  title: "Differs from the selected quality level",
+  className: "w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0"
+}) : null;
+const SETTINGS_COST_ICON = {
+  reload: 'refresh',
+  rebuild: 'code',
+  geometry: 'cube'
+};
+const SETTINGS_COST_TITLE = {
+  reload: 'Changing this reloads the stage',
+  rebuild: 'Changing this recompiles materials',
+  geometry: 'Changing this rebuilds geometry'
+};
+const SettingsCostBadge = ({
+  kind,
+  pending
+}) => kind ? /*#__PURE__*/React.createElement("span", {
+  title: SETTINGS_COST_TITLE[kind],
+  className: 'inline-flex ' + (pending ? 'text-amber-400' : 'text-gray-500')
+}, /*#__PURE__*/React.createElement(MtlxIcon, {
+  name: SETTINGS_COST_ICON[kind],
+  className: "w-3 h-3"
+})) : null;
+
+// Manifest rows for a surface in manifest order (bool Toggle, enum MtlxSelect,
+// number SliderField); writes go through MtlxRenderSettings.apply. `keys`
+// renders a subset for cards that own only some of a group's rows.
+// `draft` hands the Scene's staged-value model to the same rows:
+// { value(row), onChange(row, next), visible?, disabled?, dirty?, cost?,
+// pending?, title?, hint?, defaultValue?, testId? }. Variants: sidebar and
+// dialog (preview surfaces), panel (Scene popover tabs), popover (Scene
+// Environment popover), flat (one label and select per line).
+function RenderSettingsSection({
+  surface,
+  groups,
+  keys,
+  variant = 'sidebar',
+  exclude,
+  labelClassName = 'text-gray-200',
+  draft
+}) {
+  const RS = window.MtlxRenderSettings;
+  const [, forceTick] = React.useState(0);
   React.useEffect(() => {
-    const onChanged = e => {
-      if (!e.detail) return;
-      if (e.detail.key === 'displacement') setEnabled(!!e.detail.value);else if (e.detail.key === 'previewSubdivision') setLevel(e.detail.value);
-    };
-    window.addEventListener('mtlx-settings-changed', onChanged);
-    return () => window.removeEventListener('mtlx-settings-changed', onChanged);
+    const onChange = () => forceTick(n => n + 1);
+    const events = ['mtlx-render-setting', 'mtlx-settings-changed', 'mtlx-display-transform', 'mtlx-display-exposure', 'mtlx-global-geom'];
+    events.forEach(ev => window.addEventListener(ev, onChange));
+    return () => events.forEach(ev => window.removeEventListener(ev, onChange));
   }, []);
-  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
-    className: "flex items-center justify-between cursor-pointer",
-    title: enabled ? 'Disable displacement' : 'Enable displacement'
-  }, /*#__PURE__*/React.createElement("span", {
-    className: labelClassName
-  }, "Displacement"), /*#__PURE__*/React.createElement(Toggle, {
-    checked: enabled,
-    onChange: next => {
-      setEnabled(next);
-      window.setDisplacementEnabled && window.setDisplacementEnabled(next);
+  if (!surface || !RS) return null;
+  let rows = RS.rowsFor(surface, {
+    ui: true
+  });
+  if (groups) rows = rows.filter(row => groups.indexOf(row.group) !== -1);
+  if (exclude) rows = rows.filter(row => exclude.indexOf(row.key) === -1);
+  if (keys) {
+    const keySet = new Set(keys);
+    rows = rows.filter(row => keySet.has(row.key));
+  }
+  if (draft && draft.visible) rows = rows.filter(row => draft.visible(row));
+  if (!rows.length) return null;
+  const showHint = variant === 'sidebar';
+  return /*#__PURE__*/React.createElement(React.Fragment, null, rows.map(baseRow => {
+    const row = RS.rowUi(baseRow, surface);
+    const P = row.profiles[RS.PROFILE_OF[surface]];
+    const value = draft ? draft.value(row) : RS.get(row.key, {
+      surface
+    });
+    const onChange = draft ? next => draft.onChange(row, next) : next => RS.apply(row.key, next, {
+      surface
+    });
+    const hint = draft && draft.hint && draft.hint(row) || row.hint;
+    const title = draft && draft.title ? draft.title(row) : row.hint;
+    const disabled = !!(draft && draft.disabled && draft.disabled(row));
+    const options = row.options;
+    const asBool = row.asBool;
+    const isToggle = row.type === 'bool' || !!asBool;
+    const isSelect = !isToggle && (row.type === 'enum' || row.control === 'select');
+    const defValue = row.type === 'enum' ? P && P.levels ? P.levels.default : options[0] : options ? options[0] : undefined;
+    const sliderDefault = draft && draft.defaultValue ? draft.defaultValue(row) : undefined;
+    const decimals = row.decimals !== undefined ? row.decimals : row.type === 'int' ? 0 : undefined;
+    const step = row.step || (row.type === 'int' ? 1 : 0.1);
+    const experimental = row.experimental ? SETTINGS_EXP_BADGE : null;
+    const toggleChecked = asBool ? value === asBool.on : !!value;
+    const toggleChange = asBool ? next => onChange(next ? asBool.on : asBool.off) : onChange;
+    const selectNode = extra => /*#__PURE__*/React.createElement(MtlxSelect, _extends({
+      value: value,
+      options: options,
+      labels: row.optionLabels || {},
+      onChange: onChange,
+      defValue: defValue,
+      title: variant === 'panel' ? undefined : row.hint,
+      size: "sm",
+      disabled: disabled
+    }, extra));
+    const sliderNode = /*#__PURE__*/React.createElement(SliderField, {
+      label: row.label,
+      unit: row.unit,
+      value: value,
+      min: row.min,
+      max: row.max,
+      step: step,
+      decimals: decimals,
+      defaultValue: sliderDefault,
+      disabled: disabled,
+      onSlider: onChange,
+      onNumber: onChange
+    });
+    if (variant === 'panel') {
+      const kind = draft && draft.cost ? draft.cost(row) : null;
+      const dirty = !!(draft && draft.dirty && draft.dirty(row));
+      const labelNode = /*#__PURE__*/React.createElement("span", {
+        className: "inline-flex items-center gap-1.5 text-xs font-medium text-gray-300"
+      }, /*#__PURE__*/React.createElement(SettingsDirtyDot, {
+        show: dirty
+      }), /*#__PURE__*/React.createElement("span", null, row.label), experimental, /*#__PURE__*/React.createElement(SettingsCostBadge, {
+        kind: kind,
+        pending: !!(draft && draft.pending && draft.pending(row))
+      }));
+      const shell = 'py-2 border-b border-gray-700/60 last:border-b-0';
+      const hintNode = hint ? /*#__PURE__*/React.createElement("div", {
+        className: "mt-1 text-[11px] text-gray-400"
+      }, hint) : null;
+      if (isToggle) {
+        return /*#__PURE__*/React.createElement("div", {
+          key: row.key,
+          className: shell
+        }, /*#__PURE__*/React.createElement("label", {
+          className: "flex items-center justify-between gap-2 cursor-pointer",
+          title: title
+        }, labelNode, /*#__PURE__*/React.createElement(Toggle, {
+          checked: toggleChecked,
+          onChange: toggleChange,
+          disabled: disabled
+        })), hintNode);
+      }
+      if (isSelect) {
+        return /*#__PURE__*/React.createElement("div", {
+          key: row.key,
+          className: shell,
+          title: title
+        }, /*#__PURE__*/React.createElement("div", {
+          className: "flex items-center justify-between gap-2"
+        }, labelNode, selectNode()), hintNode);
+      }
+      return /*#__PURE__*/React.createElement("div", {
+        key: row.key,
+        className: shell
+      }, dirty ? /*#__PURE__*/React.createElement("div", {
+        className: "flex items-center gap-1.5 mb-1"
+      }, /*#__PURE__*/React.createElement(SettingsDirtyDot, {
+        show: true
+      }), /*#__PURE__*/React.createElement("span", {
+        className: "text-[10px] text-amber-300/80"
+      }, "Differs from the selected quality level")) : null, sliderNode, hintNode);
     }
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "mt-1 text-[11px] text-gray-400"
-  }, "Moves the mesh by the material's displacement; the material itself is unchanged.")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center justify-between gap-2"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: labelClassName
-  }, "Subdivision"), /*#__PURE__*/React.createElement(MtlxSelect, {
-    value: level,
-    options: [0, 1, 2, 3],
-    labels: DISPLACEMENT_SUBDIV_LABELS,
-    onChange: v => {
-      setLevel(v);
-      window.setPreviewSubdivisionLevel && window.setPreviewSubdivisionLevel(v);
-    },
-    defValue: 2,
-    title: "Applied to preview geometry when the material has displacement; each level is 4x triangles, capped at 1.5M",
-    size: "sm"
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "mt-1 text-[11px] text-gray-400"
-  }, "Applied to preview geometry when the material has displacement; each level is 4x triangles, capped at 1.5M.")));
-};
+    if (variant === 'popover') {
+      if (isToggle) {
+        return /*#__PURE__*/React.createElement("div", {
+          key: row.key,
+          className: "flex items-center justify-between",
+          title: title
+        }, /*#__PURE__*/React.createElement("span", {
+          className: labelClassName
+        }, row.label), /*#__PURE__*/React.createElement(Toggle, {
+          checked: toggleChecked,
+          onChange: toggleChange,
+          disabled: disabled
+        }));
+      }
+      if (isSelect) {
+        return /*#__PURE__*/React.createElement("div", {
+          key: row.key,
+          className: "flex items-center justify-between gap-2",
+          title: title
+        }, /*#__PURE__*/React.createElement("span", {
+          className: labelClassName
+        }, row.label), selectNode());
+      }
+      return /*#__PURE__*/React.createElement("div", {
+        key: row.key
+      }, sliderNode);
+    }
+    if (variant === 'flat') {
+      const testId = draft && draft.testId ? draft.testId(row) : undefined;
+      return /*#__PURE__*/React.createElement("div", {
+        key: row.key,
+        className: "flex items-center justify-between gap-3",
+        title: title
+      }, /*#__PURE__*/React.createElement("span", {
+        className: labelClassName
+      }, row.label), /*#__PURE__*/React.createElement("div", {
+        "data-testid": testId
+      }, selectNode({
+        ariaLabel: row.label,
+        title: undefined
+      })));
+    }
+    const labelNode = /*#__PURE__*/React.createElement("span", {
+      className: labelClassName + ' inline-flex items-center gap-1.5'
+    }, row.label, row.experimental && /*#__PURE__*/React.createElement("span", {
+      className: "text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300"
+    }, "Experimental"));
+    if (row.type === 'bool') {
+      return /*#__PURE__*/React.createElement("div", {
+        key: row.key
+      }, /*#__PURE__*/React.createElement("label", {
+        className: "flex items-center justify-between cursor-pointer",
+        title: row.hint
+      }, labelNode, /*#__PURE__*/React.createElement(Toggle, {
+        checked: !!value,
+        onChange: onChange
+      })), showHint && row.hint && /*#__PURE__*/React.createElement("div", {
+        className: "mt-1 text-[11px] text-gray-400"
+      }, row.hint));
+    }
+    if (row.type === 'enum') {
+      return /*#__PURE__*/React.createElement("div", {
+        key: row.key
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "flex items-center justify-between gap-2"
+      }, labelNode, /*#__PURE__*/React.createElement(MtlxSelect, {
+        value: value,
+        options: row.options,
+        labels: row.optionLabels || {},
+        onChange: onChange,
+        defValue: P && P.levels ? P.levels.default : row.options[0],
+        title: row.hint,
+        size: "sm"
+      })), showHint && row.hint && /*#__PURE__*/React.createElement("div", {
+        className: "mt-1 text-[11px] text-gray-400"
+      }, row.hint));
+    }
+    // number rendered as a dropdown (manifest control: 'select'),
+    // e.g. Subdivision: a small fixed set of levels, not a range.
+    if (row.control === 'select') {
+      return /*#__PURE__*/React.createElement("div", {
+        key: row.key
+      }, /*#__PURE__*/React.createElement("div", {
+        className: "flex items-center justify-between gap-2"
+      }, labelNode, /*#__PURE__*/React.createElement(MtlxSelect, {
+        value: value,
+        options: row.options,
+        labels: row.optionLabels || {},
+        onChange: onChange,
+        defValue: row.options[0],
+        title: row.hint,
+        size: "sm"
+      })), showHint && row.hint && /*#__PURE__*/React.createElement("div", {
+        className: "mt-1 text-[11px] text-gray-400"
+      }, row.hint));
+    }
+    // number
+    return /*#__PURE__*/React.createElement("div", {
+      key: row.key
+    }, /*#__PURE__*/React.createElement(SliderField, {
+      label: row.label,
+      unit: row.unit,
+      value: value,
+      min: row.min,
+      max: row.max,
+      step: row.step || (row.type === 'int' ? 1 : 0.1),
+      decimals: row.type === 'int' ? 0 : undefined,
+      onSlider: onChange,
+      onNumber: onChange
+    }), showHint && row.hint && /*#__PURE__*/React.createElement("div", {
+      className: "mt-1 text-[11px] text-gray-400"
+    }, row.hint));
+  }));
+}
 
 // Settings popover (cogwheel button in ViewportControls): mounted once
 // there so it's shared across docs/viewer/graph with zero per-app wiring.
@@ -837,34 +1074,9 @@ function SettingsDialog({
   open,
   onClose,
   children,
-  hideDisplacementSettings = false
+  surface
 }) {
   useEscapeToClose(onClose, open);
-  // Re-read from the engine's persisted value on every open (not just
-  // mount) — window.getForceTransparency is the single source of truth,
-  // so this only needs to resync on open rather than track it live.
-  const [forceT, setForceT] = React.useState(() => !!(window.getForceTransparency && window.getForceTransparency()));
-  React.useEffect(() => {
-    if (open) setForceT(!!(window.getForceTransparency && window.getForceTransparency()));
-  }, [open]);
-  // Display transform: same resync-on-open as forceT, plus a live
-  // listener (unlike forceT, other open dialogs/tools can change this
-  // and broadcast it) so every mounted popover stays in step.
-  const [displayTransform, setDisplayTransformState] = React.useState(() => window.getDisplayTransform ? window.getDisplayTransform() : 'srgb');
-  React.useEffect(() => {
-    if (open && window.getDisplayTransform) setDisplayTransformState(window.getDisplayTransform());
-  }, [open]);
-  React.useEffect(() => {
-    const onDisplayTransform = () => {
-      if (window.getDisplayTransform) setDisplayTransformState(window.getDisplayTransform());
-    };
-    window.addEventListener('mtlx-display-transform', onDisplayTransform);
-    return () => window.removeEventListener('mtlx-display-transform', onDisplayTransform);
-  }, []);
-  const pickDisplayTransform = mode => {
-    setDisplayTransformState(mode);
-    if (window.setDisplayTransform) window.setDisplayTransform(mode);
-  };
   const popRef = React.useRef(null);
   const [pos, setPos] = React.useState(null);
 
@@ -900,6 +1112,7 @@ function SettingsDialog({
   if (!open) return null;
   return ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
     ref: popRef,
+    "data-mtlx-settings-dialog": true,
     onPointerDown: e => e.stopPropagation(),
     style: Object.assign({
       position: 'fixed',
@@ -909,39 +1122,11 @@ function SettingsDialog({
     className: "bg-gray-800/95 backdrop-blur border border-gray-600 rounded-lg shadow-2xl overflow-hidden"
   }, /*#__PURE__*/React.createElement("div", {
     className: "px-3 py-3 space-y-3 text-[12px]"
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center justify-between gap-2"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "text-gray-200"
-  }, "View Transform"), /*#__PURE__*/React.createElement(MtlxSelect, {
-    value: displayTransform,
-    options: ['srgb', 'aces', 'lin_rec709'],
-    labels: {
-      srgb: 'sRGB',
-      aces: 'ACES',
-      lin_rec709: 'lin_rec709'
-    },
-    onChange: pickDisplayTransform,
-    defValue: "srgb",
-    title: "How the linear render is encoded for display. sRGB matches the official MaterialX viewer (no tone mapping).",
-    size: "sm"
-  }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center justify-between gap-2"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "inline-flex items-center gap-1.5 text-gray-200"
-  }, "Force Transparency", /*#__PURE__*/React.createElement("span", {
-    className: "text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300"
-  }, "Experimental")), /*#__PURE__*/React.createElement("button", {
-    onClick: () => {
-      const next = !forceT;
-      setForceT(next);
-      window.setForceTransparency && window.setForceTransparency(next);
-    },
-    title: forceT ? 'Disable forced transparency' : 'Enable forced transparency',
-    className: `h-5 px-2 rounded border transition-colors shrink-0 ${forceT ? 'bg-blue-600/80 border-blue-500 text-white' : 'bg-gray-800/80 border-gray-600 text-gray-300'}`
-  }, forceT ? 'On' : 'Off')), /*#__PURE__*/React.createElement("div", {
-    className: "mt-1 text-[11px] text-gray-400"
-  }, "Render opacity/transmission with real alpha blending in previews. When off, previews match the standard MaterialX viewer (opaque). Applies immediately to open previews.")), !hideDisplacementSettings && /*#__PURE__*/React.createElement(DisplacementSettingsRows, null), children)), fullscreenPortalRoot());
+  }, /*#__PURE__*/React.createElement(RenderSettingsSection, {
+    surface: surface,
+    keys: ['displayTransform', 'transparency', 'displacement', 'previewSubdivision'],
+    variant: "dialog"
+  }), children)), fullscreenPortalRoot());
 }
 
 // Copy text to the clipboard: try navigator.clipboard.writeText first
@@ -1735,6 +1920,55 @@ const useWindowFileDrop = ({
   }, []);
 };
 
+// Shown when a preview surface's WebGL context is lost while visible.
+const RENDER_CONTEXT_LOST_MESSAGE = 'The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.';
+
+// Tracks mtlx-gl-context lost/restored per group of canvas refs, one
+// epoch counter per group. A restore while `isHidden()` is true is
+// stashed and flushed on the next hashchange (a tick later, via rAF,
+// since hashchange fires around the shell's display:none flip).
+const useRenderContextRecovery = ({
+  groups,
+  isHidden,
+  onLost
+}) => {
+  const groupsRef = React.useRef(groups);
+  groupsRef.current = groups;
+  const isHiddenRef = React.useRef(isHidden);
+  isHiddenRef.current = isHidden;
+  const onLostRef = React.useRef(onLost);
+  onLostRef.current = onLost;
+  const [epochs, setEpochs] = React.useState(() => groups.map(() => 0));
+  const pendingRef = React.useRef(new Set());
+  const bump = i => setEpochs(prev => prev.map((v, idx) => idx === i ? v + 1 : v));
+  React.useEffect(() => {
+    const onGlContext = e => {
+      const d = e.detail || {};
+      const idx = groupsRef.current.findIndex(refs => refs.some(r => r && r.current === d.canvas));
+      if (idx === -1) return;
+      if (d.state === 'lost') {
+        if (!isHiddenRef.current() && onLostRef.current) onLostRef.current(idx);
+      } else if (d.state === 'restored') {
+        if (isHiddenRef.current()) pendingRef.current.add(idx);else bump(idx);
+      }
+    };
+    window.addEventListener('mtlx-gl-context', onGlContext);
+    return () => window.removeEventListener('mtlx-gl-context', onGlContext);
+  }, []);
+  React.useEffect(() => {
+    const flush = () => {
+      requestAnimationFrame(() => {
+        if (isHiddenRef.current()) return;
+        pendingRef.current.forEach(i => bump(i));
+        pendingRef.current.clear();
+      });
+    };
+    window.addEventListener('hashchange', flush);
+    return () => window.removeEventListener('hashchange', flush);
+  }, []);
+  return epochs;
+};
+
 // Absolute loading overlay shown over a viewport while (re)generating.
 // Defaults match node-preview.jsx's markup; viewer-app.jsx overrides
 // className/labelClassName/barWidthClass to reproduce its own markup.
@@ -1808,6 +2042,10 @@ const EnvDialog = ({
   anchorRef,
   open,
   onClose,
+  // Which manifest surface this instance belongs to, used only to pull
+  // the backdrop row's options/labels (rowMeta); value/writes stay the
+  // caller's own backdrop/onBackdropChange props, real per-view state.
+  surface,
   backdrop,
   onBackdropChange,
   showBackdropPicker = true,
@@ -1903,6 +2141,7 @@ const EnvDialog = ({
   if (!open) return null;
   return ReactDOM.createPortal(/*#__PURE__*/React.createElement("div", {
     ref: popRef,
+    "data-mtlx-env-dialog": true,
     onPointerDown: e => e.stopPropagation(),
     style: Object.assign({
       position: 'fixed',
@@ -1926,17 +2165,12 @@ const EnvDialog = ({
     className: "flex items-center justify-between mb-0.5"
   }, /*#__PURE__*/React.createElement("span", null, "Backdrop")), /*#__PURE__*/React.createElement(MtlxSelect, {
     value: backdrop,
-    options: ['studio', 'studio-dark', 'environment', 'none'],
-    labels: {
-      studio: 'Studio',
-      'studio-dark': 'Studio (Dark)',
-      environment: 'Environment',
-      none: 'None'
-    },
+    options: (rowMeta('backdrop', surface) || {}).options,
+    labels: (rowMeta('backdrop', surface) || {}).optionLabels,
     onChange: onBackdropChange,
     defValue: "studio",
     disabled: backdropDisabled,
-    title: backdropDisabled ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : 'Studio: a white room. Environment: the HDRI as background. None: a dark void.',
+    title: backdropDisabled ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : (rowMeta('backdrop', surface) || {}).hint,
     size: "sm",
     block: true
   })), /*#__PURE__*/React.createElement("div", {
@@ -2588,13 +2822,12 @@ const ViewportControls = ({
   children,
   trailingChildren,
   // Extra blocks for the settings popover, appended after the built-in
-  // Force Transparency block. Node or render prop; docs previewer is
-  // the only consumer today.
+  // rows. Node or render prop; docs previewer and the Graph preview are
+  // the consumers today.
   settingsChildren,
-  // Hides the built-in Displacement/Subdivision rows in the settings
-  // popover. The docs previewer has no mesh displacement pipeline, so
-  // those rows would be dead controls there.
-  hideDisplacementSettings = false,
+  // Which manifest surface ('docs'|'graph'|...) this instance serves.
+  // Forwarded to SettingsDialog so rows come from render-settings.js.
+  surface,
   // Hides the settings cog. Additive, like showScreenshot above; the
   // popover it opens (SettingsDialog) already renders null while closed,
   // so hiding just the trigger is enough.
@@ -2751,6 +2984,7 @@ const ViewportControls = ({
           open: envOpen,
           onClose: () => setEnvOpen(false),
           placement: envDialogPlacement,
+          surface: surface,
           backdrop: backdrop,
           onBackdropChange: onBackdropChange,
           showBackdropPicker: showBackdropPicker,
@@ -2897,7 +3131,7 @@ const ViewportControls = ({
     anchorRef: settingsBtnRef,
     open: settingsOpen,
     onClose: () => setSettingsOpen(false),
-    hideDisplacementSettings: hideDisplacementSettings
+    surface: surface
   }, typeof settingsChildren === 'function' ? settingsChildren() : settingsChildren));
 };
 
@@ -4471,6 +4705,8 @@ Object.assign(window, {
   useWindowFileDrop,
   LoadingOverlay,
   ViewportControls,
+  RENDER_CONTEXT_LOST_MESSAGE,
+  useRenderContextRecovery,
   ColorSwatch,
   MtlxSelect,
   MtlxMenu,
@@ -4487,7 +4723,8 @@ Object.assign(window, {
   DialogFrame,
   PresetsDialog,
   SettingsDialog,
-  DisplacementSettingsRows,
+  RenderSettingsSection,
+  rowMeta,
   MTLX_PRESETS,
   MTLX_PRESETS_BASE,
   RecordGifDialog,

@@ -85,3 +85,7 @@ tests/embed/fixtures/**/*.bin binary
 index.html                            text eol=lf
 scripts/build-webview.mjs             text eol=lf
 vscode_extension/media/webview.html   text eol=lf
+
+# scripts/check-render-parity.mjs byte-compares this generated matrix in --check;
+# force LF so a Windows checkout cannot make that comparison spuriously fail.
+docs/RENDER-FEATURES.md               text eol=lf

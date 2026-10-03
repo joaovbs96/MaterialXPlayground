@@ -19,6 +19,10 @@
 // Outbound (iframe -> host): ready, renderables, error, snapshot, camera, displacement.
 (function () {
     'use strict';
+    // Marks this page for MtlxRenderSettings.canPersist(): the embed
+    // viewer iframe never persists the shared per-origin preferences,
+    // same guard shape as window.__MTLX_EMBED for the docs iframe.
+    window.__MTLX_EMBED_PAGE__ = true;
 
     var qs = new URLSearchParams(window.location.search);
 
@@ -195,7 +199,10 @@
     // `backdrop` -> props.backdrop, replacing the old boolean `background`
     // toggle. Undefined when absent (the legacy alias below decides then);
     // otherwise the parsed mode, or `'studio'` (reported) if unrecognized.
-    var BACKDROP_MODES = ['studio', 'studio-dark', 'environment', 'none'];
+    // Sourced from js/shared/render-settings.js (loaded eagerly, before
+    // this file, see embed/viewer.html) instead of a second hardcoded list.
+    var BACKDROP_ROW = window.MtlxRenderSettings.ROWS.find(function (r) { return r.key === 'backdrop'; });
+    var BACKDROP_MODES = BACKDROP_ROW.options;
     function parseBackdrop(v) {
         if (v == null || v === '') return undefined;
         var lower = String(v).trim().toLowerCase();

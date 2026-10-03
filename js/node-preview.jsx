@@ -205,9 +205,7 @@
                 const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
                 return c ? { epoch: c.epoch, name: c.name } : null;
             });
-            const [glEpoch, setGlEpoch] = React.useState(0);
             const pendingCustomGeomRef = React.useRef(false);
-            const pendingGlRestoredRef = React.useRef(false);
             const pendingGlobalGeomRef = React.useRef(false);
             // canvasRef (target) is always mounted, unlike sourceCanvasRef
             // which only exists in compare mode, so it's the right check.
@@ -251,22 +249,11 @@
             // Restore re-inits GL state but not render-target contents, so a
             // glEpoch bump forces the build effect to dispose and fully
             // rebuild both views.
-            React.useEffect(() => {
-                const onGlContext = (e) => {
-                    const d = e.detail || {};
-                    if (d.canvas !== canvasRef.current && d.canvas !== sourceCanvasRef.current) return;
-                    if (d.state === 'lost') {
-                        if (!surfaceHidden()) {
-                            setNotice('The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.');
-                        }
-                    } else if (d.state === 'restored') {
-                        if (surfaceHidden()) pendingGlRestoredRef.current = true;
-                        else setGlEpoch((n) => n + 1);
-                    }
-                };
-                window.addEventListener('mtlx-gl-context', onGlContext);
-                return () => window.removeEventListener('mtlx-gl-context', onGlContext);
-            }, []);
+            const [glEpoch] = useRenderContextRecovery({
+                groups: [[canvasRef, sourceCanvasRef]],
+                isHidden: surfaceHidden,
+                onLost: () => setNotice(RENDER_CONTEXT_LOST_MESSAGE),
+            });
             React.useEffect(() => {
                 const flush = () => {
                     // hashchange fires before/around the shell's display:none class
@@ -274,7 +261,6 @@
                     requestAnimationFrame(() => {
                         if (surfaceHidden()) return;
                         if (pendingCustomGeomRef.current) { pendingCustomGeomRef.current = false; applyCustomGeom(); }
-                        if (pendingGlRestoredRef.current) { pendingGlRestoredRef.current = false; setGlEpoch((n) => n + 1); }
                         if (pendingGlobalGeomRef.current) { pendingGlobalGeomRef.current = false; applyGlobalGeom(); }
                     });
                 };
@@ -1139,7 +1125,7 @@
 
                         const buildView = () => createMtlxRenderView({
                             canvas, mx, gen, genContext, renderable, lightData,
-                            label: nodeName,
+                            label: nodeName, surface: 'docs',
                             // Many small previews mount at once; a tighter
                             // budget keeps displaced subdivision cheap here.
                             triangleBudget: 250000,
@@ -1247,7 +1233,7 @@
                                 try {
                                     const sourceView = await createMtlxRenderView({
                                         canvas: srcCanvas, mx, gen, genContext, renderable: sourceRenderable, lightData,
-                                        label: nodeName + ' (source)',
+                                        label: nodeName + ' (source)', surface: 'docs',
                                         triangleBudget: 250000,
                                         needsLighting,
                                         geomName: geom,
@@ -1905,9 +1891,9 @@
                     onScreenshot={takeScreenshot}
                     isFullscreen={isFullscreen}
                     onToggleFullscreen={toggleFullscreenView}
-                    // Docs node previews render a single node's output, not
-                    // a full material, so mesh displacement never applies.
-                    hideDisplacementSettings
+                    // Manifest marks displacement/subdivision 'na' for docs
+                    // surface, so RenderSettingsSection renders no rows for them.
+                    surface="docs"
                     containerClassName={compact ? 'absolute top-2 right-2 z-20 flex items-center gap-1.5' : undefined}
                     buttonClassName={compact ? ((active) => 'w-7 h-7 flex-none flex items-center justify-center rounded transition-colors ' + (active ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-gray-700 hover:bg-gray-600 text-gray-200')) : undefined}
                 />

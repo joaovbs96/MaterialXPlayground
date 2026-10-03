@@ -273,7 +273,8 @@ const parseBuilderHashSettings = () => {
     if (params.has('geometryUrl')) patch.geometryUrl = params.get('geometryUrl');
     if (params.has('autorotate')) patch.autorotate = builderParseBool(params.get('autorotate'));
     if (params.has('controls')) patch.controls = controlsObjFromStr(params.get('controls'));
-    if (params.has('backdrop') && ['studio', 'studio-dark', 'environment', 'none'].includes(params.get('backdrop'))) {
+    const backdropOptions = rowMeta('backdrop', 'embed').options;
+    if (params.has('backdrop') && backdropOptions.includes(params.get('backdrop'))) {
         patch.backdrop = params.get('backdrop');
     }
     if (params.has('transparent')) patch.transparent = builderParseBool(params.get('transparent'));
@@ -1636,11 +1637,11 @@ function BuilderApp({ active } = {}) {
             </div>
             <div>
                 <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-medium text-gray-400">Backdrop</span>
+                    <span className="text-xs font-medium text-gray-400">{(rowMeta('backdrop', 'embed') || {}).label || 'Backdrop'}</span>
                     <MtlxSelect
                         value={backdrop}
-                        options={['studio', 'studio-dark', 'environment', 'none']}
-                        labels={{ studio: 'Studio', 'studio-dark': 'Studio (Dark)', environment: 'Environment', none: 'None' }}
+                        options={rowMeta('backdrop', 'embed').options}
+                        labels={(rowMeta('backdrop', 'embed') || {}).optionLabels || {}}
                         onChange={(v) => patch({ backdrop: v })}
                         defValue={BUILDER_DEFAULTS.backdrop}
                         disabled={backdropPickerDisabled}

@@ -7,14 +7,14 @@ import { fileURLToPath } from 'node:url';
 
 function loadCatcherVisible() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-  const source = fs.readFileSync(path.join(root, 'js', 'usd-scene-environment.js'), 'utf8');
+  const source = fs.readFileSync(path.join(root, 'js', 'shared', 'render-environment.js'), 'utf8');
   const start = source.indexOf('const studioCatcherVisible =');
   const end = source.indexOf('\n', start);
   assert.ok(start >= 0 && end > start, 'studio catcher visibility helper is present');
   const context = {};
   vm.runInNewContext(
     source.slice(start, end) + '\nthis.studioCatcherVisible = studioCatcherVisible;',
-    context, { filename: 'usd-scene-environment.js' });
+    context, { filename: 'render-environment.js' });
   return context.studioCatcherVisible;
 }
 

@@ -12,11 +12,11 @@ test('displacement normals default to mesh until the analytic path is verified',
   const end = source.indexOf('const getDisplacementNormalsMode', start);
   const block = source.slice(start, end);
   assert.ok(start >= 0 && end > start);
-  // Both the query/localStorage-miss fallback and the catch fallback must
-  // resolve to 'mesh', not 'analytic', so a fresh session never silently
-  // renders the unverified analytic terracing.
-  const returns = [...block.matchAll(/return\s+'(analytic|mesh)';/g)].map((m) => m[1]);
-  assert.deepEqual(returns, ['mesh', 'mesh'], 'both the default and error fallback must be mesh');
+  // Both the settings-store-miss fallback (`|| 'mesh'`) and the catch
+  // fallback (`return 'mesh';`) must resolve to 'mesh', not 'analytic', so
+  // a fresh session never silently renders the unverified analytic terracing.
+  assert.match(block, /window\.MtlxRenderSettings\.get\('displacementNormals'.*\)\s*\|\|\s*'mesh'/, 'the store-miss fallback must be mesh');
+  assert.match(block, /catch \(e\) \{ return 'mesh'; \}/, 'the catch fallback must be mesh');
 });
 
 test('the analytic displacement-normal readback requires a float render target and fails soft', () => {

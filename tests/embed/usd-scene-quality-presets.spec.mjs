@@ -7,9 +7,7 @@ import { test, expect } from './lib/test-base.mjs';
 // @scene: exercises the Performance/Default/Quality control in
 // js/usd-scene-app.jsx (SCENE_QUALITY_LEVELS, the Render settings popover's
 // segmented control, and the draft/Apply/Cancel/Reset dance). PRESET_SETTINGS
-// mirrors SCENE_QUALITY_LEVELS (not exposed on window for the test to read
-// back at runtime) and must be updated together with it. default.subdivision
-// tracks SCENE_SUBDIVISION_DEFAULT (currently 0). The popover header is just
+// is read from window.MtlxRenderSettings (the stage profile levels). The popover header is just
 // "Preset" + the segmented control (no name/count pill); every other
 // popover row is also governed (live sliders/selects included) and shares
 // the same value on all three levels. Staged (non-live) rows wait for
@@ -38,11 +36,26 @@ async function loadFixtureScene(page) {
   }
 }
 
-const PRESET_SETTINGS = {
-  performance: { resolution: '512 px', memory: '1 GB', subdivision: 'Off', shadows: false, ao: false, skyVis: false, transparency: false },
-  default: { resolution: '2048 px', memory: '1 GB', subdivision: 'Off', shadows: false, ao: false, skyVis: false, transparency: true },
-  quality: { resolution: '4096 px', memory: '4 GB', subdivision: '2', shadows: true, ao: true, skyVis: true, transparency: true },
-};
+// The levels come from the settings manifest the app itself renders from,
+// so this spec cannot drift from it; option values map to the labels the
+// rows show.
+async function readPresetSettings(page) {
+  return page.evaluate(() => {
+    const RS = window.MtlxRenderSettings;
+    const row = (key) => RS.ROWS.find((entry) => entry.key === key);
+    const at = (key, level) => { const levels = row(key).profiles.stage.levels; return levels[level] !== undefined ? levels[level] : levels.default; };
+    const label = (key, level) => String(row(key).optionLabels[String(at(key, level))]);
+    const out = {};
+    for (const level of RS.LEVELS) {
+      out[level] = {
+        resolution: label('textureMaxSize', level), memory: label('textureBudgetGib', level), subdivision: label('subdivision', level),
+        shadows: at('shadows', level), ao: at('ao', level), skyVis: at('skyVis', level), transparency: at('transparency', level),
+      };
+    }
+    return out;
+  });
+}
+
 
 // The popover's three-way segmented control stages a draft; nothing
 // reaches the renderer until the footer's Apply button is clicked (live

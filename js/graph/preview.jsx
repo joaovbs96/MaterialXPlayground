@@ -194,9 +194,8 @@
         // Experimental: wraps the previewed root-level shading network in a
         // transient nodedef so it compiles as one compound function instead
         // of an inlined chain (see wrapRootNetwork below).
-        const GRAPH_COMPOUND_KEY = 'mtlx_graph_preview_compound';
         const readGraphCompoundRoot = () => {
-            try { return localStorage.getItem(GRAPH_COMPOUND_KEY) === '1'; } catch (e) { return false; }
+            try { return !!window.MtlxRenderSettings.get('graphCompoundCompile', { surface: 'graph' }); } catch (e) { return false; }
         };
         // Row layout for the docked/fullscreen viewport strip: docked splits
         // send/colorspace/collapse from the geometry/screenshot/env/settings
@@ -1049,10 +1048,7 @@
             const [compoundRoot, setCompoundRootState] = React.useState(readGraphCompoundRoot);
             const setCompoundRoot = (on) => {
                 setCompoundRootState(on);
-                try {
-                    if (on) localStorage.setItem(GRAPH_COMPOUND_KEY, '1');
-                    else localStorage.removeItem(GRAPH_COMPOUND_KEY);
-                } catch (e) { /* best-effort */ }
+                try { window.MtlxRenderSettings.set('graphCompoundCompile', !!on, { surface: 'graph' }); } catch (e) { /* best-effort */ }
             };
             // Ref mirror so the registry subscription below (mount-once)
             // always reads the CURRENT mode without re-subscribing.
@@ -1065,15 +1061,9 @@
                 const c = window.getCustomPreviewGeom && window.getCustomPreviewGeom();
                 return c ? { epoch: c.epoch, name: c.name } : null;
             });
-            // GL context restore epoch: bumped when mtlx-engine.js reports
-            // this view's canvas restored, forcing the build effect below
-            // to dispose and fully rebuild (render-target contents are
-            // never re-baked by three's own restore handler).
-            const [glEpoch, setGlEpoch] = React.useState(0);
             // Stashed work for a hidden view: applied once visible again
             // (hashchange flush effect below), never while offscreen.
             const pendingCustomGeomRef = React.useRef(false);
-            const pendingGlRestoredRef = React.useRef(false);
             const pendingGlobalGeomRef = React.useRef(false);
             // A hidden ancestor (the shell's display:none wrapper) makes
             // offsetParent null regardless of which level it's applied at.
@@ -1121,23 +1111,12 @@
             // Restore re-inits GL state but not render-target contents, so
             // a glEpoch bump forces the build effect to dispose and fully
             // rebuild this view's shell.
-            React.useEffect(() => {
-                const onGlContext = (e) => {
-                    const d = e.detail || {};
-                    if (d.canvas !== canvasRef.current) return;
-                    if (d.state === 'lost') {
-                        if (!surfaceHidden()) {
-                            setNotice('The browser reclaimed this 3D view (too many WebGL contexts). It will rebuild when the context is restored.');
-                        }
-                    } else if (d.state === 'restored') {
-                        if (surfaceHidden()) pendingGlRestoredRef.current = true;
-                        else setGlEpoch((n) => n + 1);
-                    }
-                };
-                window.addEventListener('mtlx-gl-context', onGlContext);
-                return () => window.removeEventListener('mtlx-gl-context', onGlContext);
-            }, []);
-            // Flushes stashed geometry/restore work once this view becomes
+            const [glEpoch] = useRenderContextRecovery({
+                groups: [[canvasRef]],
+                isHidden: surfaceHidden,
+                onLost: () => setNotice(RENDER_CONTEXT_LOST_MESSAGE),
+            });
+            // Flushes stashed geometry work once this view becomes
             // visible again (docked view switch via the shell's hashchange).
             React.useEffect(() => {
                 const flush = () => {
@@ -1146,7 +1125,6 @@
                     requestAnimationFrame(() => {
                         if (surfaceHidden()) return;
                         if (pendingCustomGeomRef.current) { pendingCustomGeomRef.current = false; applyCustomGeom(); }
-                        if (pendingGlRestoredRef.current) { pendingGlRestoredRef.current = false; setGlEpoch((n) => n + 1); }
                         if (pendingGlobalGeomRef.current) { pendingGlobalGeomRef.current = false; applyGlobalGeom(); }
                     });
                 };
@@ -1460,7 +1438,7 @@
                                 view = await createMtlxRenderView({
                                     canvas, mx, gen, genContext, renderable: built.renderable, lightData,
                                     materialName: built.materialName || null,
-                                    label: built.label || parsed.label,
+                                    label: built.label || parsed.label, surface: 'graph',
                                     needsLighting: true,
                                     geomName: wantGeom,
                                     // 3D geometries orbit by default; the full scene opts
@@ -1573,6 +1551,7 @@
                         (send/colorspace/collapse, then geometry/screenshot/
                         env/settings), one row in fullscreen; see clusters. */}
                     <ViewportControls
+                        surface="graph"
                         backdrop={backdrop}
                         onBackdropChange={setBackdrop}
                         envAvail={envAvail}
@@ -1584,10 +1563,16 @@
                         viewEpoch={viewEpoch}
                         onScreenshot={takeScreenshot}
                         settingsChildren={
+                            // compoundRoot is real state driving the compile
+                            // path directly (see the effect deps above), with
+                            // no engine-global setter, so it stays caller-
+                            // driven; only the label/hint text come from the
+                            // manifest (js/shared/render-settings.js), via
+                            // rowMeta, so this can't drift from it.
                             <div>
                                 <div className="flex items-center justify-between gap-2">
                                     <span className="inline-flex items-center gap-1.5 text-gray-200">
-                                        Compound compile
+                                        {(rowMeta('graphCompoundCompile', 'graph') || {}).label || 'Compound compile'}
                                         <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-amber-600/30 border border-amber-500/50 text-amber-300">Experimental</span>
                                     </span>
                                     <button
@@ -1601,8 +1586,7 @@
                                     </button>
                                 </div>
                                 <div className="mt-1 text-[11px] text-gray-400">
-                                    Wraps the document's root-level shading network in a temporary node definition so the GPU driver compiles it as one function.
-                                    Measured 6x faster compiles on large closure networks; parameter edits stay live. Connections and node edits still recompile as before.
+                                    {(rowMeta('graphCompoundCompile', 'graph') || {}).hint}
                                 </div>
                             </div>
                         }
