@@ -27,6 +27,7 @@ One row per setting in `js/shared/render-settings.js`, one table per group. `yes
 | Setting | viewer | compare | docs | graph | embed | scene | Storage keys |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Force Transparency | yes | yes | yes | yes | yes | yes | preview: `mtlxForceTransparency`<br>stage: `mtlxUsdSceneTransparency` (legacy: `mtlxForceTransparency`) |
+| Transmission | yes | yes | yes | yes | yes | yes | preview: quality level, not saved<br>stage: per view, not saved |
 | Height-to-Normal Texel Space | yes | yes | yes | yes | yes | yes | preview: `mtlxHeightToNormalTexel`<br>stage: `mtlxHeightToNormalTexel` |
 | Diffuse Environment Method | yes | yes | yes | yes | yes | yes | preview: `mtlx_diffuse_env`<br>stage: `mtlx_scene_diffuse_env` (legacy: `mtlx_diffuse_env`) |
 | Compound compile | na (only the Graph Editor compiles compound taps) | na (only the Graph Editor compiles compound taps) | na (only the Graph Editor compiles compound taps) | yes | na (only the Graph Editor compiles compound taps) | na (only the Graph Editor compiles compound taps) | preview: `mtlx_graph_preview_compound` |

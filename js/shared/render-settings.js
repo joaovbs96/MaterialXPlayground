@@ -146,6 +146,19 @@
             embed: { attr: 'forcetransparency', live: true },
         },
         {
+            key: 'transmission', label: 'Transmission', group: 'effects', order: 9.5, type: 'enum', options: ['scalar', 'rgbt'], apply: 'regenerate', ui: false, experimental: true,
+            optionLabels: { scalar: 'Scalar alpha', rgbt: 'RGB transmission' },
+            hint: 'How transparent surfaces composite under transparency: one alpha value (the MaterialX viewer) or a per-channel RGB transmission tint (the Scene). Takes effect on the next material build.',
+            // No storage: the value is the level's or an in-memory set(), so a
+            // stored choice can never carry a Quality effect into Default or an embed.
+            profiles: {
+                preview: { codec: 'enum', options: ['scalar', 'rgbt'], levels: { performance: 'scalar', default: 'scalar', quality: 'rgbt' } },
+                // The Scene always composites RGB-T; a single option keeps it fixed.
+                stage: { codec: 'enum', options: ['rgbt'], levels: { performance: 'rgbt', default: 'rgbt', quality: 'rgbt' } },
+            },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
+        },
+        {
             key: 'displacement', label: 'Displacement', group: 'geometry', order: 3, type: 'bool', apply: 'geometry', ui: true,
             hint: "Moves the mesh by the material's displacement; the material itself is unchanged.",
             profiles: {

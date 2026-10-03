@@ -214,3 +214,22 @@ test('rejectStored: a stored geometry of custom is treated as undefined, falls t
   });
   assert.equal(legacyCustomSkip.MtlxRenderSettings.get('geometry', { surface: 'viewer' }), 'cube');
 });
+
+test('transmission (P7): scalar at preview Performance/Default, rgbt only at Quality, never stored', () => {
+  const { MtlxRenderSettings, store } = loadStore();
+  for (const surface of ['viewer', 'compare', 'docs', 'graph', 'embed']) {
+    assert.equal(MtlxRenderSettings.get('transmission', { surface }), 'scalar', surface);
+  }
+  assert.equal(MtlxRenderSettings.get('transmission', { surface: 'scene' }), 'rgbt');
+  // A stored value (there is no key) or a stored Viewer level never reach the embed.
+  const viewer = loadStore({ store: { mtlx_quality_viewer: 'quality' } });
+  assert.equal(viewer.MtlxRenderSettings.get('transmission', { surface: 'viewer' }), 'rgbt');
+  assert.equal(viewer.MtlxRenderSettings.get('transmission', { surface: 'embed' }), 'scalar');
+  MtlxRenderSettings.setLevel('viewer', 'quality');
+  assert.equal(store['mtlx_quality_viewer'], 'quality');
+  assert.equal(MtlxRenderSettings.get('transmission', { surface: 'viewer' }), 'rgbt');
+  assert.equal(Object.keys(store).some((k) => /transmission/i.test(k)), false);
+  // The stage profile has one option, so the Scene stays RGB-T.
+  assert.equal(MtlxRenderSettings.set('transmission', 'scalar', { surface: 'scene' }), 'rgbt');
+  assert.equal(MtlxRenderSettings.rowsFor('viewer', { ui: true }).some((r) => r.key === 'transmission'), false);
+});

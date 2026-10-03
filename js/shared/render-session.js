@@ -226,6 +226,79 @@
         return begin;
     };
 
+    // One peel orchestrator per view: owns its depth-peel pipeline and draws a
+    // frame over the content's transparent meshes (plain render when none).
+    // rgbt 'always' = the RGB-T wrapper; 'auto' = scalar unless the list carries the RGB-T payload.
+    const createPeelOrchestrator = ({ renderer, rgbt = 'auto', pipelineOptions = {} }) => {
+        const make = (sceneRgbt) => ENGINE.createPeelPipeline(renderer,
+            sceneRgbt ? Object.assign({}, pipelineOptions, { sceneRgbt: true }) : pipelineOptions);
+        const always = rgbt === 'always';
+        const scalar = always ? null : make(false);
+        let rgbtPipeline = always ? make(true) : null;
+        let current = always ? rgbtPipeline : scalar;
+        const state = { mode: 'inactive', reason: null, payloadMaterials: 0, unsupportedLabels: [] };
+        const carriesPayload = (list) => list.some((object) => {
+            const mats = Array.isArray(object.material) ? object.material : [object.material];
+            return mats.some((m) => !!(m && m.uniforms && m.uniforms.u_peelRgbt && m.uniforms.u_peelRgbtPass));
+        });
+        // Picks this frame's pipeline; a switch frees the other one's targets.
+        const choose = (list) => {
+            if (always) return rgbtPipeline;
+            const next = carriesPayload(list) ? (rgbtPipeline || (rgbtPipeline = make(true))) : scalar;
+            if (next !== current) {
+                try { current.dispose(); } catch (e) { /* already disposed/invalid */ }
+                current = next;
+            }
+            return current;
+        };
+        const render = (scene, camera, list, opts = {}) => {
+            if (!list || !list.length) {
+                Object.assign(state, { mode: opts.enabled ? 'opaque' : 'inactive', reason: null, payloadMaterials: 0, unsupportedLabels: [] });
+                renderer.render(scene, camera);
+                return;
+            }
+            const pipeline = choose(list);
+            if (pipeline === scalar) {
+                Object.assign(state, { mode: 'scalar', reason: null });
+                pipeline.render(scene, camera, list, { setSceneLinear: opts.setSceneLinear, outputLinear: opts.outputLinear });
+                return;
+            }
+            const payloadMaterials = [];
+            const unsupportedLabels = [];
+            const seenPayload = new Set();
+            list.forEach((object) => {
+                const mats = Array.isArray(object.material) ? object.material : [object.material];
+                mats.forEach((material) => {
+                    if (!material || seenPayload.has(material) || !(material.uniforms && material.uniforms.u_peelMode)) return;
+                    seenPayload.add(material);
+                    payloadMaterials.push(material);
+                    if (!material.uniforms.u_peelRgbtPass || !material.uniforms.u_peelRgbt) {
+                        unsupportedLabels.push(String((material.userData && material.userData.mtlxSceneMaterialPath) || material.name || 'material'));
+                    }
+                });
+            });
+            Object.assign(state, { mode: 'rgbt', reason: null, payloadMaterials: payloadMaterials.length, unsupportedLabels: unsupportedLabels.slice(0, 32) });
+            pipeline.render(scene, camera, list, {
+                setSceneLinear: opts.setSceneLinear, outputLinear: opts.outputLinear,
+                onUnsupported: (reason) => {
+                    Object.assign(state, { mode: 'legacy', reason: String(reason || 'RGBT unsupported'), unsupportedLabels: unsupportedLabels.slice(0, 32) });
+                    if (opts.onUnsupported) opts.onUnsupported(reason);
+                },
+            });
+        };
+        return {
+            render,
+            // Frees the targets; the next peeling frame reallocates them lazily.
+            dispose: () => {
+                if (scalar) scalar.dispose();
+                if (rgbtPipeline) rgbtPipeline.dispose();
+            },
+            resident: () => !!(current && current.debug && current.debug().opaque),
+            debug: () => (current && typeof current.debug === 'function' ? current.debug() : null),
+            state: () => Object.assign({}, state),
+        };
+    };
+
     // Filters ONE benign Windows ANGLE warning (X4008 division by zero,
     // harmless), matched by exact signature. debugShaders sends filtered
     // warnings to console.debug instead of vanishing them silently.
@@ -689,7 +762,7 @@
         let reqId = null, renderer = null, scene = null, camera = null, controls = null, handle = null;
         let onGlLost = null, onGlRestored = null, onContextLostSleep = null, onContextRestoredWake = null;
         let sizer = null, captureController = null, sleepGate = null, unsubDiffuseEnv = null, wheelGate = null;
-        let peelPipeline = null, peelLinearOk = false, backdropParts = null, pmremRT = null, linearToggle = null;
+        let peel = null, peelLinearOk = false, backdropParts = null, pmremRT = null, linearToggle = null;
         let caps = null, renderPathReady = false, stopped = false;
         let explicitActive = true, drawingBufferParked = false;
         // No-OrbitControls fallback spin (script blocked) mirrors autoRotate.
@@ -741,7 +814,7 @@
             // disposed (r128 shares its LOD planes module-wide).
             try { if (pmremRT) pmremRT.dispose(); } catch (e) { /* already disposed/invalid */ }
             try { envMapGate.disposeAll(); } catch (e) { /* already disposed/invalid */ }
-            try { if (peelPipeline) peelPipeline.dispose(); } catch (e) { /* already disposed/invalid */ }
+            try { if (peel) peel.dispose(); } catch (e) { /* already disposed/invalid */ }
             // No forceContextLoss(): callers rebuild on the SAME canvas right away.
             try {
                 if (onContextLostSleep) canvas.removeEventListener('webglcontextlost', onContextLostSleep);
@@ -755,8 +828,7 @@
             const list = ENGINE.getForceTransparency() ? content.transparentMeshes() : [];
             const peelActive = list.length > 0;
             linearToggle.sync(peelActive && peelLinearOk);
-            if (!peelActive) { renderer.render(scene, camera); return; }
-            peelPipeline.render(scene, camera, list);
+            peel.render(scene, camera, list);
         };
         const animate = (ts) => {
             if (stopped || !aliveFn()) return;
@@ -837,7 +909,7 @@
                 asleep: sleepGate.isAsleep(),
                 reason: sleepGate.getReason(),
                 resident: {
-                    peel: !!(peelPipeline && peelPipeline.debug && peelPipeline.debug().opaque),
+                    peel: !!(peel && peel.resident()),
                     studioShadow: backdropParts.hasShadowMap(),
                     drawingBuffer: !drawingBufferParked,
                 },
@@ -876,7 +948,7 @@
             // reallocates them lazily.
             refreshRenderMode: () => {
                 const peelOn = content.renderModeChanged();
-                if (!peelOn && peelPipeline) peelPipeline.dispose();
+                if (!peelOn && peel) peel.dispose();
             },
             refreshDisplaySettings: () => {
                 const scale = ENGINE.displayExposureScale();
@@ -893,7 +965,7 @@
             },
             setEnvironment,
             setEnvMap,
-            __debug: () => ({ renderer, scene, camera }),
+            __debug: () => ({ renderer, scene, camera, peel: peel ? peel.state() : null }),
         });
 
         const start = async () => {
@@ -921,7 +993,7 @@
                     console.log('[mtlx-perf] WebGLRenderer init: '
                         + (performance.now() - rendererPerfStart).toFixed(1) + 'ms');
                 }
-                peelPipeline = ENGINE.createPeelPipeline(renderer, { getDisplayTransform: ENGINE.getDisplayTransform });
+                peel = createPeelOrchestrator({ renderer, rgbt: 'auto', pipelineOptions: { getDisplayTransform: ENGINE.getDisplayTransform } });
                 scene = createRenderScene();
                 backdropParts = window.MtlxRender.createPreviewBackdrop({ scene, getDisplayTransform: ENGINE.getDisplayTransform });
                 let instantiateResult = content.instantiate(host);
@@ -947,7 +1019,7 @@
                 sizer = createSizer({
                     canvas, renderer, fallbackWidth: cw, fallbackHeight: ch,
                     layout: (w, h) => {
-                        if (peelPipeline) peelPipeline.dispose();
+                        if (peel) peel.dispose();
                         content.layout(w, h);
                     },
                     onVisibility: (hidden) => { if (sleepGate) sleepGate.notify({ hidden }); },
@@ -963,7 +1035,7 @@
                 sleepGate = createSleepGate({
                     onSleep: () => {
                         if (reqId) { cancelAnimationFrame(reqId); reqId = null; }
-                        if (peelPipeline) peelPipeline.dispose();
+                        if (peel) peel.dispose();
                         backdropParts.disposeShadowMap();
                         renderer.setSize(1, 1, false);
                         drawingBufferParked = true;
@@ -1071,6 +1143,7 @@
         applyRendererDisplay,
         createRenderScene,
         createLinearLease,
+        createPeelOrchestrator,
         createDefaultCamera,
         createOrbitControls,
         shouldGateWheel,

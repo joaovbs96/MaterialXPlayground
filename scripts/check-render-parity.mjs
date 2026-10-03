@@ -361,7 +361,9 @@ function renderStorageKeysCell(row) {
   const parts = [];
   for (const profile of Object.keys(row.profiles)) {
     const P = row.profiles[profile];
-    let s = P.storage ? `${profile}: \`${P.storage}\`` : `${profile}: per view, not saved`;
+    // A storage-less profile whose levels differ follows the surface's quality level.
+    const governed = P.levels && new Set(LEVELS.map((l) => JSON.stringify(P.levels[l] !== undefined ? P.levels[l] : P.levels.default))).size > 1;
+    let s = P.storage ? `${profile}: \`${P.storage}\`` : `${profile}: ${governed ? 'quality level' : 'per view'}, not saved`;
     if (P.field) s += ` (field \`${P.field}\`)`;
     if (P.legacy && P.legacy.length) s += ` (legacy: ${P.legacy.map((k) => `\`${k}\``).join(", ")})`;
     parts.push(s);
@@ -668,13 +670,13 @@ function checkResolverDuplicationLedger() {
 }
 
 // ---------------------------------------------------------------------
-// (j) IIFE guard (plan guard (d), P6 S2): js/shared/render-*.js and
-// js/usd-scene-*.js run as one IIFE, so no top-level name can collide with
+// (j) IIFE guard (plan guard (d), P6 S2): js/shared/render-*.js, js/shared/fx-*.js
+// (P7) and js/usd-scene-*.js run as one IIFE, so no top-level name can collide with
 // the engine's unwrapped globals. First statement `(`, last `})(...);`.
 // ---------------------------------------------------------------------
 function checkIifeGuard() {
   const problems = [];
-  const files = listSourceFiles().filter((f) => /^js\/shared\/render-[^/]+\.js$/.test(f) || /^js\/usd-scene-[^/]+\.js$/.test(f));
+  const files = listSourceFiles().filter((f) => /^js\/shared\/(?:render|fx)-[^/]+\.js$/.test(f) || /^js\/usd-scene-[^/]+\.js$/.test(f));
   for (const file of files) {
     const text = readFileSync(path.join(REPO_ROOT, file), "utf8");
     const code = text.replace(/\/\*[\s\S]*?\*\//g, "").split("\n")

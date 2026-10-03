@@ -411,6 +411,14 @@ const setForceTransparency = (v, { persist = true } = {}) => {
     try { window.dispatchEvent(new CustomEvent('mtlx-settings-changed', { detail: { key: 'forceTransparency', value: FORCE_TRANSPARENCY } })); } catch (e) { /* best-effort */ }
 };
 
+// Preview transmission model ('scalar' | 'rgbt', manifest row `transmission`),
+// read per material build. The embed page and the docs iframe read their own
+// level (Performance), never the Viewer's stored one.
+const previewLevelSurface = () => (window.__MTLX_EMBED_PAGE__ ? 'embed' : (window.__MTLX_EMBED ? 'docs' : 'viewer'));
+const getPreviewTransmission = () => {
+    try { return window.MtlxRenderSettings.get('transmission', { surface: previewLevelSurface() }) === 'rgbt' ? 'rgbt' : 'scalar'; } catch (e) { return 'scalar'; }
+};
+
 // NOTE: no separate "depth peeling" setting exists, Force Transparency
 // always means front-to-back depth-peeled OIT now (a naive single-pass
 // blended mode was collapsed into this one flag). renderFrame()/
@@ -7950,6 +7958,7 @@ const prewarmPreviewTarget = async ({ mx, gen, genContext, buildRenderable, labe
                 return generatePreviewSourcesUnlocked({
                     mx, gen, genContext, renderable: built.renderable, label, isMounted,
                     stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, sceneFeatureOptions: PREVIEW_FEATURE_OPTIONS,
+                    transmission: getPreviewTransmission(),
                 });
             } finally {
                 // Best-effort, ALWAYS: the transient __pv_* wrappers must
@@ -8194,7 +8203,10 @@ const mergeDuplicateImageNodes = (doc) => {
 // letting tryRefreshRenderView diff sources without a full rebuild.
 // Frees mxShader before returning, so nothing holds a live wasm handle.
 // ------------------------------------------------------------------
-const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label, materialName = null, isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, sceneFeatureOptions = null, stageLightCount = null, allowConstInputs = true }) => {
+const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label, materialName = null, isMounted = () => true, document: documentArg = null, sceneRgbt = false, transmission = 'scalar', lightTransport = false, sceneFeatureOptions = null, stageLightCount = null, allowConstInputs = true }) => {
+    // The Scene's RGB-T transmission model (payload + thin-wall correction);
+    // previews opt in with transmission 'rgbt' (preview Quality).
+    const rgbtPayload = sceneRgbt || transmission === 'rgbt';
     // Sampler-budget drops, requested only by compileMtlxSceneMaterial's
     // recompile loop; every other caller keeps the full feature set.
     const skipSkyVis = !!(sceneFeatureOptions && sceneFeatureOptions.skipSkyVis);
@@ -8378,7 +8390,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     }
     fs = patchUnlitLightingRefs(fs);
     fs = patchScenePhysicalLightFalloff(fs, sceneRgbt);
-    fs = patchSceneThinWalledTransmission(fs, sceneRgbt, notices);
+    fs = patchSceneThinWalledTransmission(fs, rgbtPayload, notices);
     const outDeclMatch = fs.match(/\bout\s+vec4\s+(\w+)\s*;/);
     const outVar = outDeclMatch ? outDeclMatch[1] : null;
     const outAssignments = outVar
@@ -8405,7 +8417,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // Folds transmission into peel-pass alpha; must precede injectPeelDiscard (see its u_peelMode guard).
     fs = patchTransmissionAlpha(fs, { skipRefraction });
     let payloadSupported = false;
-    if (sceneRgbt) {
+    if (rgbtPayload) {
         fs = patchRgbtPayload(fs);
         payloadSupported = fs.indexOf('/* MX_RGBT_PAYLOAD_SUPPORTED */') !== -1;
     }
@@ -9898,6 +9910,7 @@ const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, lab
         // byte compare below can never match.
         srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, materialName, isMounted,
             stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, sceneFeatureOptions: PREVIEW_FEATURE_OPTIONS,
+            transmission: getPreviewTransmission(),
             allowConstInputs: view ? view.allowConstInputs !== false : true });
     } catch (e) {
         return { refreshed: false, srcs: null };
@@ -11610,7 +11623,8 @@ const createPreviewContent = ({
         prepare: async (h) => {
             host = h;
             const srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, materialName, isMounted,
-                stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, sceneFeatureOptions: PREVIEW_FEATURE_OPTIONS, allowConstInputs });
+                stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, sceneFeatureOptions: PREVIEW_FEATURE_OPTIONS, allowConstInputs,
+                transmission: getPreviewTransmission() });
             if (!srcs) return false;
             firstSrcs = srcs;
             prewarmDisplacementSources(srcs, isMounted, label);
@@ -11732,8 +11746,9 @@ const createPreviewContent = ({
             }
             configureSceneOrbit();
             // Same helper every later applyMaterial() uses, same styled Error.
-            const { vs, fs, introspected, transparent, geomprops, notices, maxLights } = firstSrcs;
-            applyMaterialInternal({ vs, fs, introspected, transparent, geomprops, notices, maxLights }, label);
+            // payloadSupported seeds the RGB-T selectors (false below preview Quality).
+            const { vs, fs, introspected, transparent, geomprops, notices, maxLights, payloadSupported } = firstSrcs;
+            applyMaterialInternal({ vs, fs, introspected, transparent, geomprops, notices, maxLights, payloadSupported }, label);
             return true;
         },
         // Spin target and floor bounds: the whole assembled scene when present.
@@ -11850,7 +11865,8 @@ const createPreviewContent = ({
                 // A caller switching materials passes the new material's name.
                 const genMaterialName = applyMaterialName !== undefined ? applyMaterialName : materialName;
                 srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, materialName: genMaterialName, isMounted,
-                    stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, sceneFeatureOptions: PREVIEW_FEATURE_OPTIONS, allowConstInputs });
+                    stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, sceneFeatureOptions: PREVIEW_FEATURE_OPTIONS, allowConstInputs,
+                    transmission: getPreviewTransmission() });
             }
             // A thrown generation error is NOT caught here, it
             // propagates like a first-build failure, so the UI shows
@@ -12225,7 +12241,7 @@ const watchFullscreen = (cb) => {
 Object.assign(window, {
     getMxEnv, DEBUG_SHADERS, mtlxWarn, mxExclusive,
     MTLX_CLOCK, clockTick,
-    getForceTransparency, setForceTransparency,
+    getForceTransparency, setForceTransparency, getPreviewTransmission,
     getDisplacementEnabled, setDisplacementEnabled, getTextureAnisotropy, setTextureAnisotropy,
     getDisplacementNormalsMode, setDisplacementNormalsMode,
     getPreviewSubdivisionLevel, setPreviewSubdivisionLevel,
