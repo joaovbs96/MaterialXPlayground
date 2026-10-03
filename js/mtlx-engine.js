@@ -9363,7 +9363,7 @@ const evaluateDisplacement = async ({ renderer, displacement, geometry, worldMat
             // Attribute to THIS material's own program, not the first broken
             // program anywhere in the shared renderer (an unrelated material
             // would otherwise blame every displacement evaluation). Mirrors
-            // reportBadPrograms in js/usd-scene-renderer.js. Falls back to the
+            // MtlxRender.findUnrunnableMaterials (render-session.js). Falls back to the
             // old scan if r128 hasn't recorded a currentProgram yet.
             const props = renderer.properties.get(material);
             const ownProgram = props && props.currentProgram;

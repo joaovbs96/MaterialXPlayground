@@ -2082,6 +2082,8 @@
         const mountedRef = React.useRef(true);
         const filesRef = React.useRef(files);
         const handleRef = React.useRef(null);
+        // The live stage canvas, for WebGL context-loss recovery below.
+        const sceneCanvasRef = React.useRef(null);
         const generationRef = React.useRef(0);
         // Compact HUD: below ~720px the left pills (Render settings,
         // Environment settings, both with labels) and the right
@@ -2365,6 +2367,7 @@
                     nextHandle.__sceneStage = stage;
                     adopted = true;
                     handleRef.current = nextHandle;
+                    sceneCanvasRef.current = nextHandle.renderer ? nextHandle.renderer.domElement : null;
                     window.__mtlxUsdSceneHandle = nextHandle; // test and console access to the live scene handle.
                     const settings = envSettingsRef.current;
                     // A stage that ships a dome light has already seeded the
@@ -2965,6 +2968,18 @@
             if (IN_VSCODE) { reloadFromHost(); return; }
             if (filesRef.current && filesRef.current.length && rootPath) load(filesRef.current, rootPath);
         };
+        // WebGL context recovery: a restore re-inits GL state but not render
+        // targets or programs, so the stage view rebuilds through Reload.
+        const [sceneGlEpoch] = useRenderContextRecovery({
+            groups: [[sceneCanvasRef]],
+            isHidden: () => !containerRef.current || containerRef.current.getClientRects().length === 0,
+            onLost: () => setError(RENDER_CONTEXT_LOST_MESSAGE),
+        });
+        React.useEffect(() => {
+            if (!sceneGlEpoch) return;
+            setError('');
+            reloadScene();
+        }, [sceneGlEpoch]);
         const frameAll = () => { if (handle && handle.frameAll) { handle.frameAll(); if (handle.renderNow) handle.renderNow(); } };
         const selectCamera = (value) => {
             setSelectedCamera(value);

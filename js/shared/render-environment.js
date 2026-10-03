@@ -620,8 +620,8 @@ void main() {
         };
     };
 
-    // USD scene environment bridge (js/usd-scene-environment.js is now a
-    // thin adapter calling this). getDisplayTransform (optional): the
+    // USD scene environment bridge (the Scene renderer calls this directly).
+    // getDisplayTransform (optional): the
     // Scene's own mode getter; unset, the engine's global transform is used.
     const createStageEnvironment = ({ scene, renderer, camera, contentRoot, THREE = window.THREE, getDisplayTransform } = {}) => {
         if (!scene || !renderer || !THREE) throw new Error('USD scene environment requires a Three.js scene and renderer.');

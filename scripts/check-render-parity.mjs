@@ -521,8 +521,17 @@ function checkEmbedConsistency() {
 // e.g. the peel pipeline's `{render, dispose}`) so they are excluded;
 // the unit test covers those instead. Scene files are PENDING.
 // ---------------------------------------------------------------------
-const HANDLE_GUARD_PENDING_FILES = ["js/usd-scene-renderer.js", "js/usd-scene-app.jsx"];
+// Emptied in P6 S3: the Scene builds its handle through buildHandle too.
+const HANDLE_GUARD_PENDING_FILES = [];
+// Files whose handle literals feed buildHandle: core names are allowed only
+// inside their `session`/`content` literals (the engine has only `content`).
+const HANDLE_GUARD_FILES = ["js/mtlx-engine.js", "js/usd-scene-renderer.js", "js/usd-scene-app.jsx"];
 const HANDLE_GUARD_GENERIC_NAMES = new Set(["dispose", "resize", "snapshot"]);
+// Verified non-handle keys that reuse a contract name, one entry per site.
+const HANDLE_GUARD_ALLOW = [
+  { file: "js/usd-scene-renderer.js", name: "setResizeSuspended", reason: "sizer adapter handed to MtlxRender.createCaptureController (createSizer's interface)" },
+  { file: "js/usd-scene-renderer.js", name: "whenSettled", reason: "createSceneRebuildQueue's own fence, not a handle" },
+];
 
 function loadHandleContract() {
   const source = readFileSync(path.join(REPO_ROOT, "js", "shared", "render-session.js"), "utf8");
@@ -552,26 +561,28 @@ function findObjectLiteralRange(text, constName) {
 function checkHandleContractGuard() {
   const problems = [];
   const names = loadHandleContract().filter((n) => !HANDLE_GUARD_GENERIC_NAMES.has(n) && n !== "__debug");
-  const file = "js/mtlx-engine.js";
-  const text = readFileSync(path.join(REPO_ROOT, file), "utf8");
-  // createPreviewContent's `content` literal (P6 S1) is the only place the
-  // engine may define core handle names (its refreshDisplacement).
-  const allowedRanges = [findObjectLiteralRange(text, "content")].filter(Boolean);
-  if (!allowedRanges.length) problems.push(`no \`const content = {\` literal found in ${file}; update this guard`);
-  const inAllowedRange = (idx) => allowedRanges.some(([s, e]) => idx >= s && idx < e);
-  for (const name of names) {
-    const keyRe = new RegExp(`(?:^|[{,]\\s*)${name}\\s*:`, "gm");
-    let m;
-    while ((m = keyRe.exec(text))) {
-      const idx = m.index + m[0].indexOf(name);
-      if (inAllowedRange(idx)) continue;
-      problems.push(`handle-contract name "${name}" defined as an object-literal key in ${file} (outside the content passed to buildHandle)`);
+  for (const file of HANDLE_GUARD_FILES) {
+    const text = readFileSync(path.join(REPO_ROOT, file), "utf8");
+    const allowedRanges = [findObjectLiteralRange(text, "session"), findObjectLiteralRange(text, "content")].filter(Boolean);
+    if (file === "js/mtlx-engine.js" && !findObjectLiteralRange(text, "content")) {
+      problems.push(`no \`const content = {\` literal found in ${file}; update this guard`);
+    }
+    const inAllowedRange = (idx) => allowedRanges.some(([s, e]) => idx >= s && idx < e);
+    for (const name of names) {
+      const keyRe = new RegExp(`(?:^|[{,]\\s*)${name}\\s*:`, "gm");
+      let m;
+      while ((m = keyRe.exec(text))) {
+        const idx = m.index + m[0].indexOf(name);
+        if (inAllowedRange(idx)) continue;
+        if (HANDLE_GUARD_ALLOW.some((a) => a.file === file && a.name === name)) continue;
+        problems.push(`handle-contract name "${name}" defined as an object-literal key in ${file} (outside the session/content passed to buildHandle)`);
+      }
     }
   }
   if (problems.length) {
     fail(["handle-contract guard (g) failed:", ...problems.map((p) => `  - ${p}`)].join("\n"));
   }
-  log(`(g) handle-contract guard OK, ${names.length} names checked in ${file}; ${HANDLE_GUARD_PENDING_FILES.join(", ")} pending.`);
+  log(`(g) handle-contract guard OK, ${names.length} names checked in ${HANDLE_GUARD_FILES.join(", ")}.`);
 }
 
 // ---------------------------------------------------------------------

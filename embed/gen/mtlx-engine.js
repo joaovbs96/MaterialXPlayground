@@ -2451,7 +2451,7 @@ const previousTarget=renderer.getRenderTarget();const previousClearColor=rendere
 const perf=window.MTLX_PERF_LOG?{compileMs:0,readbackMs:0}:null;const __compileStart=perf?performance.now():0;try{compileFilteringDriverNoise(renderer,scene,camera);if(perf)perf.compileMs=performance.now()-__compileStart;// Attribute to THIS material's own program, not the first broken
 // program anywhere in the shared renderer (an unrelated material
 // would otherwise blame every displacement evaluation). Mirrors
-// reportBadPrograms in js/usd-scene-renderer.js. Falls back to the
+// MtlxRender.findUnrunnableMaterials (render-session.js). Falls back to the
 // old scan if r128 hasn't recorded a currentProgram yet.
 const props=renderer.properties.get(material);const ownProgram=props&&props.currentProgram;const badProg=ownProgram?ownProgram.diagnostics&&ownProgram.diagnostics.runnable===false?ownProgram:null:(renderer.info.programs||[]).find(p=>p.diagnostics&&p.diagnostics.runnable===false);if(badProg){const d=badProg.diagnostics;const log=(d.programLog||'')+(d.vertexShader&&d.vertexShader.log?' VERT: '+d.vertexShader.log:'')+(d.fragmentShader&&d.fragmentShader.log?' FRAG: '+d.fragmentShader.log:'');notices.push('Displacement evaluation failed: '+(log.split('\n')[0]||'program not runnable').slice(0,200));return{offsets:null,mode,notices};}// rgba32f: readRenderTargetPixels wants a Float32Array and hands
 // back the exact bytes the shader wrote (0..1, no UNORM8 clamp);

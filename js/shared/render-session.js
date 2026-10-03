@@ -71,14 +71,19 @@
             const fn = pick(name);
             if (fn) handle[name] = fn;
         });
-        // Writable data fields: tryRefreshRenderView mutates these
-        // directly on the handle afterward, so they must be own, plain
-        // assignable properties, not getters.
+        // Data fields: plain values become own writable properties
+        // (tryRefreshRenderView mutates them); a getter stays a live getter
+        // (the Scene's missingFiles), so descriptors are copied, not values.
         const contentFields = content && (typeof content.fields === 'function' ? content.fields() : content.fields);
-        const fields = Object.assign({}, session && session.fields, contentFields);
-        Object.keys(fields).forEach((k) => {
-            if (reserved.indexOf(k) !== -1) throw new Error('buildHandle: field "' + k + '" shadows a core handle name');
-            handle[k] = fields[k];
+        [session && session.fields, contentFields].forEach((source) => {
+            if (!source) return;
+            Object.keys(source).forEach((k) => {
+                if (reserved.indexOf(k) !== -1) throw new Error('buildHandle: field "' + k + '" shadows a core handle name');
+                const desc = Object.getOwnPropertyDescriptor(source, k);
+                Object.defineProperty(handle, k, desc.get || desc.set
+                    ? { get: desc.get, set: desc.set, enumerable: true, configurable: true }
+                    : { value: desc.value, writable: true, enumerable: true, configurable: true });
+            });
         });
         if (content && content.extras) {
             Object.keys(content.extras).forEach((k) => {
@@ -253,6 +258,51 @@
     // (js/mtlx-engine.js's applyMaterialInternal).
     const findBadProgram = (renderer) =>
         (renderer.info.programs || []).find((p) => p.diagnostics && p.diagnostics.runnable === false);
+
+    // Exact per-material attribution for multi-material content: r128 sets
+    // properties.get(material).currentProgram for every material compile()
+    // touched, so only a material whose OWN program is unrunnable is listed.
+    const findUnrunnableMaterials = (renderer, materials, accept) => {
+        const out = [];
+        for (const material of materials) {
+            if (!material || (accept && !accept(material))) continue;
+            const props = renderer.properties.get(material);
+            const program = props && props.currentProgram;
+            if (!program || !program.diagnostics || program.diagnostics.runnable !== false) continue;
+            const d = program.diagnostics;
+            out.push({ material, log: d.programLog || (d.fragmentShader && d.fragmentShader.log) || (d.vertexShader && d.vertexShader.log) });
+        }
+        return out;
+    };
+
+    // Fetches and builds an .hdr/.exr environment by URL (decoder chosen by
+    // extension); rejects with the same messages setEnvMap always used.
+    const loadEnvMapUrl = (url) => {
+        const THREE = window.THREE;
+        const clean = String(url).split('?')[0].split('#')[0];
+        const ext = clean.slice(clean.lastIndexOf('.')).toLowerCase();
+        if (ext !== '.hdr' && ext !== '.exr') {
+            return Promise.reject(new Error('Unsupported environment URL "' + url + '". Expected .hdr or .exr.'));
+        }
+        if (ext === '.hdr' && typeof THREE.RGBELoader === 'undefined') {
+            return Promise.reject(new Error('RGBELoader unavailable (script blocked/offline). Cannot load .hdr environments.'));
+        }
+        if (ext === '.exr' && typeof THREE.EXRLoader === 'undefined') {
+            return Promise.reject(new Error('EXRLoader unavailable (script blocked/offline). Cannot load .exr environments.'));
+        }
+        return fetch(url)
+            .then((r) => {
+                if (!r.ok) throw new Error('Failed to fetch environment "' + url + '" (HTTP ' + r.status + ').');
+                return r.arrayBuffer();
+            })
+            .then((buf) => {
+                const raw = ENGINE.parseEnvBuffer(buf, ext);
+                if (!raw || !raw.image || !raw.image.data) {
+                    throw new Error('Failed to parse the environment image "' + url + '".');
+                }
+                return ENGINE.buildEnvFromParsedTexture(raw);
+            });
+    };
 
     // Sticky linear-pass toggler: flips toneMapped state only on
     // transitions, never every frame. `apply(on)` is the caller's side
@@ -554,6 +604,7 @@
                 captureState = null;
                 sizer.setResizeSuspended(false);
             },
+            isCapturing: () => !!captureState,
         };
     };
 
@@ -756,7 +807,6 @@
         // Fetches an .hdr/.exr by URL; a falsy url restores the default and
         // the latest call always wins.
         const setEnvMap = (url) => {
-            const THREE = window.THREE;
             const callId = envMapGate.begin();
             const swapIn = (env, owned) => {
                 if (!envMapGate.isLatest(callId)) return;
@@ -770,30 +820,10 @@
                     return true;
                 });
             }
-            const clean = String(url).split('?')[0].split('#')[0];
-            const ext = clean.slice(clean.lastIndexOf('.')).toLowerCase();
-            if (ext !== '.hdr' && ext !== '.exr') {
-                return Promise.reject(new Error('Unsupported environment URL "' + url + '". Expected .hdr or .exr.'));
-            }
-            if (ext === '.hdr' && typeof THREE.RGBELoader === 'undefined') {
-                return Promise.reject(new Error('RGBELoader unavailable (script blocked/offline). Cannot load .hdr environments.'));
-            }
-            if (ext === '.exr' && typeof THREE.EXRLoader === 'undefined') {
-                return Promise.reject(new Error('EXRLoader unavailable (script blocked/offline). Cannot load .exr environments.'));
-            }
-            return fetch(url)
-                .then((r) => {
-                    if (!r.ok) throw new Error('Failed to fetch environment "' + url + '" (HTTP ' + r.status + ').');
-                    return r.arrayBuffer();
-                })
-                .then((buf) => {
-                    const raw = ENGINE.parseEnvBuffer(buf, ext);
-                    if (!raw || !raw.image || !raw.image.data) {
-                        throw new Error('Failed to parse the environment image "' + url + '".');
-                    }
-                    swapIn(ENGINE.buildEnvFromParsedTexture(raw), true);
-                    return true;
-                });
+            return loadEnvMapUrl(url).then((env) => {
+                swapIn(env, true);
+                return true;
+            });
         };
 
         const buildSessionApi = (cameraHandle) => ({
@@ -1053,6 +1083,8 @@
         disposeRendererCore,
         compileFilteringDriverNoise,
         findBadProgram,
+        findUnrunnableMaterials,
+        loadEnvMapUrl,
         createLinearToggle,
         computeAwake,
         sleepReason,
