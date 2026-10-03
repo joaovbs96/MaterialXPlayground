@@ -331,7 +331,7 @@
         {
             key: 'shadows', label: 'Shadows', experimental: true, hint: 'Up to 32 shadow faces, packed into one shadow atlas, chosen by the light they deliver to sampled receivers. The atlas is rebuilt when the camera or lighting changes. Staged: takes effect on Apply.', group: 'lighting', order: 2, type: 'bool', apply: 'renderMode', ui: true,
             profiles: { stage: { storage: 'mtlx_scene_shadows', codec: 'boolOnlyOne', levels: { performance: false, default: false, quality: true } } },
-            surfaces: { viewer: PLANNED('P9'), compare: PLANNED('P9'), docs: PLANNED('P9'), graph: PLANNED('P9'), embed: PLANNED('P9'), scene: 'yes' },
+            surfaces: { viewer: PLANNED('follow-up: preview shadow atlas'), compare: PLANNED('follow-up: preview shadow atlas'), docs: PLANNED('follow-up: preview shadow atlas'), graph: PLANNED('follow-up: preview shadow atlas'), embed: PLANNED('follow-up: preview shadow atlas'), scene: 'yes' },
         },
         {
             key: 'ao', label: 'Ambient occlusion', experimental: true, hint: 'Environment light reaches every surface equally, including ones facing a wall, which makes interiors read flat. This estimates how much sky each pixel can actually see. Staged: takes effect on Apply.', group: 'effects', order: 0, type: 'bool', apply: 'renderMode', ui: true, samplers: 1, dropKey: 'skipSsao',

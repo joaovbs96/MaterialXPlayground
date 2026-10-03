@@ -795,6 +795,8 @@ shows in place of the plain placeholder until that instance actually activates.<
 against the ~10.8 MB the same material costs inside the full playground app (Babel, Tailwind,
 site header, and the default heavier geometry all add up); the embed exists specifically to
 avoid that.</p>
+<h2 id="render-quality">Render quality</h2>
+<p>Embeds always render at the Performance level; there is no <code>quality</code> attribute, and the host page&#39;s stored viewer level never applies to an embed. The Quality level (ambient occlusion, specular anti-aliasing, HDR presentation, RGB transmission) is a feature of the full Playground viewer and is not switched on in embeds. Effect code is not part of the embed&#39;s initial download: it is loaded on demand (<code>MtlxRender.loadEffect</code>) only when a level asks for it, so a default embed pays nothing for effects it never runs.</p>
 <h2 id="self-hosting">Self-hosting</h2>
 <p>The hosted default is <code>https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html</code>,
 nothing to set up. To self-host instead (e.g. from the offline release zip), serve at least
