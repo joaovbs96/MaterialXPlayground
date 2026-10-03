@@ -18,7 +18,9 @@
         // filterMode/filterType drive the port-dot double-click flow:
         // 'in' matches nodes whose OUTPUT feeds the port, 'out' matches
         // an INPUT that can consume it; null/'' is the normal flow.
-        function AddNodeSearch({ catalog, docCatalog = [], ifaceMode, onAddInterface, defMode, onCreateDefinition, initialMode = null, onPick, onClose, filterMode = null, filterType = '' }) {
+        // slxMode/onAddSlx offer a synthetic "ShadingLanguageX node" row
+        // (document root only, where a nodegraph can live).
+        function AddNodeSearch({ catalog, docCatalog = [], ifaceMode, onAddInterface, defMode, onCreateDefinition, slxMode = false, onAddSlx, initialMode = null, onPick, onClose, filterMode = null, filterType = '' }) {
             const [q, setQ] = React.useState('');
             const [typeFilter, setTypeFilter] = React.useState(filterType || '');
             const [hi, setHi] = React.useState(0);
@@ -77,6 +79,11 @@
                         synth.push({ synthetic: 'definition', category: 'node definition' });
                     }
                 }
+                if (slxMode) {
+                    if (!s || ['shadinglanguagex', 'slx', 'mxsl', 'code', 'shading language'].some((k) => k.indexOf(s) !== -1)) {
+                        synth.push({ synthetic: 'slx', category: 'ShadingLanguageX node' });
+                    }
+                }
                 if (!catalog) return synth;
                 // Rank on category first, group second (see catalog.jsx's
                 // searchFilter comment): a group-only match still shows,
@@ -109,7 +116,11 @@
                 if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
             }, [hi, items]);
             const pick = (c) => {
-                if (c.synthetic === 'definition') {
+                if (c.synthetic === 'slx') {
+                    onAddSlx();
+                    onClose();
+                }
+                else if (c.synthetic === 'definition') {
                     setDefDraft({ node: '', type: 'color3', nodegroup: '', withGraph: true });
                 }
                 else if (c.synthetic) {
@@ -387,7 +398,7 @@
                                         <React.Fragment>
                                             <span className="w-2 h-2 rotate-45 flex-none border" style={{ background: 'transparent', borderColor: '#94a3b8' }} />
                                             <span className="truncate italic">{c.category}</span>
-                                            <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-gray-500 border border-gray-600 border-dashed rounded px-1">{c.synthetic === 'definition' ? 'new' : 'interface'}</span>
+                                            <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-gray-500 border border-gray-600 border-dashed rounded px-1">{c.synthetic === 'definition' ? 'new' : (c.synthetic === 'slx' ? 'code' : 'interface')}</span>
                                         </React.Fragment>
                                     ) : (
                                         <React.Fragment>
@@ -499,7 +510,9 @@
         // One row per param: connected inputs jump to their source node;
         // unconnected ones edit the value, debounced (each commit writes
         // the doc and recompiles); onLive fires per tick for a live preview.
-        function ParamRow({ nodeId, inp, readOnly, sourceId, onJump, onCommit, onLive, onPickFile, onSetColorspace, hideHeader }) {
+        // `disabled`: the reason, shown as a tooltip, the controls are shown
+        // greyed out and inert (a code node's inputs are set by its code).
+        function ParamRow({ nodeId, inp, readOnly, disabled, sourceId, onJump, onCommit, onLive, onPickFile, onSetColorspace, hideHeader }) {
             // A ref (not state): blurring alone must never re-trigger the
             // re-seed effects below, only an actual value change should.
             const focusedRef = React.useRef(false);
@@ -877,6 +890,10 @@
             ) : readOnly ? (
                 <div className={(hideHeader ? '' : 'mt-1 ') + 'text-[11px] text-gray-400 font-mono truncate'} title={inp.value}>
                     {inp.value !== '' ? inp.value : '\u2014'}
+                </div>
+            ) : disabled ? (
+                <div className={(hideHeader ? '' : 'mt-1 ') + 'cursor-not-allowed'} title={disabled}>
+                    <fieldset disabled className="min-w-0 opacity-50 pointer-events-none">{control()}</fieldset>
                 </div>
             ) : (
                 hideHeader ? control() : <div className="mt-1">{control()}</div>

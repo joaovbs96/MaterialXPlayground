@@ -563,7 +563,7 @@
         };
 
 Object.assign(window, {
-    slxTypeName, slxTypeDisplay, slxSignatureText, slxFileSymbols, slxCompletionContext, slxCallContext,
+    slxTypeName, slxTypeDisplay, slxSignatureText, slxParseFunctions, slxFileSymbols, slxCompletionContext, slxCallContext,
     slxPickSignature, slxActiveParam, slxCompletionItems, slxFilterCompletions, slxMatch,
     buildSlxLibrary, loadSlxLibrary,
 });

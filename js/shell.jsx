@@ -210,6 +210,7 @@ const VIEW_DEPS = {
             'js/graph/slx-language.jsx',
             'js/graph/slx-assist.jsx',
             'js/graph/code-view.jsx',
+            'js/graph/slx-node.jsx',
             'js/graph/definition-panel.jsx',
             'js/graph/texture-convert.jsx',
         ],

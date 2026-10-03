@@ -3962,6 +3962,18 @@ const withXmlEnvelope = (xml, envelope) => {
     return text;
 };
 
+// MaterialX's XML writer escapes only &, " and line breaks inside attribute
+// values: a literal <, > or tab goes out as-is. < and > are not well-formed
+// XML (and > ends a tag early in xmlTokenize below), and a tab reads back
+// as a space, so attributes carrying them (a ShadingLanguageX node's
+// slxsource code, say) are re-escaped here. Comments are left untouched.
+const escapeXmlAttrSpecials = (xml) => {
+    const text = xml == null ? '' : String(xml);
+    if (!/="[^"]*[<>\t]/.test(text)) return text;
+    return text.replace(/<!--[\s\S]*?-->|="[^"]*"/g, (m) => (m[0] === '<' || !/[<>\t]/.test(m)) ? m
+        : '="' + m.slice(2, -1).replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\t/g, '&#9;') + '"');
+};
+
 // Source formatting survives a save: tags and comments are matched between the
 // loaded text and the writer's output, unchanged ones keep their original text
 // (wrapping, blank lines, quoting); only edited or new elements use the writer's.
@@ -4018,7 +4030,12 @@ const xmlPatchTag = (srcRaw, outRaw) => {
     if (!s || !o || s.tag !== o.tag || s.selfClosing !== o.selfClosing) return null;
     const sName = s.attrs.get('name'), oName = o.attrs.get('name');
     if ((sName && sName.value) !== (oName && oName.value)) return null;
-    const esc = (v, q) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(q === '"' ? /"/g : /'/g, q === '"' ? '&quot;' : '&apos;');
+    // Values arrive decoded (xmlTagParts), so line breaks and tabs must be
+    // re-encoded too: a literal one reads back as a space, which would flatten
+    // multi-line values such as a ShadingLanguageX node's slxsource code.
+    const esc = (v, q) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/\t/g, '&#9;').replace(/\n/g, '&#10;').replace(/\r/g, '&#13;')
+        .replace(q === '"' ? /"/g : /'/g, q === '"' ? '&quot;' : '&apos;');
     const edits = [];
     s.attrs.forEach((sa, n) => {
         const oa = o.attrs.get(n);
@@ -12938,7 +12955,7 @@ Object.assign(window, {
     findConvertChain, ensureTypedInput, stripValuesFromConnectedInputs,
     listDocRenderables,
     normPath, readDroppedItems, expandZips, isHiddenSideFile, findFileForRef, findFilesForRef, preferKtx2Sibling, resolveIncludes, readMtlxText, readMtlxXml,
-    isExportAttribution, splitXmlEnvelope, withXmlEnvelope, preserveSourceFormatting,
+    isExportAttribution, splitXmlEnvelope, withXmlEnvelope, escapeXmlAttrSpecials, preserveSourceFormatting,
     TEXTURE_CACHE, textureCacheKey, textureCacheKeyAsync, hasBlobIdentity, samplerCacheKey, normalizeSamplerAddressMode, collectImageSamplerModes, annotateFilenameSamplerModes, bindDroppedTextures,
     loadExrTexture, loadHdrTexture, loadTifTexture, loadKtx2Texture, capKtx2MipLevels,
     runHeavyTextureDecode,

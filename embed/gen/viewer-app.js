@@ -600,7 +600,7 @@ function MaterialViewerApp({
         // value and a connection before handing off. Self-heals
         // documents loaded before this fix existed.
         mxSafe(() => stripValuesFromConnectedInputs(loaded.doc), 0);
-        xml = preserveSourceFormatting(loaded.sourceXml, withXmlEnvelope(loaded.mx.writeToXmlString(loaded.doc), splitXmlEnvelope(loaded.sourceXml)));
+        xml = preserveSourceFormatting(loaded.sourceXml, withXmlEnvelope(escapeXmlAttrSpecials(loaded.mx.writeToXmlString(loaded.doc)), splitXmlEnvelope(loaded.sourceXml)));
       } catch (e) {
         console.warn('Send to Editor: failed to serialize the document', e);
         return;

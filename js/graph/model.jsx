@@ -180,7 +180,7 @@
             // self-heals documents from outside the graph editor too.
             mxSafe(() => stripValuesFromConnectedInputs(parsed.doc), 0);
             return preserveSourceFormatting(parsed.sourceText,
-                withXmlEnvelope(parsed.mx.writeToXmlString(parsed.doc), parsed.envelope));
+                withXmlEnvelope(escapeXmlAttrSpecials(parsed.mx.writeToXmlString(parsed.doc)), parsed.envelope));
         };
 
         // Document's own children only, never the library: every by-name
@@ -194,6 +194,23 @@
                 if (mxElName(el) === name) return el;
             }
             return null;
+        };
+
+        // Every element in `container` that can carry a reference: its
+        // nodes' inputs, its own outputs and, at the document root, each
+        // nodegraph's interface inputs, which are wired like a node's
+        // (a code node's, say). Implementation graphs (nodedef=) take no wires.
+        const collectConnectables = (container) => {
+            const out = [];
+            for (const n of vecToArray(mxSafe(() => container.getNodes(), []))) {
+                out.push.apply(out, vecToArray(mxSafe(() => n.getInputs(), [])));
+            }
+            out.push.apply(out, vecToArray(mxSafe(() => container.getOutputs(), [])));
+            for (const g of docChildren(container)) {
+                if (mxElCat(g) !== 'nodegraph' || mxElAttr(g, 'nodedef')) continue;
+                out.push.apply(out, vecToArray(mxSafe(() => g.getInputs(), [])));
+            }
+            return out;
         };
 
         // True for a document-local element; false only when it's
@@ -321,6 +338,14 @@
             parsed.implGraphByNodedef = computeImplGraphByNodedef(parsed.doc);
             return parsed;
         };
+
+        // A ShadingLanguageX code node is a plain root-level instance
+        // nodegraph whose interior was compiled from the SLX source it
+        // carries in SLX_SOURCE_ATTR (js/mxslc-engine.js; see
+        // js/graph/slx-node.jsx). Lives here, not there, since read-only
+        // graph previews render these cards too.
+        const isSlxGraph = (el) => !!el && mxElCat(el) === 'nodegraph'
+            && mxElHasAttr(el, SLX_SOURCE_ATTR) && !mxElAttr(el, 'nodedef');
 
         // Kind decides the accent color and (for nodegraphs) the
         // double-click-to-open affordance.
@@ -610,7 +635,8 @@
                     push({ id: 'g:' + mxElName(g), kind: 'nodegraph', name: mxElName(g),
                            category: 'nodegraph', type: '',
                            inputs: ins, outputs: outs.length ? outs : [{ name: 'out', type: '' }],
-                           pos: storedPos(g) });
+                           pos: storedPos(g),
+                           slx: isSlxGraph(g) ? { source: mxElAttr(g, SLX_SOURCE_ATTR) } : undefined });
                 }
                 // One "definition card" per local nodedef: one card per
                 // functional graph implementing it, or one keyed off the
@@ -773,10 +799,11 @@
 
 Object.assign(window, {
     DEFAULT_GRAPH_URL, parseMtlxDocument, validateMtlxXml, serializeDocXml, kindOfNode,
+    isSlxGraph,
     resolveVersionedNodeDef,
     collectPorts, storedPos, buildScope, MTLX_PERF_LOG: (window.MTLX_PERF_LOG || MTLX_PERF_LOG), ifaceColorManaged,
     ifaceNumericType, ifaceLiteralType,
-    docChildren, docChild, isDocLocal, resolveNodedefFor, nodedefPorts,
+    docChildren, docChild, collectConnectables, isDocLocal, resolveNodedefFor, nodedefPorts,
     definitionOutType, computeDefinitions, refreshDefinitions,
     computeImplGraphByNodedef, implGraphForNode,
 });

@@ -67,7 +67,7 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 - [done] **Interface input editing**: edit ui attributes, default values and colorspace on nodegraph interface inputs.
 - [done] **Texture formats**: TIFF textures, and an option to convert every texture in a zip export to PNG, JPEG or EXR.
 - [idea] **Recipes for common node tree patterns**: ability to insert commonly used sequences of nodes from a "gallery" of node patterns - e.g. a texcoord, connected to a place2d, connected to an image.
-- [idea] **Support for a ShadingLanguageX (SLX) node**: via SLX WASM bindings, support for a 'scripted' ShadingLanguageX node, which for export/rendering would be compiled down to actual MaterialX syntax
+- [done] **Support for a ShadingLanguageX (SLX) node**: a Graph Editor node whose nodegraph is written as ShadingLanguageX code on the node; editing the nodegraph rewrites the code.
 - [done] **Support for ShadingLanguageX (SLX) import**: open .mxsl files in the Node Graph Editor, compiled to MaterialX and shown as a node graph.
 - [done] **Support for ShadingLanguageX (SLX) export**: export the current graph as ShadingLanguageX source from Export Shader Code, alongside the original .mxsl when the document came from one. Very large graphs decompile slowly.
 

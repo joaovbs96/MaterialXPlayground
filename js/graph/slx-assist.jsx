@@ -180,7 +180,7 @@
                     {fn && fn.description && <div className="mt-1 line-clamp-4">{fn.description}</div>}
                     <div className={body ? 'mt-1 text-gray-500' : ''}>
                         {!body && <span className="font-mono text-gray-100">{name}: </span>}
-                        Ctrl/Cmd + click to open its documentation
+                        Ctrl+click to open its documentation
                     </div>
                 </div>
             );

@@ -536,7 +536,7 @@
                         // documents loaded before this fix existed.
                         mxSafe(() => stripValuesFromConnectedInputs(loaded.doc), 0);
                         xml = preserveSourceFormatting(loaded.sourceXml,
-                            withXmlEnvelope(loaded.mx.writeToXmlString(loaded.doc), splitXmlEnvelope(loaded.sourceXml)));
+                            withXmlEnvelope(escapeXmlAttrSpecials(loaded.mx.writeToXmlString(loaded.doc)), splitXmlEnvelope(loaded.sourceXml)));
                     } catch (e) {
                         console.warn('Send to Editor: failed to serialize the document', e);
                         return;

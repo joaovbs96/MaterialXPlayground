@@ -29,7 +29,6 @@
             { keys: 'Double-click a definition card', desc: 'Open its implementation graph; the sidebar edits the nodedef interface', group: 'mouse' },
             { keys: '+ / − badge on a node', desc: "Show or hide that node's default-valued inputs", group: 'mouse' },
             { keys: 'Drag & drop files', desc: 'Import a .mtlx / .zip / companion files anywhere on the page', group: 'mouse', browserOnly: true },
-            { keys: 'Ctrl/Cmd + Click a function', desc: 'In the ShadingLanguageX view: open the documentation for an underlined standard library function', group: 'mouse', browserOnly: true },
             // Keyboard
             { keys: 'Delete', desc: 'Delete the selected node(s) and disconnect the selected edge(s)', group: 'keyboard' },
             { keys: 'Backspace', desc: 'Exit the current nodegraph scope (step up to its parent / document root)', group: 'keyboard' },
@@ -37,7 +36,7 @@
             { keys: 'F', desc: 'Fit the whole graph in view', group: 'keyboard' },
             { keys: 'A', desc: 'Re-run the automatic layout once', group: 'keyboard' },
             { keys: 'L', desc: 'Toggle the node list sidebar', group: 'keyboard' },
-            { keys: 'Tab', desc: 'Open the add-node search (inside a nodegraph: also add interface inputs/outputs; at the root: also a new node definition)', group: 'keyboard' },
+            { keys: 'Tab', desc: 'Open the add-node search (inside a nodegraph: also add interface inputs/outputs; at the root: also a new node definition or ShadingLanguageX node)', group: 'keyboard' },
             { keys: '↑ ↓ / Enter', desc: 'Navigate / choose inside the add-node search and port pickers', group: 'keyboard' },
             { keys: 'Ctrl/Cmd + C', desc: 'Copy the selected node(s)', group: 'keyboard' },
             { keys: 'Ctrl/Cmd + V', desc: 'Paste the copied node(s)', group: 'keyboard' },
@@ -45,10 +44,13 @@
             { keys: 'Ctrl/Cmd + Shift + G', desc: 'Ungroup the selected nodegraph (dissolve it, keeping connections) (with a nodegraph selected)', group: 'keyboard' },
             { keys: 'Ctrl/Cmd + Z', desc: 'Undo the last document edit', group: 'keyboard' },
             { keys: 'Ctrl/Cmd + Shift + Z (or Ctrl/Cmd + Y)', desc: 'Redo', group: 'keyboard' },
-            { keys: 'Ctrl/Cmd + Enter', desc: 'In the ShadingLanguageX view: compile the code into the node graph', group: 'keyboard', browserOnly: true },
-            { keys: 'Ctrl + Space', desc: 'In the ShadingLanguageX view: show suggestions (they also appear as you type; Enter or Tab inserts one)', group: 'keyboard', browserOnly: true },
-            { keys: 'Ctrl + Shift + Space', desc: 'In the ShadingLanguageX view: show parameter hints for the call around the cursor (Up/Down steps through its signatures)', group: 'keyboard', browserOnly: true },
             { keys: 'Ctrl/Cmd + S', desc: 'Save the document back to the open .mtlx file', group: 'keyboard', vscodeOnly: true },
+            // ShadingLanguageX code (the code panel and ShadingLanguageX nodes)
+            { keys: 'Ctrl/Cmd + Click a function', desc: 'Open the documentation for an underlined standard library function', group: 'slx', browserOnly: true },
+            { keys: 'Ctrl/Cmd + Enter', desc: "Compile the code (the code panel's into the whole node graph, a ShadingLanguageX node's into its nodegraph; leaving a node's code compiles it too)", group: 'slx', browserOnly: true },
+            { keys: 'Ctrl/Cmd + Space', desc: 'Show suggestions (they also appear as you type; Enter or Tab inserts one)', group: 'slx', browserOnly: true },
+            { keys: 'Ctrl/Cmd + Shift + Space', desc: 'Show parameter hints for the call around the cursor (Up/Down steps through its signatures)', group: 'slx', browserOnly: true },
+            { keys: 'Tab / Shift + Tab', desc: 'Indent / outdent (every selected line when several are selected)', group: 'slx', browserOnly: true },
         ];
 
         function KeybindsHelp({ onClose, active = true }) {
@@ -57,6 +59,7 @@
             // VS Code, vscodeOnly rows everywhere else.
             const IN_VSCODE = !!window.__MTLX_VSCODE__;
             const keybinds = KEYBINDS.filter((k) => (!k.vscodeOnly || IN_VSCODE) && (!k.browserOnly || !IN_VSCODE));
+            const slxKeybinds = keybinds.filter((k) => k.group === 'slx');
             const mouseKeybinds = keybinds.filter((k) => k.group === 'mouse');
             const keyboardKeybinds = keybinds.filter((k) => k.group === 'keyboard');
             useEscapeToClose(onClose, active);
@@ -112,6 +115,17 @@
                                 </tr>
                                 {keyboardKeybinds.map((k) => (
                                     <tr key={k.keys} className="align-top">
+                                        <td className="py-1 pr-3 whitespace-nowrap text-blue-300">{k.keys}</td>
+                                        <td className="py-1 text-gray-300">{k.desc}</td>
+                                    </tr>
+                                ))}
+                                {slxKeybinds.length > 0 && (
+                                    <tr>
+                                        <td colSpan={2} className="pt-3 pb-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">Shading Language X</td>
+                                    </tr>
+                                )}
+                                {slxKeybinds.map((k) => (
+                                    <tr key={'slx:' + k.keys} className="align-top">
                                         <td className="py-1 pr-3 whitespace-nowrap text-blue-300">{k.keys}</td>
                                         <td className="py-1 text-gray-300">{k.desc}</td>
                                     </tr>
