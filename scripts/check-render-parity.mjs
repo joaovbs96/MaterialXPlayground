@@ -525,7 +525,7 @@ function checkEmbedConsistency() {
 const HANDLE_GUARD_PENDING_FILES = [];
 // Files whose handle literals feed buildHandle: core names are allowed only
 // inside their `session`/`content` literals (the engine has only `content`).
-const HANDLE_GUARD_FILES = ["js/mtlx-engine.js", "js/usd-scene-renderer.js", "js/usd-scene-app.jsx"];
+const HANDLE_GUARD_FIXED_FILES = ["js/mtlx-engine.js", "js/usd-scene-app.jsx"];
 const HANDLE_GUARD_GENERIC_NAMES = new Set(["dispose", "resize", "snapshot"]);
 // Verified non-handle keys that reuse a contract name, one entry per site.
 const HANDLE_GUARD_ALLOW = [
@@ -561,7 +561,9 @@ function findObjectLiteralRange(text, constName) {
 function checkHandleContractGuard() {
   const problems = [];
   const names = loadHandleContract().filter((n) => !HANDLE_GUARD_GENERIC_NAMES.has(n) && n !== "__debug");
-  for (const file of HANDLE_GUARD_FILES) {
+  // The engine, the Scene app and every js/usd-scene-*.js module (P6 S5).
+  const handleGuardFiles = HANDLE_GUARD_FIXED_FILES.concat(listSourceFiles().filter((f) => /^js\/usd-scene-[^/]+\.js$/.test(f)));
+  for (const file of handleGuardFiles) {
     const text = readFileSync(path.join(REPO_ROOT, file), "utf8");
     const allowedRanges = [findObjectLiteralRange(text, "session"), findObjectLiteralRange(text, "content")].filter(Boolean);
     if (file === "js/mtlx-engine.js" && !findObjectLiteralRange(text, "content")) {
@@ -582,7 +584,7 @@ function checkHandleContractGuard() {
   if (problems.length) {
     fail(["handle-contract guard (g) failed:", ...problems.map((p) => `  - ${p}`)].join("\n"));
   }
-  log(`(g) handle-contract guard OK, ${names.length} names checked in ${HANDLE_GUARD_FILES.join(", ")}.`);
+  log(`(g) handle-contract guard OK, ${names.length} names checked in ${handleGuardFiles.length} files.`);
 }
 
 // ---------------------------------------------------------------------
@@ -647,6 +649,8 @@ const RESOLVER_DUPLICATION_PENDING = [];
 const RESOLVER_DELETED_SCENE_COPIES = [
   "sceneJoinPath", "sceneKtx2SiblingPath", "resolveSceneIncludes", "decodeUnboundedSceneTexture",
   "sceneUdimCode", "sceneUdimTile", "sceneUdimTriangle", "sceneUdimRefs", "sceneCloneUniforms",
+  // P6 S5: displacement budget and cage subdivision go through the engine.
+  "resolveDisplacementLevel", "buildDisplacementEffectiveRecord",
 ];
 
 function checkResolverDuplicationLedger() {

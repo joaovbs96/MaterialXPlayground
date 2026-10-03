@@ -269,6 +269,9 @@
         const validateProgram=mat=>{
             if(validatedPrograms.has(mat))return;
             const program=renderer.properties.get(mat).currentProgram;
+            // A handle deleted by a swap/dispose is skipped silently (isProgram
+            // raises no GL error, getProgramParameter would) and checked next pass.
+            if(program && program.program && !gl.isProgram(program.program))return;
             if(!program || !gl.getProgramParameter(program.program,gl.LINK_STATUS))
                 throw new Error('HDR presentation shader did not link: '+(program?.diagnostics?.programLog||'unknown program'));
             validatedPrograms.add(mat);

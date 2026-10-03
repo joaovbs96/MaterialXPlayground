@@ -159,8 +159,10 @@
             key: 'displacementNormals', label: 'Displacement Normals', group: 'geometry', order: 10, type: 'enum', options: ['mesh', 'analytic'], apply: 'geometry', ui: false,
             profiles: {
                 preview: { storage: 'mtlxDisplacementNormals', codec: 'enum', options: ['mesh', 'analytic'], query: 'displacementnormals', setter: 'setDisplacementNormalsMode', levels: { performance: 'mesh', default: 'mesh', quality: 'mesh' } },
+                // Shared with the preview (P6 S5): the Scene follows the engine's live mode, as it always did.
+                stage: { storage: 'mtlxDisplacementNormals', codec: 'enum', options: ['mesh', 'analytic'], levels: { performance: 'mesh', default: 'mesh', quality: 'mesh' } },
             },
-            surfaces: { viewer: 'yes', compare: 'yes', docs: NA("docs previews render a single node's output, so no displacement shader is ever bound"), graph: 'yes', embed: 'yes', scene: PLANNED('P6') },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: NA("docs previews render a single node's output, so no displacement shader is ever bound"), graph: 'yes', embed: 'yes', scene: 'yes' },
         },
         {
             key: 'previewSubdivision', label: 'Subdivision', group: 'geometry', order: 11, type: 'number', min: 0, max: 3, step: 1, apply: 'geometry', ui: true,
@@ -181,7 +183,7 @@
                 preview: { storage: 'mtlx_texture_anisotropy', codec: 'int', min: 1, max: 16, setter: 'setTextureAnisotropy', levels: { performance: 8, default: 8, quality: 8 } },
                 stage: { storage: 'mtlx_scene_texture_anisotropy', codec: 'int', min: 1, max: 16, levels: { performance: 8, default: 8, quality: 8 } },
             },
-            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: PLANNED('P6') },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
         {
             key: 'heightToNormalTexel', label: 'Height-to-Normal Texel Space', group: 'effects', order: 20, type: 'bool', apply: 'regenerate', ui: false, experimental: true,

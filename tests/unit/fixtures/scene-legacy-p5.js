@@ -1,6 +1,6 @@
-// Frozen pre-P6 copies of the Scene's exact resolvers and UDIM helpers
-// (js/usd-scene-renderer.js at P6 S3, 4c7ea0c), kept verbatim as the parity
-// oracle for the shared engine/mesh-udim functions that replaced them in P6 S4.
+// Frozen pre-P6 copies of the Scene's exact resolvers, UDIM helpers and its
+// displacement triangle budget (js/usd-scene-renderer.js at P6 S3/S4), kept
+// verbatim as the parity oracle for the shared engine helpers (P6 S4, S5).
 const sceneNormPath = (value) => String(value || '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\//, '');
 const sceneDir = (value) => {
     const p = sceneNormPath(value);
@@ -99,3 +99,28 @@ const resolveSceneIncludes = async (xml, fromDir, map, visited = new Set(), warn
     }
     return out + xml.slice(last);
 };
+
+        const DISPLACEMENT_MESH_TRIANGLE_LIMIT = 700000;
+        const DISPLACEMENT_STAGE_TRIANGLE_LIMIT = 6000000;
+        let displacementStageTriangleTotal = 0;
+        // Resolves the requested numeric override against the per-mesh and
+        // whole-stage triangle budgets, lowering it (never below 0) until it
+        // fits; returns the level actually used plus whether it was capped.
+        const resolveDisplacementLevel = (record, requestedLevel) => {
+            const cage = record.cage;
+            const base = cage || record;
+            const cornerCount = base.indices ? base.indices.length : (base.positions ? base.positions.length / 3 : 0);
+            const originalTriangles = Math.floor(cornerCount / 3);
+            let level = Math.max(0, Math.min(3, Math.round(Number(requestedLevel) || 0)));
+            let capped = false;
+            if (triangleLimitsEnabled) {
+                while (level > 0 && originalTriangles * (4 ** level) > DISPLACEMENT_MESH_TRIANGLE_LIMIT) { level--; capped = true; }
+                while (level > 0 && displacementStageTriangleTotal + originalTriangles * (4 ** level) > DISPLACEMENT_STAGE_TRIANGLE_LIMIT) { level--; capped = true; }
+            }
+            const triangles = originalTriangles * (4 ** level);
+            const allowed = !triangleLimitsEnabled || (triangles <= DISPLACEMENT_MESH_TRIANGLE_LIMIT
+                && displacementStageTriangleTotal + triangles <= DISPLACEMENT_STAGE_TRIANGLE_LIMIT);
+            if (allowed) displacementStageTriangleTotal += triangles;
+            return { level, capped: capped || !allowed, triangles, allowed };
+        };
+        // Re-subdivides the PRE-subdivision cage (end of the frozen budget block)

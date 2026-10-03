@@ -45,9 +45,9 @@ One row per setting in `js/shared/render-settings.js`, one table per group. `yes
 | Setting | viewer | compare | docs | graph | embed | scene | Storage keys |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Displacement | yes | yes | na (docs previews render a single node's output, so no displacement shader is ever bound) | yes | yes | yes | preview: `mtlxDisplacement`<br>stage: `mtlx_scene_displacement` (legacy: `mtlxDisplacement`) |
-| Displacement Normals | yes | yes | na (docs previews render a single node's output, so no displacement shader is ever bound) | yes | yes | planned (P6) | preview: `mtlxDisplacementNormals` |
+| Displacement Normals | yes | yes | na (docs previews render a single node's output, so no displacement shader is ever bound) | yes | yes | yes | preview: `mtlxDisplacementNormals`<br>stage: `mtlxDisplacementNormals` |
 | Subdivision | yes | yes | na (docs previews render a single node's output, so no displacement shader is ever bound) | yes | yes | na (the Scene uses displacementSubdivision) | preview: `mtlxPreviewSubdivision` |
-| Texture Anisotropy | yes | yes | yes | yes | yes | planned (P6) | preview: `mtlx_texture_anisotropy`<br>stage: `mtlx_scene_texture_anisotropy` |
+| Texture Anisotropy | yes | yes | yes | yes | yes | yes | preview: `mtlx_texture_anisotropy`<br>stage: `mtlx_scene_texture_anisotropy` |
 | Preview Geometry | yes | yes | yes | yes | yes | na (stage geometry is authored) | preview: `mtlx_geom_global` (legacy: `mtlx_preview_geom_choice`, `mtlx_graph_preview_geom`) |
 | Texture resolution | na (the Material Viewer has no scene texture budget) | na (the Material Viewer has no scene texture budget) | na (the Material Viewer has no scene texture budget) | na (the Material Viewer has no scene texture budget) | na (the Material Viewer has no scene texture budget) | yes | stage: `mtlx_scene_texture_size` |
 | Texture memory | na (the Material Viewer has no scene texture budget) | na (the Material Viewer has no scene texture budget) | na (the Material Viewer has no scene texture budget) | na (the Material Viewer has no scene texture budget) | na (the Material Viewer has no scene texture budget) | yes | stage: `mtlx_scene_texture_budget` |

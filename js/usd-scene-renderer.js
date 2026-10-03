@@ -1655,7 +1655,6 @@ const createMtlxSceneView = async ({
         });
     };
     const geometries = new Set();
-    const textureCache = new Map();
     // Bounded decode concurrency for ordinary (non-KTX2/EXR/HDR/TIF) Scene
     // textures: 'tails' is a small round-robin set of serial chains, one
     // slot decoding at a time each, so several textures decode in parallel
@@ -1664,14 +1663,34 @@ const createMtlxSceneView = async ({
     // a single-slot queue reproduces the old fully-serial behaviour.
     const textureFastPath = window.sceneTextureFastPathEnabled ? window.sceneTextureFastPathEnabled() : true;
     const TEXTURE_DECODE_CONCURRENCY = textureFastPath ? 5 : 1;
-    const textureQueue = { tails: Array.from({ length: TEXTURE_DECODE_CONCURRENCY }, () => Promise.resolve()), next: 0 };
     // Material textures go through this view's texture session (shared
     // engine decoders at the Scene's bounded tiers, decoded once per file and
-    // tier, every GPU copy freed with the session); textureCache/textureQueue
-    // above now serve only displacement evaluation (moved in P6 S5).
+    // tier, every GPU copy freed with the session).
     const newSceneTextureSession = () => window.createTextureSession({ exact: true, concurrency: TEXTURE_DECODE_CONCURRENCY,
-        renderer: null, isAlive: () => !stopped, anisotropy: 8, boundedDecode: true });
+        renderer: null, isAlive: () => !stopped, anisotropy: sceneSetting('textureAnisotropy'), boundedDecode: true });
     let textureSession = newSceneTextureSession();
+    // Displacement evaluates through the shared runner (evaluateGeometry per
+    // part) with its own session: bitmap height maps load at the planned
+    // tier, KTX2/float/TIF ones at native size, exactly as before.
+    let displacementTextureSession = null, displacementRunner = null, displacementRunnerTier = null;
+    const disposeDisplacementRunner = () => {
+        if (displacementTextureSession) { try { displacementTextureSession.dispose(); } catch (e) {} }
+        displacementTextureSession = null; displacementRunner = null; displacementRunnerTier = null;
+    };
+    const ensureDisplacementRunner = () => {
+        if (displacementRunner && displacementRunnerTier === plannedTextureSize) return displacementRunner;
+        disposeDisplacementRunner();
+        displacementTextureSession = window.createTextureSession({ maxSize: plannedTextureSize, concurrency: TEXTURE_DECODE_CONCURRENCY,
+            renderer: null, isAlive: () => !stopped, anisotropy: 8, boundBitmapsOnly: true, fastPathSamplerQuirk: true });
+        displacementRunner = window.createDisplacementRunner({ renderer, isAlive: () => !stopped,
+            textureSession: displacementTextureSession, creaseByNormals: true });
+        displacementRunnerTier = plannedTextureSize;
+        return displacementRunner;
+    };
+    // Texture anisotropy is a stage setting, applied live to the material session.
+    const unsubSceneAnisotropy = window.MtlxRenderSettings.subscribe((detail) => {
+        if (detail && detail.key === 'textureAnisotropy' && detail.profile === 'stage' && textureSession) textureSession.setAnisotropy(detail.value);
+    });
     const documents = new Set();
     const prims = [];
     // Outliner state keyed by userData.primPath: hidden prims (object.visible,
@@ -3888,33 +3907,23 @@ const scenePruneUnreachableNodes = (xml) => {
             const paths = groups.length ? groups.map((g) => g && (g.materialPath || record.materialPath)) : [record.materialPath];
             return new Set(paths.filter((p) => materialIsDisplaced(p)).map((p) => String(p || '')));
         };
+        // Displacement triangle budget (createTriangleBudget): 700k triangles
+        // per mesh and 6M per stage, never capping while triangle limits are
+        // off; a fresh budget per mesh build.
         const DISPLACEMENT_MESH_TRIANGLE_LIMIT = 700000;
         const DISPLACEMENT_STAGE_TRIANGLE_LIMIT = 6000000;
-        let displacementStageTriangleTotal = 0;
-        // Resolves the requested numeric override against the per-mesh and
-        // whole-stage triangle budgets, lowering it (never below 0) until it
-        // fits; returns the level actually used plus whether it was capped.
-        const resolveDisplacementLevel = (record, requestedLevel) => {
-            const cage = record.cage;
-            const base = cage || record;
+        let displacementBudget = null;
+        const newDisplacementBudget = () => window.createTriangleBudget({ perMesh: DISPLACEMENT_MESH_TRIANGLE_LIMIT,
+            total: DISPLACEMENT_STAGE_TRIANGLE_LIMIT, enabled: triangleLimitsEnabled });
+        const pickDisplacementLevel = (record, requestedLevel) => {
+            const base = record.cage || record;
             const cornerCount = base.indices ? base.indices.length : (base.positions ? base.positions.length / 3 : 0);
-            const originalTriangles = Math.floor(cornerCount / 3);
-            let level = Math.max(0, Math.min(3, Math.round(Number(requestedLevel) || 0)));
-            let capped = false;
-            if (triangleLimitsEnabled) {
-                while (level > 0 && originalTriangles * (4 ** level) > DISPLACEMENT_MESH_TRIANGLE_LIMIT) { level--; capped = true; }
-                while (level > 0 && displacementStageTriangleTotal + originalTriangles * (4 ** level) > DISPLACEMENT_STAGE_TRIANGLE_LIMIT) { level--; capped = true; }
-            }
-            const triangles = originalTriangles * (4 ** level);
-            const allowed = !triangleLimitsEnabled || (triangles <= DISPLACEMENT_MESH_TRIANGLE_LIMIT
-                && displacementStageTriangleTotal + triangles <= DISPLACEMENT_STAGE_TRIANGLE_LIMIT);
-            if (allowed) displacementStageTriangleTotal += triangles;
-            return { level, capped: capped || !allowed, triangles, allowed };
+            return displacementBudget.pick(Math.floor(cornerCount / 3), Math.max(0, Math.min(3, Math.round(Number(requestedLevel) || 0))));
         };
         // Re-subdivides the PRE-subdivision cage (or the authored mesh, when
-        // the worker never subdivided it) at `level`, instead of the
-        // worker's own subdivision. Never mutates `record` or `record.cage`.
-        const buildDisplacementEffectiveRecord = (record, level) => {
+        // the worker never subdivided it) at `level` through the shared
+        // prepareDisplacementBase (creases at normal discontinuities kept).
+        const buildDisplacementRecord = (record, level) => {
             const cage = record.cage;
             const base = cage || record;
             const baseGroups = cage ? (Array.isArray(cage.subsets) ? cage.subsets : undefined) : sceneArray(record.groups);
@@ -3926,9 +3935,9 @@ const scenePruneUnreachableNodes = (xml) => {
                 });
             }
             const meshIn = { positions: base.positions, indices: base.indices, normals: base.normals, uvs: base.uvs, geomprops: base.geomprops };
-            const subdivided = window.MtlxMeshSubdivision.subdivideMesh(meshIn, level, {});
-            if (!subdivided) return record;
-            const welded = window.MtlxMeshSubdivision.weldMesh(subdivided);
+            const prepared = window.prepareDisplacementBase(meshIn, level, { creaseByNormals: true });
+            if (!prepared || !prepared.arrays) return record;
+            const welded = prepared.arrays;
             const scale = 4 ** level;
             const scaledGroups = baseGroups && baseGroups.length
                 ? baseGroups.map((g) => (g ? Object.assign({}, g, { start: (Number(g.start) || 0) * scale, count: (Number(g.count) || 0) * scale }) : g))
@@ -4025,10 +4034,8 @@ const scenePruneUnreachableNodes = (xml) => {
                     if (scenePerf) __perfDispWaitMs = performance.now() - __perfWaitStart;
                 }
                 try {
-                    result = await window.evaluateDisplacement({
-                        renderer, displacement: range.disp, geometry, worldMatrix,
-                        fileMap: dispFileMap, textureCache, textureQueue, maxTextureSize: plannedTextureSize,
-                        isAlive: () => !stopped,
+                    result = await ensureDisplacementRunner().evaluateGeometry({
+                        geometry, displacement: range.disp, worldMatrix, fileMap: dispFileMap,
                     });
                 } catch (e) {
                     result = { offsets: null, notices: ['Displacement evaluation failed: ' + (e && e.message ? e.message : String(e))] };
@@ -6534,7 +6541,7 @@ const scenePruneUnreachableNodes = (xml) => {
             selectionState.dirty = true; // outline proxies point at the old geometry
             geometries.forEach((g) => { try { g.dispose(); } catch (e) {} });
             geometries.clear();
-            displacementStageTriangleTotal = 0;
+            displacementBudget = newDisplacementBudget();
             for (let i = 0; i < stage.meshes.length; i++) {
                 if (!isMounted() || stopped) throw new Error('USD scene view was cancelled.');
                 const record = stage.meshes[i];
@@ -6553,7 +6560,7 @@ const scenePruneUnreachableNodes = (xml) => {
                 let displacementAllowed = true;
                 let effectiveRecord = record;
                 if (displacementOn && displacementSubdivisionOverride !== 'follow') {
-                    const { level, capped, triangles, allowed } = resolveDisplacementLevel(record, displacementSubdivisionOverride);
+                    const { level, capped, triangles, allowed } = pickDisplacementLevel(record, displacementSubdivisionOverride);
                     displacementAllowed = allowed;
                     if (!allowed) {
                         warnings.push('Displacement skipped for ' + String(record.primPath || record.name || 'mesh')
@@ -6562,15 +6569,13 @@ const scenePruneUnreachableNodes = (xml) => {
                         warnings.push('Displacement subdivision capped at level ' + level + ' for '
                             + String(record.primPath || record.name || 'mesh') + ' to stay under the triangle budget');
                     }
-                    effectiveRecord = buildDisplacementEffectiveRecord(record, level);
+                    effectiveRecord = buildDisplacementRecord(record, level);
                 } else if (displacementOn) {
                     const corners = effectiveRecord.indices ? effectiveRecord.indices.length
                         : (effectiveRecord.positions ? effectiveRecord.positions.length / 3 : 0);
                     const triangles = Math.floor(corners / 3);
-                    displacementAllowed = !triangleLimitsEnabled || (triangles <= DISPLACEMENT_MESH_TRIANGLE_LIMIT
-                        && displacementStageTriangleTotal + triangles <= DISPLACEMENT_STAGE_TRIANGLE_LIMIT);
-                    if (displacementAllowed) displacementStageTriangleTotal += triangles;
-                    else warnings.push('Displacement skipped for ' + String(record.primPath || record.name || 'mesh')
+                    displacementAllowed = displacementBudget.pick(triangles, 0).allowed;
+                    if (!displacementAllowed) warnings.push('Displacement skipped for ' + String(record.primPath || record.name || 'mesh')
                         + ': ' + triangles + ' triangles exceed the scene displacement budget');
                 }
                 const parts = meshParts(effectiveRecord, materialForPath);
@@ -6901,11 +6906,7 @@ const scenePruneUnreachableNodes = (xml) => {
             // Every material regenerates below, so drop stale reservations
             // and byte counters up front (as setTextureMaxSize/
             // setTextureBudgetBytes already do before enqueueing this).
-            textureCache.forEach((texture) => {
-                try { texture.dispose && texture.dispose(); } catch (e) {}
-                try { texture.image && texture.image.close && texture.image.close(); } catch (e) {}
-            });
-            textureCache.clear();
+            disposeDisplacementRunner();
             try { textureSession.dispose(); } catch (e) {}
             textureSession = newSceneTextureSession();
             textureReservations.clear();
@@ -8332,12 +8333,9 @@ const scenePruneUnreachableNodes = (xml) => {
                     if (transfer && transfer.material) { try { transfer.material.dispose(); } catch (e) {} }
                     try { m.dispose(); } catch (e) {}
                 });
-                textureCache.forEach((t) => {
-                    try { t.dispose && t.dispose(); } catch (e) {}
-                    try { t.image && t.image.close && t.image.close(); } catch (e) {}
-                });
-                textureCache.clear();
+                disposeDisplacementRunner();
                 try { textureSession.dispose(); } catch (e) {}
+                unsubSceneAnisotropy();
                 if (presentationPipeline) { try { presentationPipeline.dispose(); } catch (e) {} }
                 if (peelPipeline) { try { peelPipeline.dispose(); } catch (e) {} }
                 if (window.unregisterLiveView) window.unregisterLiveView(handle);
@@ -9111,12 +9109,9 @@ const scenePruneUnreachableNodes = (xml) => {
         if (resizeObserver) resizeObserver.disconnect();
         documents.forEach((d) => { try { d.delete && d.delete(); } catch (err) {} });
         materials.forEach((m) => { try { m.dispose(); } catch (err) {} });
-        textureCache.forEach((t) => {
-            try { t.dispose && t.dispose(); } catch (err) {}
-            try { t.image && t.image.close && t.image.close(); } catch (err) {}
-        });
-        textureCache.clear();
+        disposeDisplacementRunner();
         try { textureSession.dispose(); } catch (err) {}
+        unsubSceneAnisotropy();
         geometries.forEach((g) => { try { g.dispose(); } catch (err) {} });
         if (presentationPipeline) { try { presentationPipeline.dispose(); } catch (err) {} }
         if (peelPipeline) { try { peelPipeline.dispose(); } catch (err) {} }

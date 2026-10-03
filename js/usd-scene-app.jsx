@@ -1902,6 +1902,8 @@
         const [skyVisStrength, setSkyVisStrength] = React.useState(() => sceneStored('skyVisStrength'));
         const [localEnvOn, setLocalEnvOn] = React.useState(() => !!sceneStored('localReflections'));
         const [localEnvStrength, setLocalEnvStrength] = React.useState(() => sceneStored('localEnvStrength'));
+        // Live, not staged: the renderer's texture session follows the store.
+        const [textureAnisotropy, setTextureAnisotropyState] = React.useState(() => sceneStored('textureAnisotropy'));
         // Render settings popover: replaces the old sidebar Rendering card.
         // Tab is persisted so a reopen lands where the user left it.
         const RENDER_TAB_KEY = 'mtlx_scene_render_settings_tab';
@@ -3380,6 +3382,7 @@
                     case 'ssrStrength': return ssrStrength;
                     case 'ssrMaxRoughness': return ssrMaxRoughness;
                     case 'diffuseEnv': return diffuseEnvConvolve ? 'convolve' : 'sh';
+                    case 'textureAnisotropy': return textureAnisotropy;
                     default: return draftValues[row.key];
                 }
             },
@@ -3401,6 +3404,7 @@
                     case 'ssrStrength': return applySsrStrength(next);
                     case 'ssrMaxRoughness': return applySsrMaxRoughness(next);
                     case 'diffuseEnv': return setDiffuseEnvConvolveValue(next === 'convolve');
+                    case 'textureAnisotropy': setTextureAnisotropyState(Number(next)); return sceneWrite('textureAnisotropy', Number(next));
                     case 'subdivision': return stageQualityValue('subdivision', Number(next));
                     case 'displacementSubdivision': return stageQualityValue('displacementSubdivision', next === 'follow' ? 'follow' : Number(next));
                     case 'triangleLimits': return stageQualityValue('triangleLimits', next !== false);

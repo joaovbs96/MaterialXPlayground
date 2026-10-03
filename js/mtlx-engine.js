@@ -4997,13 +4997,14 @@ const acquireTextureSourceRef = (cache, key) => {
 // with capKtx2MipLevels; exr/hdr/tif through the shared heavy-decode
 // limiter, then boundDecodedTexture when a finite tier is requested; else
 // (png/jpg at a finite tier) the bounded ImageBitmap path.
-// bounded (the Scene): the bounded decoders at every tier, Infinity included
-// (TIF gets mipmaps, PNG/JPG go through createImageBitmap), and a failed
-// boundDecodedTexture keeps the undecimated texture.
-const decodeTextureSource = async (blob, ext, path, tier, renderer, bounded) => {
+// bounded (Scene materials): the bounded decoders at every tier, Infinity
+// included (TIF gets mipmaps, PNG/JPG through createImageBitmap); a failed
+// bound keeps the undecimated texture. bitmapsOnly (Scene displacement):
+// only bitmap formats are bounded; KTX2 and float/TIF height maps stay native.
+const decodeTextureSource = async (blob, ext, path, tier, renderer, bounded, bitmapsOnly) => {
     if (ext === 'ktx2') {
         const tex = await loadKtx2Texture(blob, renderer ? { renderer } : null, path);
-        if (tex && Number.isFinite(tier)) capKtx2MipLevels(tex, tier);
+        if (tex && Number.isFinite(tier) && !bitmapsOnly) capKtx2MipLevels(tex, tier);
         return tex;
     }
     if (ext === 'exr' || ext === 'hdr' || ext === 'tif' || ext === 'tiff') {
@@ -5011,10 +5012,10 @@ const decodeTextureSource = async (blob, ext, path, tier, renderer, bounded) => 
         let tex = await runHeavyTextureDecode(startDecode);
         if (tex && bounded) {
             try { tex = await boundDecodedTexture(tex, tier); } catch (e) { /* keep the undecimated texture */ }
-        } else if (tex && Number.isFinite(tier)) tex = await boundDecodedTexture(tex, tier);
+        } else if (tex && Number.isFinite(tier) && !bitmapsOnly) tex = await boundDecodedTexture(tex, tier);
         return tex;
     }
-    if ((bounded || Number.isFinite(tier)) && typeof createImageBitmap === 'function') {
+    if ((bounded || bitmapsOnly || Number.isFinite(tier)) && typeof createImageBitmap === 'function') {
         return loadBoundedBitmapTexture(blob, tier, null);
     }
     const url = URL.createObjectURL(blob);
@@ -5085,6 +5086,10 @@ const createTextureSession = (opts) => {
     const renderer = options.renderer || null;
     const isAlive = typeof options.isAlive === 'function' ? options.isAlive : () => true;
     const boundedDecode = !!options.boundedDecode;
+    const boundBitmapsOnly = !!options.boundBitmapsOnly;
+    // Session-wide fastPathSamplerQuirk (the Scene's displacement binds go
+    // through bindDroppedTextures, which cannot pass the per-acquire flag).
+    const sessionSamplerQuirk = !!options.fastPathSamplerQuirk;
 
     const sourceRefs = new Map(); // sourceKey -> ref count this session holds
     const wrappers = new Map(); // wrapperKey -> { texture, sourceKey }
@@ -5127,7 +5132,7 @@ const createTextureSession = (opts) => {
         const tier = options2.tier != null ? options2.tier : maxSize;
         // fastPathSamplerQuirk: a proto from the bounded fast path keeps the
         // default address modes, as the Scene's legacy ordinary binds did.
-        const quirk = !!options2.fastPathSamplerQuirk;
+        const quirk = sessionSamplerQuirk || !!options2.fastPathSamplerQuirk;
         const ext = String(hit.key).split('.').pop().toLowerCase();
         const sourceKey = rawKey + '|' + (Number.isFinite(tier) ? tier : 'orig');
         const wrapperKey = sourceKey + '|' + samplerCacheKey('', samplerModes) + (quirk ? '|q' : '');
@@ -5169,7 +5174,7 @@ const createTextureSession = (opts) => {
             });
         }
 
-        const decodePromise = enqueue(() => decodeTextureSource(hit.blob, ext, hit.key, Number.isFinite(tier) ? tier : Infinity, renderer, boundedDecode))
+        const decodePromise = enqueue(() => decodeTextureSource(hit.blob, ext, hit.key, Number.isFinite(tier) ? tier : Infinity, renderer, boundedDecode, boundBitmapsOnly))
             .then((proto) => {
                 if (!proto) return null;
                 if (disposed || !isAlive()) { proto.dispose && proto.dispose(); return null; }
@@ -7833,10 +7838,24 @@ const prewarmShaderCompile = async ({ vs, fs, isMounted, label, timeoutMs }) => 
         console.log('[mtlx-perf] GL compile submit: '
             + (performance.now() - __warmPerfStart).toFixed(1) + 'ms (target: ' + label + ')');
     }
-    const cleanup = () => {
+    const deleteWarmObjects = () => {
         try { if (warmProgram) gl.deleteProgram(warmProgram); } catch (e) { /* context lost etc. */ }
         try { if (warmVShader) gl.deleteShader(warmVShader); } catch (e) { /* ditto */ }
         try { if (warmFShader) gl.deleteShader(warmFShader); } catch (e) { /* ditto */ }
+    };
+    // A program deleted while its parallel link still runs makes the GPU
+    // process query a dead name (GL_INVALID_VALUE glGetProgramiv), so a
+    // bail or timeout waits for the link to finish before deleting.
+    const stillLinking = () => {
+        try {
+            return !gl.isContextLost() && gl.isProgram(warmProgram)
+                && gl.getProgramParameter(warmProgram, ext.COMPLETION_STATUS_KHR) === false;
+        } catch (e) { return false; }
+    };
+    const cleanup = () => {
+        if (!stillLinking()) { deleteWarmObjects(); return; }
+        const retry = () => { if (stillLinking()) setTimeout(retry, 100); else deleteWarmObjects(); };
+        setTimeout(retry, 100);
     };
 
     const WAIT_POLL_MS = 50, WAIT_POLL_FAST_MS = 16, WAIT_POLL_FAST_TICKS = 6;
@@ -11606,7 +11625,8 @@ const createPreviewContent = ({
             textureSession = createTextureSession({ renderer, isAlive: () => !stopped, anisotropy: getTextureAnisotropy() });
             unsubTextureAnisotropy = window.MtlxRenderSettings && window.MtlxRenderSettings.subscribe
                 ? window.MtlxRenderSettings.subscribe((detail) => {
-                    if (detail && detail.key === 'textureAnisotropy' && textureSession) textureSession.setAnisotropy(detail.value);
+                    // Stage-profile writes belong to the Scene's own sessions.
+                    if (detail && detail.key === 'textureAnisotropy' && detail.profile !== 'stage' && textureSession) textureSession.setAnisotropy(detail.value);
                 })
                 : null;
             dispRunner = createDisplacementRunner({
@@ -12209,7 +12229,7 @@ Object.assign(window, {
     getDisplacementEnabled, setDisplacementEnabled, getTextureAnisotropy, setTextureAnisotropy,
     getDisplacementNormalsMode, setDisplacementNormalsMode,
     getPreviewSubdivisionLevel, setPreviewSubdivisionLevel,
-    PREVIEW_TRIANGLE_BUDGET, pickSubdivisionLevel,
+    PREVIEW_TRIANGLE_BUDGET, pickSubdivisionLevel, createTriangleBudget, prepareDisplacementBase, createDisplacementRunner,
     getHeightToNormalTexel, setHeightToNormalTexel,
     parseUniforms, parseVertexInputs, stripVersion, encodeDisplay, countFragmentSamplers,
     mergeDuplicateImageNodes, mxNodeSignature,
