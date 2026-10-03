@@ -467,6 +467,10 @@ against the ~10.8 MB the same material costs inside the full playground app (Bab
 site header, and the default heavier geometry all add up); the embed exists specifically to
 avoid that.
 
+## Render quality
+
+Embeds always render at the Performance level; there is no `quality` attribute, and the host page's stored viewer level never applies to an embed. The Quality level (ambient occlusion, specular anti-aliasing, HDR presentation, RGB transmission) is a feature of the full Playground viewer and is not switched on in embeds. Effect code is not part of the embed's initial download: it is loaded on demand (`MtlxRender.loadEffect`) only when a level asks for it, so a default embed pays nothing for effects it never runs.
+
 ## Self-hosting
 
 The hosted default is `https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html`,

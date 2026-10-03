@@ -620,10 +620,28 @@ const rowMeta = (key, surface) => {
     } catch (e) { return null; }
 };
 
+// Scene settings rows carry a quality-level dirty dot and a cost badge.
+const SETTINGS_EXP_BADGE = <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-experimental-fill/30 border border-experimental-hue/50 text-experimental">Experimental</span>;
+const SettingsDirtyDot = ({ show }) => (show ? <span title="Differs from the selected quality level" className="w-1.5 h-1.5 rounded-full bg-warning-marker shrink-0" /> : null);
+const SETTINGS_COST_ICON = { reload: 'refresh', rebuild: 'code', geometry: 'cube' };
+const SETTINGS_COST_TITLE = {
+    reload: 'Changing this reloads the stage', rebuild: 'Changing this recompiles materials', geometry: 'Changing this rebuilds geometry',
+};
+const SettingsCostBadge = ({ kind, pending }) => (kind ? (
+    <span title={SETTINGS_COST_TITLE[kind]} className={'inline-flex ' + (pending ? 'text-warning-marker' : 'text-fg-subtle')}>
+        <MtlxIcon name={SETTINGS_COST_ICON[kind]} className="w-3 h-3" />
+    </span>
+) : null);
+
 // Manifest rows for a surface in manifest order (bool Toggle, enum MtlxSelect,
 // number SliderField); writes go through MtlxRenderSettings.apply. `keys`
 // renders a subset for cards that own only some of a group's rows.
-function RenderSettingsSection({ surface, groups, keys, variant = 'sidebar', exclude, labelClassName = 'text-fg-soft' }) {
+// `draft` hands the Scene's staged-value model to the same rows:
+// { value(row), onChange(row, next), visible?, disabled?, dirty?, cost?,
+// pending?, title?, hint?, defaultValue?, testId? }. Variants: sidebar and
+// dialog (preview surfaces), panel (Scene popover tabs), popover (Scene
+// Environment popover), flat (one label and select per line).
+function RenderSettingsSection({ surface, groups, keys, variant = 'sidebar', exclude, labelClassName = 'text-fg-soft', draft }) {
     const RS = window.MtlxRenderSettings;
     const [, forceTick] = React.useState(0);
     React.useEffect(() => {
@@ -640,13 +658,124 @@ function RenderSettingsSection({ surface, groups, keys, variant = 'sidebar', exc
         const keySet = new Set(keys);
         rows = rows.filter((row) => keySet.has(row.key));
     }
+    if (draft && draft.visible) rows = rows.filter((row) => draft.visible(row));
     if (!rows.length) return null;
     const showHint = variant === 'sidebar';
     return (
         <React.Fragment>
-            {rows.map((row) => {
-                const value = RS.get(row.key, { surface });
-                const onChange = (next) => RS.apply(row.key, next, { surface });
+            {rows.map((baseRow) => {
+                const row = RS.rowUi(baseRow, surface);
+                const P = row.profiles[RS.PROFILE_OF[surface]];
+                const value = draft ? draft.value(row) : RS.get(row.key, { surface });
+                const onChange = draft ? (next) => draft.onChange(row, next) : (next) => RS.apply(row.key, next, { surface });
+                const hint = (draft && draft.hint && draft.hint(row)) || row.hint;
+                const title = draft && draft.title ? draft.title(row) : row.hint;
+                const disabled = !!(draft && draft.disabled && draft.disabled(row));
+                const options = row.options;
+                const asBool = row.asBool;
+                const isToggle = row.type === 'bool' || !!asBool;
+                const isSelect = !isToggle && (row.type === 'enum' || row.control === 'select');
+                const defValue = row.type === 'enum' ? (P && P.levels ? P.levels.default : options[0]) : (options ? options[0] : undefined);
+                const sliderDefault = draft && draft.defaultValue ? draft.defaultValue(row) : undefined;
+                const decimals = row.decimals !== undefined ? row.decimals : (row.type === 'int' ? 0 : undefined);
+                const step = row.step || (row.type === 'int' ? 1 : 0.1);
+                const experimental = row.experimental ? SETTINGS_EXP_BADGE : null;
+                const toggleChecked = asBool ? value === asBool.on : !!value;
+                const toggleChange = asBool ? (next) => onChange(next ? asBool.on : asBool.off) : onChange;
+                const selectNode = (extra) => (
+                    <MtlxSelect
+                        value={value}
+                        options={options}
+                        labels={row.optionLabels || {}}
+                        onChange={onChange}
+                        defValue={defValue}
+                        title={variant === 'panel' ? undefined : row.hint}
+                        size="sm"
+                        disabled={disabled}
+                        {...extra}
+                    />
+                );
+                const sliderNode = (
+                    <SliderField
+                        label={row.label} unit={row.unit} value={value}
+                        min={row.min} max={row.max} step={step}
+                        decimals={decimals}
+                        defaultValue={sliderDefault}
+                        disabled={disabled}
+                        onSlider={onChange} onNumber={onChange}
+                    />
+                );
+
+                if (variant === 'panel') {
+                    const kind = draft && draft.cost ? draft.cost(row) : null;
+                    const dirty = !!(draft && draft.dirty && draft.dirty(row));
+                    const labelNode = (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-secondary">
+                            <SettingsDirtyDot show={dirty} /><span>{row.label}</span>{experimental}
+                            <SettingsCostBadge kind={kind} pending={!!(draft && draft.pending && draft.pending(row))} />
+                        </span>
+                    );
+                    const shell = 'py-2 border-b border-line/60 last:border-b-0';
+                    const hintNode = hint ? <div className="mt-1 text-[11px] text-fg-muted">{hint}</div> : null;
+                    if (isToggle) {
+                        return (
+                            <div key={row.key} className={shell}>
+                                <label className="flex items-center justify-between gap-2 cursor-pointer" title={title}>
+                                    {labelNode}
+                                    <Toggle checked={toggleChecked} onChange={toggleChange} disabled={disabled} />
+                                </label>
+                                {hintNode}
+                            </div>
+                        );
+                    }
+                    if (isSelect) {
+                        return (
+                            <div key={row.key} className={shell} title={title}>
+                                <div className="flex items-center justify-between gap-2">
+                                    {labelNode}
+                                    {selectNode()}
+                                </div>
+                                {hintNode}
+                            </div>
+                        );
+                    }
+                    return (
+                        <div key={row.key} className={shell}>
+                            {dirty ? <div className="flex items-center gap-1.5 mb-1"><SettingsDirtyDot show /><span className="text-[10px] text-warning/80">Differs from the selected quality level</span></div> : null}
+                            {sliderNode}
+                            {hintNode}
+                        </div>
+                    );
+                }
+                if (variant === 'popover') {
+                    if (isToggle) {
+                        return (
+                            <div key={row.key} className="flex items-center justify-between" title={title}>
+                                <span className={labelClassName}>{row.label}</span>
+                                <Toggle checked={toggleChecked} onChange={toggleChange} disabled={disabled} />
+                            </div>
+                        );
+                    }
+                    if (isSelect) {
+                        return (
+                            <div key={row.key} className="flex items-center justify-between gap-2" title={title}>
+                                <span className={labelClassName}>{row.label}</span>
+                                {selectNode()}
+                            </div>
+                        );
+                    }
+                    return <div key={row.key}>{sliderNode}</div>;
+                }
+                if (variant === 'flat') {
+                    const testId = draft && draft.testId ? draft.testId(row) : undefined;
+                    return (
+                        <div key={row.key} className="flex items-center justify-between gap-3" title={title}>
+                            <span className={labelClassName}>{row.label}</span>
+                            <div data-testid={testId}>{selectNode({ ariaLabel: row.label, title: undefined })}</div>
+                        </div>
+                    );
+                }
+
                 const labelNode = (
                     <span className={labelClassName + ' inline-flex items-center gap-1.5'}>
                         {row.label}
@@ -667,7 +796,6 @@ function RenderSettingsSection({ surface, groups, keys, variant = 'sidebar', exc
                     );
                 }
                 if (row.type === 'enum') {
-                    const P = row.profiles[RS.PROFILE_OF[surface]];
                     return (
                         <div key={row.key}>
                             <div className="flex items-center justify-between gap-2">

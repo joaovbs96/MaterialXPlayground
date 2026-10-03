@@ -256,7 +256,8 @@ test.describe('@scene displacement', () => {
       return box.getSize(new window.THREE.Vector3()).y;
     });
     const after = await page.evaluate(() => {
-      window.setDisplacementEnabled(false);
+      // The Scene keeps its own displacement flag (stage profile).
+      window.__sceneDisp.applySceneSettings({ displacement: false });
       const h = window.__sceneDisp;
       let planeMesh = null;
       h.scene.traverse((o) => { if (o.isMesh && o.userData.primPath === '/Grid/Plane') planeMesh = o; });
@@ -264,7 +265,7 @@ test.describe('@scene displacement', () => {
       const box = new window.THREE.Box3();
       for (const prim of h.prims) box.expandByObject(prim);
       const sizeY = box.getSize(new window.THREE.Vector3()).y;
-      window.setDisplacementEnabled(true);
+      window.__sceneDisp.applySceneSettings({ displacement: true });
       return { positions, sizeY };
     });
     for (let v = 0; v < after.positions.length / 3; v++) {

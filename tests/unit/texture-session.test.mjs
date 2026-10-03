@@ -11,7 +11,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const ENGINE_SOURCE = fs.readFileSync(path.join(ROOT, 'js', 'mtlx-engine.js'), 'utf8');
-const SCENE_SOURCE = fs.readFileSync(path.join(ROOT, 'js', 'usd-scene-renderer.js'), 'utf8');
+// The Scene's own copies were deleted in P6 S4; their frozen pre-P6 text is the oracle.
+const SCENE_SOURCE = fs.readFileSync(path.join(ROOT, 'tests', 'unit', 'fixtures', 'scene-legacy-p5.js'), 'utf8');
 
 function extractStatement(source, name, filename) {
     const marker = 'const ' + name + ' = ';
@@ -275,4 +276,49 @@ test('LRU eviction closes the idle prototype bitmap once the 256 MiB idle budget
     sessionA.dispose(); // refs -> 0, entry goes idle, way over budget, evicted immediately
 
     assert.equal(cache.has(key), false, 'the idle prototype is evicted once far over the 256 MiB budget');
+});
+
+test('release drops one wrapper and its source reference (P6 S4)', async () => {
+    const engine = loadEngineTextureSession();
+    const cache = new Map();
+    const session = engine.createTextureSession({ cache });
+    const fileMap = { 'wood.png': { name: 'wood.png', size: 10, lastModified: 1 } };
+    const hit = session.resolve(fileMap, 'wood.png');
+    const result = await session.acquire(hit, { samplerModes: null });
+
+    assert.equal(session.release(result.texture), true);
+    assert.equal(result.texture.disposed, true);
+    assert.equal(session.stats().wrapperCount, 0);
+    assert.equal(Array.from(cache.values())[0].refs, 0);
+    assert.equal(session.release(result.texture), false, 'a second release is a no-op');
+});
+
+test('fastPathSamplerQuirk keeps default address modes for a bounded fast-path prototype only (P6 S4)', async () => {
+    const engine = loadEngineTextureSession();
+    const cache = new Map();
+    const session = engine.createTextureSession({ cache });
+    const fileMap = { 'wood.png': { name: 'wood.png', size: 10, lastModified: 1 } };
+    const hit = session.resolve(fileMap, 'wood.png');
+    const modes = { u: 'clamp', v: 'mirror' };
+    await session.acquire(hit, { samplerModes: null });
+    const proto = Array.from(cache.values())[0].proto;
+    proto.userData = { mtlxBoundedFastPath: true };
+
+    const quirk = session.acquire(hit, { samplerModes: modes, fastPathSamplerQuirk: true });
+    const plain = session.acquire(hit, { samplerModes: modes });
+    assert.equal(quirk.texture.wrapS, 1000, 'fast-path proto under the quirk keeps periodic');
+    assert.equal(plain.texture.wrapS, 1001, 'without the quirk the authored modes apply');
+    assert.notEqual(quirk.texture, plain.texture, 'the quirk is part of the wrapper key');
+});
+
+test('a session-wide fastPathSamplerQuirk applies to every acquire (Scene displacement, P6 S5)', async () => {
+    const engine = loadEngineTextureSession();
+    const cache = new Map();
+    const session = engine.createTextureSession({ cache, fastPathSamplerQuirk: true });
+    const fileMap = { 'height.png': { name: 'height.png', size: 10, lastModified: 1 } };
+    const hit = session.resolve(fileMap, 'height.png');
+    await session.acquire(hit, { samplerModes: null });
+    Array.from(cache.values())[0].proto.userData = { mtlxBoundedFastPath: true };
+    const result = session.acquire(hit, { samplerModes: { u: 'clamp', v: 'clamp' } });
+    assert.equal(result.texture.wrapS, 1000, 'the bounded fast-path proto keeps periodic, as the legacy binds did');
 });

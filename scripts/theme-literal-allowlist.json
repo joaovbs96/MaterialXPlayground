@@ -143,5 +143,15 @@
     "file": "embed/mtlx-viewer.js",
     "match": "/^#(111827|9ca3af|f3f4f6|4b5563)$/i",
     "reason": "host-page shadow DOM has no token CSS; values mirror the theme tokens"
+  },
+  {
+    "file": "js/shared/fx-ssao.js",
+    "match": "/^0x000000$/",
+    "reason": "Render-internal clear color for the AO normal/depth pass (alpha 0 marks no geometry)."
+  },
+  {
+    "file": "js/shared/fx-thickness.js",
+    "match": "/^0x000000$/",
+    "reason": "Render-internal clear color for the thickness pass (0 distance means no medium)."
   }
 ]

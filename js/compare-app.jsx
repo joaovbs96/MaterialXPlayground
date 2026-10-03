@@ -267,7 +267,7 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
                     mx: loaded.mx, gen: loaded.gen, genContext: loaded.genContext,
                     renderable: target.node,
                     lightData: loaded.lightData,
-                    label: 'compare-' + label,
+                    label: 'compare-' + label, surface: 'compare',
                     materialName: target.name,
                     needsLighting: true,
                     geomName: geom,

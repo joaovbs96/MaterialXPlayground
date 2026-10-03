@@ -7171,7 +7171,7 @@
                                 const origin = scopeOriginRef.current;
                                 const hasOrigin = !!(origin && origin.graph === scope);
                                 await window.prewarmPreviewTarget({
-                                    mx, gen, genContext,
+                                    mx, gen, genContext, surface: 'graph',
                                     buildRenderable: () => window.buildPreviewRenderable(parsed, {
                                         scope, id,
                                         originId: hasOrigin ? origin.id : null,

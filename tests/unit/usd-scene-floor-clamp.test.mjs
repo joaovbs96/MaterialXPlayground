@@ -5,17 +5,18 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 
+// The Scene's floor clamp uses the shared helper since P6 S2
+// (js/shared/render-environment.js, MtlxRender.studioFloorPolarLimit).
 function loadFloorPolarLimit() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-  const source = fs.readFileSync(path.join(root, 'js', 'usd-scene-renderer.js'), 'utf8');
-  const start = source.indexOf('const studioFloorPolarLimit =');
-  const end = source.indexOf('// Turntable/GIF capture state', start);
-  assert.ok(start >= 0 && end > start, 'studio floor polar limit helper is present');
-  const context = {};
-  vm.runInNewContext(
-    source.slice(start, end) + '\nthis.studioFloorPolarLimit = studioFloorPolarLimit;',
-    context, { filename: 'usd-scene-renderer.js' });
-  return context.studioFloorPolarLimit;
+  const source = fs.readFileSync(path.join(root, 'js', 'shared', 'render-environment.js'), 'utf8');
+  const sandbox = { window: {} };
+  vm.createContext(sandbox);
+  vm.runInContext(source, sandbox, { filename: 'render-environment.js' });
+  const scene = fs.readFileSync(path.join(root, 'js', 'usd-scene-renderer.js'), 'utf8');
+  assert.ok(scene.includes('window.MtlxRender.studioFloorPolarLimit('), 'the Scene clamp calls the shared helper');
+  assert.ok(!scene.includes('const studioFloorPolarLimit ='), 'the Scene keeps no private copy');
+  return sandbox.window.MtlxRender.studioFloorPolarLimit;
 }
 
 const studioFloorPolarLimit = loadFloorPolarLimit();
