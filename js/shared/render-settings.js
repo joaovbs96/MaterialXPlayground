@@ -334,9 +334,9 @@
             surfaces: { viewer: PLANNED('P9'), compare: PLANNED('P9'), docs: PLANNED('P9'), graph: PLANNED('P9'), embed: PLANNED('P9'), scene: 'yes' },
         },
         {
-            key: 'ao', label: 'Ambient occlusion', experimental: true, hint: 'Environment light reaches every surface equally, including ones facing a wall, which makes interiors read flat. This estimates how much sky each pixel can actually see. Staged: takes effect on Apply.', group: 'effects', order: 0, type: 'bool', apply: 'renderMode', ui: true,
-            profiles: { stage: { storage: 'mtlx_scene_ao', codec: 'boolOnlyOne', levels: { performance: false, default: false, quality: true } } },
-            surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
+            key: 'ao', label: 'Ambient occlusion', experimental: true, hint: 'Environment light reaches every surface equally, including ones facing a wall, which makes interiors read flat. This estimates how much sky each pixel can actually see. Staged: takes effect on Apply.', group: 'effects', order: 0, type: 'bool', apply: 'renderMode', ui: true, samplers: 1, dropKey: 'skipSsao',
+            profiles: { preview: { codec: 'bool01', hidden: true, levels: { performance: false, default: false, quality: true } }, stage: { storage: 'mtlx_scene_ao', codec: 'boolOnlyOne', levels: { performance: false, default: false, quality: true } } },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
         {
             key: 'skyVis', label: 'Sky visibility', experimental: true, hint: 'Environment light has no visibility term, so a wall does not block the sky and interiors read flat and overlit. This bakes how much sky each part of the stage can see into a coarse volume. Staged: takes effect on Apply.', group: 'lighting', order: 3, type: 'bool', apply: 'renderMode', ui: true,
@@ -365,8 +365,8 @@
         },
         {
             key: 'specularAA', label: 'Specular anti-aliasing', experimental: true, hint: 'Widens anisotropic specular roughness by the screen-space variance of the shading normal and of the roughness input, so a fine procedural roughness noise network does not sparkle under a single-sample rasterizer the way a multi-sample path tracer would not. Smooth, constant-roughness materials are essentially unaffected. Staged: takes effect on Apply.', group: 'display', order: 2, type: 'bool', apply: 'regenerate', ui: true,
-            profiles: { stage: { storage: 'mtlx_scene_specular_aa', codec: 'boolOn', framedValue: false, levels: { performance: false, default: true, quality: true } } },
-            surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
+            profiles: { preview: { codec: 'bool01', hidden: true, levels: { performance: false, default: false, quality: true } }, stage: { storage: 'mtlx_scene_specular_aa', codec: 'boolOn', framedValue: false, levels: { performance: false, default: true, quality: true } } },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
 
         // ---- Stage-profile "live" rows (same value at every level) ----
@@ -387,8 +387,8 @@
         },
         {
             key: 'aoStrength', label: 'Ambient occlusion strength', step: 0.05, decimals: 2, hint: 'How strongly the estimated occlusion darkens creases and corners.', group: 'effects', order: 1, type: 'number', min: 0, max: 1, apply: 'uniform', ui: true,
-            profiles: { stage: { storage: 'mtlx_scene_ao_strength', codec: 'number', min: 0, max: 1, levels: { performance: 0.85, default: 0.85, quality: 0.85 } } },
-            surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
+            profiles: { preview: { codec: 'number', min: 0, max: 1, hidden: true, levels: { performance: 0.85, default: 0.85, quality: 0.85 } }, stage: { storage: 'mtlx_scene_ao_strength', codec: 'number', min: 0, max: 1, levels: { performance: 0.85, default: 0.85, quality: 0.85 } } },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
         {
             key: 'bounceStrength', label: 'Diffuse bounce strength', step: 0.05, decimals: 2, hint: 'How strongly the baked bounce term fills back in.', group: 'effects', order: 3, type: 'number', min: 0, max: 1, apply: 'uniform', ui: true,
@@ -424,50 +424,50 @@
         // ---- Presentation jsonField rows (mtlx_scene_presentation) ----
         {
             key: 'hdrPresentation', label: 'HDR presentation', hint: 'Capture scene-linear HDR before a single display transform. Off uses the previous rendering path.', group: 'display', order: 4, type: 'bool', apply: 'post', ui: true,
-            profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'enabled', codec: 'jsonField', levels: { performance: true, default: true, quality: true } } },
-            surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
+            profiles: { preview: { codec: 'bool01', hidden: true, levels: { performance: false, default: false, quality: true } }, stage: { storage: 'mtlx_scene_presentation', field: 'enabled', codec: 'jsonField', levels: { performance: true, default: true, quality: true } } },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
         {
             key: 'bloom', label: 'Highlight glow', hint: 'Optical glow from actual HDR highlights. This does not add lighting to nearby geometry.', group: 'display', order: 5, type: 'bool', apply: 'post', ui: true,
-            profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'bloom', codec: 'jsonField', levels: { performance: false, default: false, quality: false } } },
-            surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
+            profiles: { preview: { codec: 'bool01', hidden: true, levels: { performance: false, default: false, quality: false } }, stage: { storage: 'mtlx_scene_presentation', field: 'bloom', codec: 'jsonField', levels: { performance: false, default: false, quality: false } } },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
         {
             key: 'bloomStrength', label: 'Glow strength', step: 0.025, decimals: 3, hint: 'Controls how much of the glow highlight bleeds into the image.', group: 'display', order: 6, type: 'number', min: 0, max: 1, apply: 'post', ui: true,
-            profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'strength', codec: 'jsonField', min: 0, max: 1, levels: { performance: 0.25, default: 0.25, quality: 0.25 } } },
-            surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
+            profiles: { preview: { codec: 'number', min: 0, max: 1, hidden: true, levels: { performance: 0.25, default: 0.25, quality: 0.25 } }, stage: { storage: 'mtlx_scene_presentation', field: 'strength', codec: 'jsonField', min: 0, max: 1, levels: { performance: 0.25, default: 0.25, quality: 0.25 } } },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
         {
             key: 'hdrView', label: 'HDR view', group: 'display', order: 6.5, type: 'enum', options: ['final', 'linear', 'no-bloom', 'highlights', 'bloom', 'composite'], apply: 'post', ui: true, persist: 'view',
             optionLabels: { final: 'Final', linear: 'Scene linear', 'no-bloom': 'No glow', highlights: 'Highlights', bloom: 'Glow', composite: 'Composite' },
             hint: 'Temporary inspection view for the HDR presentation pipeline.',
             profiles: { stage: { codec: 'enum', options: ['final', 'linear', 'no-bloom', 'highlights', 'bloom', 'composite'], levels: { performance: 'final', default: 'final', quality: 'final' } } },
-            surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
+            surfaces: { viewer: NA('an inspection view of the Scene presentation pipeline'), compare: NA('an inspection view of the Scene presentation pipeline'), docs: NA('an inspection view of the Scene presentation pipeline'), graph: NA('an inspection view of the Scene presentation pipeline'), embed: NA('an inspection view of the Scene presentation pipeline'), scene: 'yes' },
         },
         {
             key: 'bloomThreshold', label: 'Glow threshold', step: 0.01, decimals: 2, hint: 'Luminance level above which highlights start to glow.', group: 'display', order: 7, type: 'number', min: 0.01, max: 1000, apply: 'post', ui: true,
-            profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'threshold', codec: 'jsonField', min: 0.01, max: 1000, levels: { performance: 1, default: 1, quality: 1 } } },
-            surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
+            profiles: { preview: { codec: 'number', min: 0.01, max: 1000, hidden: true, levels: { performance: 1, default: 1, quality: 1 } }, stage: { storage: 'mtlx_scene_presentation', field: 'threshold', codec: 'jsonField', min: 0.01, max: 1000, levels: { performance: 1, default: 1, quality: 1 } } },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
         {
             key: 'bloomKnee', label: 'Glow knee', step: 0.01, decimals: 2, hint: 'How softly the glow threshold transitions.', group: 'display', order: 8, type: 'number', min: 0, max: 1, apply: 'post', ui: true,
-            profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'knee', codec: 'jsonField', min: 0, max: 1, levels: { performance: 0.5, default: 0.5, quality: 0.5 } } },
-            surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
+            profiles: { preview: { codec: 'number', min: 0, max: 1, hidden: true, levels: { performance: 0.5, default: 0.5, quality: 0.5 } }, stage: { storage: 'mtlx_scene_presentation', field: 'knee', codec: 'jsonField', min: 0, max: 1, levels: { performance: 0.5, default: 0.5, quality: 0.5 } } },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
         {
             key: 'bloomRadius', label: 'Glow radius', step: 0.01, decimals: 2, hint: 'How far the glow spreads from each highlight.', group: 'display', order: 9, type: 'number', min: 0, max: 1, apply: 'post', ui: true,
-            profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'radius', codec: 'jsonField', min: 0, max: 1, levels: { performance: 0.65, default: 0.65, quality: 0.65 } } },
-            surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
+            profiles: { preview: { codec: 'number', min: 0, max: 1, hidden: true, levels: { performance: 0.65, default: 0.65, quality: 0.65 } }, stage: { storage: 'mtlx_scene_presentation', field: 'radius', codec: 'jsonField', min: 0, max: 1, levels: { performance: 0.65, default: 0.65, quality: 0.65 } } },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
         {
             key: 'postAntialias', label: 'Post Antialias', group: 'display', order: 20, type: 'bool', apply: 'post', ui: false,
-            profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'antialias', codec: 'jsonField', levels: { performance: true, default: true, quality: true } } },
-            surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
+            profiles: { preview: { codec: 'bool01', hidden: true, levels: { performance: true, default: true, quality: true } }, stage: { storage: 'mtlx_scene_presentation', field: 'antialias', codec: 'jsonField', levels: { performance: true, default: true, quality: true } } },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
         {
             key: 'msaaSamples', label: 'MSAA Samples', group: 'display', order: 21, type: 'number', min: 0, max: 4, apply: 'post', ui: false,
-            profiles: { stage: { storage: 'mtlx_scene_presentation', field: 'samples', codec: 'jsonField', min: 0, max: 4, levels: { performance: 4, default: 4, quality: 4 } } },
-            surfaces: { viewer: PLANNED('P8'), compare: PLANNED('P8'), docs: PLANNED('P8'), graph: PLANNED('P8'), embed: PLANNED('P8'), scene: 'yes' },
+            profiles: { preview: { codec: 'int', min: 0, max: 4, hidden: true, levels: { performance: 4, default: 4, quality: 4 } }, stage: { storage: 'mtlx_scene_presentation', field: 'samples', codec: 'jsonField', min: 0, max: 4, levels: { performance: 4, default: 4, quality: 4 } } },
+            surfaces: { viewer: 'yes', compare: 'yes', docs: 'yes', graph: 'yes', embed: 'yes', scene: 'yes' },
         },
     ];
 
@@ -556,6 +556,11 @@
         try { window.dispatchEvent(new CustomEvent('mtlx-render-setting', { detail })); } catch (e) { /* best-effort */ }
     };
 
+    // A governed preview row (levels differ) keeps one value per surface, so
+    // a Viewer level never moves Docs or Graph; such rows declare no storage.
+    const surfaceKey = (key, profile, P, opts) => (profile === 'preview' && opts && opts.surface && isGoverned(P)
+        ? opts.surface + '|' + key : null);
+
     const resolveProfile = (opts) => {
         if (!opts) return undefined;
         if (opts.profile) return opts.profile;
@@ -584,6 +589,8 @@
         const P = row.profiles[profile];
         if (!P) return undefined;
         const seedKey = profile + '|' + key;
+        const ownKey = surfaceKey(key, profile, P, opts);
+        if (ownKey && OVERRIDES.has(ownKey)) return OVERRIDES.get(ownKey);
         // An in-memory value from set() this session outranks the URL seed:
         // once the visitor changes a setting, the page-load query param must
         // not keep overriding what they just picked.
@@ -621,8 +628,7 @@
         const P = row.profiles[profile];
         if (!P) return undefined;
         const validated = validate(P, value);
-        const seedKey = profile + '|' + key;
-        OVERRIDES.set(seedKey, validated);
+        OVERRIDES.set(surfaceKey(key, profile, P, options) || (profile + '|' + key), validated);
         const persist = options.persist !== false;
         if (persist && P.storage && canPersist() && !(profile === 'stage' && isFramed())) persistValue(P, validated);
         notify({ key, profile, surface: options.surface, value: validated });
@@ -701,6 +707,9 @@
             const s = row.surfaces[surface];
             if (s !== 'yes') return false;
             if (uiOnly && row.ui !== true) return false;
+            // A hidden profile (preview Quality effects, P8) is reachable through levels only.
+            const P = row.profiles[PROFILE_OF[surface]];
+            if (uiOnly && P && P.hidden) return false;
             return true;
         }).sort((a, b) => rowSortKey(a) - rowSortKey(b));
     };

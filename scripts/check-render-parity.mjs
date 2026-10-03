@@ -124,6 +124,11 @@ function checkManifestShape() {
     for (const profile of Object.keys(row.profiles || {})) {
       const P = row.profiles[profile];
       if (!P.levels) { problems.push(`row "${row.key}" profile "${profile}" has no levels`); continue; }
+      // Governed preview rows resolve per surface (P8); a shared stored key would leak a level across surfaces.
+      const levelValues = new Set(LEVELS.map((l) => JSON.stringify(P.levels[l] !== undefined ? P.levels[l] : P.levels.default)));
+      if (profile === "preview" && levelValues.size > 1 && P.storage) {
+        problems.push(`row "${row.key}" preview profile differs per level but declares storage "${P.storage}"`);
+      }
       for (const level of LEVELS) {
         const value = P.levels[level] !== undefined ? P.levels[level] : P.levels.default;
         if (!isLevelValueValid(P, value)) {
@@ -131,6 +136,13 @@ function checkManifestShape() {
         }
       }
     }
+  }
+
+  // Every dropKey names an entry of the engine's SAMPLER_BUDGET_DROP_ORDER (P8).
+  const engineText = readFileSync(path.join(REPO_ROOT, "js", "mtlx-engine.js"), "utf8");
+  const dropBlock = (engineText.match(/const SAMPLER_BUDGET_DROP_ORDER = \[([\s\S]*?)\n\];/) || [])[1] || "";
+  for (const row of M.ROWS) {
+    if (row.dropKey && !dropBlock.includes(`key: '${row.dropKey}'`)) problems.push(`row "${row.key}" dropKey "${row.dropKey}" is not in SAMPLER_BUDGET_DROP_ORDER`);
   }
 
   if (problems.length) {

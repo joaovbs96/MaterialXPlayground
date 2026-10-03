@@ -226,6 +226,79 @@
         return begin;
     };
 
+    // One frame for either content kind, in a fixed order: content pre-frame, depth
+    // prepass and SSAO, thickness, content pre-colour, then the colour draw wrapped
+    // by the HDR presentation when present (linear inside, through `lease`).
+    const createFrameRunner = (steps) => ({
+        render: () => {
+            if (steps.prepare) steps.prepare();
+            const ssao = steps.ssao ? steps.ssao() : null;
+            if (ssao) {
+                const renderer = steps.renderer(), THREE = window.THREE;
+                const target = renderer.getRenderTarget();
+                const outputSize = target ? new THREE.Vector2(target.width, target.height) : renderer.getDrawingBufferSize(new THREE.Vector2());
+                // Both read the prepass, so it is valid for THIS camera before any material draws.
+                if (steps.prepassNeeded()) ssao.prepass(outputSize, steps.root());
+                if (steps.aoEnabled()) ssao.apply(ssao.occlusion(outputSize, steps.root()), outputSize.x, outputSize.y);
+            }
+            if (steps.thickness) {
+                const state = steps.thickness.update(steps.root());
+                steps.thickness.apply(state, state.width, state.height);
+            }
+            if (steps.beforeColor) steps.beforeColor();
+            const presentation = steps.presentation ? steps.presentation() : null;
+            if (!presentation) { steps.drawColor(false); return; }
+            presentation.render((linear) => {
+                const release = linear ? steps.lease() : null;
+                try { steps.drawColor(linear); } finally { if (release) release(); }
+            });
+            if (steps.afterPresent) steps.afterPresent();
+        },
+    });
+
+    // A view's rAF loop: tick(ts) runs one frame while canRun(); scheduleFirst
+    // books the next frame before the tick (the preview), else after (the Scene).
+    const createFrameLoop = ({ canRun, tick, scheduleFirst = false }) => {
+        let id = 0;
+        const step = (ts) => {
+            if (!canRun()) { id = 0; return; }
+            if (scheduleFirst) id = requestAnimationFrame(step);
+            tick(ts);
+            if (!scheduleFirst) id = requestAnimationFrame(step);
+        };
+        return {
+            start: () => { if (!id) step(); },
+            stop: () => { if (id) cancelAnimationFrame(id); id = 0; },
+            running: () => !!id,
+        };
+    };
+
+    // On-demand effect files (js/shared/fx-<name>.js) against the document base
+    // (site root, the embed's base, the webview's base); one load per effect,
+    // resolved at once when the factory is already registered (VIEW_DEPS).
+    const EFFECT_FACTORIES = { post: 'createPostEffect', ssao: 'createSsaoEffect', thickness: 'createThicknessEffect' };
+    const effectLoads = {};
+    const loadEffect = (name) => {
+        const factory = EFFECT_FACTORIES[name];
+        if (!factory) return Promise.reject(new Error('MtlxRender.loadEffect: unknown effect ' + name));
+        if (window.MtlxRender[factory]) return Promise.resolve(window.MtlxRender[factory]);
+        if (!effectLoads[name]) {
+            effectLoads[name] = new Promise((resolve, reject) => {
+                const tag = document.createElement('script');
+                tag.src = new URL('js/shared/fx-' + name + '.js', document.baseURI).href;
+                tag.onload = () => {
+                    tag.remove();
+                    if (window.MtlxRender[factory]) resolve(window.MtlxRender[factory]);
+                    else reject(new Error(tag.src + ' did not register MtlxRender.' + factory));
+                };
+                tag.onerror = () => { tag.remove(); reject(new Error('could not load ' + tag.src)); };
+                document.head.appendChild(tag);
+            });
+            effectLoads[name].catch(() => { delete effectLoads[name]; });
+        }
+        return effectLoads[name];
+    };
+
     // One peel orchestrator per view: owns its depth-peel pipeline and draws a
     // frame over the content's transparent meshes (plain render when none).
     // rgbt 'always' = the RGB-T wrapper; 'auto' = scalar unless the list carries the RGB-T payload.
@@ -759,7 +832,9 @@
         let backdropMode = normalizeBackdropMode(
             backdrop !== undefined ? backdrop : (envBackground ? 'environment' : 'studio')
         );
-        let reqId = null, renderer = null, scene = null, camera = null, controls = null, handle = null;
+        let loop = null, renderer = null, scene = null, camera = null, controls = null, handle = null;
+        // Preview Quality effects (null below Quality): SSAO, HDR presentation and its linear lease.
+        let fxSsao = null, fxPost = null, fxLease = null;
         let onGlLost = null, onGlRestored = null, onContextLostSleep = null, onContextRestoredWake = null;
         let sizer = null, captureController = null, sleepGate = null, unsubDiffuseEnv = null, wheelGate = null;
         let peel = null, peelLinearOk = false, backdropParts = null, pmremRT = null, linearToggle = null;
@@ -804,7 +879,7 @@
         const disposeAll = () => {
             stopped = true;
             content.dispose();
-            if (reqId) cancelAnimationFrame(reqId);
+            if (loop) loop.stop();
             if (sizer) sizer.dispose();
             if (controls) controls.dispose();
             if (wheelGate) wheelGate.dispose();
@@ -820,19 +895,25 @@
                 if (onContextLostSleep) canvas.removeEventListener('webglcontextlost', onContextLostSleep);
                 if (onContextRestoredWake) canvas.removeEventListener('webglcontextrestored', onContextRestoredWake);
             } catch (e) { /* already disposed/invalid */ }
+            try { if (fxSsao) fxSsao.dispose(); if (fxPost) fxPost.dispose(); } catch (e) { /* already disposed/invalid */ }
             disposeRendererCore({ canvas, onGlLost, onGlRestored, renderer });
         };
 
         // The one render entry point: plain render unless this frame peels.
-        const renderFrame = () => {
-            const list = ENGINE.getForceTransparency() ? content.transparentMeshes() : [];
-            const peelActive = list.length > 0;
-            linearToggle.sync(peelActive && peelLinearOk);
-            peel.render(scene, camera, list);
-        };
-        const animate = (ts) => {
-            if (stopped || !aliveFn()) return;
-            reqId = requestAnimationFrame(animate);
+        const frame = createFrameRunner({
+            renderer: () => renderer, root: () => content.root(),
+            ssao: () => fxSsao, prepassNeeded: () => true, aoEnabled: () => true,
+            presentation: () => fxPost, lease: () => fxLease(),
+            drawColor: (linear) => {
+                const list = ENGINE.getForceTransparency() ? content.transparentMeshes() : [];
+                // Inside the HDR frame the lease keeps every material linear.
+                if (linear) { peel.render(scene, camera, list, { outputLinear: true }); return; }
+                linearToggle.sync(list.length > 0 && peelLinearOk);
+                peel.render(scene, camera, list);
+            },
+        });
+        const renderFrame = () => frame.render();
+        const animateTick = (ts) => {
             // Idempotent per rAF timestamp, so every view reads one clock value.
             ENGINE.clockTick(ts);
             if (controls) {
@@ -846,6 +927,8 @@
             content.beforeRender();
             renderFrame();
         };
+        loop = createFrameLoop({ canRun: () => !stopped && aliveFn(), tick: animateTick, scheduleFirst: true });
+        const animate = () => loop.start();
         const applyBackdrop = (mode) => {
             backdropMode = normalizeBackdropMode(mode);
             backdropParts.applyBackdrop(backdropMode, controls, camera);
@@ -965,7 +1048,8 @@
             },
             setEnvironment,
             setEnvMap,
-            __debug: () => ({ renderer, scene, camera, peel: peel ? peel.state() : null }),
+            __debug: () => ({ renderer, scene, camera, peel: peel ? peel.state() : null,
+                effects: { ssao: !!fxSsao, post: fxPost ? fxPost.getSettings().mode : null } }),
         });
 
         const start = async () => {
@@ -1034,13 +1118,16 @@
                 // parks the drawing buffer; wake restores the layout size.
                 sleepGate = createSleepGate({
                     onSleep: () => {
-                        if (reqId) { cancelAnimationFrame(reqId); reqId = null; }
+                        if (fxSsao) fxSsao.dispose();
+                        if (fxPost) fxPost.setSettings({ enabled: false, persist: false });
+                        loop.stop();
                         if (peel) peel.dispose();
                         backdropParts.disposeShadowMap();
                         renderer.setSize(1, 1, false);
                         drawingBufferParked = true;
                     },
                     onWake: () => {
+                        if (fxPost) fxPost.setSettings({ enabled: true, persist: false });
                         drawingBufferParked = false;
                         sizer.forceSync();
                         if (!stopped && aliveFn()) animate();
@@ -1095,6 +1182,36 @@
                     });
                     backdropParts.setStudioLinearOut(on);
                 });
+                // Preview Quality effects, loaded on demand; nothing happens below Quality.
+                const fxSetting = (key) => { try { return window.MtlxRenderSettings.get(key, { surface: caps.surface }); } catch (e) { return undefined; } };
+                const wantSsao = !!caps.surface && caps.threeD && caps.lit && !!fxSetting('ao');
+                const wantPost = !!caps.surface && caps.threeD && !!fxSetting('hdrPresentation');
+                if (wantSsao || wantPost) {
+                    try {
+                        if (wantSsao) {
+                            fxSsao = (await loadEffect('ssao'))({
+                                renderer: () => renderer, scene: () => scene, camera: () => camera,
+                                materials: () => {
+                                    const list = [];
+                                    scene.traverse((o) => { if (o.isMesh && o.material && o.material.uniforms && o.material.uniforms.u_ssaoMap) list.push(o.material); });
+                                    return list;
+                                },
+                                enabled: () => true, ssr: () => false, strength: () => Number(fxSetting('aoStrength')) || 0,
+                                // The backdrop (sky, studio, catcher) never occludes the subject.
+                                coverage: (object) => (backdropParts.builtinMaterials().indexOf(object.material) !== -1 ? 0 : 1),
+                            });
+                        }
+                        if (wantPost) {
+                            fxPost = (await loadEffect('post'))(renderer, {
+                                surface: caps.surface, getDisplayTransform: ENGINE.getDisplayTransform, getExposure: ENGINE.displayExposureScale,
+                            });
+                            fxLease = createLinearLease({ renderer, scene });
+                        }
+                    } catch (e) {
+                        console.warn('preview effects unavailable:', e);
+                    }
+                    if (!isMounted()) return bail();
+                }
                 let buildResult = content.build(host);
                 if (isThenable(buildResult)) buildResult = await buildResult;
                 if (buildResult === false) return bail();
@@ -1144,6 +1261,9 @@
         createRenderScene,
         createLinearLease,
         createPeelOrchestrator,
+        createFrameRunner,
+        createFrameLoop,
+        loadEffect,
         createDefaultCamera,
         createOrbitControls,
         shouldGateWheel,

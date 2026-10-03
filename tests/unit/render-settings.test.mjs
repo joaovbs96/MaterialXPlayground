@@ -233,3 +233,31 @@ test('transmission (P7): scalar at preview Performance/Default, rgbt only at Qua
   assert.equal(MtlxRenderSettings.set('transmission', 'scalar', { surface: 'scene' }), 'rgbt');
   assert.equal(MtlxRenderSettings.rowsFor('viewer', { ui: true }).some((r) => r.key === 'transmission'), false);
 });
+
+test('per-surface preview levels (P8): a Viewer level never moves Docs, Graph or Compare', () => {
+  const { MtlxRenderSettings: RS, store } = loadStore();
+  RS.setLevel('viewer', 'quality');
+  assert.equal(RS.getLevel('viewer'), 'quality');
+  assert.equal(RS.getLevel('docs'), 'performance');
+  assert.equal(RS.getLevel('graph'), 'performance');
+  assert.equal(RS.getLevel('compare'), 'default');
+  assert.equal(RS.get('transmission', { surface: 'viewer' }), 'rgbt');
+  for (const surface of ['docs', 'graph', 'compare', 'embed']) {
+    assert.equal(RS.get('transmission', { surface }), 'scalar', surface);
+  }
+  // An explicit per-surface value stays on that surface too.
+  RS.set('transmission', 'rgbt', { surface: 'graph' });
+  assert.equal(RS.get('transmission', { surface: 'graph' }), 'rgbt');
+  assert.equal(RS.get('transmission', { surface: 'docs' }), 'scalar');
+  RS.setLevel('graph', 'performance');
+  assert.equal(RS.get('transmission', { surface: 'graph' }), 'scalar');
+  assert.equal(RS.get('transmission', { surface: 'viewer' }), 'rgbt');
+  // Stored keys are read as before: the level keys stay per surface.
+  assert.equal(store['mtlx_quality_viewer'], 'quality');
+  const reloaded = loadStore({ store: { mtlx_quality_viewer: 'quality', mtlx_quality_docs: 'performance' } });
+  assert.equal(reloaded.MtlxRenderSettings.get('transmission', { surface: 'viewer' }), 'rgbt');
+  assert.equal(reloaded.MtlxRenderSettings.get('transmission', { surface: 'docs' }), 'scalar');
+  // Non-governed preview rows keep one shared value (transparency).
+  RS.set('transparency', true, { surface: 'viewer' });
+  assert.equal(RS.get('transparency', { surface: 'docs' }), true);
+});

@@ -10,17 +10,17 @@ One row per setting in `js/shared/render-settings.js`, one table per group. `yes
 | View Transform | yes | yes | yes | yes | yes | yes | preview: `mtlx_display_transform`<br>stage: `mtlx_scene_display_transform` |
 | Camera Exposure | yes | yes | yes | yes | yes | yes | preview: `mtlx_display_exposure`<br>stage: `mtlx_scene_display_exposure` (legacy: `mtlx_display_exposure`) |
 | Backdrop | yes | yes | yes | yes | yes | yes | preview: per view, not saved<br>stage: per view, not saved |
-| Specular anti-aliasing | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_specular_aa` |
+| Specular anti-aliasing | yes | yes | yes | yes | yes | yes | preview: quality level, not saved<br>stage: `mtlx_scene_specular_aa` |
 | Material working space | na (untagged-colour convention is Scene-only) | na (untagged-colour convention is Scene-only) | na (untagged-colour convention is Scene-only) | na (untagged-colour convention is Scene-only) | na (untagged-colour convention is Scene-only) | yes | stage: `mtlx_scene_material_workspace` |
-| HDR presentation | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_presentation` (field `enabled`) |
-| Highlight glow | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_presentation` (field `bloom`) |
-| Glow strength | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_presentation` (field `strength`) |
-| HDR view | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: per view, not saved |
-| Glow threshold | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_presentation` (field `threshold`) |
-| Glow knee | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_presentation` (field `knee`) |
-| Glow radius | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_presentation` (field `radius`) |
-| Post Antialias | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_presentation` (field `antialias`) |
-| MSAA Samples | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_presentation` (field `samples`) |
+| HDR presentation | yes | yes | yes | yes | yes | yes | preview: quality level, not saved<br>stage: `mtlx_scene_presentation` (field `enabled`) |
+| Highlight glow | yes | yes | yes | yes | yes | yes | preview: per view, not saved<br>stage: `mtlx_scene_presentation` (field `bloom`) |
+| Glow strength | yes | yes | yes | yes | yes | yes | preview: per view, not saved<br>stage: `mtlx_scene_presentation` (field `strength`) |
+| HDR view | na (an inspection view of the Scene presentation pipeline) | na (an inspection view of the Scene presentation pipeline) | na (an inspection view of the Scene presentation pipeline) | na (an inspection view of the Scene presentation pipeline) | na (an inspection view of the Scene presentation pipeline) | yes | stage: per view, not saved |
+| Glow threshold | yes | yes | yes | yes | yes | yes | preview: per view, not saved<br>stage: `mtlx_scene_presentation` (field `threshold`) |
+| Glow knee | yes | yes | yes | yes | yes | yes | preview: per view, not saved<br>stage: `mtlx_scene_presentation` (field `knee`) |
+| Glow radius | yes | yes | yes | yes | yes | yes | preview: per view, not saved<br>stage: `mtlx_scene_presentation` (field `radius`) |
+| Post Antialias | yes | yes | yes | yes | yes | yes | preview: per view, not saved<br>stage: `mtlx_scene_presentation` (field `antialias`) |
+| MSAA Samples | yes | yes | yes | yes | yes | yes | preview: per view, not saved<br>stage: `mtlx_scene_presentation` (field `samples`) |
 
 ## effects
 
@@ -31,10 +31,10 @@ One row per setting in `js/shared/render-settings.js`, one table per group. `yes
 | Height-to-Normal Texel Space | yes | yes | yes | yes | yes | yes | preview: `mtlxHeightToNormalTexel`<br>stage: `mtlxHeightToNormalTexel` |
 | Diffuse Environment Method | yes | yes | yes | yes | yes | yes | preview: `mtlx_diffuse_env`<br>stage: `mtlx_scene_diffuse_env` (legacy: `mtlx_diffuse_env`) |
 | Compound compile | na (only the Graph Editor compiles compound taps) | na (only the Graph Editor compiles compound taps) | na (only the Graph Editor compiles compound taps) | yes | na (only the Graph Editor compiles compound taps) | na (only the Graph Editor compiles compound taps) | preview: `mtlx_graph_preview_compound` |
-| Ambient occlusion | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_ao` |
+| Ambient occlusion | yes | yes | yes | yes | yes | yes | preview: quality level, not saved<br>stage: `mtlx_scene_ao` |
 | Diffuse bounce | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | yes | stage: `mtlx_scene_bounce` |
 | Local reflections | na (the Material Viewer has no per-stage local environment capture) | na (the Material Viewer has no per-stage local environment capture) | na (the Material Viewer has no per-stage local environment capture) | na (the Material Viewer has no per-stage local environment capture) | na (the Material Viewer has no per-stage local environment capture) | yes | stage: `mtlx_scene_local_reflections` |
-| Ambient occlusion strength | planned (P8) | planned (P8) | planned (P8) | planned (P8) | planned (P8) | yes | stage: `mtlx_scene_ao_strength` |
+| Ambient occlusion strength | yes | yes | yes | yes | yes | yes | preview: per view, not saved<br>stage: `mtlx_scene_ao_strength` |
 | Diffuse bounce strength | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | na (the Material Viewer has no room-scale bounce bake) | yes | stage: `mtlx_scene_bounce_strength` |
 | Local reflection strength | na (the Material Viewer has no per-stage local environment capture) | na (the Material Viewer has no per-stage local environment capture) | na (the Material Viewer has no per-stage local environment capture) | na (the Material Viewer has no per-stage local environment capture) | na (the Material Viewer has no per-stage local environment capture) | yes | stage: `mtlx_scene_local_reflections_strength` |
 | Screen-space reflections | na (SSR is Scene-only and parked) | na (SSR is Scene-only and parked) | na (SSR is Scene-only and parked) | na (SSR is Scene-only and parked) | na (SSR is Scene-only and parked) | yes | stage: `mtlx_scene_ssr` |

@@ -415,8 +415,20 @@ const setForceTransparency = (v, { persist = true } = {}) => {
 // read per material build. The embed page and the docs iframe read their own
 // level (Performance), never the Viewer's stored one.
 const previewLevelSurface = () => (window.__MTLX_EMBED_PAGE__ ? 'embed' : (window.__MTLX_EMBED ? 'docs' : 'viewer'));
-const getPreviewTransmission = () => {
-    try { return window.MtlxRenderSettings.get('transmission', { surface: previewLevelSurface() }) === 'rgbt' ? 'rgbt' : 'scalar'; } catch (e) { return 'scalar'; }
+// Preview Quality codegen (SSAO block, specular AA) for a view's surface; below
+// Quality this is PREVIEW_FEATURE_OPTIONS itself, so the sources stay identical.
+const previewSetting = (key, surface) => {
+    try { return window.MtlxRenderSettings.get(key, { surface: surface || previewLevelSurface() }); } catch (e) { return undefined; }
+};
+const previewFeatureOptions = (surface) => {
+    const ao = !!previewSetting('ao', surface), specularAA = !!previewSetting('specularAA', surface);
+    if (!ao && !specularAA) return PREVIEW_FEATURE_OPTIONS;
+    return Object.assign({}, PREVIEW_FEATURE_OPTIONS,
+        ao ? { skipOcclusion: false, skipSkyVis: true, skipAoVolume: true } : null, specularAA ? { specularAA: true } : null);
+};
+// A view's own surface (createMtlxRenderView `surface`) when given.
+const getPreviewTransmission = (surface) => {
+    try { return window.MtlxRenderSettings.get('transmission', { surface: surface || previewLevelSurface() }) === 'rgbt' ? 'rgbt' : 'scalar'; } catch (e) { return 'scalar'; }
 };
 
 // NOTE: no separate "depth peeling" setting exists, Force Transparency
@@ -7944,7 +7956,7 @@ const prewarmDisplacementSources = (srcs, isMounted, label) => {
 // generates, and pre-compiles inside ONE mxExclusive hold (so a transient
 // __pv_* wrapper is never observable by a concurrent op). NEVER call from
 // inside an existing mxExclusive (deadlock).
-const prewarmPreviewTarget = async ({ mx, gen, genContext, buildRenderable, label, isMounted = () => true }) => {
+const prewarmPreviewTarget = async ({ mx, gen, genContext, buildRenderable, label, isMounted = () => true, surface = null }) => {
     // No warm context (no WebGL2 / no KHR_parallel_shader_compile) means
     // generating sources here would only be thrown away, skip the work.
     if (!getWarmContext()) return 'skipped';
@@ -7957,8 +7969,8 @@ const prewarmPreviewTarget = async ({ mx, gen, genContext, buildRenderable, labe
             try {
                 return generatePreviewSourcesUnlocked({
                     mx, gen, genContext, renderable: built.renderable, label, isMounted,
-                    stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, sceneFeatureOptions: PREVIEW_FEATURE_OPTIONS,
-                    transmission: getPreviewTransmission(),
+                    stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, sceneFeatureOptions: previewFeatureOptions(surface),
+                    transmission: getPreviewTransmission(surface),
                 });
             } finally {
                 // Best-effort, ALWAYS: the transient __pv_* wrappers must
@@ -8219,7 +8231,9 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // never generated. The kill switch forces both back to "generate".
     const featureGated = readFeatureGated();
     const skipShadowMap = featureGated && !!(sceneFeatureOptions && sceneFeatureOptions.skipShadowMap);
-    const skipOcclusion = featureGated && !!(sceneFeatureOptions && sceneFeatureOptions.skipOcclusion);
+    // skipSsao: the preview's budget drop of its only occlusion term (sky/volume are skipped there).
+    const skipOcclusion = (featureGated && !!(sceneFeatureOptions && sceneFeatureOptions.skipOcclusion))
+        || !!(sceneFeatureOptions && sceneFeatureOptions.skipSsao);
     // Screen-space reflections are parked (see SCENE_SSR_PARKED in the renderer): skip the patch.
     const skipSsr = true || !!(sceneFeatureOptions && sceneFeatureOptions.skipSsr);
     const skipLocalEnv = !!(sceneFeatureOptions && sceneFeatureOptions.skipLocalEnv);
@@ -8718,6 +8732,8 @@ const DEFAULT_SAMPLER_BUDGET = 16;
 const joinWithAnd = (items) => (items.length <= 1 ? items.join('')
     : items.slice(0, -1).join(', ') + ' and ' + items[items.length - 1]);
 const SAMPLER_BUDGET_DROP_ORDER = [
+    // Preview Quality SSAO goes first; the Scene's loop skips previewOnly entries.
+    { key: 'skipSsao', label: 'screen-space AO (u_ssaoMap)', userLabel: 'ambient occlusion', previewOnly: true },
     // Parked with screen-space reflections (always skipped for now).
     // { key: 'skipSsr', label: 'screen-space reflection (u_opaqueColor)' },
     { key: 'skipLocalEnv', label: 'local reflection capture (u_localEnvRadiance)', userLabel: 'local reflections' },
@@ -8728,6 +8744,8 @@ const SAMPLER_BUDGET_DROP_ORDER = [
     { key: 'skipTransmittance', label: 'shadow transmittance (u_shadowTransmittance)', userLabel: 'colored shadows through transparent materials' },
     { key: 'skipRefraction', label: 'refraction colour (u_opaqueColor)', userLabel: 'refraction' },
 ];
+
+const SCENE_SAMPLER_DROPS = SAMPLER_BUDGET_DROP_ORDER.filter((d) => !d.previewOnly);
 
 // One accurate sentence for a material that ran out of texture units:
 // what it needed, where those samplers came from, and what was turned off.
@@ -8746,7 +8764,9 @@ const generatePreviewSourcesWithinBudget = async (args) => {
     // A key the caller already gated off (e.g. PREVIEW_FEATURE_OPTIONS'
     // skipLocalEnv/skipBounce) is a no-op drop here: trying it again wastes
     // a regeneration and would name a feature the preview never had.
-    const candidates = SAMPLER_BUDGET_DROP_ORDER.filter((d) => !(baseFeatureOptions && baseFeatureOptions[d.key]));
+    const candidates = SAMPLER_BUDGET_DROP_ORDER.filter((d) => !(baseFeatureOptions && baseFeatureOptions[d.key])
+        // skipSsao only means something while the occlusion block is generated.
+        && !(d.key === 'skipSsao' && (!baseFeatureOptions || baseFeatureOptions.skipOcclusion)));
     const appliedOptions = Object.assign({}, baseFeatureOptions);
     let srcs = await generatePreviewSources(Object.assign({}, args, { sceneFeatureOptions: appliedOptions }));
     if (!srcs) return null;
@@ -8808,8 +8828,8 @@ const compileMtlxSceneMaterial = async ({ mx, gen, genContext, renderable, label
         samplerInfo = countFragmentSamplers(srcs.fs);
         if (!neededInfo) neededInfo = samplerInfo;
         if (samplerInfo.count <= budget) break;
-        if (attempt >= SAMPLER_BUDGET_DROP_ORDER.length) break; // hooks exhausted, still over
-        dropped.push(SAMPLER_BUDGET_DROP_ORDER[attempt]);
+        if (attempt >= SCENE_SAMPLER_DROPS.length) break; // hooks exhausted, still over
+        dropped.push(SCENE_SAMPLER_DROPS[attempt]);
     }
     const declared = parseUniforms(srcs.vs).concat(parseUniforms(srcs.fs));
     const overBudget = samplerInfo.count > budget;
@@ -9909,8 +9929,8 @@ const tryRefreshRenderView = async ({ view, mx, gen, genContext, renderable, lab
         // Same generation options the live view was built with, else the
         // byte compare below can never match.
         srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, materialName, isMounted,
-            stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, sceneFeatureOptions: PREVIEW_FEATURE_OPTIONS,
-            transmission: getPreviewTransmission(),
+            stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, sceneFeatureOptions: previewFeatureOptions(view && view.renderSurface),
+            transmission: getPreviewTransmission(view && view.renderSurface),
             allowConstInputs: view ? view.allowConstInputs !== false : true });
     } catch (e) {
         return { refreshed: false, srcs: null };
@@ -11004,7 +11024,11 @@ const createPreviewContent = ({
     // Highest triangle count this view's subdivided preview mesh may reach;
     // window.__mtlxTriangleBudgetOverride (test hook) wins at each use.
     triangleBudget = PREVIEW_TRIANGLE_BUDGET,
+    // Settings surface whose quality level this view follows (viewer, compare,
+    // docs, graph, embed); defaults from the host.
+    surface = null,
 }) => {
+    const renderSurface = surface || previewLevelSurface();
     // 'shaderball-scene' -> full authored GLB scene with its detached camera;
     // 'shaderball' -> ball-only GLB; anything else -> sphere/cube path.
     const sceneMode = geomName === 'shaderball-scene' ? 'full'
@@ -11617,14 +11641,16 @@ const createPreviewContent = ({
             sceneEnvironment: !!sceneInst,
             autoRotate: !fullScene && !flat2d,
             camera: flat2d ? 'ortho' : (fullScene && !sceneOrbit ? 'fixed' : 'orbit'),
+            // Settings surface the session reads its preview Quality effects from.
+            surface: renderSurface,
         }),
         // Codegen, then the driver pre-warm BEFORE the display renderer
         // exists (the old after-renderer placement stalled WebGLRenderer init).
         prepare: async (h) => {
             host = h;
             const srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, materialName, isMounted,
-                stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, sceneFeatureOptions: PREVIEW_FEATURE_OPTIONS, allowConstInputs,
-                transmission: getPreviewTransmission() });
+                stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, sceneFeatureOptions: previewFeatureOptions(renderSurface), allowConstInputs,
+                transmission: getPreviewTransmission(renderSurface) });
             if (!srcs) return false;
             firstSrcs = srcs;
             prewarmDisplacementSources(srcs, isMounted, label);
@@ -11865,8 +11891,8 @@ const createPreviewContent = ({
                 // A caller switching materials passes the new material's name.
                 const genMaterialName = applyMaterialName !== undefined ? applyMaterialName : materialName;
                 srcs = await generatePreviewSourcesWithinBudget({ mx, gen, genContext, renderable, label, materialName: genMaterialName, isMounted,
-                    stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, sceneFeatureOptions: PREVIEW_FEATURE_OPTIONS, allowConstInputs,
-                    transmission: getPreviewTransmission() });
+                    stageLightCount: PREVIEW_STAGE_LIGHT_COUNT, sceneFeatureOptions: previewFeatureOptions(renderSurface), allowConstInputs,
+                    transmission: getPreviewTransmission(renderSurface) });
             }
             // A thrown generation error is NOT caught here, it
             // propagates like a first-build failure, so the UI shows
@@ -11965,7 +11991,7 @@ const createPreviewContent = ({
         // Handle data fields at publish time; the first-build displacement
         // notices ran before the handle existed, so fold them in now.
         fields: () => ({
-            uniforms, introspected: firstSrcs.introspected, vs: firstSrcs.vs, fs: firstSrcs.fs, allowConstInputs,
+            uniforms, introspected: firstSrcs.introspected, vs: firstSrcs.vs, fs: firstSrcs.fs, allowConstInputs, renderSurface,
             isTransparent: !!firstSrcs.transparent,
             notices: (materialNotices = firstSrcs.notices || []).concat(currentDispNotices()),
             // bindDroppedTextures routes through the view's own session.

@@ -1438,7 +1438,7 @@
                                 view = await createMtlxRenderView({
                                     canvas, mx, gen, genContext, renderable: built.renderable, lightData,
                                     materialName: built.materialName || null,
-                                    label: built.label || parsed.label,
+                                    label: built.label || parsed.label, surface: 'graph',
                                     needsLighting: true,
                                     geomName: wantGeom,
                                     // 3D geometries orbit by default; the full scene opts

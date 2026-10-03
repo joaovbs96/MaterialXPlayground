@@ -1125,7 +1125,7 @@
 
                         const buildView = () => createMtlxRenderView({
                             canvas, mx, gen, genContext, renderable, lightData,
-                            label: nodeName,
+                            label: nodeName, surface: 'docs',
                             // Many small previews mount at once; a tighter
                             // budget keeps displaced subdivision cheap here.
                             triangleBudget: 250000,
@@ -1233,7 +1233,7 @@
                                 try {
                                     const sourceView = await createMtlxRenderView({
                                         canvas: srcCanvas, mx, gen, genContext, renderable: sourceRenderable, lightData,
-                                        label: nodeName + ' (source)',
+                                        label: nodeName + ' (source)', surface: 'docs',
                                         triangleBudget: 250000,
                                         needsLighting,
                                         geomName: geom,
