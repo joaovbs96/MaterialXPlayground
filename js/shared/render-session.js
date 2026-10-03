@@ -96,7 +96,9 @@
     // Acquires the WebGL2 context and sets up display transform, in
     // the same order createMtlxRenderView ran inline, so program state
     // and the PMREM bake downstream stay byte-identical.
-    const acquireRenderer = ({ canvas, wantsStudio, maxPixelRatio, width, height }) => {
+    // The Scene passes no size (its resize() sizes the buffer) and its own
+    // display mode/exposure; the preview uses the engine-global display.
+    const acquireRenderer = ({ canvas, wantsStudio, maxPixelRatio, width, height, display = null }) => {
         const THREE = window.THREE;
         // Acquire WebGL2 ourselves and pass it via `context`, so three
         // skips its own getContext('webgl2')-then-'webgl' fallback: a
@@ -128,21 +130,14 @@
             renderer.shadowMap.enabled = true;
             renderer.shadowMap.type = THREE.VSMShadowMap;
         }
-        renderer.setSize(width, height, false);
+        if (width != null && height != null) renderer.setSize(width, height, false);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxPixelRatio));
         renderer.debug.checkShaderErrors = true;
         // No-ops for the RawShaderMaterial surface (encodeDisplay bakes
         // its transform in); set here for the ordinary three materials
         // (skybox, backplanes, neutral glTF parts) so both agree.
-        const displayMode = ENGINE.getDisplayTransform();
-        // CustomToneMapping carries our own chunk (applyThreeToneMappingChunk),
-        // so these materials run the SAME curve and exposure as the
-        // MaterialX surface instead of only agreeing in 'aces'.
-        const customTone = ENGINE.applyThreeToneMappingChunk(displayMode);
-        if ('outputEncoding' in renderer) renderer.outputEncoding = displayMode === 'lin_rec709' ? THREE.LinearEncoding : THREE.sRGBEncoding;
-        renderer.toneMapping = customTone ? THREE.CustomToneMapping
-            : (displayMode === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping);
-        renderer.toneMappingExposure = ENGINE.displayExposureScale();
+        if (display) applyRendererDisplay(renderer, display.mode, display.exposure);
+        else applyRendererDisplay(renderer, ENGINE.getDisplayTransform(), ENGINE.displayExposureScale());
         // Hoisted once the renderer exists: gates u_peelLinear binding,
         // peel-layer/accum half-float storage, and finalMat's shader
         // choice, all from this one extension check (see allocPeel).
@@ -150,7 +145,81 @@
         return { renderer, gl, onGlLost, onGlRestored, peelLinearOk };
     };
 
+    // Renderer output for the built-in three materials. CustomToneMapping
+    // carries our own chunk (applyThreeToneMappingChunk), so they run the SAME
+    // curve and exposure as the MaterialX surfaces, not only in 'aces'.
+    const applyRendererDisplay = (renderer, mode, exposure) => {
+        const THREE = window.THREE;
+        const customTone = ENGINE.applyThreeToneMappingChunk(mode);
+        if ('outputEncoding' in renderer) renderer.outputEncoding = mode === 'lin_rec709' ? THREE.LinearEncoding : THREE.sRGBEncoding;
+        renderer.toneMapping = customTone ? THREE.CustomToneMapping
+            : (mode === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping);
+        renderer.toneMappingExposure = exposure;
+    };
+
     const createRenderScene = () => new window.THREE.Scene();
+
+    // Frame-scoped linear output (the Scene's HDR frame and nested peel
+    // passes): begin(switchMaterialX) returns a release, the outermost one
+    // restores materials and renderer output; begin.isActive() for diagnostics.
+    const createLinearLease = ({ renderer, scene }) => {
+        let state = null;
+        const begin = (switchMaterialX = true) => {
+            const THREE = window.THREE;
+            if (state) {
+                state.depth++;
+            } else {
+                state = {
+                    depth: 1, toneMapping: renderer.toneMapping,
+                    outputEncoding: renderer.outputEncoding, materials: new Map(),
+                };
+                scene.traverse((object) => {
+                    const list = object && object.material
+                        ? (Array.isArray(object.material) ? object.material : [object.material]) : [];
+                    list.forEach((material) => {
+                        if (!material || state.materials.has(material)) return;
+                        const u = material.uniforms || {};
+                        state.materials.set(material, {
+                            toneMapped: material.toneMapped,
+                            linearOut: u.uLinearOut ? u.uLinearOut.value : undefined,
+                            peelLinear: switchMaterialX && u.u_peelLinear ? u.u_peelLinear.value : undefined,
+                        });
+                        // Raw MaterialX includes opaque/emissive materials,
+                        // not just the transparent set processed by peeling.
+                        if (switchMaterialX && u.u_peelLinear) u.u_peelLinear.value = 1;
+                        if (u.uLinearOut) u.uLinearOut.value = 1;
+                        if (!material.isRawShaderMaterial && material.toneMapped) {
+                            material.toneMapped = false;
+                            material.needsUpdate = true;
+                        }
+                    });
+                });
+                renderer.toneMapping = THREE.NoToneMapping;
+                renderer.outputEncoding = THREE.LinearEncoding;
+            }
+            let released = false;
+            return () => {
+                if (released) return;
+                released = true;
+                if (!state || --state.depth > 0) return;
+                const done = state;
+                state = null;
+                done.materials.forEach((value, material) => {
+                    if (material.toneMapped !== value.toneMapped) {
+                        material.toneMapped = value.toneMapped;
+                        material.needsUpdate = true;
+                    }
+                    const u = material.uniforms || {};
+                    if (u.uLinearOut && value.linearOut !== undefined) u.uLinearOut.value = value.linearOut;
+                    if (u.u_peelLinear && value.peelLinear !== undefined) u.u_peelLinear.value = value.peelLinear;
+                });
+                renderer.toneMapping = done.toneMapping;
+                renderer.outputEncoding = done.outputEncoding;
+            };
+        };
+        begin.isActive = () => !!state;
+        return begin;
+    };
 
     // Filters ONE benign Windows ANGLE warning (X4008 division by zero,
     // harmless), matched by exact signature. debugShaders sends filtered
@@ -969,7 +1038,9 @@
         HANDLE_CONTRACT,
         buildHandle,
         acquireRenderer,
+        applyRendererDisplay,
         createRenderScene,
+        createLinearLease,
         createDefaultCamera,
         createOrbitControls,
         shouldGateWheel,

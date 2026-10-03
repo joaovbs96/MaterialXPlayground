@@ -56,26 +56,16 @@ test('window.MtlxStudio exposes the same key set as before the move', () => {
   assert.deepEqual(Object.keys(MtlxStudio).sort(), expected.sort());
 });
 
-test('studioFloorPolarLimit matches the Scene\'s own copy (js/usd-scene-renderer.js)', () => {
+// The Scene's private studioFloorPolarLimit was deleted in P6 S2 (it calls
+// this shared one); its behaviour is pinned by usd-scene-floor-clamp.test.mjs.
+test('keyLightDirection rotates by -rad about Y, like the Scene\'s old inline copies', () => {
+  const calls = [];
+  class Matrix4 { makeRotationY(r) { this.r = r; return this; } }
+  const sandbox = { window: { THREE: { Matrix4 } } };
+  vm.createContext(sandbox);
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-  const source = fs.readFileSync(path.join(root, 'js', 'usd-scene-renderer.js'), 'utf8');
-  const start = source.indexOf('const studioFloorPolarLimit =');
-  const end = source.indexOf('// Turntable/GIF capture state', start);
-  assert.ok(start >= 0 && end > start, 'the Scene\'s studioFloorPolarLimit is present');
-  const context = {};
-  vm.runInNewContext(
-    source.slice(start, end) + '\nthis.studioFloorPolarLimit = studioFloorPolarLimit;',
-    context, { filename: 'usd-scene-renderer.js' });
-  const sceneVersion = context.studioFloorPolarLimit;
-
-  const { MtlxRender } = loadRenderEnvironment();
-  const cases = [
-    [Math.PI * 0.54, 0, 0, 1, 10],
-    [Math.PI * 0.54, -0.5, 0.25, 2, 5],
-    [Math.PI * 0.54, 1, 0, 1, 0.0001],
-    [Math.PI * 0.54, NaN, 0, 1, 5],
-  ];
-  for (const args of cases) {
-    assert.equal(MtlxRender.studioFloorPolarLimit(...args), sceneVersion(...args));
-  }
+  vm.runInContext(fs.readFileSync(path.join(root, 'js', 'shared', 'render-environment.js'), 'utf8'), sandbox);
+  const direction = { clone() { return { applyMatrix4(m) { calls.push(m.r); return 'rotated'; } }; } };
+  assert.equal(sandbox.window.MtlxRender.keyLightDirection({ direction }, 0.75), 'rotated');
+  assert.deepEqual(calls, [-0.75]);
 });

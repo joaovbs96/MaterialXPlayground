@@ -6,6 +6,8 @@
     // historically fixed, only this one rotates). RotY(-rad): env content
     // shifts by +rad, so the light direction shifts by -rad to match.
     const keyLightRotationMatrix = (rad) => new window.THREE.Matrix4().makeRotationY(-rad);
+    // World direction of an extracted key light under an env rotation.
+    const keyLightDirection = (keyLight, rad) => keyLight.direction.clone().applyMatrix4(keyLightRotationMatrix(rad));
 
     // Skybox <-> IBL rotation calibration, derived from u_envMatrix and
     // MaterialX's longitude convention: rotation.y = PI - rad matches
@@ -935,6 +937,7 @@ void main() {
 
     window.MtlxRender = Object.assign(window.MtlxRender || {}, {
         keyLightRotationMatrix,
+        keyLightDirection,
         createPreviewBackdrop,
         createStageEnvironment,
         studioFloorPolarLimit,

@@ -3,6 +3,9 @@
 // Renderer for the extracted USD scene snapshot. The USD parser/worker owns
 // composition and produces typed mesh data; this module owns one Three.js
 // renderer, per-object transforms, and MaterialX material instances.
+// One IIFE (P6): the body stays unindented so source-sliced unit tests keep
+// their anchors; only the window exports at the bottom leave it.
+(() => {
 
 // Formats the engine's exr/hdr/tif loaders decode whole (never resized by
 // createImageBitmap, unlike the bounded PNG/JPEG path). Single source of
@@ -1245,10 +1248,9 @@ const mxLatlongProjectionJS = (nx, ny, nz) => {
 // canonical.md (2026-09-20) proved reproduces the GPU to 0.7 percent.
 //
 // keyDirWorld, when supplied, must be the SAME already-rotated key light
-// direction the ordinary light loop uses (env.keyLight.direction.clone()
-// .applyMatrix4(new THREE.Matrix4().makeRotationY(-envRotationRad)), see
-// the call sites below): passed in rather than re-derived from envMatrix's
-// own rotation (a different construction, makeRotationY(Math.PI/2 +
+// direction the ordinary light loop uses (MtlxRender.keyLightDirection(
+// env.keyLight, envRotationRad), see the call sites below): passed in
+// rather than re-derived from envMatrix's own rotation (a different construction, makeRotationY(Math.PI/2 +
 // envRotationRad)) to avoid a second, error-prone decomposition of the
 // same angle.
 //
@@ -1564,6 +1566,8 @@ const createMtlxSceneView = async ({
     canvas.style.outline = 'none';
     container.appendChild(canvas);
     let renderer = null;
+    // acquireRenderer's mtlx-gl-context listeners, removed with the renderer.
+    let rendererGlListeners = null;
     let environmentBridge = null;
     let controls = null;
     // Depth-peel OIT pipeline (js/mtlx-engine.js createPeelPipeline) and its
@@ -1659,15 +1663,6 @@ const createMtlxSceneView = async ({
         if (!(far > near)) far = Math.max(1000000 * meters, near * 2);
         return { near, far };
     };
-    // Polar angle (radians from +Y) at which the eye touches the floor
-    // plane, given the orbit target's height above it. Pure: see
-    // tests/unit/usd-scene-floor-clamp.test.mjs.
-    const studioFloorPolarLimit = (maxPolar, floorY, clearance, targetY, distance) => {
-        if (!Number.isFinite(floorY) || !Number.isFinite(targetY)) return maxPolar;
-        if (!Number.isFinite(distance) || distance <= 1e-3) return maxPolar;
-        const rel = (floorY + (Number(clearance) || 0)) - targetY;
-        return Math.min(maxPolar, Math.acos(Math.max(-1, Math.min(1, rel / distance))));
-    };
     // Mirrors the material viewer's applyStudioPolarClamp (js/mtlx-
     // engine.js:4804-4819): the orbit target sits above the floor, so a
     // fixed dip below the horizon drops the eye through the floor once the
@@ -1685,7 +1680,8 @@ const createMtlxSceneView = async ({
         if (floorY == null) return;
         const clearance = environmentBridge.getFloorClearance ? environmentBridge.getFloorClearance() : 0;
         const dist = camera.position.distanceTo(controls.target);
-        const limit = studioFloorPolarLimit(maxPolar, floorY, clearance, controls.target.y, dist);
+        // Shared floor-touch polar angle (js/shared/render-environment.js).
+        const limit = window.MtlxRender.studioFloorPolarLimit(maxPolar, floorY, clearance, controls.target.y, dist);
         if (!orbitFloorClamp) {
             const cosPolar = dist > 1e-9 ? (camera.position.y - controls.target.y) / dist : 1;
             if (Math.acos(Math.max(-1, Math.min(1, cosPolar))) > limit + 1e-9) {
@@ -2114,7 +2110,12 @@ const createMtlxSceneView = async ({
     let mxEnv = null;
     let domeLight = null;
     let domeEnv = null;
+    // The dome's tilt applies only while the dome is the active environment.
+    let domeTilt = null;
     let envTilt = null;
+    // True while the stage's dome is the active environment: global env
+    // broadcasts (LIVE_VIEWS) then leave it alone unless sent with {user:true}.
+    let domeActive = false;
     let stageLights = [];
     // Stage-light slots a generated shader must reserve, rounded up to a
     // tier by the engine. convertLights hands the whole budget out across
@@ -3541,7 +3542,9 @@ const scenePruneUnreachableNodes = (xml) => {
                 env = domeResult.env;
                 domeEnv = domeResult.env;
                 domeLight = domeResult.descriptor;
-                envTilt = domeResult.tilt || null;
+                domeTilt = domeResult.tilt || null;
+                envTilt = domeTilt;
+                domeActive = true;
             }
         }
         // Splitting an area light across its surface needs to know how far it
@@ -5063,8 +5066,7 @@ const scenePruneUnreachableNodes = (xml) => {
             // against local emitters by irradiance.
             const envKey = env && env.keyLight;
             if (envKey && envKey.direction) {
-                const keyDirection = envKey.direction.clone()
-                    .applyMatrix4(new THREE.Matrix4().makeRotationY(-envRotationRad));
+                const keyDirection = window.MtlxRender.keyLightDirection(envKey, envRotationRad);
                 const keyIntensity = Math.max(0, Number(envKey.intensity) || 0) * (Number.isFinite(envExposure) ? envExposure : 1);
                 // An exhausted environment contribution must not consume one
                 // of the bounded caster slots.  This also keeps env exposure
@@ -5091,7 +5093,7 @@ const scenePruneUnreachableNodes = (xml) => {
             // those stages a shadow at all.
             if (!ranked.length) {
                 const keyDir = env && env.keyLight && env.keyLight.direction
-                    ? env.keyLight.direction.clone().applyMatrix4(new THREE.Matrix4().makeRotationY(-envRotationRad)) : null;
+                    ? window.MtlxRender.keyLightDirection(env.keyLight, envRotationRad) : null;
                 const keyEnergy = env && env.keyLight
                     ? Math.max(0, Number(env.keyLight.intensity) || 0) * Math.max(0, Number(envExposure) || 0) : 0;
                 if (!keyDir || keyEnergy <= 0) {
@@ -6156,7 +6158,7 @@ const scenePruneUnreachableNodes = (xml) => {
             const rotRad = typeof envRotationRad !== 'undefined' ? envRotationRad : 0;
             const envMatrix = new THREE.Matrix4().makeRotationY(Math.PI / 2 + rotRad);
             const keyDirWorld = (env && env.keyLight && env.keyLight.direction)
-                ? env.keyLight.direction.clone().applyMatrix4(new THREE.Matrix4().makeRotationY(-rotRad))
+                ? window.MtlxRender.keyLightDirection(env.keyLight, rotRad)
                 : null;
             const eStored = makeEStoredSampler(env, exposure, envMatrix, keyDirWorld);
             if (!eStored) return null;
@@ -6510,14 +6512,7 @@ const scenePruneUnreachableNodes = (xml) => {
             updateRendererDisplayTransform();
         };
         const updateRendererDisplayTransform = () => {
-            const mode = sceneDisplayTransform;
-            const custom = window.applyThreeToneMappingChunk && window.applyThreeToneMappingChunk(mode);
-            if ('outputEncoding' in renderer) renderer.outputEncoding = mode === 'lin_rec709' ? THREE.LinearEncoding : THREE.sRGBEncoding;
-            if ('toneMapping' in renderer) {
-                renderer.toneMapping = custom ? THREE.CustomToneMapping
-                    : (mode === 'aces' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping);
-                renderer.toneMappingExposure = sceneExposureScale();
-            }
+            window.MtlxRender.applyRendererDisplay(renderer, sceneDisplayTransform, sceneExposureScale());
             // The chunk is a compile-time include, so a mode change needs the
             // built-ins recompiled; three r128's needsProgramChange never fires
             // on a toneMapping-only change.
@@ -6539,118 +6534,27 @@ const scenePruneUnreachableNodes = (xml) => {
                 environmentBridge.refreshDisplayTransform();
             }
         };
-        // Acquire WebGL2 ourselves so three never silently falls back to
-        // a WebGL1 context on this canvas, which would poison it for good.
-        const gl = canvas.getContext('webgl2', { antialias: true, alpha: true, depth: true, stencil: true,
-            premultipliedAlpha: true, preserveDrawingBuffer: false, powerPreference: 'default', failIfMajorPerformanceCaveat: false });
-        if (!gl) {
-            throw new Error('WebGL2 context could not be created for this preview (the browser refused WebGL2). Reload the tab or check the browser GPU settings.');
-        }
-        renderer = new THREE.WebGLRenderer({ canvas, context: gl, antialias: true, alpha: true });
-        // r128's blend-state cache otherwise corrupts VSM and PMREM passes;
-        // see js/mtlx-engine.js:4290-4292 for the same reset after construction.
-        renderer.resetState();
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        // Shared WebGL2 acquisition (js/shared/render-session.js): same context
+        // options and resetState(); no size (resize() owns it) and the
+        // Scene's own display mode and exposure.
+        const acquired = window.MtlxRender.acquireRenderer({
+            canvas, wantsStudio: false, maxPixelRatio: 2,
+            display: { mode: sceneDisplayTransform, exposure: sceneExposureScale() },
+        });
+        renderer = acquired.renderer;
+        rendererGlListeners = { onGlLost: acquired.onGlLost, onGlRestored: acquired.onGlRestored };
         renderer.setClearColor(0x111827, 1);
-        const snapshotRendererDestination = () => {
-            const gl = renderer.getContext();
-            return {
-                target: renderer.getRenderTarget(),
-                viewport: renderer.getViewport(new THREE.Vector4()),
-                actualViewport: renderer.getCurrentViewport(new THREE.Vector4()),
-                scissor: renderer.getScissor(new THREE.Vector4()),
-                actualScissor: new THREE.Vector4().fromArray(gl.getParameter(gl.SCISSOR_BOX)),
-                scissorTest: renderer.getScissorTest(),
-                actualScissorTest: gl.isEnabled(gl.SCISSOR_TEST),
-                face: renderer.getActiveCubeFace(),
-                mip: renderer.getActiveMipmapLevel(),
-            };
-        };
-        const restoreRendererDestination = (state) => {
-            renderer.setViewport(state.viewport);
-            renderer.setScissor(state.scissor);
-            renderer.setScissorTest(state.scissorTest);
-            if (!state.target) { renderer.setRenderTarget(null); return; }
-            const target = state.target;
-            const viewport = target.viewport.clone();
-            const scissor = target.scissor.clone();
-            const scissorTest = target.scissorTest;
-            target.viewport.copy(state.actualViewport);
-            target.scissor.copy(state.actualScissor);
-            target.scissorTest = state.actualScissorTest;
-            try {
-                renderer.setRenderTarget(target, state.face, state.mip);
-            } finally {
-                target.viewport.copy(viewport);
-                target.scissor.copy(scissor);
-                target.scissorTest = scissorTest;
-            }
-        };
+        // The engine's render-destination snapshot (viewport, scissor, cube face, mip).
+        const snapshotRendererDestination = () => window.snapshotRenderDestination(renderer);
+        const restoreRendererDestination = (state) => window.restoreRenderDestination(renderer, state);
         // Same fallback as updateRendererDisplayTransform: without it a missing
         // getDisplayTransform left outputEncoding at Linear while the shaders
         // still emitted sRGB, so objects and backdrop disagreed.
         updateRendererDisplayTransform();
-        // The Scene uses the float linear composite when the GPU exposes
-        // EXT_color_buffer_float. MaterialX layers and the built-in backdrop
-        // are then transformed exactly once by the final composite quad.
-        // Viewer parity remains in createMtlxRenderView, which supplies its
-        // own transform/exposure callbacks.
-        // A frame-scoped lease, not a global boolean. The outer HDR frame
-        // and nested peel passes may independently acquire/release linear
-        // output without ending each other's transaction.
-        let sceneLinearState = null;
-        const beginSceneLinear = (switchMaterialX = true) => {
-            if (sceneLinearState) {
-                sceneLinearState.depth++;
-            } else {
-                sceneLinearState = {
-                    depth: 1, toneMapping: renderer.toneMapping,
-                    outputEncoding: renderer.outputEncoding, materials: new Map(),
-                };
-                scene.traverse((object) => {
-                    const list = object && object.material
-                        ? (Array.isArray(object.material) ? object.material : [object.material]) : [];
-                    list.forEach((material) => {
-                        if (!material || sceneLinearState.materials.has(material)) return;
-                        const u = material.uniforms || {};
-                        sceneLinearState.materials.set(material, {
-                            toneMapped: material.toneMapped,
-                            linearOut: u.uLinearOut ? u.uLinearOut.value : undefined,
-                            peelLinear: switchMaterialX && u.u_peelLinear ? u.u_peelLinear.value : undefined,
-                        });
-                        // Raw MaterialX includes opaque/emissive materials,
-                        // not just the transparent set processed by peeling.
-                        if (switchMaterialX && u.u_peelLinear) u.u_peelLinear.value = 1;
-                        if (u.uLinearOut) u.uLinearOut.value = 1;
-                        if (!material.isRawShaderMaterial && material.toneMapped) {
-                            material.toneMapped = false;
-                            material.needsUpdate = true;
-                        }
-                    });
-                });
-                renderer.toneMapping = THREE.NoToneMapping;
-                renderer.outputEncoding = THREE.LinearEncoding;
-            }
-            let released = false;
-            return () => {
-                if (released) return;
-                released = true;
-                if (!sceneLinearState || --sceneLinearState.depth > 0) return;
-                const state = sceneLinearState;
-                sceneLinearState = null;
-                state.materials.forEach((value, material) => {
-                    if (material.toneMapped !== value.toneMapped) {
-                        material.toneMapped = value.toneMapped;
-                        material.needsUpdate = true;
-                    }
-                    const u = material.uniforms || {};
-                    if (u.uLinearOut && value.linearOut !== undefined) u.uLinearOut.value = value.linearOut;
-                    if (u.u_peelLinear && value.peelLinear !== undefined) u.u_peelLinear.value = value.peelLinear;
-                });
-                renderer.toneMapping = state.toneMapping;
-                renderer.outputEncoding = state.outputEncoding;
-            };
-        };
+        // Frame-scoped linear lease (float composite, display transform applied
+        // once by the final quad): the outer HDR frame and nested peel passes
+        // acquire and release it independently.
+        const beginSceneLinear = window.MtlxRender.createLinearLease({ renderer, scene });
         peelPipeline = window.createPeelPipeline ? window.createPeelPipeline(renderer, {
             getDisplayTransform: () => sceneDisplayTransform,
             getDisplayExposure: () => (sceneExposureScale()),
@@ -6720,8 +6624,9 @@ const scenePruneUnreachableNodes = (xml) => {
         const meters = Number(stage.metersPerUnit);
         if (Number.isFinite(meters) && meters > 0) sceneRoot.scale.setScalar(meters);
         scene.add(sceneRoot);
-        if (window.createUsdSceneEnvironment) {
-            environmentBridge = window.createUsdSceneEnvironment({ scene, renderer, camera, contentRoot: sceneRoot });
+        // Stage backdrop, studio and sky (js/shared/render-environment.js).
+        if (window.MtlxRender && window.MtlxRender.createStageEnvironment) {
+            environmentBridge = window.MtlxRender.createStageEnvironment({ scene, renderer, camera, contentRoot: sceneRoot });
             if (env) environmentBridge.setEnvironment(env);
             if (domeLight) {
                 environmentBridge.setEnvRotation(envRotationRad);
@@ -7014,6 +6919,8 @@ const scenePruneUnreachableNodes = (xml) => {
         const applyDomeLight = () => {
             if (!domeEnv || !domeLight || stopped) return false;
             env = domeEnv;
+            envTilt = domeTilt;
+            domeActive = true;
             if (environmentBridge && environmentBridge.setEnvironment) environmentBridge.setEnvironment(domeEnv);
             setEnvRotation(sceneDomeYawDegFromRotation(domeLight.rotationDeg) * Math.PI / 180);
             setEnvExposure(domeLight.exposure);
@@ -7822,7 +7729,16 @@ const scenePruneUnreachableNodes = (xml) => {
             });
         }
         startLoop();
-        const setEnvironment = (next) => {
+        // Public setter: leaving the dome clears its tilt. Internal re-applies
+        // (key light refresh) keep the dome via applyEnvironment.
+        const setEnvironment = (next, opts) => {
+            if (!next || stopped) return false;
+            if (domeActive && !(opts && opts.user)) return false;
+            domeActive = false;
+            envTilt = null;
+            return applyEnvironment(next);
+        };
+        const applyEnvironment = (next) => {
             if (!next || stopped) return false;
             env = sceneKeyEnv(next);
             if (environmentBridge && environmentBridge.setEnvironment) environmentBridge.setEnvironment(env);
@@ -8388,7 +8304,7 @@ const scenePruneUnreachableNodes = (xml) => {
             setTriangleLimits,
             applySceneSettings,
             refreshDisplacement,
-            refreshKeyLight: () => { if (!stopped && env) setEnvironment(env); },
+            refreshKeyLight: () => { if (!stopped && env) applyEnvironment(env); },
             whenDisplacementSettled: () => sceneRebuildQueue.whenSettled(),
             getTextureStats: () => ({
                 textureMaxSize: sceneOptions.textureMaxSize,
@@ -8751,7 +8667,8 @@ const scenePruneUnreachableNodes = (xml) => {
                 if (presentationPipeline) { try { presentationPipeline.dispose(); } catch (e) {} }
                 if (peelPipeline) { try { peelPipeline.dispose(); } catch (e) {} }
                 if (window.unregisterLiveView) window.unregisterLiveView(handle);
-                try { renderer.dispose(); } catch (e) {}
+                // Listeners go first: forceContextLoss below fires webglcontextlost.
+                try { window.MtlxRender.disposeRendererCore(Object.assign({ canvas, renderer }, rendererGlListeners)); } catch (e) {}
                 // Releases the WebGL context immediately instead of waiting
                 // for GC, so a torn-down scene frees GPU memory right away.
                 try { renderer.forceContextLoss(); } catch (e) {}
@@ -8771,7 +8688,7 @@ const scenePruneUnreachableNodes = (xml) => {
                 ssr: { historyTarget: ssrHistoryTarget, historyValid, prepassTargets: prepassTargets.slice(), prepassIndex },
                 sceneRgbt: Object.assign({}, sceneRgbtState),
                 presentation: presentationPipeline ? presentationPipeline.debug() : null,
-                linearScopeActive: !!sceneLinearState,
+                linearScopeActive: beginSceneLinear.isActive(),
                 sleep: handle.getSleepState() }),
             // Reads the RGB-T pipeline's opaque depth at one canvas pixel (top
             // left origin) in [0, 1], blitted through a quad shader because a
@@ -9316,14 +9233,30 @@ const scenePruneUnreachableNodes = (xml) => {
         if (peelPipeline) { try { peelPipeline.dispose(); } catch (err) {} }
         if (controls) controls.dispose();
         if (environmentBridge && environmentBridge.dispose) environmentBridge.dispose();
-        if (renderer) { try { renderer.dispose(); } catch (err) {} try { renderer.forceContextLoss(); } catch (err) {} }
+        if (renderer) {
+            try { window.MtlxRender.disposeRendererCore(Object.assign({ canvas, renderer }, rendererGlListeners)); } catch (err) {}
+            try { renderer.forceContextLoss(); } catch (err) {}
+        }
         if (canvas.parentElement) canvas.parentElement.removeChild(canvas);
         throw e;
     }
 };
 
+// Names js/usd-scene-app.jsx (and the bounce spec) read as bare globals,
+// which the classic-script load used to leak before the IIFE wrap.
 Object.assign(window, {
     createMtlxSceneView,
     getUsdSceneTransparency,
     setUsdSceneTransparency,
+    SCENE_SETTINGS_RELOAD_KEYS,
+    SCENE_SETTINGS_REBUILD_KEYS,
+    SCENE_SETTINGS_GEOMETRY_KEYS,
+    describeSceneSettingsCost,
+    setStoredSceneTextureMaxSize,
+    setStoredSceneTextureBudgetBytes,
+    setStoredSceneSubdivisionLevel,
+    setStoredSceneDisplacementSubdivision,
+    setStoredSceneTriangleLimits,
+    storedSceneBounce,
 });
+})();

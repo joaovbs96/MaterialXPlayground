@@ -2427,7 +2427,7 @@
                     }
                     callHandle('setBackdrop', settings.backdrop);
                     callHandle('setAutoRotate', settings.autoRotate);
-                    if (currentEnvironmentRef.current && !useDome) callHandle('setEnvironment', currentEnvironmentRef.current);
+                    if (currentEnvironmentRef.current && !useDome) callHandle('setEnvironment', currentEnvironmentRef.current, { user: true });
                     setHandle(nextHandle); setStatus('rendered');
                     // VS Code: textures and layers still missing once rendered go
                     // to the host; if it finds any, a bigger set reloads the scene.
@@ -2879,11 +2879,11 @@
             try {
                 const env = await loader(file.data || file);
                 if (!mountedRef.current || generation !== environmentGenerationRef.current) { disposeUnusedEnvironment(env); return; }
-                // setEnvOverride now broadcasts to every LIVE_VIEWS member
-                // (the Scene handle joined that registry at creation), so
-                // the manual callHandle('setEnvironment', env) this used to
-                // need right after is redundant.
+                // setEnvOverride broadcasts to every LIVE_VIEWS member, but an
+                // active stage dome ignores broadcasts, so this Scene's own
+                // import replaces it explicitly.
                 if (apiFunction('setEnvOverride')) apiFunction('setEnvOverride')(env);
+                if (domeRotationActiveRef.current) callHandle('setEnvironment', env, { user: true });
                 envOverrideRef.current = env;
                 currentEnvironmentRef.current = env;
                 domeRotationActiveRef.current = false;
@@ -2898,7 +2898,7 @@
             const reset = apiFunction('setEnvOverride');
             if (reset) reset(null);
             const getter = apiFunction('getEnvironment');
-            if (getter) { try { const env = await getter(); if (mountedRef.current && generation === environmentGenerationRef.current) { currentEnvironmentRef.current = env; callHandle('setEnvironment', env); } } catch (e) {} }
+            if (getter) { try { const env = await getter(); if (mountedRef.current && generation === environmentGenerationRef.current) { currentEnvironmentRef.current = env; callHandle('setEnvironment', env, { user: true }); } } catch (e) {} }
             if (mountedRef.current && generation === environmentGenerationRef.current) setEnvFileName('');
         };
         const resetEnvironment = async () => {
@@ -2925,7 +2925,7 @@
                 return;
             }
             domeRotationActiveRef.current = false;
-            if (env) { currentEnvironmentRef.current = env; callHandle('setEnvironment', env); }
+            if (env) { currentEnvironmentRef.current = env; callHandle('setEnvironment', env, { user: true }); }
             setEnvFileName(''); setEnvRotation(0); setEnvExposureLinear(1); callHandle('setEnvRotation', 0); callHandle('setEnvExposure', 1);
         };
         // The slider always displays and edits the authored degrees (matching
@@ -3087,7 +3087,7 @@
         const setDiffuseEnvConvolveValue = (next) => {
             setDiffuseEnvConvolveState(next);
             sceneWrite('diffuseEnv', next ? 'convolve' : 'sh');
-            if (currentEnvironmentRef.current) callHandle('setEnvironment', currentEnvironmentRef.current);
+            if (currentEnvironmentRef.current) callHandle('setEnvironment', currentEnvironmentRef.current, { user: true });
         };
         // No stage handle yet: persist-only, like every governed handler
         // without a handle; the store write is what the next load reads.

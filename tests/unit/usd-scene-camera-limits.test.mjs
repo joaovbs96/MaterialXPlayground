@@ -9,7 +9,7 @@ function loadHelpers() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
   const source = fs.readFileSync(path.join(root, 'js', 'usd-scene-renderer.js'), 'utf8');
   const start = source.indexOf('const sceneOrbitDollyLimits =');
-  const end = source.indexOf('// Polar angle (radians from +Y)', start);
+  const end = source.indexOf('// Mirrors the material viewer\'s applyStudioPolarClamp', start);
   assert.ok(start >= 0 && end > start, 'dolly limit helpers are present');
   const context = {};
   vm.runInNewContext(

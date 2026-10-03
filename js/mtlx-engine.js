@@ -12224,6 +12224,7 @@ Object.assign(window, {
     SHADOW_FACE_SLOTS, SHADOW_LIGHT_SLOTS_MAX,
     SHADOW_NORMAL_OFFSET_TEXELS, SHADOW_DEPTH_BIAS_TEXELS,
     createPeelPipeline, createRgbtPeelPipeline, applyPeelMaterialMode, registerLiveView, unregisterLiveView,
+    snapshotRenderDestination, restoreRenderDestination,
     tryRefreshRenderView, prewarmPreviewTarget, checkTargetTransparency,
     EXPORT_TARGETS, generateTargetSources,
     fullscreenElement, toggleFullscreen, watchFullscreen,

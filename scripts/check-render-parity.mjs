@@ -578,14 +578,15 @@ function checkHandleContractGuard() {
 // (h) renderer-creation guard (P3-DESIGN.md section 4 S5, "guard (d)"):
 // `new THREE.WebGLRenderer(`, `getContext('webgl2'` and
 // `toneMappingExposure =` only in js/shared/render-session.js, plus a
-// short, verified allowlist. Scene files are PENDING.
+// short, verified allowlist.
 // ---------------------------------------------------------------------
 const RENDERER_CREATION_PATTERNS = [
   "new THREE.WebGLRenderer(",
   "getContext('webgl2'",
   "toneMappingExposure =",
 ];
-const RENDERER_CREATION_PENDING_FILES = ["js/usd-scene-renderer.js", "js/usd-scene-app.jsx"];
+// Emptied in P6 S2: the Scene acquires its renderer through the session.
+const RENDERER_CREATION_PENDING_FILES = [];
 // Verified one-off sites: a warm-compile probe context, the KTX2 basis
 // support probe, shell.jsx's WebGL2-availability probe, and Compare's
 // GPU diff readback, none of which build/own the actual view's renderer.
@@ -656,6 +657,30 @@ function checkResolverDuplicationLedger() {
   log(`(i) resolver duplication ledger OK, ${RESOLVER_DUPLICATION_PENDING.length} PENDING pairs tracked (Scene consolidation: P6).`);
 }
 
+// ---------------------------------------------------------------------
+// (j) IIFE guard (plan guard (d), P6 S2): js/shared/render-*.js and
+// js/usd-scene-*.js run as one IIFE, so no top-level name can collide with
+// the engine's unwrapped globals. First statement `(`, last `})(...);`.
+// ---------------------------------------------------------------------
+function checkIifeGuard() {
+  const problems = [];
+  const files = listSourceFiles().filter((f) => /^js\/shared\/render-[^/]+\.js$/.test(f) || /^js\/usd-scene-[^/]+\.js$/.test(f));
+  for (const file of files) {
+    const text = readFileSync(path.join(REPO_ROOT, file), "utf8");
+    const code = text.replace(/\/\*[\s\S]*?\*\//g, "").split("\n")
+      .filter((line) => line.trim() !== "" && !/^\s*\/\//.test(line));
+    const first = code.length ? code[0].trim() : "";
+    const last = code.length ? code[code.length - 1].trim() : "";
+    if (!first.startsWith("(") || !/^\}\)\([^)]*\);$/.test(last)) {
+      problems.push(`${file} is not a single IIFE (first statement "${first.slice(0, 40)}", last "${last.slice(0, 40)}")`);
+    }
+  }
+  if (problems.length) {
+    fail(["IIFE guard (j) failed:", ...problems.map((p) => `  - ${p}`)].join("\n"));
+  }
+  log(`(j) IIFE guard OK, ${files.length} files.`);
+}
+
 checkManifestShape();
 checkStorageKeyScan();
 checkOptionListRatchet();
@@ -665,4 +690,5 @@ checkEmbedConsistency();
 checkHandleContractGuard();
 checkRendererCreationGuard();
 checkResolverDuplicationLedger();
+checkIifeGuard();
 log(`OK${CHECK_MODE ? " --check" : ""}`);
