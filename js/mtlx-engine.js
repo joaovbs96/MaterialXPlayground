@@ -5108,9 +5108,6 @@ const createTextureSession = (opts) => {
     const isAlive = typeof options.isAlive === 'function' ? options.isAlive : () => true;
     const boundedDecode = !!options.boundedDecode;
     const boundBitmapsOnly = !!options.boundBitmapsOnly;
-    // Session-wide fastPathSamplerQuirk (the Scene's displacement binds go
-    // through bindDroppedTextures, which cannot pass the per-acquire flag).
-    const sessionSamplerQuirk = !!options.fastPathSamplerQuirk;
 
     const sourceRefs = new Map(); // sourceKey -> ref count this session holds
     const wrappers = new Map(); // wrapperKey -> { texture, sourceKey }
@@ -5151,12 +5148,9 @@ const createTextureSession = (opts) => {
         const options2 = opts2 || {};
         const samplerModes = options2.samplerModes || null;
         const tier = options2.tier != null ? options2.tier : maxSize;
-        // fastPathSamplerQuirk: a proto from the bounded fast path keeps the
-        // default address modes, as the Scene's legacy ordinary binds did.
-        const quirk = sessionSamplerQuirk || !!options2.fastPathSamplerQuirk;
         const ext = String(hit.key).split('.').pop().toLowerCase();
         const sourceKey = rawKey + '|' + (Number.isFinite(tier) ? tier : 'orig');
-        const wrapperKey = sourceKey + '|' + samplerCacheKey('', samplerModes) + (quirk ? '|q' : '');
+        const wrapperKey = sourceKey + '|' + samplerCacheKey('', samplerModes);
 
         const existingWrapper = wrappers.get(wrapperKey);
         if (existingWrapper) return { texture: existingWrapper.texture };
@@ -5169,8 +5163,7 @@ const createTextureSession = (opts) => {
             const already = wrappers.get(wrapperKey);
             if (already) return already.texture;
             const texture = proto.clone();
-            const fastPath = quirk && proto.userData && proto.userData.mtlxBoundedFastPath;
-            configureLoadedTexture(texture, fastPath ? null : samplerModes, anisotropy);
+            configureLoadedTexture(texture, samplerModes, anisotropy);
             wrappers.set(wrapperKey, { texture, sourceKey });
             return texture;
         };

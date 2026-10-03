@@ -69,13 +69,13 @@ test('KTX2 bytes are the sum of the kept mip levels', () => {
   assert.equal(ctx.sceneTextureBytes(tex, 'ktx2'), 125);
 });
 
-test('bitmap textures bind through the session with the legacy fast-path sampler behaviour', async () => {
+test('bitmap textures bind through the session with their authored sampler modes', async () => {
   const texture = { image: { width: 4, height: 4 } };
   const ctx = loadSceneTextureGlue(() => Promise.resolve({ texture }));
   const uniforms = { u_tex: { value: null } };
   const job = ctx.bindSceneTexture(uniforms, 'u_tex', { path: 'a.png', blob: {} }, null);
   await job;
   assert.equal(uniforms.u_tex.value, texture);
-  assert.equal(ctx.calls[0].opts.fastPathSamplerQuirk, true);
+  assert.equal(ctx.calls[0].opts.fastPathSamplerQuirk, undefined);
   assert.equal(ctx.calls[0].opts.tier, 64);
 });

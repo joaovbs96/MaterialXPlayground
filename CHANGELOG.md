@@ -6,6 +6,7 @@ Full notes for every release, including every fix, are on the [GitHub Releases p
 
 ## Unreleased
 
+- The Scene Viewer now honours clamp and mirror texture address modes on PNG and JPG textures.
 - A material opened from the Scene Viewer's "Open in Graph Editor" now opens as view only, with a banner and an Export .mtlx button to save an editable copy.
 - The Scene Viewer's wording is now generic instead of USD-specific: "Scene" instead of "Stage", "Scene selection" instead of "Root layer", "objects" instead of "prims", and so on.
 - The Scene Viewer's Scene card now shows the loaded file, its format, the files loaded (with a list that marks missing files), units and up axis where the scene declares them, a camera picker and a Reload button, including in VS Code.

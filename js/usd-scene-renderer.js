@@ -1299,7 +1299,7 @@ const createMtlxSceneView = async ({
         if (displacementRunner && displacementRunnerTier === plannedTextureSize) return displacementRunner;
         disposeDisplacementRunner();
         displacementTextureSession = window.createTextureSession({ maxSize: plannedTextureSize, concurrency: TEXTURE_DECODE_CONCURRENCY,
-            renderer: null, isAlive: () => !stopped, anisotropy: 8, boundBitmapsOnly: true, fastPathSamplerQuirk: true });
+            renderer: null, isAlive: () => !stopped, anisotropy: 8, boundBitmapsOnly: true });
         displacementRunner = window.createDisplacementRunner({ renderer, isAlive: () => !stopped,
             textureSession: displacementTextureSession, creaseByNormals: true });
         displacementRunnerTier = plannedTextureSize;
@@ -1800,14 +1800,14 @@ const createMtlxSceneView = async ({
         return { tex: result.texture, bytes: sceneTextureBytes(result.texture, ext) };
     };
     // PNG/JPG (and other bitmap formats) through the same session at the
-    // planned tier; the legacy fast-path address-mode behaviour is kept.
+    // planned tier, with the authored address modes.
     const bindSceneTexture = (uniforms, name, hit, samplerModes) => {
         const apply = (result) => {
             if (!result || stopped || !isMounted()) return;
             if (uniforms[name]) uniforms[name].value = result.texture;
         };
         const acquired = textureSession.acquire({ key: hit.path, blob: hit.blob },
-            { samplerModes, tier: plannedTextureSize, fastPathSamplerQuirk: true });
+            { samplerModes, tier: plannedTextureSize });
         if (acquired && typeof acquired.then === 'function') return acquired.then(apply, (error) => ({ error }));
         apply(acquired);
         return null;

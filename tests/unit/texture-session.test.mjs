@@ -293,32 +293,32 @@ test('release drops one wrapper and its source reference (P6 S4)', async () => {
     assert.equal(session.release(result.texture), false, 'a second release is a no-op');
 });
 
-test('fastPathSamplerQuirk keeps default address modes for a bounded fast-path prototype only (P6 S4)', async () => {
+test('a bounded fast-path prototype gets the requested clamp and mirror modes per acquire', async () => {
     const engine = loadEngineTextureSession();
     const cache = new Map();
     const session = engine.createTextureSession({ cache });
     const fileMap = { 'wood.png': { name: 'wood.png', size: 10, lastModified: 1 } };
     const hit = session.resolve(fileMap, 'wood.png');
-    const modes = { u: 'clamp', v: 'mirror' };
     await session.acquire(hit, { samplerModes: null });
-    const proto = Array.from(cache.values())[0].proto;
-    proto.userData = { mtlxBoundedFastPath: true };
+    Array.from(cache.values())[0].proto.userData = { mtlxBoundedFastPath: true };
 
-    const quirk = session.acquire(hit, { samplerModes: modes, fastPathSamplerQuirk: true });
-    const plain = session.acquire(hit, { samplerModes: modes });
-    assert.equal(quirk.texture.wrapS, 1000, 'fast-path proto under the quirk keeps periodic');
-    assert.equal(plain.texture.wrapS, 1001, 'without the quirk the authored modes apply');
-    assert.notEqual(quirk.texture, plain.texture, 'the quirk is part of the wrapper key');
+    const clamp = session.acquire(hit, { samplerModes: { u: 'clamp', v: 'clamp' } });
+    const mirror = session.acquire(hit, { samplerModes: { u: 'mirror', v: 'mirror' } });
+    assert.equal(clamp.texture.wrapS, 1001, 'clamp to edge');
+    assert.equal(clamp.texture.wrapT, 1001);
+    assert.equal(mirror.texture.wrapS, 1002, 'mirrored repeat');
+    assert.equal(mirror.texture.wrapT, 1002);
 });
 
-test('a session-wide fastPathSamplerQuirk applies to every acquire (Scene displacement, P6 S5)', async () => {
+test('a displacement-style session (boundBitmapsOnly) honours authored modes on a fast-path prototype', async () => {
     const engine = loadEngineTextureSession();
     const cache = new Map();
-    const session = engine.createTextureSession({ cache, fastPathSamplerQuirk: true });
+    const session = engine.createTextureSession({ cache, boundBitmapsOnly: true });
     const fileMap = { 'height.png': { name: 'height.png', size: 10, lastModified: 1 } };
     const hit = session.resolve(fileMap, 'height.png');
     await session.acquire(hit, { samplerModes: null });
     Array.from(cache.values())[0].proto.userData = { mtlxBoundedFastPath: true };
-    const result = session.acquire(hit, { samplerModes: { u: 'clamp', v: 'clamp' } });
-    assert.equal(result.texture.wrapS, 1000, 'the bounded fast-path proto keeps periodic, as the legacy binds did');
+    const result = session.acquire(hit, { samplerModes: { u: 'clamp', v: 'mirror' } });
+    assert.equal(result.texture.wrapS, 1001);
+    assert.equal(result.texture.wrapT, 1002);
 });
