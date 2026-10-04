@@ -465,7 +465,7 @@ class ViewErrorBoundary extends React.Component {
                 <div className="flex flex-col items-center justify-center h-40 gap-3 text-error text-sm text-center px-4">
                     <span>This view crashed: {String((error && error.message) || error)}</span>
                     {info && info.componentStack && (
-                        <pre className="max-w-full max-h-24 overflow-auto text-left text-[10px] leading-snug text-fg-subtle bg-surface-deep/50 border border-line-subtle rounded p-2 whitespace-pre-wrap">
+                        <pre className="max-w-full max-h-24 overflow-auto text-left text-[10px] leading-snug text-fg-subtle bg-surface-sunken/50 border border-line-subtle rounded p-2 whitespace-pre-wrap">
                             {info.componentStack.trim()}
                         </pre>
                     )}
@@ -473,14 +473,14 @@ class ViewErrorBoundary extends React.Component {
                         <button
                             type="button"
                             onClick={this.handleReload}
-                            className="text-xs px-3 py-1.5 rounded-lg border bg-control border-line-strong text-fg-soft hover:bg-hover transition-colors"
+                            className="text-xs px-3 py-1.5 rounded-lg border bg-control/80 border-line-strong text-fg-soft hover:bg-hover transition-colors"
                         >
                             Reload page
                         </button>
                         <button
                             type="button"
                             onClick={this.handleCopy}
-                            className="text-xs px-3 py-1.5 rounded-lg border bg-control border-line-strong text-fg-soft hover:bg-hover transition-colors"
+                            className="text-xs px-3 py-1.5 rounded-lg border bg-control/80 border-line-strong text-fg-soft hover:bg-hover transition-colors"
                         >
                             {this.state.copied ? 'Copied!' : 'Copy diagnostics'}
                         </button>
@@ -548,11 +548,11 @@ function DesktopCloseConfirmDialog() {
         // is closing here, so the usual below-header scrim convention
         // does not apply.
         <div
-            className="fixed inset-0 z-[70] flex items-center justify-center bg-scrim/70"
+            className="fixed inset-0 z-[70] flex items-center justify-center bg-scrim/85"
             onMouseDown={() => respond('cancel')}
         >
             <div
-                className="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
+                className="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
                 onMouseDown={(e) => e.stopPropagation()}
             >
                 <div className="text-sm font-semibold text-fg mb-1">This document has unsaved changes.</div>
@@ -752,12 +752,12 @@ function DesktopSettingsDialog() {
         // top: header height (not inset-0/z-[70]): a normal popup, not the
         // window-closing dialog above, so it stops below the header.
         <div
-            className="fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-scrim/70"
+            className="fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-scrim/85"
             style={{ top: 'var(--mtlx-header-h, 0px)' }}
         >
             <div
                 ref={panelRef}
-                className="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
+                className="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
             >
                 <div className="flex items-center justify-between mb-3">
                     <div className="text-sm font-semibold text-fg">Settings</div>
@@ -1001,12 +1001,12 @@ function AboutDialog() {
 
     return (
         <div
-            className="fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-scrim/70"
+            className="fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-scrim/85"
             style={{ top: 'var(--mtlx-header-h, 0px)' }}
         >
             <div
                 ref={panelRef}
-                className="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[32rem] max-w-[92%] max-h-[85%] p-4 flex flex-col"
+                className="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[32rem] max-w-[92%] max-h-[85%] p-4 flex flex-col"
             >
                 <div className="flex items-center justify-between gap-3 mb-3">
                     <div className="flex items-center gap-3 mtlx-dialog-brand">
@@ -1379,7 +1379,7 @@ function Shell() {
                     <button
                         type="button"
                         onClick={() => setViewState((prev) => ({ ...prev, [view]: { mounted: true, status: 'loading' } }))}
-                        className="text-xs px-3 py-1.5 rounded-lg border bg-control border-line-strong text-fg-soft hover:bg-hover transition-colors"
+                        className="text-xs px-3 py-1.5 rounded-lg border bg-control/80 border-line-strong text-fg-soft hover:bg-hover transition-colors"
                     >
                         Retry
                     </button>

@@ -1433,7 +1433,7 @@ function MaterialViewerApp({
     onFiles: onPickFileList
   })), /*#__PURE__*/React.createElement("label", {
     title: "Choose a folder",
-    className: "h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-line-control rounded-md bg-control hover:bg-hover text-fg-secondary cursor-pointer"
+    className: "h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-line-control rounded-md bg-control/80 hover:bg-hover text-fg-secondary cursor-pointer"
   }, /*#__PURE__*/React.createElement(MtlxIcon, {
     name: "folder",
     className: "w-3.5 h-3.5"
@@ -1908,13 +1908,13 @@ function MaterialViewerApp({
       open: presetPickerOpen,
       onClose: () => setPresetPickerOpen(false),
       onSelect: handlePresetPickerSelect,
-      overlayClassName: "fixed left-0 right-0 bottom-0 top-[var(--mtlx-header-h,0px)] z-50 flex items-center justify-center bg-scrim/70"
+      overlayClassName: "fixed left-0 right-0 bottom-0 top-[var(--mtlx-header-h,0px)] z-50 flex items-center justify-center bg-scrim/85"
     }), !chromeless && shaderExportOpen && loadedRef.current && /*#__PURE__*/React.createElement(ShaderExportDialog, {
       open: true,
       onClose: () => setShaderExportOpen(false),
       renderables: renderables,
       initialIndex: chosenMat,
-      overlayClassName: "fixed inset-0 z-50 flex items-center justify-center bg-scrim/70",
+      overlayClassName: "fixed inset-0 z-50 flex items-center justify-center bg-scrim/85",
       generate: ({
         renderable,
         label,

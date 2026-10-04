@@ -476,7 +476,7 @@ function WhatIsMaterialXApp({ active } = {}) {
                                 <MtlxIcon name="share" className="w-[18px] h-[18px]" />
                                 Open the Graph Editor
                             </a>
-                            <a href={links.spec} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 h-11 px-4 rounded-[10px] border border-line-strong bg-control hover:bg-hover text-sm font-medium text-fg transition-colors">
+                            <a href={links.spec} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 h-11 px-4 rounded-[10px] border border-line-strong bg-control/80 hover:bg-hover text-sm font-medium text-fg transition-colors">
                                 <MtlxIcon name="external-link" className="w-[18px] h-[18px] text-accent-fg" />
                                 Read the specification
                             </a>

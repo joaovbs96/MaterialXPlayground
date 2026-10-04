@@ -638,7 +638,7 @@
 .mtlx-tab-mobile.is-active {
     border-left-color: rgb(var(--mtlx-accent-base));
     color: rgb(var(--mtlx-accent-fg-strong));
-    background-color: rgb(var(--mtlx-hover-subtle) / calc(153 / 255)); /* gray-800/60 */
+    background-color: rgb(var(--mtlx-pressed));
 }
 
 /* Group label row (Learn/Integrate), mobile-panel-only: desktop groups

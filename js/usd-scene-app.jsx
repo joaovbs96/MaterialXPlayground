@@ -19,9 +19,6 @@
     // treatment as Compare's own empty slot.
     const EMPTY_STAGE_GRID_IMAGE = 'linear-gradient(to right, rgb(var(--mtlx-line-heavy) / calc(41 / 255)) 1px, transparent 1px), linear-gradient(to bottom, rgb(var(--mtlx-line-heavy) / calc(41 / 255)) 1px, transparent 1px)';
     const EMPTY_STAGE_GRID_MASK = 'radial-gradient(ellipse at center, rgba(0,0,0,1) 0%, rgba(0,0,0,0.9) 30%, rgba(0,0,0,0) 70%)';
-    // Same translucent-over-solid card surface as SectionCard/compare's
-    // stats panel (js/shared/mtlx-ui.jsx CARD_SURFACE).
-    const PANEL_SURFACE = 'color-mix(in srgb, rgb(var(--mtlx-surface-raised)) 35%, rgb(var(--mtlx-surface-base)))';
     // Popovers over the render: opacity is a theme param (0.95 dark, opaque light so render colors do not tint them).
     const HUD_POPOVER_BG = 'rgb(var(--mtlx-surface-raised) / var(--mtlx-alpha-hud-popover))';
 
@@ -3612,7 +3609,7 @@
             </button>
         );
         const statisticsFooter = (
-            <div className="shrink-0 border-t border-line px-3.5 py-3.5 space-y-1" style={{ background: PANEL_SURFACE }} data-testid="usd-stage-counts">
+            <div className="shrink-0 border-t border-line px-3.5 py-3.5 space-y-1 bg-surface-card" data-testid="usd-stage-counts">
                 <div className="flex items-center gap-2 mb-1.5">
                     <MtlxIcon name="cube" className="w-4 h-4 text-fg-muted shrink-0" />
                     <span className="text-[13px] font-semibold text-fg shrink-0">Statistics</span>
@@ -3811,7 +3808,7 @@
                             </div>
                             <label
                                 title="Choose a folder"
-                                className="h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-line-control rounded-md bg-control hover:bg-hover text-fg-secondary cursor-pointer"
+                                className="h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-line-control rounded-md bg-control/80 hover:bg-hover text-fg-secondary cursor-pointer"
                             >
                                 <MtlxIcon name="folder" className="w-3.5 h-3.5" />
                                 <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={(e) => chooseFiles(e.target.files)} />

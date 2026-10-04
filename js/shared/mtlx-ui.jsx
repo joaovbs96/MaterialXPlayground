@@ -83,7 +83,7 @@ const DialogFrame = ({
     open, title, titleClassName, panelClassName, onClose, children,
     headerRight, closeDisabled, backdropCloseDisabled = false,
     keepMounted = false,
-    overlayClassName = 'absolute inset-0 z-50 flex items-center justify-center bg-scrim/70',
+    overlayClassName = 'absolute inset-0 z-50 flex items-center justify-center bg-scrim/85',
 }) => {
     if (!open && !keepMounted) return null;
     return (
@@ -118,8 +118,8 @@ const DialogFrame = ({
     const st = document.createElement('style');
     st.id = 'mtlx-rec-css';
     st.textContent = [
-        '.mtlx-rec-overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgb(var(--mtlx-veil) / calc(179 / 255));font-family:inherit;}',
-        '.mtlx-rec-panel{width:360px;max-width:calc(100vw - 24px);background:rgb(var(--mtlx-surface-base));border:1px solid rgb(var(--mtlx-line));border-radius:10px;box-shadow:0 10px 40px rgb(var(--mtlx-shadow) / calc(128 / 255));color:rgb(var(--mtlx-fg));}',
+        '.mtlx-rec-overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgb(var(--mtlx-scrim) / calc(217 / 255));font-family:inherit;}',
+        '.mtlx-rec-panel{width:360px;max-width:calc(100vw - 24px);background:rgb(var(--mtlx-surface-raised));border:1px solid rgb(var(--mtlx-line));border-radius:10px;box-shadow:0 10px 40px rgb(var(--mtlx-shadow) / calc(128 / 255));color:rgb(var(--mtlx-fg));}',
         '.mtlx-rec-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid rgb(var(--mtlx-line));background:rgb(var(--mtlx-surface-raised));border-radius:10px 10px 0 0;}',
         '.mtlx-rec-title{font-size:13px;font-weight:700;color:rgb(var(--mtlx-fg));}',
         '.mtlx-rec-close{background:none;border:none;padding:4px;color:rgb(var(--mtlx-fg-muted));cursor:pointer;line-height:0;}',
@@ -564,7 +564,7 @@ function PresetsDialog({ open, onClose, onPick, busy, busyPath, overlayClassName
             closeDisabled={busy}
             backdropCloseDisabled={busy}
             overlayClassName={overlayClassName}
-            panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[28rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+            panelClassName="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[28rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
         >
             <div className="overflow-y-auto custom-scrollbar px-2 py-2 text-[12px]">
                 {MTLX_PRESETS.map((preset) => {
@@ -1209,7 +1209,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
             title="Export Shader Code"
             onClose={onClose}
             overlayClassName={overlayClassName}
-            panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[44rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col"
+            panelClassName="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[44rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col"
             headerRight={
                 <React.Fragment>
                     <button
@@ -1741,7 +1741,7 @@ const useRenderContextRecovery = ({ groups, isHidden, onLost }) => {
 // in-overlay Cancel pill).
 const LoadingOverlay = ({ show, label, className, labelClassName, barWidthClass, fraction, testId, children }) => {
     if (!show) return null;
-    const wrapCls = className || 'mtlx-loading-overlay absolute inset-0 flex flex-col items-center justify-center gap-3 text-fg-muted z-10 bg-veil/80';
+    const wrapCls = className || 'mtlx-loading-overlay absolute inset-0 flex flex-col items-center justify-center gap-3 text-fg-muted z-10 bg-veil/70';
     const labelCls = labelClassName || 'animate-pulse';
     const hasFraction = typeof fraction === 'number' && Number.isFinite(fraction);
     const barCls = 'mtlx-loading-bar ' + (barWidthClass || 'w-48');
@@ -2214,15 +2214,10 @@ function Chip({ active, disabled, dashed, onClick, icon, title, children }) {
 // Collapsible settings card shell shared by all seven fields cards. Open
 // state is local (per brief) so it survives re-renders but always starts
 // from `defaultOpen`, which the caller sets from the current column count.
-// Opaque twin of a 35% raised-surface fill: the same colour once composited
-// over the page ground, but solid. These cards sit over the hero grid on
-// builder and docs, and a translucent fill lets that grid show through.
-const CARD_SURFACE = 'color-mix(in srgb, rgb(var(--mtlx-surface-raised)) 35%, rgb(var(--mtlx-surface-base)))';
-
 function SectionCard({ icon, title, pill, summary, defaultOpen, dense, children }) {
     const [open, setOpen] = React.useState(defaultOpen);
     return (
-        <div className="rounded-lg border border-line" style={{ background: CARD_SURFACE }}>
+        <div className="rounded-lg border border-line bg-surface-card">
             <button
                 type="button"
                 onClick={() => setOpen((o) => !o)}
@@ -2352,7 +2347,7 @@ function FilePickerField({
     // onChoose branch has no such input, so this only applies below).
     inputTestId,
 }) {
-    const buttonCls = 'inline-flex items-center gap-1 border border-l-0 border-line-control rounded-r-md bg-control hover:bg-hover text-[11px] px-2 text-fg-secondary whitespace-nowrap'
+    const buttonCls = 'inline-flex items-center gap-1 border border-l-0 border-line-control rounded-r-md bg-control/80 hover:bg-hover text-[11px] px-2 text-fg-secondary whitespace-nowrap'
         + (mono ? ' font-mono' : '');
     const [draft, setDraft] = React.useState(value || '');
     // A ref (not state) so blurring alone never re-triggers the seed

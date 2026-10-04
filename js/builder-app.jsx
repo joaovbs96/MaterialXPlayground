@@ -616,7 +616,7 @@ function SnippetsCard({ tab, onTab, iframeSnippet, elementSnippet, copied, onCop
         try { return window.hljs.highlight(code, { language: 'xml' }).value; } catch (e) { return null; }
     }, [code]);
     return (
-        <div id="builder-snippets" className="rounded-lg border border-line bg-surface-base overflow-hidden h-[142px] md:h-full flex flex-col min-w-0">
+        <div id="builder-snippets" className="rounded-lg border border-line bg-surface-raised overflow-hidden h-[142px] md:h-full flex flex-col min-w-0">
             <div className="flex items-center justify-between gap-2 py-1 bg-surface-raised/60 shrink-0">
                 <div className="flex items-stretch">
                     {SNIPPET_TABS.map((s) => (
@@ -655,7 +655,7 @@ function LegendBlock() {
     // the plain ground fill (not /60): 60% of the ground over the ground is the same
     // colour, but opaque, so the hero grid cannot show through it.
     return (
-        <div className="rounded-lg border border-line bg-surface-base p-2 h-[142px] md:h-full min-w-0 overflow-auto custom-scrollbar space-y-1.5">
+        <div className="rounded-lg border border-line bg-surface-raised p-2 h-[142px] md:h-full min-w-0 overflow-auto custom-scrollbar space-y-1.5">
             <div className="flex items-center gap-1.5 text-[11px] text-fg-subtle flex-wrap">
                 <LivePill />
                 lighting, look, camera, size update in place
@@ -763,8 +763,8 @@ function BuilderHelpDialog({ open, onClose, html, loading, error }) {
             open={open}
             title="Embedding reference"
             onClose={onClose}
-            overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-scrim/70"
-            panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[46rem] max-w-[92%] max-h-[85vh] overflow-hidden flex flex-col"
+            overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-scrim/85"
+            panelClassName="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[46rem] max-w-[92%] max-h-[85vh] overflow-hidden flex flex-col"
         >
             <style>{BUILDER_HELP_DOC_CSS}</style>
             <div ref={bodyRef} onClick={handleBodyClick} className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-5 py-4">
@@ -2053,7 +2053,7 @@ function BuilderApp({ active } = {}) {
                 open={presetPickerOpen}
                 onClose={() => setPresetPickerOpen(false)}
                 onSelect={handlePresetPickerSelect}
-                overlayClassName="fixed left-0 right-0 bottom-0 top-[var(--mtlx-header-h,0px)] z-50 flex items-center justify-center bg-scrim/70"
+                overlayClassName="fixed left-0 right-0 bottom-0 top-[var(--mtlx-header-h,0px)] z-50 flex items-center justify-center bg-scrim/85"
             />
         </div>
     );

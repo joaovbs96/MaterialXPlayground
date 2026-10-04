@@ -119,7 +119,7 @@
                                         className={`min-w-0 flex items-center justify-center gap-1 text-xs transition-colors ${i > 0 ? 'border-l border-line' : ''} ${
                                             active
                                                 ? 'bg-selection/20 text-accent-fg-strong'
-                                                : 'bg-control text-fg-muted hover:bg-hover hover:text-fg-soft'
+                                                : 'bg-control/80 text-fg-muted hover:bg-hover hover:text-fg-soft'
                                         }`}
                                     >
                                         <span className="truncate">{label}</span>
@@ -337,7 +337,7 @@
             // hijack position:fixed's containing block and break the overlay.
             return ReactDOM.createPortal(
                 <div
-                    className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-scrim-alt/60"
+                    className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-scrim/85"
                     onClick={onClose}
                     role="dialog"
                     aria-modal="true"

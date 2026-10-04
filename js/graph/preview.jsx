@@ -1633,7 +1633,7 @@
                             barWidthClass="w-32"
                         />
                         {notice && (
-                            <div className="absolute inset-0 flex items-center justify-center text-[11px] text-fg-subtle px-3 text-center bg-veil/60">
+                            <div className="absolute inset-0 flex items-center justify-center text-[11px] text-fg-subtle px-3 text-center bg-veil/70">
                                 {notice}
                             </div>
                         )}

@@ -155,7 +155,7 @@
             };
 
             return (
-                <div className="absolute inset-0 z-50 flex items-center justify-center bg-scrim/70">
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-scrim/85">
                     <div
                         ref={panelRef}
                         tabIndex={-1}
@@ -266,7 +266,7 @@
             };
 
             return (
-                <div className="absolute inset-0 z-50 flex items-center justify-center bg-scrim/70">
+                <div className="absolute inset-0 z-50 flex items-center justify-center bg-scrim/85">
                     <div
                         ref={panelRef}
                         tabIndex={-1}
@@ -8486,7 +8486,7 @@
 
                                             {(displayNode.data.lib || displayNode.data.group) && (
                                                 <div
-                                                    className="flex-none px-1 py-0.5 rounded text-[8px] leading-none font-mono bg-surface-deep/50 border border-line text-fg-muted tracking-wide"
+                                                    className="flex-none px-1 py-0.5 rounded text-[8px] leading-none font-mono bg-surface-sunken/50 border border-line text-fg-muted tracking-wide"
                                                     title="Library / Group"
                                                 >
                                                     {[displayNode.data.lib, displayNode.data.group].filter(Boolean).join('/')}
@@ -8811,7 +8811,7 @@
                                 targetKey === "slx"
                                     ? generateSlxExportStages()
                                     : generateTargetSources({ mx: parsed.mx, renderable, label, targetKey })}
-                            overlayClassName="absolute inset-0 z-[55] flex items-center justify-center bg-scrim/70"
+                            overlayClassName="absolute inset-0 z-[55] flex items-center justify-center bg-scrim/85"
                         />
                     )}
 
@@ -8819,7 +8819,7 @@
                         .mtlx / switching documents while dirty (never the
                         additive Import). See confirmReplace; z-[56] beats z-55/z-50 peers. */}
                     {confirmCloseOpen && (
-                        <div className="absolute inset-0 z-[56] flex items-center justify-center bg-scrim/70"
+                        <div className="absolute inset-0 z-[56] flex items-center justify-center bg-scrim/85"
                             onMouseDown={closeConfirm}>
                             <div className="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
                                 onMouseDown={(e) => e.stopPropagation()}>
@@ -8982,7 +8982,7 @@
                             textures={exportDialog.textures}
                             onExport={handleExportDialogSubmit}
                             onClose={() => setExportDialog(null)}
-                            overlayClassName="absolute inset-0 z-[55] flex items-center justify-center bg-scrim/70"
+                            overlayClassName="absolute inset-0 z-[55] flex items-center justify-center bg-scrim/85"
                             coveredByConfirm={confirmCloseOpen}
                         />
                     )}

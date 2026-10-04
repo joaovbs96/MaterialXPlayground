@@ -237,6 +237,7 @@ const EMBED_MIRRORED_TOKEN_CLASSES = [
   "bg-hud/70", // was bg-gray-900/70
   "bg-stage", // was bg-gray-900
   "bg-surface-base", // was bg-gray-900
+  "bg-surface-card", // was a color-mix style on SectionCard
   "bg-surface-sunken", // was bg-gray-900
   "bg-veil/70", // was bg-gray-900/70
   "border-error-border/60", // was border-red-800/60

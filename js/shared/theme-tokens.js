@@ -25,6 +25,7 @@
         'surface-base': '#111827',
         'surface-raised': '#1f2937',
         'surface-sunken': '#111827',
+        'surface-card': '#161e2d',
         'chrome': '#111827',
         'control': '#1f2937',
         'chip': '#374151',
@@ -172,8 +173,6 @@
         'native-window-bg': '#0b0f19',
         'native-titlebar': '#111827',
         'native-titlebar-symbol': '#e5e7eb',
-        'surface-deep': '#030712',
-        'scrim-alt': '#000000',
         'code-inline-fg-alt': '#fca5a5',
         'code-block-bg-alt': '#0f172a',
     };
@@ -183,6 +182,7 @@
         'surface-base': '#f3f4f6',
         'surface-raised': '#ffffff',
         'surface-sunken': '#f9fafb',
+        'surface-card': '#f7f8f9',
         'chrome': '#f3f4f6',
         'control': '#ffffff',
         'chip': '#e5e7eb',
@@ -330,8 +330,6 @@
         'native-window-bg': '#f3f4f6',
         'native-titlebar': '#f3f4f6',
         'native-titlebar-symbol': '#374151',
-        'surface-deep': '#f9fafb',
-        'scrim-alt': '#334155',
         'code-inline-fg-alt': '#b45309',
         'code-block-bg-alt': '#f5f7fa',
     };

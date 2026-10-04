@@ -8,6 +8,7 @@
         "surface-base": "#1f2430",
         "surface-raised": "#2e333f",
         "surface-sunken": "#1f2430",
+        "surface-card": "#242935",
         "chrome": "#1f2430",
         "control": "#2e333f",
         "chip": "#444954",
@@ -155,8 +156,6 @@
         "native-window-bg": "#171c28",
         "native-titlebar": "#1f2430",
         "native-titlebar-symbol": "#d7dce3",
-        "surface-deep": "#0f131f",
-        "scrim-alt": "#000000",
         "code-inline-fg-alt": "#fca5a5",
         "code-block-bg-alt": "#1e232f"
     };

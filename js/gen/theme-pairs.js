@@ -5,6 +5,8 @@
     var custom = {
         contrast: 'AA',
         pairs: [
+            {"fg":"fg","bg":"surface-card","kind":"text"},
+            {"fg":"fg-secondary","bg":"surface-card","kind":"text"},
             {"fg":"fg","bg":"surface-base","kind":"text"},
             {"fg":"fg","bg":"surface-raised","kind":"text"},
             {"fg":"fg-strong","bg":"surface-raised","kind":"text"},

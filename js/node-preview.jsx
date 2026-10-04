@@ -1591,7 +1591,7 @@
                 // No fixed width: numberFieldStyle below sizes this from
                 // its own min/max/step so a longer float never clips under
                 // the native spinner (px-1 = 0.25rem/side, border = 1px/side).
-                const numCls = 'flex-none bg-control border border-line-strong rounded px-1 py-0.5 text-[11px] font-mono text-fg-soft';
+                const numCls = 'flex-none bg-control/80 border border-line-strong rounded px-1 py-0.5 text-[11px] font-mono text-fg-soft';
                 // Read-only input (e.g. a geometric default like Vworld) —
                 // shown so the input isn't "missing", but not editable.
                 if (p.readonly) {
@@ -1622,7 +1622,7 @@
                     return (
                         <input
                             type="text"
-                            className="w-full bg-control border border-line-strong rounded px-2 py-1 text-[11px] font-mono text-fg-soft"
+                            className="w-full bg-control/80 border border-line-strong rounded px-2 py-1 text-[11px] font-mono text-fg-soft"
                             value={String(cur)}
                             onChange={(e) => onParamChange(p, e.target.value)}
                         />
@@ -1771,7 +1771,7 @@
                                     <input
                                         key={i} type="number" min="0" max="1" step="0.01"
                                         title={chan[i] + ' (linear, 0-1)'}
-                                        className="w-full min-w-0 bg-control border border-line-strong rounded px-1 py-0.5 text-[11px] font-mono text-fg-soft"
+                                        className="w-full min-w-0 bg-control/80 border border-line-strong rounded px-1 py-0.5 text-[11px] font-mono text-fg-soft"
                                         value={fmt(c)}
                                         onChange={(e) => setComp(i, e.target.value)}
                                         onBlur={(e) => { e.target.value = String(fmt(cur[i])); }}
@@ -1809,7 +1809,7 @@
                         {cur.map((c, i) => (
                             <input
                                 key={i} type="number" step="0.01"
-                                className="w-full min-w-0 bg-control border border-line-strong rounded px-1 py-0.5 text-[11px] font-mono text-fg-soft"
+                                className="w-full min-w-0 bg-control/80 border border-line-strong rounded px-1 py-0.5 text-[11px] font-mono text-fg-soft"
                                 value={c}
                                 onChange={(e) => {
                                     const n = parseFloat(e.target.value);

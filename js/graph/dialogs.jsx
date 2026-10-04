@@ -66,7 +66,7 @@
                     title="Help & Keybinds"
                     titleClassName="text-sm font-bold text-fg"
                     onClose={onClose}
-                    panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[34rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+                    panelClassName="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[34rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
                 >
                     <div className="overflow-y-auto custom-scrollbar px-4 py-3">
                         <div className="text-[11px] text-fg-secondary leading-relaxed space-y-2">
@@ -151,7 +151,7 @@
                     keepMounted
                     title={label}
                     onClose={onClose}
-                    panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[min(64rem,94%)] h-[90%] overflow-hidden flex flex-col"
+                    panelClassName="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[min(64rem,94%)] h-[90%] overflow-hidden flex flex-col"
                     headerRight={!IN_VSCODE && (
                         <a href={fullUrl} target="_blank" rel="noopener noreferrer" title="Open in a new tab"
                             className="text-fg-muted hover:text-fg-soft leading-none px-1"><MtlxIcon name="external-link" className="w-4 h-4" /></a>
@@ -234,7 +234,7 @@
                     open={open}
                     title="Document"
                     onClose={onClose}
-                    panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[38rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col"
+                    panelClassName="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[38rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col"
                     headerRight={
                         <button
                             onClick={copyXml}
@@ -269,7 +269,7 @@
                     open={open}
                     title="Validate"
                     onClose={onClose}
-                    panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+                    panelClassName="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
                 >
                     <div className="overflow-y-auto custom-scrollbar px-4 py-3 text-[12px]">
                         {!status && <div className="text-fg-muted animate-pulse">Validating{'…'}</div>}
@@ -358,7 +358,7 @@
                     closeDisabled={busy}
                     backdropCloseDisabled={busy}
                     overlayClassName={overlayClassName}
-                    panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+                    panelClassName="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
                 >
                     <div className="overflow-y-auto custom-scrollbar px-4 py-3 space-y-3 text-[12px]">
                         <label className="block space-y-1">

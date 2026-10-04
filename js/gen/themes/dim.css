@@ -4,6 +4,7 @@
   --mtlx-surface-base: 31 36 48;
   --mtlx-surface-raised: 46 51 63;
   --mtlx-surface-sunken: 31 36 48;
+  --mtlx-surface-card: 36 41 53;
   --mtlx-chrome: 31 36 48;
   --mtlx-control: 46 51 63;
   --mtlx-chip: 68 73 84;
@@ -151,8 +152,6 @@
   --mtlx-native-window-bg: 23 28 40;
   --mtlx-native-titlebar: 31 36 48;
   --mtlx-native-titlebar-symbol: 215 220 227;
-  --mtlx-surface-deep: 15 19 31;
-  --mtlx-scrim-alt: 0 0 0;
   --mtlx-code-inline-fg-alt: 252 165 165;
   --mtlx-code-block-bg-alt: 30 35 47;
   --mtlx-type-fallback-saturation: 65;

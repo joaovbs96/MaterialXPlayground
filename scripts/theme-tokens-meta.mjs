@@ -19,6 +19,12 @@ export const tokens = {
         "derive": "equals background in dark; light themes go 3-4% toward foreground from surface-raised",
         "role": "Inputs, search fields, wells, table heads, inline-code wells, cards nested inside a raised panel."
     },
+    "surface-card": {
+        "group": "surface",
+        "kind": "derivable",
+        "derive": "surface-raised mixed 35% into surface-base (sRGB), as a solid color",
+        "role": "Opaque card surface: collapsible settings cards, the pinned stats panels in Compare and the USD Scene Viewer."
+    },
     "chrome": {
         "group": "surface",
         "kind": "derivable",
@@ -29,7 +35,7 @@ export const tokens = {
         "group": "surface",
         "kind": "derivable",
         "derive": "equals surface-raised in dark",
-        "role": "Buttons, segmented controls, chips and select triggers at rest (/80, /50 when disabled)."
+        "role": "Buttons, segmented controls, chips and select triggers at rest (/80)."
     },
     "chip": {
         "group": "surface",
@@ -59,13 +65,13 @@ export const tokens = {
         "group": "surface",
         "kind": "derivable",
         "derive": "equals background",
-        "role": "Translucent covers over one region (/60 to /85): loading, error and empty-state covers, busy overlays."
+        "role": "Translucent covers over one region (/70, /85): loading, error and empty-state covers, busy overlays."
     },
     "scrim": {
         "group": "surface",
         "kind": "derivable",
         "derive": "background darkened (OKLCH L -8); stays dark in light themes",
-        "role": "Modal backdrops (/70, /85)."
+        "role": "Modal backdrops (/85)."
     },
     "hover": {
         "group": "surface",
@@ -902,22 +908,6 @@ export const tokens = {
         "derive": "matches the header icon color",
         "role": "Electron title bar overlay window-control symbol color."
     },
-    "surface-deep": {
-        "group": "drift",
-        "kind": "derivable",
-        "derive": "equals scrim",
-        "role": "Deepest wells (/50): error stack pre, kbd-like chips; diff canvas ground.",
-        "drift": true,
-        "mergeInto": "surface-sunken"
-    },
-    "scrim-alt": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "black",
-        "role": "Docs sidebar dialog backdrop (/60).",
-        "drift": true,
-        "mergeInto": "scrim"
-    },
     "code-inline-fg-alt": {
         "group": "drift",
         "kind": "independent",
@@ -938,6 +928,16 @@ export const tokens = {
 
 // kind: text (4.5), large (3), ui (3), decorative (reported only). alpha+under: bg is composited at alpha over token `under`.
 export const contrast = [
+    {
+        "fg": "fg",
+        "bg": "surface-card",
+        "kind": "text"
+    },
+    {
+        "fg": "fg-secondary",
+        "bg": "surface-card",
+        "kind": "text"
+    },
     {
         "fg": "fg",
         "bg": "surface-base",
@@ -1675,6 +1675,7 @@ export const labels = {
     "surface-base": "Page background",
     "surface-raised": "Panels and cards",
     "surface-sunken": "Inputs and wells",
+    "surface-card": "Opaque cards",
     "chrome": "Toolbars and header",
     "control": "Buttons at rest",
     "chip": "Tags and badges",
@@ -1800,8 +1801,6 @@ export const labels = {
     "native-window-bg": "Window background",
     "native-titlebar": "Title bar",
     "native-titlebar-symbol": "Title bar buttons",
-    "surface-deep": "Deep wells",
-    "scrim-alt": "Sidebar dialog backdrop",
     "code-inline-fg-alt": "Help inline code",
     "code-block-bg-alt": "Help code block background",
 };

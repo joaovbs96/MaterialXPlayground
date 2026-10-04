@@ -5,6 +5,7 @@
   --mtlx-surface-base: 17 24 39;
   --mtlx-surface-raised: 31 41 55;
   --mtlx-surface-sunken: 17 24 39;
+  --mtlx-surface-card: 22 30 45;
   --mtlx-chrome: 17 24 39;
   --mtlx-control: 31 41 55;
   --mtlx-chip: 55 65 81;
@@ -152,8 +153,6 @@
   --mtlx-native-window-bg: 11 15 25;
   --mtlx-native-titlebar: 17 24 39;
   --mtlx-native-titlebar-symbol: 229 231 235;
-  --mtlx-surface-deep: 3 7 18;
-  --mtlx-scrim-alt: 0 0 0;
   --mtlx-code-inline-fg-alt: 252 165 165;
   --mtlx-code-block-bg-alt: 15 23 42;
   --mtlx-type-fallback-saturation: 65;
@@ -167,6 +166,7 @@
   --mtlx-surface-base: 243 244 246;
   --mtlx-surface-raised: 255 255 255;
   --mtlx-surface-sunken: 249 250 251;
+  --mtlx-surface-card: 247 248 249;
   --mtlx-chrome: 243 244 246;
   --mtlx-control: 255 255 255;
   --mtlx-chip: 229 231 235;
@@ -314,8 +314,6 @@
   --mtlx-native-window-bg: 243 244 246;
   --mtlx-native-titlebar: 243 244 246;
   --mtlx-native-titlebar-symbol: 55 65 81;
-  --mtlx-surface-deep: 249 250 251;
-  --mtlx-scrim-alt: 51 65 85;
   --mtlx-code-inline-fg-alt: 180 83 9;
   --mtlx-code-block-bg-alt: 245 247 250;
   --mtlx-type-fallback-saturation: 65;

@@ -91,7 +91,7 @@ const DialogFrame = ({
   closeDisabled,
   backdropCloseDisabled = false,
   keepMounted = false,
-  overlayClassName = 'absolute inset-0 z-50 flex items-center justify-center bg-scrim/70'
+  overlayClassName = 'absolute inset-0 z-50 flex items-center justify-center bg-scrim/85'
 }) => {
   if (!open && !keepMounted) return null;
   return /*#__PURE__*/React.createElement("div", {
@@ -124,7 +124,7 @@ const DialogFrame = ({
   if (typeof document === 'undefined' || document.getElementById('mtlx-rec-css')) return;
   const st = document.createElement('style');
   st.id = 'mtlx-rec-css';
-  st.textContent = ['.mtlx-rec-overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgb(var(--mtlx-veil) / calc(179 / 255));font-family:inherit;}', '.mtlx-rec-panel{width:360px;max-width:calc(100vw - 24px);background:rgb(var(--mtlx-surface-base));border:1px solid rgb(var(--mtlx-line));border-radius:10px;box-shadow:0 10px 40px rgb(var(--mtlx-shadow) / calc(128 / 255));color:rgb(var(--mtlx-fg));}', '.mtlx-rec-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid rgb(var(--mtlx-line));background:rgb(var(--mtlx-surface-raised));border-radius:10px 10px 0 0;}', '.mtlx-rec-title{font-size:13px;font-weight:700;color:rgb(var(--mtlx-fg));}', '.mtlx-rec-close{background:none;border:none;padding:4px;color:rgb(var(--mtlx-fg-muted));cursor:pointer;line-height:0;}', '.mtlx-rec-close:hover{color:rgb(var(--mtlx-fg));}', '.mtlx-rec-icon{width:16px;height:16px;display:block;}', '.mtlx-rec-body{padding:14px;display:flex;flex-direction:column;gap:10px;}', '.mtlx-rec-row{display:flex;align-items:center;justify-content:space-between;gap:10px;}', '.mtlx-rec-label{font-size:11px;color:rgb(var(--mtlx-fg-muted));flex-shrink:0;}', '.mtlx-rec-seg{display:inline-flex;border:1px solid rgb(var(--mtlx-line));border-radius:8px;overflow:hidden;}', '.mtlx-rec-seg-btn{appearance:none;border:none;background:rgb(var(--mtlx-control));color:rgb(var(--mtlx-fg-muted));font-size:11px;padding:5px 9px;cursor:pointer;border-right:1px solid rgb(var(--mtlx-line));}', '.mtlx-rec-seg-btn:last-child{border-right:none;}', '.mtlx-rec-seg-btn:hover:not(:disabled){background:rgb(var(--mtlx-hover));color:rgb(var(--mtlx-fg));}', '.mtlx-rec-seg-btn.is-active{background:rgb(var(--mtlx-accent-fill));color:rgb(var(--mtlx-on-accent));}', '.mtlx-rec-seg-btn:disabled{opacity:.5;cursor:not-allowed;}', '.mtlx-rec-hint{font-size:11px;color:rgb(var(--mtlx-fg-muted));}', '.mtlx-rec-error{font-size:11px;color:rgb(var(--mtlx-error));}', '.mtlx-rec-success{font-size:11px;color:rgb(var(--mtlx-fg-muted));}', '.mtlx-rec-progress{height:6px;border-radius:4px;background:rgb(var(--mtlx-chip));overflow:hidden;}', '.mtlx-rec-progress-fill{height:100%;background:rgb(var(--mtlx-accent-fill));transition:width .15s ease;}', '.mtlx-rec-progress-text{font-size:11px;color:rgb(var(--mtlx-fg-muted));}', '.mtlx-rec-preview{display:block;margin:0 auto;max-height:200px;max-width:100%;border-radius:6px;border:1px solid rgb(var(--mtlx-line));background:#000;}', '.mtlx-rec-footer{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 14px;border-top:1px solid rgb(var(--mtlx-line));}', '.mtlx-rec-btn{appearance:none;border:1px solid rgb(var(--mtlx-line));background:rgb(var(--mtlx-control));color:rgb(var(--mtlx-fg));font-size:11px;padding:6px 12px;border-radius:6px;cursor:pointer;}', '.mtlx-rec-btn:hover:not(:disabled){background:rgb(var(--mtlx-hover));}', '.mtlx-rec-btn:disabled{opacity:.5;cursor:not-allowed;}', '.mtlx-rec-btn--primary{background:rgb(var(--mtlx-accent-fill));border-color:rgb(var(--mtlx-accent-fill));color:rgb(var(--mtlx-on-accent));}', '.mtlx-rec-btn--primary:hover:not(:disabled){background:rgb(var(--mtlx-accent-fill-hover));}', '.mtlx-rec-btn--danger{background:rgb(var(--mtlx-error-fill));border-color:rgb(var(--mtlx-error-fill));color:rgb(var(--mtlx-on-accent));}', '.mtlx-rec-btn--danger:hover:not(:disabled){background:rgb(var(--mtlx-error-fill-hover));}'].join('');
+  st.textContent = ['.mtlx-rec-overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgb(var(--mtlx-scrim) / calc(217 / 255));font-family:inherit;}', '.mtlx-rec-panel{width:360px;max-width:calc(100vw - 24px);background:rgb(var(--mtlx-surface-raised));border:1px solid rgb(var(--mtlx-line));border-radius:10px;box-shadow:0 10px 40px rgb(var(--mtlx-shadow) / calc(128 / 255));color:rgb(var(--mtlx-fg));}', '.mtlx-rec-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid rgb(var(--mtlx-line));background:rgb(var(--mtlx-surface-raised));border-radius:10px 10px 0 0;}', '.mtlx-rec-title{font-size:13px;font-weight:700;color:rgb(var(--mtlx-fg));}', '.mtlx-rec-close{background:none;border:none;padding:4px;color:rgb(var(--mtlx-fg-muted));cursor:pointer;line-height:0;}', '.mtlx-rec-close:hover{color:rgb(var(--mtlx-fg));}', '.mtlx-rec-icon{width:16px;height:16px;display:block;}', '.mtlx-rec-body{padding:14px;display:flex;flex-direction:column;gap:10px;}', '.mtlx-rec-row{display:flex;align-items:center;justify-content:space-between;gap:10px;}', '.mtlx-rec-label{font-size:11px;color:rgb(var(--mtlx-fg-muted));flex-shrink:0;}', '.mtlx-rec-seg{display:inline-flex;border:1px solid rgb(var(--mtlx-line));border-radius:8px;overflow:hidden;}', '.mtlx-rec-seg-btn{appearance:none;border:none;background:rgb(var(--mtlx-control));color:rgb(var(--mtlx-fg-muted));font-size:11px;padding:5px 9px;cursor:pointer;border-right:1px solid rgb(var(--mtlx-line));}', '.mtlx-rec-seg-btn:last-child{border-right:none;}', '.mtlx-rec-seg-btn:hover:not(:disabled){background:rgb(var(--mtlx-hover));color:rgb(var(--mtlx-fg));}', '.mtlx-rec-seg-btn.is-active{background:rgb(var(--mtlx-accent-fill));color:rgb(var(--mtlx-on-accent));}', '.mtlx-rec-seg-btn:disabled{opacity:.5;cursor:not-allowed;}', '.mtlx-rec-hint{font-size:11px;color:rgb(var(--mtlx-fg-muted));}', '.mtlx-rec-error{font-size:11px;color:rgb(var(--mtlx-error));}', '.mtlx-rec-success{font-size:11px;color:rgb(var(--mtlx-fg-muted));}', '.mtlx-rec-progress{height:6px;border-radius:4px;background:rgb(var(--mtlx-chip));overflow:hidden;}', '.mtlx-rec-progress-fill{height:100%;background:rgb(var(--mtlx-accent-fill));transition:width .15s ease;}', '.mtlx-rec-progress-text{font-size:11px;color:rgb(var(--mtlx-fg-muted));}', '.mtlx-rec-preview{display:block;margin:0 auto;max-height:200px;max-width:100%;border-radius:6px;border:1px solid rgb(var(--mtlx-line));background:#000;}', '.mtlx-rec-footer{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 14px;border-top:1px solid rgb(var(--mtlx-line));}', '.mtlx-rec-btn{appearance:none;border:1px solid rgb(var(--mtlx-line));background:rgb(var(--mtlx-control));color:rgb(var(--mtlx-fg));font-size:11px;padding:6px 12px;border-radius:6px;cursor:pointer;}', '.mtlx-rec-btn:hover:not(:disabled){background:rgb(var(--mtlx-hover));}', '.mtlx-rec-btn:disabled{opacity:.5;cursor:not-allowed;}', '.mtlx-rec-btn--primary{background:rgb(var(--mtlx-accent-fill));border-color:rgb(var(--mtlx-accent-fill));color:rgb(var(--mtlx-on-accent));}', '.mtlx-rec-btn--primary:hover:not(:disabled){background:rgb(var(--mtlx-accent-fill-hover));}', '.mtlx-rec-btn--danger{background:rgb(var(--mtlx-error-fill));border-color:rgb(var(--mtlx-error-fill));color:rgb(var(--mtlx-on-accent));}', '.mtlx-rec-btn--danger:hover:not(:disabled){background:rgb(var(--mtlx-error-fill-hover));}'].join('');
   document.head.appendChild(st);
 })();
 
@@ -735,7 +735,7 @@ function PresetsDialog({
     closeDisabled: busy,
     backdropCloseDisabled: busy,
     overlayClassName: overlayClassName,
-    panelClassName: "bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[28rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+    panelClassName: "bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[28rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
   }, /*#__PURE__*/React.createElement("div", {
     className: "overflow-y-auto custom-scrollbar px-2 py-2 text-[12px]"
   }, MTLX_PRESETS.map(preset => {
@@ -1435,7 +1435,7 @@ function ShaderExportDialog({
     title: "Export Shader Code",
     onClose: onClose,
     overlayClassName: overlayClassName,
-    panelClassName: "bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[44rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col",
+    panelClassName: "bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[44rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col",
     headerRight: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
       onClick: handleCopy,
       disabled: busy || !!error || !stages || currentCode == null,
@@ -1988,7 +1988,7 @@ const LoadingOverlay = ({
   children
 }) => {
   if (!show) return null;
-  const wrapCls = className || 'mtlx-loading-overlay absolute inset-0 flex flex-col items-center justify-center gap-3 text-fg-muted z-10 bg-veil/80';
+  const wrapCls = className || 'mtlx-loading-overlay absolute inset-0 flex flex-col items-center justify-center gap-3 text-fg-muted z-10 bg-veil/70';
   const labelCls = labelClassName || 'animate-pulse';
   const hasFraction = typeof fraction === 'number' && Number.isFinite(fraction);
   const barCls = 'mtlx-loading-bar ' + (barWidthClass || 'w-48');
@@ -2529,10 +2529,6 @@ function Chip({
 // Collapsible settings card shell shared by all seven fields cards. Open
 // state is local (per brief) so it survives re-renders but always starts
 // from `defaultOpen`, which the caller sets from the current column count.
-// Opaque twin of a 35% raised-surface fill: the same colour once composited
-// over the page ground, but solid. These cards sit over the hero grid on
-// builder and docs, and a translucent fill lets that grid show through.
-const CARD_SURFACE = 'color-mix(in srgb, rgb(var(--mtlx-surface-raised)) 35%, rgb(var(--mtlx-surface-base)))';
 function SectionCard({
   icon,
   title,
@@ -2544,10 +2540,7 @@ function SectionCard({
 }) {
   const [open, setOpen] = React.useState(defaultOpen);
   return /*#__PURE__*/React.createElement("div", {
-    className: "rounded-lg border border-line",
-    style: {
-      background: CARD_SURFACE
-    }
+    className: "rounded-lg border border-line bg-surface-card"
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: () => setOpen(o => !o),
@@ -2704,7 +2697,7 @@ function FilePickerField({
   // onChoose branch has no such input, so this only applies below).
   inputTestId
 }) {
-  const buttonCls = 'inline-flex items-center gap-1 border border-l-0 border-line-control rounded-r-md bg-control hover:bg-hover text-[11px] px-2 text-fg-secondary whitespace-nowrap' + (mono ? ' font-mono' : '');
+  const buttonCls = 'inline-flex items-center gap-1 border border-l-0 border-line-control rounded-r-md bg-control/80 hover:bg-hover text-[11px] px-2 text-fg-secondary whitespace-nowrap' + (mono ? ' font-mono' : '');
   const [draft, setDraft] = React.useState(value || '');
   // A ref (not state) so blurring alone never re-triggers the seed
   // effect below -- only an actual `value` change should re-seed.
