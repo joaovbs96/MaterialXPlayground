@@ -22,7 +22,15 @@ const BUILDER_CONTROLS = [
 // embed-boot.js validates with CSS.supports and rejects a bare number.
 // A custom theme travels as its code (mtlx1.<payload>); the embed validates it and falls back to dark.
 const builderIsThemeCode = (v) => typeof v === 'string' && /^mtlx1\.[A-Za-z0-9_-]{1,8000}$/.test(v);
-const builderThemeAttrValue = (v) => (v === 'light' ? 'light' : builderIsThemeCode(v) ? v : 'dark');
+// Built-in presets from the registry (not custom, vscode or system), read live so new registry entries appear.
+const builderPresetThemes = () => {
+    try { return ((window.MtlxTheme && window.MtlxTheme.list && window.MtlxTheme.list()) || []).filter((e) => e && e.group !== 'custom' && e.id !== 'system' && e.id !== 'vscode' && e.id !== 'dark' && e.id !== 'light' && !builderIsThemeCode(e.id)); } catch (e) { return []; }
+};
+// Valid embed theme value: dark, light, a registry preset id or a theme code.
+const builderIsEmbedTheme = (v) => v === 'dark' || v === 'light' || builderIsThemeCode(v) || (typeof v === 'string' && builderPresetThemes().some((e) => e.id === v));
+const builderThemeAttrValue = (v) => (builderIsEmbedTheme(v) ? v : 'dark');
+// The preview applies a color only when the snippet would emit it, so a preset's own HUD colors show.
+const builderThemeOverride = (key, v) => (builderNorm(v) !== builderNorm(BUILDER_THEME_DEFAULTS[key]) ? String(v == null ? '' : v).trim() : '');
 const BUILDER_THEME_DEFAULTS = { accent: '#3b82f6', surface: '#1f2937', text: '#d1d5db', radius: '4' };
 const builderRadiusPx = (v) => { const t = String(v == null ? '' : v).trim(); return t ? t + 'px' : ''; };
 
@@ -324,7 +332,7 @@ const buildShareParams = (s) => {
     if (cs) params.set('controls', cs);
     if (!isBuilderDefault('backdrop', s.backdrop)) params.set('backdrop', s.backdrop);
     if (s.transparent) params.set('transparent', '1');
-    if (s.theme === 'light' || builderIsThemeCode(s.theme)) params.set('theme', s.theme);
+    if (s.theme !== 'dark' && builderIsEmbedTheme(s.theme)) params.set('theme', s.theme);
     if (!isBuilderDefault('accent', s.accent)) params.set('accent', s.accent.trim());
     if (!isBuilderDefault('surface', s.surface)) params.set('surface', s.surface.trim());
     if (!isBuilderDefault('text', s.text)) params.set('text', s.text.trim());
@@ -1043,6 +1051,7 @@ function BuilderApp({ active } = {}) {
     const themeChoice = React.useMemo(() => {
         const options = ['dark', 'light'];
         const labels = { dark: 'Dark', light: 'Light' };
+        for (const e of builderPresetThemes()) { if (!options.includes(e.id)) { options.push(e.id); labels[e.id] = String(e.label || e.id); } }
         let specs = [];
         try { specs = (window.MtlxTheme && window.MtlxTheme.listCustom && window.MtlxTheme.listCustom()) || []; } catch (e) { specs = []; }
         for (const spec of specs) {
@@ -1135,9 +1144,9 @@ function BuilderApp({ active } = {}) {
         el.backdrop = backdrop;
         el.transparent = transparent;
         el.theme = theme;
-        el.accent = accent;
-        el.surface = surface;
-        el.text = text;
+        el.accent = builderThemeOverride('accent', accent);
+        el.surface = builderThemeOverride('surface', surface);
+        el.text = builderThemeOverride('text', text);
         el.radius = builderRadiusPx(radius);
         if (material) el.material = material;
         if (camera.trim()) el.camera = camera.trim();
@@ -1182,9 +1191,9 @@ function BuilderApp({ active } = {}) {
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.backdrop = backdrop; }, [backdrop]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.transparent = transparent; }, [transparent]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.theme = theme; }, [theme]);
-    React.useEffect(() => { if (previewElRef.current) previewElRef.current.accent = accent; }, [accent]);
-    React.useEffect(() => { if (previewElRef.current) previewElRef.current.surface = surface; }, [surface]);
-    React.useEffect(() => { if (previewElRef.current) previewElRef.current.text = text; }, [text]);
+    React.useEffect(() => { if (previewElRef.current) previewElRef.current.accent = builderThemeOverride('accent', accent); }, [accent]);
+    React.useEffect(() => { if (previewElRef.current) previewElRef.current.surface = builderThemeOverride('surface', surface); }, [surface]);
+    React.useEffect(() => { if (previewElRef.current) previewElRef.current.text = builderThemeOverride('text', text); }, [text]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.radius = builderRadiusPx(radius); }, [radius]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.material = material; }, [material]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.camera = camera.trim(); }, [camera]);
@@ -1368,7 +1377,7 @@ function BuilderApp({ active } = {}) {
         if (controlsStr) entries.push(['controls', controlsStr]);
         if (backdrop !== BUILDER_DEFAULTS.backdrop) entries.push(['backdrop', backdrop]);
         if (transparent) entries.push(['transparent', '1']);
-        if (theme === 'light' || builderIsThemeCode(theme)) entries.push(['theme', theme]);
+        if (theme !== 'dark' && builderIsEmbedTheme(theme)) entries.push(['theme', theme]);
         if (builderNorm(accent) !== builderNorm(BUILDER_THEME_DEFAULTS.accent)) entries.push(['accent', accent.trim()]);
         if (builderNorm(surface) !== builderNorm(BUILDER_THEME_DEFAULTS.surface)) entries.push(['surface', surface.trim()]);
         if (builderNorm(text) !== builderNorm(BUILDER_THEME_DEFAULTS.text)) entries.push(['text', text.trim()]);
@@ -1415,7 +1424,7 @@ function BuilderApp({ active } = {}) {
         if (controlsStr) attrs.push(`controls="${controlsStr}"`);
         if (backdrop !== BUILDER_DEFAULTS.backdrop) attrs.push(`backdrop="${backdrop}"`);
         if (transparent) attrs.push('transparent');
-        if (theme === 'light' || builderIsThemeCode(theme)) attrs.push(`theme="${builderEscAttr(theme)}"`);
+        if (theme !== 'dark' && builderIsEmbedTheme(theme)) attrs.push(`theme="${builderEscAttr(theme)}"`);
         if (builderNorm(accent) !== builderNorm(BUILDER_THEME_DEFAULTS.accent)) attrs.push(`accent="${builderEscAttr(accent.trim())}"`);
         if (builderNorm(surface) !== builderNorm(BUILDER_THEME_DEFAULTS.surface)) attrs.push(`surface="${builderEscAttr(surface.trim())}"`);
         if (builderNorm(text) !== builderNorm(BUILDER_THEME_DEFAULTS.text)) attrs.push(`text="${builderEscAttr(text.trim())}"`);

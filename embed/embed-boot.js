@@ -172,7 +172,10 @@
             if (window.MtlxTheme && window.MtlxTheme.setPreference) window.MtlxTheme.setPreference(pref, { persist: false });
             return;
         }
-        if (value == null || value === '') return;
+        if (value == null || value === '') {
+            document.documentElement.style.removeProperty(THEME_VARS[name]);
+            return;
+        }
         if (!themeValueOk(name, value)) {
             post('error', { message: 'Invalid `' + name + '` value "' + value + '" rejected (failed CSS validation).' });
             return;
