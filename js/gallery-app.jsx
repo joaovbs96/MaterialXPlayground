@@ -25,7 +25,7 @@ const GALLERY_TAG_CLASS_LINK = GALLERY_TAG_CLASS + ' cursor-pointer transition-c
 const GALLERY_CODE_CLASS = 'font-mono text-[0.9em] text-fg-soft bg-code-inline-bg/50 border border-line rounded px-1 py-px';
 // Filter-chip idiom, shared by the family chips, the tag chips and the
 // numbered page pills.
-const GALLERY_CHIP_ACTIVE = 'border-accent-base bg-accent-wash/[0.12] text-accent-fg-strong';
+const GALLERY_CHIP_ACTIVE = 'border-accent-base bg-selection/20 text-accent-fg-strong';
 const GALLERY_CHIP_IDLE = 'border-line-strong bg-control text-fg-secondary hover:bg-hover hover:text-fg';
 // Multi-select AND tag chips shown next to the single-select family chips;
 // the manifest's other tags (familyLabel, shader) aren't chip-worthy.

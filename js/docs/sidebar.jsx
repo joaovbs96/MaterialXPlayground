@@ -118,7 +118,7 @@
                                         style={{ flex: '1 1 auto', whiteSpace: 'nowrap', paddingLeft: '6px', paddingRight: '6px' }}
                                         className={`min-w-0 flex items-center justify-center gap-1 text-xs transition-colors ${i > 0 ? 'border-l border-line' : ''} ${
                                             active
-                                                ? 'bg-accent-wash/[0.12] text-accent-fg-strong'
+                                                ? 'bg-selection/20 text-accent-fg-strong'
                                                 : 'bg-control text-fg-muted hover:bg-hover hover:text-fg-soft'
                                         }`}
                                     >
@@ -237,13 +237,13 @@
                                     </React.Fragment>
                                 )}
                                 {fileFilter && (
-                                    <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-accent-wash/[0.12] text-accent-fg-strong max-w-full">
+                                    <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-selection/20 text-accent-fg-strong max-w-full">
                                         <span className="truncate">In {fileFilter.file}</span>
                                         <button
                                             onClick={onClearFileFilter}
                                             title="Clear the file filter"
                                             aria-label="Clear the file filter"
-                                            className="flex-none text-accent-fg-strong/80 hover:text-accent-text-on-tint"
+                                            className="flex-none text-accent-fg-strong/80 hover:text-accent-fg-bright"
                                         >
                                             <MtlxIcon name="x" className="w-3 h-3" />
                                         </button>

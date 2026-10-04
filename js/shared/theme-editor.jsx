@@ -223,7 +223,7 @@ function TeSegmented({ value, options, onChange, label }) {
                         onClick={() => onChange(o.value)}
                         className={'h-7 inline-flex items-center gap-1.5 px-3 text-[11px] transition-colors ' + TE_FOCUS
                             + (i ? ' border-l border-line-strong' : '')
-                            + (on ? ' bg-accent-wash/[0.12] text-accent-fg-strong' : ' text-fg-secondary hover:bg-hover/60')}
+                            + (on ? ' bg-selection/20 text-accent-fg-strong' : ' text-fg-secondary hover:bg-hover/60')}
                     >
                         {o.icon && <MtlxIcon name={o.icon} className="w-3.5 h-3.5" />}
                         {o.label}

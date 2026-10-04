@@ -109,7 +109,7 @@ function RoadmapStatusPill({ status, active, count, onClick }) {
             aria-pressed={active}
             onClick={onClick}
             className={'h-8 px-3.5 rounded-full border text-[13px] font-medium transition-colors inline-flex items-center gap-1.5 '
-                + (active ? 'border-accent-base bg-accent-wash/[0.12] text-accent-fg-strong' : 'border-line-strong bg-control text-fg-secondary hover:bg-hover hover:text-fg')}
+                + (active ? 'border-accent-base bg-selection/20 text-accent-fg-strong' : 'border-line-strong bg-control text-fg-secondary hover:bg-hover hover:text-fg')}
         >
             <span className={'w-1.5 h-1.5 rounded-full ' + meta.dot} aria-hidden="true" />
             {meta.label}
@@ -219,7 +219,7 @@ function MtlxRoadmapApp({ active } = {}) {
                             aria-pressed={statusFilter === 'all'}
                             onClick={() => setStatusFilter('all')}
                             className={'h-8 px-3.5 rounded-full border text-[13px] font-medium transition-colors '
-                                + (statusFilter === 'all' ? 'border-accent-base bg-accent-wash/[0.12] text-accent-fg-strong' : 'border-line-strong bg-control text-fg-secondary hover:bg-hover hover:text-fg')}
+                                + (statusFilter === 'all' ? 'border-accent-base bg-selection/20 text-accent-fg-strong' : 'border-line-strong bg-control text-fg-secondary hover:bg-hover hover:text-fg')}
                         >
                             All <span className="text-fg-subtle">{totalItems}</span>
                         </button>

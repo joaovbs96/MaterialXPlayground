@@ -495,7 +495,7 @@ function ThemeTile({ label, swatch, active, title, onClick }) {
             title={title}
             onClick={onClick}
             className={'h-[58px] w-full min-w-0 rounded-lg border flex flex-col items-center justify-center gap-1.5 transition-colors '
-                + (active ? 'border-accent-base ring-1 ring-accent-wash/15 bg-accent-wash/5' : 'border-line-control hover:border-line-strong')}
+                + (active ? 'border-accent-base ring-1 ring-accent-wash/15 bg-selection/20' : 'border-line-control hover:border-line-strong')}
         >
             <div className="flex gap-1">
                 <span className="w-3 h-3 rounded-sm border border-black/25" style={{ background: sw.accent }} />

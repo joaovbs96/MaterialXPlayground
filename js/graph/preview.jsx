@@ -1579,7 +1579,7 @@
                                         onClick={() => setCompoundRoot(!compoundRoot)}
                                         title={compoundRoot ? 'Disable compound compile' : 'Enable compound compile'}
                                         className={`h-5 px-2 rounded border transition-colors shrink-0 ${
-                                            compoundRoot ? 'bg-accent-fill/80 border-accent-base text-on-accent' : 'bg-control/80 border-line-strong text-fg-secondary'
+                                            compoundRoot ? 'mtlx-fill-accent-translucent border-accent-base text-on-accent' : 'bg-control/80 border-line-strong text-fg-secondary'
                                         }`}
                                     >
                                         {compoundRoot ? 'On' : 'Off'}

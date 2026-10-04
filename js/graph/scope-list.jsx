@@ -31,7 +31,7 @@
                     type="button"
                     data-row-id={r.id}
                     className={'w-full flex items-center gap-2 px-2 py-1 rounded text-[12px] font-mono text-left transition-colors '
-                        + (selected ? 'bg-selection/30 text-fg' : (hi ? 'bg-hover/60 text-fg-soft' : 'text-fg-secondary hover:bg-hover/60'))}
+                        + (selected ? 'bg-selection/20 text-fg' : (hi ? 'bg-hover/60 text-fg-soft' : 'text-fg-secondary hover:bg-hover/60'))}
                     title={r.category + (r.type ? ' : ' + r.type : '')}
                     onClick={() => onSelect(r.id)}
                     onDoubleClick={() => {

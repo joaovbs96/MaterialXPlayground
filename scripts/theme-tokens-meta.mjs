@@ -251,13 +251,13 @@ export const tokens = {
         "group": "accent",
         "kind": "derivable",
         "derive": "equals on-accent-muted in dark; light themes need a dark accent on the pale tint",
-        "role": "Text and icons on faint accent tints (selected tile cards at /5, docs sidebar clear-filter hover). Solid accent fills keep on-accent-muted."
+        "role": "Unused since the accent merge (selected cards and docs sidebar hover use accent-fg-bright); kept for now."
     },
     "selection": {
         "group": "accent",
         "kind": "derivable",
         "derive": "equals accent-fill",
-        "role": "Highlighted/selected list rows as a wash (/20, /30), MtlxSelect highlighted row (30%)."
+        "role": "The one selected wash (/20): list rows, selected chips and cards, MtlxSelect highlighted row (20%)."
     },
     "focus": {
         "group": "accent",
@@ -917,14 +917,6 @@ export const tokens = {
         "role": "Docs sidebar dialog backdrop (/60).",
         "drift": true,
         "mergeInto": "scrim"
-    },
-    "on-accent-soft": {
-        "group": "drift",
-        "kind": "derivable",
-        "derive": "equals fg",
-        "role": "gray-100 text on accent fills.",
-        "drift": true,
-        "mergeInto": "on-accent"
     },
     "code-inline-fg-alt": {
         "group": "drift",
@@ -1810,7 +1802,6 @@ export const labels = {
     "native-titlebar-symbol": "Title bar buttons",
     "surface-deep": "Deep wells",
     "scrim-alt": "Sidebar dialog backdrop",
-    "on-accent-soft": "Soft text on accent fills",
     "code-inline-fg-alt": "Help inline code",
     "code-block-bg-alt": "Help code block background",
 };

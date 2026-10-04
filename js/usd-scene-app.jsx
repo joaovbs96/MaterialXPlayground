@@ -1399,7 +1399,7 @@
                             >
                                 {Array.from({ length: node.depth }, (_, level) => (
                                     <span key={level} aria-hidden="true"
-                                        className={'absolute top-0 bottom-0 w-px ' + (selected ? 'bg-accent-fg-strong/40' : 'bg-line/80')}
+                                        className={'absolute top-0 bottom-0 w-px ' + (selected ? 'bg-on-accent-muted/40' : 'bg-line/80')}
                                         style={{ left: 6 + level * SCENE_TREE_INDENT + 6 }} />
                                 ))}
                                 {renderChevron(node, open, selected)}
@@ -1540,12 +1540,12 @@
         hud: {
             wrap: 'inline-flex rounded-lg border border-hud-line/50 overflow-hidden',
             idle: 'bg-hud/70 backdrop-blur text-hud-fg hover:bg-hud-hover hover:text-hud-fg-strong',
-            active: 'bg-accent-fill/80 text-on-accent border-accent-base',
+            active: 'mtlx-fill-accent-translucent text-on-accent border-accent-base',
         },
         panel: {
             wrap: 'flex flex-1 rounded-lg border border-line-strong/50 overflow-hidden',
             idle: 'bg-control/80 text-fg-secondary hover:bg-hover/80',
-            active: 'bg-accent-wash/[0.12] text-accent-fg-strong',
+            active: 'bg-selection/20 text-accent-fg-strong',
         },
     };
     const QualitySegments = ({ value, onChange, disabled, tone }) => {
@@ -1607,7 +1607,7 @@
                             onClick={() => onChange(id)}
                             className={'h-6 min-w-0 flex-1 px-1 flex items-center justify-center text-[11px] font-medium transition-colors '
                                 + (i > 0 ? 'border-l border-line ' : '')
-                                + (active ? 'bg-accent-wash/[0.12] text-accent-fg-strong' : 'bg-transparent text-fg-muted hover:bg-hover-subtle hover:text-fg-soft')}
+                                + (active ? 'bg-selection/20 text-accent-fg-strong' : 'bg-transparent text-fg-muted hover:bg-hover-subtle hover:text-fg-soft')}
                         >
                             <span className="truncate">{label}</span>
                         </button>

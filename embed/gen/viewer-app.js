@@ -1409,7 +1409,7 @@ function MaterialViewerApp({
   // slots (via buttonClassName) and the custom sendToGraph/
   // presets/shaderCode buttons below. VS Code stays icon-only and
   // square; the browser HUD grows labels via HUD_PILL/HUD_PILL_ACTIVE.
-  const hudChipClass = active => IN_VSCODE ? `h-7 w-7 justify-center inline-flex items-center rounded-lg border transition-colors ${active ? 'bg-accent-fill/80 border-accent-base text-on-accent' : 'border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong'}` : active ? HUD_PILL_ACTIVE : HUD_PILL;
+  const hudChipClass = active => IN_VSCODE ? `h-7 w-7 justify-center inline-flex items-center rounded-lg border transition-colors ${active ? 'mtlx-fill-accent-translucent border-accent-base text-on-accent' : 'border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong'}` : active ? HUD_PILL_ACTIVE : HUD_PILL;
 
   // Files sidebar body: Document/Materials/Textures cards, split
   // out so the docked panel's own JSX (below) stays flat.

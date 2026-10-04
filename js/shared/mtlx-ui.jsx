@@ -28,7 +28,7 @@ const BTN_MENUBAR = 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded
 // collapsed-sidebar pills: deliberately 11px normal weight, not the
 // bolder PILL_ACTION, to match the sidebar's own labeled pills.
 const HUD_PILL = 'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-hud-line/50 bg-hud/70 backdrop-blur text-hud-fg hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong transition-colors whitespace-nowrap';
-const HUD_PILL_ACTIVE = 'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-accent-base bg-accent-fill/80 backdrop-blur text-on-accent transition-colors whitespace-nowrap';
+const HUD_PILL_ACTIVE = 'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-accent-base mtlx-fill-accent-translucent backdrop-blur text-on-accent transition-colors whitespace-nowrap';
 
 // Collapsible parameter-group header (graph editor sidebar + definition
 // panel). Negative margins matching the panel's own px-2.5 pull the
@@ -39,7 +39,7 @@ const GROUP_HEADER_CLASS = 'w-[calc(100%+1.25rem)] flex items-center gap-1.5 -mx
 
 // Small square icon buttons for list rows (reorder controls, etc).
 const ICON_BTN_SM = 'flex-none w-6 h-6 inline-flex items-center justify-center rounded border border-line-strong bg-control/80 text-fg-muted hover:bg-hover/80 hover:text-fg-soft transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-control/80 disabled:hover:text-fg-muted';
-const ICON_BTN_SM_PRIMARY = 'flex-none w-6 h-6 inline-flex items-center justify-center rounded border bg-accent-fill/80 border-accent-base text-on-accent-soft hover:bg-accent-fill transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-accent-fill/80 disabled:hover:text-on-accent-soft';
+const ICON_BTN_SM_PRIMARY = 'flex-none w-6 h-6 inline-flex items-center justify-center rounded border mtlx-fill-accent-translucent border-accent-base text-on-accent mtlx-fill-accent-translucent-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-on-accent';
 const ICON_BTN_SM_DANGER = ICON_BTN_SM + ' hover:text-error hover:border-error-border/60';
 
 // Formats a caught value for display: an Error's .message, or the value
@@ -146,7 +146,7 @@ const DialogFrame = ({
         '.mtlx-rec-btn:hover:not(:disabled){background:rgb(var(--mtlx-hover));}',
         '.mtlx-rec-btn:disabled{opacity:.5;cursor:not-allowed;}',
         '.mtlx-rec-btn--primary{background:rgb(var(--mtlx-accent-fill));border-color:rgb(var(--mtlx-accent-fill));color:rgb(var(--mtlx-on-accent));}',
-        '.mtlx-rec-btn--primary:hover:not(:disabled){background:rgb(var(--mtlx-accent-fill-pressed));}',
+        '.mtlx-rec-btn--primary:hover:not(:disabled){background:rgb(var(--mtlx-accent-fill-hover));}',
         '.mtlx-rec-btn--danger{background:rgb(var(--mtlx-error-fill));border-color:rgb(var(--mtlx-error-fill));color:rgb(var(--mtlx-on-accent));}',
         '.mtlx-rec-btn--danger:hover:not(:disabled){background:rgb(var(--mtlx-error-fill-hover));}',
     ].join('');
@@ -1302,7 +1302,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                                     onClick={() => setStageIdx(i)}
                                     className={'h-6 text-[11px] px-2 rounded border transition-colors '
                                         + (i === stageIdx
-                                            ? 'bg-accent-fill/80 border-accent-base text-on-accent'
+                                            ? 'mtlx-fill-accent-translucent border-accent-base text-on-accent'
                                             : 'bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80')}
                                 >
                                     {st.label}
@@ -1921,7 +1921,7 @@ const EnvDialog = ({
                     disabled={!keyLightAvail}
                     title="Automatically extract a strong sun into a directional light so sharp highlights stay crisp (rebuilds the environment)"
                     className={`h-5 px-2 rounded border transition-colors disabled:opacity-40 ${
-                        keyLightOn ? 'bg-accent-fill/80 border-accent-base text-on-accent' : 'bg-control/80 border-line-strong text-fg-secondary'
+                        keyLightOn ? 'mtlx-fill-accent-translucent border-accent-base text-on-accent' : 'bg-control/80 border-line-strong text-fg-secondary'
                     }`}
                 >
                     {keyLightOn ? 'On' : 'Off'}
@@ -2201,7 +2201,7 @@ function Chip({ active, disabled, dashed, onClick, icon, title, children }) {
     const cls = disabled
         ? base + ' opacity-40 cursor-not-allowed text-fg-subtle border-line' + (dashed ? ' border-dashed' : '')
         : active
-            ? base + ' border-accent-base/70 bg-accent-wash/10 text-accent-fg-bright'
+            ? base + ' border-accent-base/70 bg-selection/20 text-accent-fg-bright'
             : base + ' border-line-strong text-fg-secondary hover:border-line-heavy cursor-pointer';
     return (
         <button type="button" title={title} disabled={disabled} onClick={onClick} className={cls}>
@@ -2256,7 +2256,7 @@ function GeometryTile({ label, icon, selected, disabled, title, onClick, badge }
             onClick={onClick}
             className={'relative h-[84px] rounded-lg border flex flex-col items-center pt-3 px-1.5 gap-1.5 transition-colors '
                 + (disabled ? 'opacity-50 cursor-not-allowed border-line text-fg-subtle'
-                    : selected ? 'border-accent-base text-accent-text-on-tint ring-1 ring-accent-wash/15 bg-accent-wash/5' : 'border-line-control text-fg-secondary hover:border-line-strong')}
+                    : selected ? 'border-accent-base text-accent-fg-bright ring-1 ring-accent-wash/15 bg-selection/20' : 'border-line-control text-fg-secondary hover:border-line-strong')}
         >
             {badge && (
                 <span className="absolute top-1 right-1 flex-none text-[8px] uppercase tracking-wide px-1 py-0 rounded border bg-chip/60 border-line-heavy/50 text-fg-secondary">{badge}</span>
@@ -2281,7 +2281,7 @@ function CustomModelTile({ name, selected, expanded, accept, onSelect, onExpand,
     return (
         <div
             className={'relative rounded-lg border overflow-hidden w-full transition-colors '
-                + (selected ? 'border-accent-base text-accent-text-on-tint ring-1 ring-accent-wash/15 bg-accent-wash/5' : 'border-line-control text-fg-secondary hover:border-line-strong')
+                + (selected ? 'border-accent-base text-accent-fg-bright ring-1 ring-accent-wash/15 bg-selection/20' : 'border-line-control text-fg-secondary hover:border-line-strong')
                 + (className ? ' ' + className : '')}
         >
             <span
@@ -2472,7 +2472,7 @@ const ViewportControls = ({
     selectSize = 'sm',
     buttonClassName = (active) => `h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors ${
         active
-            ? 'bg-accent-fill/80 border-accent-base text-on-accent'
+            ? 'mtlx-fill-accent-translucent border-accent-base text-on-accent'
             : 'bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80'
     }`,
     // Optional grouped layout. `clusters` is an array of arrays of slot ids;
@@ -3121,7 +3121,7 @@ const MXS_BADGE_WARN = 'var(--mx-select-badge-warn, rgb(var(--mtlx-experimental,
 // Translucent derivations so the highlight reads as a tint over the
 // popover ground, not a solid slab. color-mix is already a baseline here
 // (embed/embed-controls.css, js/builder-app.jsx).
-const MXS_ACCENT_SOFT = 'color-mix(in srgb, ' + MXS_ACCENT + ' 30%, transparent)';
+const MXS_ACCENT_SOFT = 'color-mix(in srgb, ' + MXS_ACCENT + ' 20%, transparent)';
 const MXS_SURFACE_SOFT = 'color-mix(in srgb, ' + MXS_SURFACE + ' 95%, transparent)';
 // Toolbar triggers sit alongside BTN_TOOLBAR buttons, which fill at
 // control/80 over backdrop-blur. Matching that 80% is what stops a

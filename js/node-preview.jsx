@@ -1941,7 +1941,7 @@
                             disabled={loading}
                             title={compareOn ? 'Show only the translated shader' : 'Compare against the source shader (swipe)'}
                             className={(compareOn
-                                ? 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-accent-fill/80 border-accent-base text-on-accent transition-colors whitespace-nowrap shrink-0'
+                                ? 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border mtlx-fill-accent-translucent border-accent-base text-on-accent transition-colors whitespace-nowrap shrink-0'
                                 : BTN_TOOLBAR) + ' font-sans disabled:opacity-40 disabled:cursor-not-allowed'}
                         >
                             <MtlxIcon name="compare" className="w-3.5 h-3.5" />

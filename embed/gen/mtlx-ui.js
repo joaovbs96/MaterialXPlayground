@@ -30,7 +30,7 @@ const BTN_MENUBAR = 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded
 // collapsed-sidebar pills: deliberately 11px normal weight, not the
 // bolder PILL_ACTION, to match the sidebar's own labeled pills.
 const HUD_PILL = 'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-hud-line/50 bg-hud/70 backdrop-blur text-hud-fg hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong transition-colors whitespace-nowrap';
-const HUD_PILL_ACTIVE = 'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-accent-base bg-accent-fill/80 backdrop-blur text-on-accent transition-colors whitespace-nowrap';
+const HUD_PILL_ACTIVE = 'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-accent-base mtlx-fill-accent-translucent backdrop-blur text-on-accent transition-colors whitespace-nowrap';
 
 // Collapsible parameter-group header (graph editor sidebar + definition
 // panel). Negative margins matching the panel's own px-2.5 pull the
@@ -39,7 +39,7 @@ const GROUP_HEADER_CLASS = 'w-[calc(100%+1.25rem)] flex items-center gap-1.5 -mx
 
 // Small square icon buttons for list rows (reorder controls, etc).
 const ICON_BTN_SM = 'flex-none w-6 h-6 inline-flex items-center justify-center rounded border border-line-strong bg-control/80 text-fg-muted hover:bg-hover/80 hover:text-fg-soft transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-control/80 disabled:hover:text-fg-muted';
-const ICON_BTN_SM_PRIMARY = 'flex-none w-6 h-6 inline-flex items-center justify-center rounded border bg-accent-fill/80 border-accent-base text-on-accent-soft hover:bg-accent-fill transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-accent-fill/80 disabled:hover:text-on-accent-soft';
+const ICON_BTN_SM_PRIMARY = 'flex-none w-6 h-6 inline-flex items-center justify-center rounded border mtlx-fill-accent-translucent border-accent-base text-on-accent mtlx-fill-accent-translucent-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-on-accent';
 const ICON_BTN_SM_DANGER = ICON_BTN_SM + ' hover:text-error hover:border-error-border/60';
 
 // Formats a caught value for display: an Error's .message, or the value
@@ -124,7 +124,7 @@ const DialogFrame = ({
   if (typeof document === 'undefined' || document.getElementById('mtlx-rec-css')) return;
   const st = document.createElement('style');
   st.id = 'mtlx-rec-css';
-  st.textContent = ['.mtlx-rec-overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgb(var(--mtlx-veil) / calc(179 / 255));font-family:inherit;}', '.mtlx-rec-panel{width:360px;max-width:calc(100vw - 24px);background:rgb(var(--mtlx-surface-base));border:1px solid rgb(var(--mtlx-line));border-radius:10px;box-shadow:0 10px 40px rgb(var(--mtlx-shadow) / calc(128 / 255));color:rgb(var(--mtlx-fg));}', '.mtlx-rec-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid rgb(var(--mtlx-line));background:rgb(var(--mtlx-surface-raised));border-radius:10px 10px 0 0;}', '.mtlx-rec-title{font-size:13px;font-weight:700;color:rgb(var(--mtlx-fg));}', '.mtlx-rec-close{background:none;border:none;padding:4px;color:rgb(var(--mtlx-fg-muted));cursor:pointer;line-height:0;}', '.mtlx-rec-close:hover{color:rgb(var(--mtlx-fg));}', '.mtlx-rec-icon{width:16px;height:16px;display:block;}', '.mtlx-rec-body{padding:14px;display:flex;flex-direction:column;gap:10px;}', '.mtlx-rec-row{display:flex;align-items:center;justify-content:space-between;gap:10px;}', '.mtlx-rec-label{font-size:11px;color:rgb(var(--mtlx-fg-muted));flex-shrink:0;}', '.mtlx-rec-seg{display:inline-flex;border:1px solid rgb(var(--mtlx-line));border-radius:8px;overflow:hidden;}', '.mtlx-rec-seg-btn{appearance:none;border:none;background:rgb(var(--mtlx-control));color:rgb(var(--mtlx-fg-muted));font-size:11px;padding:5px 9px;cursor:pointer;border-right:1px solid rgb(var(--mtlx-line));}', '.mtlx-rec-seg-btn:last-child{border-right:none;}', '.mtlx-rec-seg-btn:hover:not(:disabled){background:rgb(var(--mtlx-hover));color:rgb(var(--mtlx-fg));}', '.mtlx-rec-seg-btn.is-active{background:rgb(var(--mtlx-accent-fill));color:rgb(var(--mtlx-on-accent));}', '.mtlx-rec-seg-btn:disabled{opacity:.5;cursor:not-allowed;}', '.mtlx-rec-hint{font-size:11px;color:rgb(var(--mtlx-fg-muted));}', '.mtlx-rec-error{font-size:11px;color:rgb(var(--mtlx-error));}', '.mtlx-rec-success{font-size:11px;color:rgb(var(--mtlx-fg-muted));}', '.mtlx-rec-progress{height:6px;border-radius:4px;background:rgb(var(--mtlx-chip));overflow:hidden;}', '.mtlx-rec-progress-fill{height:100%;background:rgb(var(--mtlx-accent-fill));transition:width .15s ease;}', '.mtlx-rec-progress-text{font-size:11px;color:rgb(var(--mtlx-fg-muted));}', '.mtlx-rec-preview{display:block;margin:0 auto;max-height:200px;max-width:100%;border-radius:6px;border:1px solid rgb(var(--mtlx-line));background:#000;}', '.mtlx-rec-footer{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 14px;border-top:1px solid rgb(var(--mtlx-line));}', '.mtlx-rec-btn{appearance:none;border:1px solid rgb(var(--mtlx-line));background:rgb(var(--mtlx-control));color:rgb(var(--mtlx-fg));font-size:11px;padding:6px 12px;border-radius:6px;cursor:pointer;}', '.mtlx-rec-btn:hover:not(:disabled){background:rgb(var(--mtlx-hover));}', '.mtlx-rec-btn:disabled{opacity:.5;cursor:not-allowed;}', '.mtlx-rec-btn--primary{background:rgb(var(--mtlx-accent-fill));border-color:rgb(var(--mtlx-accent-fill));color:rgb(var(--mtlx-on-accent));}', '.mtlx-rec-btn--primary:hover:not(:disabled){background:rgb(var(--mtlx-accent-fill-pressed));}', '.mtlx-rec-btn--danger{background:rgb(var(--mtlx-error-fill));border-color:rgb(var(--mtlx-error-fill));color:rgb(var(--mtlx-on-accent));}', '.mtlx-rec-btn--danger:hover:not(:disabled){background:rgb(var(--mtlx-error-fill-hover));}'].join('');
+  st.textContent = ['.mtlx-rec-overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgb(var(--mtlx-veil) / calc(179 / 255));font-family:inherit;}', '.mtlx-rec-panel{width:360px;max-width:calc(100vw - 24px);background:rgb(var(--mtlx-surface-base));border:1px solid rgb(var(--mtlx-line));border-radius:10px;box-shadow:0 10px 40px rgb(var(--mtlx-shadow) / calc(128 / 255));color:rgb(var(--mtlx-fg));}', '.mtlx-rec-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid rgb(var(--mtlx-line));background:rgb(var(--mtlx-surface-raised));border-radius:10px 10px 0 0;}', '.mtlx-rec-title{font-size:13px;font-weight:700;color:rgb(var(--mtlx-fg));}', '.mtlx-rec-close{background:none;border:none;padding:4px;color:rgb(var(--mtlx-fg-muted));cursor:pointer;line-height:0;}', '.mtlx-rec-close:hover{color:rgb(var(--mtlx-fg));}', '.mtlx-rec-icon{width:16px;height:16px;display:block;}', '.mtlx-rec-body{padding:14px;display:flex;flex-direction:column;gap:10px;}', '.mtlx-rec-row{display:flex;align-items:center;justify-content:space-between;gap:10px;}', '.mtlx-rec-label{font-size:11px;color:rgb(var(--mtlx-fg-muted));flex-shrink:0;}', '.mtlx-rec-seg{display:inline-flex;border:1px solid rgb(var(--mtlx-line));border-radius:8px;overflow:hidden;}', '.mtlx-rec-seg-btn{appearance:none;border:none;background:rgb(var(--mtlx-control));color:rgb(var(--mtlx-fg-muted));font-size:11px;padding:5px 9px;cursor:pointer;border-right:1px solid rgb(var(--mtlx-line));}', '.mtlx-rec-seg-btn:last-child{border-right:none;}', '.mtlx-rec-seg-btn:hover:not(:disabled){background:rgb(var(--mtlx-hover));color:rgb(var(--mtlx-fg));}', '.mtlx-rec-seg-btn.is-active{background:rgb(var(--mtlx-accent-fill));color:rgb(var(--mtlx-on-accent));}', '.mtlx-rec-seg-btn:disabled{opacity:.5;cursor:not-allowed;}', '.mtlx-rec-hint{font-size:11px;color:rgb(var(--mtlx-fg-muted));}', '.mtlx-rec-error{font-size:11px;color:rgb(var(--mtlx-error));}', '.mtlx-rec-success{font-size:11px;color:rgb(var(--mtlx-fg-muted));}', '.mtlx-rec-progress{height:6px;border-radius:4px;background:rgb(var(--mtlx-chip));overflow:hidden;}', '.mtlx-rec-progress-fill{height:100%;background:rgb(var(--mtlx-accent-fill));transition:width .15s ease;}', '.mtlx-rec-progress-text{font-size:11px;color:rgb(var(--mtlx-fg-muted));}', '.mtlx-rec-preview{display:block;margin:0 auto;max-height:200px;max-width:100%;border-radius:6px;border:1px solid rgb(var(--mtlx-line));background:#000;}', '.mtlx-rec-footer{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 14px;border-top:1px solid rgb(var(--mtlx-line));}', '.mtlx-rec-btn{appearance:none;border:1px solid rgb(var(--mtlx-line));background:rgb(var(--mtlx-control));color:rgb(var(--mtlx-fg));font-size:11px;padding:6px 12px;border-radius:6px;cursor:pointer;}', '.mtlx-rec-btn:hover:not(:disabled){background:rgb(var(--mtlx-hover));}', '.mtlx-rec-btn:disabled{opacity:.5;cursor:not-allowed;}', '.mtlx-rec-btn--primary{background:rgb(var(--mtlx-accent-fill));border-color:rgb(var(--mtlx-accent-fill));color:rgb(var(--mtlx-on-accent));}', '.mtlx-rec-btn--primary:hover:not(:disabled){background:rgb(var(--mtlx-accent-fill-hover));}', '.mtlx-rec-btn--danger{background:rgb(var(--mtlx-error-fill));border-color:rgb(var(--mtlx-error-fill));color:rgb(var(--mtlx-on-accent));}', '.mtlx-rec-btn--danger:hover:not(:disabled){background:rgb(var(--mtlx-error-fill-hover));}'].join('');
   document.head.appendChild(st);
 })();
 
@@ -1511,7 +1511,7 @@ function ShaderExportDialog({
   }, stages.map((st, i) => /*#__PURE__*/React.createElement("button", {
     key: st.id,
     onClick: () => setStageIdx(i),
-    className: 'h-6 text-[11px] px-2 rounded border transition-colors ' + (i === stageIdx ? 'bg-accent-fill/80 border-accent-base text-on-accent' : 'bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80')
+    className: 'h-6 text-[11px] px-2 rounded border transition-colors ' + (i === stageIdx ? 'mtlx-fill-accent-translucent border-accent-base text-on-accent' : 'bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80')
   }, st.label))), error ? /*#__PURE__*/React.createElement("div", {
     className: "px-4 py-3"
   }, /*#__PURE__*/React.createElement("div", {
@@ -2179,7 +2179,7 @@ const EnvDialog = ({
     onClick: handleToggleKeyLight,
     disabled: !keyLightAvail,
     title: "Automatically extract a strong sun into a directional light so sharp highlights stay crisp (rebuilds the environment)",
-    className: `h-5 px-2 rounded border transition-colors disabled:opacity-40 ${keyLightOn ? 'bg-accent-fill/80 border-accent-base text-on-accent' : 'bg-control/80 border-line-strong text-fg-secondary'}`
+    className: `h-5 px-2 rounded border transition-colors disabled:opacity-40 ${keyLightOn ? 'mtlx-fill-accent-translucent border-accent-base text-on-accent' : 'bg-control/80 border-line-strong text-fg-secondary'}`
   }, keyLightOn ? 'On' : 'Off')), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between mb-0.5"
   }, /*#__PURE__*/React.createElement("span", null, "Rotation"), /*#__PURE__*/React.createElement("span", {
@@ -2513,7 +2513,7 @@ function Chip({
   children
 }) {
   const base = 'h-[30px] inline-flex items-center gap-1.5 px-3 rounded-full border text-[11px] transition-colors whitespace-nowrap';
-  const cls = disabled ? base + ' opacity-40 cursor-not-allowed text-fg-subtle border-line' + (dashed ? ' border-dashed' : '') : active ? base + ' border-accent-base/70 bg-accent-wash/10 text-accent-fg-bright' : base + ' border-line-strong text-fg-secondary hover:border-line-heavy cursor-pointer';
+  const cls = disabled ? base + ' opacity-40 cursor-not-allowed text-fg-subtle border-line' + (dashed ? ' border-dashed' : '') : active ? base + ' border-accent-base/70 bg-selection/20 text-accent-fg-bright' : base + ' border-line-strong text-fg-secondary hover:border-line-heavy cursor-pointer';
   return /*#__PURE__*/React.createElement("button", {
     type: "button",
     title: title,
@@ -2586,7 +2586,7 @@ function GeometryTile({
     disabled: disabled,
     title: title,
     onClick: onClick,
-    className: 'relative h-[84px] rounded-lg border flex flex-col items-center pt-3 px-1.5 gap-1.5 transition-colors ' + (disabled ? 'opacity-50 cursor-not-allowed border-line text-fg-subtle' : selected ? 'border-accent-base text-accent-text-on-tint ring-1 ring-accent-wash/15 bg-accent-wash/5' : 'border-line-control text-fg-secondary hover:border-line-strong')
+    className: 'relative h-[84px] rounded-lg border flex flex-col items-center pt-3 px-1.5 gap-1.5 transition-colors ' + (disabled ? 'opacity-50 cursor-not-allowed border-line text-fg-subtle' : selected ? 'border-accent-base text-accent-fg-bright ring-1 ring-accent-wash/15 bg-selection/20' : 'border-line-control text-fg-secondary hover:border-line-strong')
   }, badge && /*#__PURE__*/React.createElement("span", {
     className: "absolute top-1 right-1 flex-none text-[8px] uppercase tracking-wide px-1 py-0 rounded border bg-chip/60 border-line-heavy/50 text-fg-secondary"
   }, badge), /*#__PURE__*/React.createElement(MtlxIcon, {
@@ -2619,7 +2619,7 @@ function CustomModelTile({
     if (name) onSelect();else if (expanded) openPicker();else onExpand();
   };
   return /*#__PURE__*/React.createElement("div", {
-    className: 'relative rounded-lg border overflow-hidden w-full transition-colors ' + (selected ? 'border-accent-base text-accent-text-on-tint ring-1 ring-accent-wash/15 bg-accent-wash/5' : 'border-line-control text-fg-secondary hover:border-line-strong') + (className ? ' ' + className : '')
+    className: 'relative rounded-lg border overflow-hidden w-full transition-colors ' + (selected ? 'border-accent-base text-accent-fg-bright ring-1 ring-accent-wash/15 bg-selection/20' : 'border-line-control text-fg-secondary hover:border-line-strong') + (className ? ' ' + className : '')
   }, /*#__PURE__*/React.createElement("span", {
     className: 'absolute top-1 right-1 flex-none text-[8px] uppercase tracking-wide px-1 py-0 rounded border ' + SELECT_BADGE_TONE_CLS.warn,
     style: {
@@ -2835,7 +2835,7 @@ const ViewportControls = ({
   envDialogPlacement,
   containerClassName = 'absolute top-2 right-2 z-20 flex items-center gap-1',
   selectSize = 'sm',
-  buttonClassName = active => `h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors ${active ? 'bg-accent-fill/80 border-accent-base text-on-accent' : 'bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80'}`,
+  buttonClassName = active => `h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors ${active ? 'mtlx-fill-accent-translucent border-accent-base text-on-accent' : 'bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80'}`,
   // Optional grouped layout. `clusters` is an array of arrays of slot ids;
   // each inner array becomes one <div className={clusterClassName}>.
   // Absent (every existing caller) => today's flat strip, same order.
@@ -3552,7 +3552,7 @@ const MXS_BADGE_WARN = 'var(--mx-select-badge-warn, rgb(var(--mtlx-experimental,
 // Translucent derivations so the highlight reads as a tint over the
 // popover ground, not a solid slab. color-mix is already a baseline here
 // (embed/embed-controls.css, js/builder-app.jsx).
-const MXS_ACCENT_SOFT = 'color-mix(in srgb, ' + MXS_ACCENT + ' 30%, transparent)';
+const MXS_ACCENT_SOFT = 'color-mix(in srgb, ' + MXS_ACCENT + ' 20%, transparent)';
 const MXS_SURFACE_SOFT = 'color-mix(in srgb, ' + MXS_SURFACE + ' 95%, transparent)';
 // Toolbar triggers sit alongside BTN_TOOLBAR buttons, which fill at
 // control/80 over backdrop-blur. Matching that 80% is what stops a

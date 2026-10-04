@@ -26,7 +26,7 @@ const PRESET_PICKER_TAG_FILTERS = [
 
 // Small pill idioms, sized well below the Material Gallery's own chips so
 // two rows of them fit under the search bar in a narrow left column.
-const PRESET_PICKER_CHIP_ACTIVE = 'border-accent-base bg-accent-wash/[0.12] text-accent-fg-strong';
+const PRESET_PICKER_CHIP_ACTIVE = 'border-accent-base bg-selection/20 text-accent-fg-strong';
 const PRESET_PICKER_CHIP_IDLE = 'border-line-strong bg-control text-fg-secondary hover:bg-hover hover:text-fg';
 const PRESET_PICKER_CHIP_BASE = 'h-6 px-2 rounded-full border text-[11px] font-medium transition-colors whitespace-nowrap';
 const PRESET_PICKER_TAG_CLASS = 'text-[9px] font-medium uppercase tracking-wide px-[6px] py-px rounded-full border border-line-strong text-fg-muted';

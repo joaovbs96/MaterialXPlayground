@@ -1330,7 +1330,7 @@
             const hudChipClass = (active) => IN_VSCODE
                 ? `h-7 w-7 justify-center inline-flex items-center rounded-lg border transition-colors ${
                     active
-                        ? 'bg-accent-fill/80 border-accent-base text-on-accent'
+                        ? 'mtlx-fill-accent-translucent border-accent-base text-on-accent'
                         : 'border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong'
                 }`
                 : (active ? HUD_PILL_ACTIVE : HUD_PILL);

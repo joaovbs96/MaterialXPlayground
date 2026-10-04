@@ -157,7 +157,6 @@
         "native-titlebar-symbol": "#eeeeee",
         "surface-deep": "#000000",
         "scrim-alt": "#000000",
-        "on-accent-soft": "#ffffff",
         "code-inline-fg-alt": "#fca5a5",
         "code-block-bg-alt": "#000000"
     };

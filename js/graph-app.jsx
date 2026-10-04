@@ -84,7 +84,7 @@
                                 onMouseEnter={() => setHi(i)}
                                 onClick={() => onPick(c)}
                                 className={'w-full flex items-center gap-2 px-3 py-1.5 text-left text-[12px] font-mono transition-colors '
-                                    + (i === hi ? 'bg-selection/30 text-fg' : 'text-fg-secondary hover:bg-hover/60')}
+                                    + (i === hi ? 'bg-selection/20 text-fg' : 'text-fg-secondary hover:bg-hover/60')}
                             >
                                 <span className="w-2 h-2 rounded-full flex-none" style={{ background: typeColor(c.type) }} />
                                 <span className="flex-1 truncate">{c.label}</span>
@@ -174,7 +174,7 @@
                                         type="button"
                                         onClick={() => setHi(i)}
                                         className={'w-full text-left px-2 py-1.5 border-b border-line last:border-b-0 transition-colors '
-                                            + (i === hi ? 'bg-selection/30 text-fg' : 'text-fg-secondary hover:bg-hover/60')}
+                                            + (i === hi ? 'bg-selection/20 text-fg' : 'text-fg-secondary hover:bg-hover/60')}
                                     >
                                         <div className="text-[11px] font-mono truncate">{o.name || 'untitled'}</div>
                                         <div className="text-[10px] text-fg-subtle">
@@ -291,7 +291,7 @@
                                     onClick={() => setHi(i)}
                                     onDoubleClick={() => onOpen(p)}
                                     className={'w-full text-left px-2 py-1.5 border-b border-line last:border-b-0 transition-colors '
-                                        + (i === hi ? 'bg-selection/30 text-fg' : 'text-fg-secondary hover:bg-hover/60')}
+                                        + (i === hi ? 'bg-selection/20 text-fg' : 'text-fg-secondary hover:bg-hover/60')}
                                 >
                                     <div className="text-[11px] font-mono truncate">{pathBasename(p)}</div>
                                     <div className="text-[10px] text-fg-subtle truncate">{p}</div>
@@ -8341,7 +8341,7 @@
                                             : 'Pin the preview to this node, it stays put regardless of what you select next'}
                                         className={'absolute top-1 left-1 z-10 w-6 h-6 flex items-center justify-center rounded-full border backdrop-blur transition-colors '
                                             + (pinnedTarget
-                                                ? 'bg-accent-fill/80 border-accent-fg text-on-accent hover:bg-accent-fill-hover/80'
+                                                ? 'mtlx-fill-accent-translucent border-accent-base text-on-accent mtlx-fill-accent-translucent-hover'
                                                 : 'bg-hud/70 border-hud-line text-hud-fg hover:bg-hud-hover/80')}
                                     >
                                         <MtlxIcon name={pinnedTarget ? 'pin-filled' : 'pin'} className="w-3.5 h-3.5" />

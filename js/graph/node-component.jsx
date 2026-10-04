@@ -129,7 +129,7 @@
                             title={expanded ? 'Hide the inputs left at their defaults' : 'Show all inputs (defaults included)'}
                             className={'absolute -top-2 -right-2 z-10 w-4 h-4 rounded-full border text-[10px] leading-none flex items-center justify-center transition-colors '
                                 + (expanded
-                                    ? 'bg-accent-fill border-accent-fg text-on-accent hover:bg-accent-fill-hover'
+                                    ? 'bg-accent-fill border-accent-base text-on-accent hover:bg-accent-fill-hover'
                                     : 'bg-chip border-graph-node-line-iface text-fg-secondary hover:bg-hover-strong hover:text-fg')}
                         >{expanded ? '\u2212' : '+'}</button>
                     )}

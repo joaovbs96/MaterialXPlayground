@@ -475,7 +475,7 @@ function HomeApp({ active } = {}) {
                             onClick={() => setFilter(g.id)}
                             className={'h-8 px-3.5 rounded-full border text-[13px] font-medium transition-colors '
                                 + (isActive
-                                    ? 'border-accent-base bg-accent-wash/[0.12] text-accent-fg-strong'
+                                    ? 'border-accent-base bg-selection/20 text-accent-fg-strong'
                                     : 'border-line-strong bg-control text-fg-secondary hover:bg-hover hover:text-fg')}
                         >
                             {g.label}

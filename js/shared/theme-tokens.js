@@ -174,7 +174,6 @@
         'native-titlebar-symbol': '#e5e7eb',
         'surface-deep': '#030712',
         'scrim-alt': '#000000',
-        'on-accent-soft': '#f3f4f6',
         'code-inline-fg-alt': '#fca5a5',
         'code-block-bg-alt': '#0f172a',
     };
@@ -333,7 +332,6 @@
         'native-titlebar-symbol': '#374151',
         'surface-deep': '#f9fafb',
         'scrim-alt': '#334155',
-        'on-accent-soft': '#ffffff',
         'code-inline-fg-alt': '#b45309',
         'code-block-bg-alt': '#f5f7fa',
     };

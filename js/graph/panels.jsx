@@ -272,7 +272,7 @@
                                     <div className="flex items-center gap-2 pt-0.5">
                                         <button
                                             onClick={confirmIface}
-                                            className="h-7 text-[11px] px-2.5 rounded border bg-accent-fill/80 border-accent-base text-on-accent-soft hover:bg-accent-fill transition-colors"
+                                            className="h-7 text-[11px] px-2.5 rounded border mtlx-fill-accent-translucent border-accent-base text-on-accent mtlx-fill-accent-translucent-hover transition-colors"
                                         >Add</button>
                                         <button
                                             onClick={() => setIfaceDraft(null)}
@@ -325,7 +325,7 @@
                                         <button
                                             onClick={confirmDef}
                                             disabled={!defDraft.node.trim()}
-                                            className="h-7 text-[11px] px-2.5 rounded border bg-accent-fill/80 border-accent-base text-on-accent-soft hover:bg-accent-fill transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                            className="h-7 text-[11px] px-2.5 rounded border mtlx-fill-accent-translucent border-accent-base text-on-accent mtlx-fill-accent-translucent-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                         >Create</button>
                                         <button
                                             onClick={() => setDefDraft(null)}
@@ -376,7 +376,7 @@
                                     onMouseEnter={() => setHi(i)}
                                     onClick={() => pick(c)}
                                     className={'w-full flex items-center gap-2 px-3 py-1.5 text-left text-[12px] font-mono transition-colors '
-                                        + (i === hi ? 'bg-selection/30 text-fg' : 'text-fg-secondary hover:bg-hover/60')}
+                                        + (i === hi ? 'bg-selection/20 text-fg' : 'text-fg-secondary hover:bg-hover/60')}
                                 >
                                     {c.synthetic ? (
                                         <React.Fragment>

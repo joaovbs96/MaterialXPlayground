@@ -1619,7 +1619,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                         key={id}
                                         onClick={() => setDisplayMode(id)}
                                         className={'flex-1 px-2 py-1.5 transition-colors ' + (displayMode === id
-                                            ? 'bg-accent-wash/[0.12] text-accent-fg-strong'
+                                            ? 'bg-selection/20 text-accent-fg-strong'
                                             : 'bg-control/80 text-fg-secondary hover:bg-hover/80')}
                                     >
                                         {label}
