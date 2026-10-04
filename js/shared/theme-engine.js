@@ -617,14 +617,29 @@
         return moved;
     }
 
-    // A validated custom spec ({ base, seeds, overrides, modifiers }) to { ok, base, tokens, params, adjusted, report, error }.
+    // A validated custom spec ({ base, seeds, overrides, modifiers } or { base, from, overrides } plus opts.baseline) to { ok, base, tokens, params, adjusted, report, error }.
     // adjusted: [{ fg, bg, token, from, to }] per fixed pair (token is the color that moved; only surface-base and fg are
     // locked, as for VS Code). ok false: tokens are the uncorrected derivation and error is a short user-facing message.
     function resolveCustom(spec, opts) {
         const o = opts || {};
         const pairs = o.pairs || [];
-        const level = o.level || 'AA';
-        const d = deriveTheme({ base: spec.base, seeds: spec.seeds, overrides: spec.overrides, modifiers: spec.modifiers, data: o.data });
+        let level = o.level || 'AA';
+        let d;
+        if (spec.from) {
+            // Based on a built-in theme: its exact map and params plus the overrides, at that theme's level.
+            const bl = o.baseline;
+            if (!bl || !bl.tokens) return { ok: false, base: spec.base, tokens: {}, params: {}, adjusted: [], report: [], error: 'The theme "' + spec.from + '" it is based on is not available' };
+            level = bl.level || level;
+            const tokens = Object.assign({}, bl.tokens);
+            const ov = spec.overrides || {};
+            Object.keys(ov).forEach(function (t) {
+                if (!(t in tokens)) throw new Error('theme-engine: override of unknown token "' + t + '"');
+                tokens[t] = normHex(ov[t]);
+            });
+            d = { base: spec.base, tokens: tokens, params: JSON.parse(JSON.stringify(bl.params || {})) };
+        } else {
+            d = deriveTheme({ base: spec.base, seeds: spec.seeds, overrides: spec.overrides, modifiers: spec.modifiers, data: o.data });
+        }
         const out = { ok: true, base: d.base, tokens: d.tokens, params: d.params, adjusted: [], report: [], error: null };
         try {
             const fitted = Object.assign({}, d.tokens);

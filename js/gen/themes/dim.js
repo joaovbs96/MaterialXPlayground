@@ -170,12 +170,18 @@
             "accentFillTranslucent": 0.7
         }
     };
-    if (typeof module === 'object' && module.exports) { module.exports = { id: id, base: base, tokens: tokens, params: params }; return; }
+    var seeds = {
+        "background": "#1f2430",
+        "foreground": "#e3e7ee",
+        "accent": "#4c8df6"
+    };
+    if (typeof module === 'object' && module.exports) { module.exports = { id: id, base: base, tokens: tokens, params: params, seeds: seeds }; return; }
     var d = root.MTLX_THEME_TOKENS;
     var doc = root.document;
     if (!d || !doc) return;
     d.themes[id] = tokens;
     d.params[id] = params;
+    (d.seeds = d.seeds || {})[id] = seeds;
     var me = doc.currentScript;
     var href = me && me.src ? me.src.replace(/\.js([?#].*)?$/, '.css') : 'js/gen/themes/' + id + '.css';
     var done = function () { if (typeof d.loaded === 'function') d.loaded(id); };

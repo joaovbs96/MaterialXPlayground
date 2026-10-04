@@ -115,3 +115,82 @@ test('every preset resolves at its registry level and matches the generated file
     assert.equal(r.tokens['brand-logo-inner'], '#ffffff');
   }
 });
+
+// ---- Custom themes based on a built-in theme (spec.from) ----
+const pairsGen = require('../../js/gen/theme-pairs.js');
+const deepMerge = (a, b) => {
+  const o = JSON.parse(JSON.stringify(a || {}));
+  for (const [k, v] of Object.entries(b || {})) o[k] = v && typeof v === 'object' && !Array.isArray(v) ? deepMerge(o[k], v) : v;
+  return o;
+};
+const BASELINES = {};
+for (const e of data.registry.filter((x) => x.base !== 'auto')) {
+  if (e.id === 'dark') BASELINES.dark = { base: 'dark', tokens: data.themes.dark, params: data.params.dark, level: e.contrast };
+  else if (e.id === 'light') BASELINES.light = { base: 'light', tokens: { ...data.themes.dark, ...data.themes.light }, params: deepMerge(data.params.dark, data.params.light), level: e.contrast };
+  else {
+    const g = require(`../../js/gen/themes/${e.id}.js`);
+    BASELINES[e.id] = { base: g.base, tokens: g.tokens, params: g.params, level: e.contrast };
+  }
+}
+const fromCustom = (id, overrides) => {
+  const b = BASELINES[id];
+  return E.resolveCustom({ base: b.base, from: id, overrides: overrides || {} }, { data, pairs: pairsGen.pairs, baseline: { tokens: b.tokens, params: b.params, level: b.level } });
+};
+
+test('generated presets carry their true seeds', () => {
+  for (const id of ['hc-dark', 'hc-light', 'dim', 'paper']) {
+    const g = require(`../../js/gen/themes/${id}.js`);
+    const r = E.resolvePreset({ ...meta.presets[id], contrast: data.registry.find((e) => e.id === id).contrast }, { data, pairs: meta.contrast, name: id });
+    assert.deepEqual(g.seeds, r.seeds, id);
+    assert.deepEqual(Object.keys(g.seeds), Object.keys(data.seeds.dark));
+  }
+});
+
+test('from without overrides reproduces the built-in theme exactly, for all six', () => {
+  assert.deepEqual(Object.keys(BASELINES).sort(), ['dark', 'dim', 'hc-dark', 'hc-light', 'light', 'paper']);
+  for (const [id, b] of Object.entries(BASELINES)) {
+    const r = fromCustom(id);
+    assert.equal(r.ok, true, id + ': ' + r.error);
+    assert.deepEqual(r.tokens, b.tokens, id + ' tokens');
+    assert.deepEqual(r.params, b.params, id + ' params');
+    assert.deepEqual(r.adjusted, [], id);
+    assert.ok(r.report.every((x) => x.pass), id);
+  }
+});
+
+test('from: overriding a token at its current value changes nothing', () => {
+  for (const [id, b] of Object.entries(BASELINES)) {
+    const all = Object.keys(b.tokens);
+    const names = id === 'light' || id === 'paper' ? all : all.filter((_, i) => i % Math.floor(all.length / 20) === 0).slice(0, 20);
+    if (names.length < 20 && id !== 'light' && id !== 'paper') assert.fail('sample too small');
+    for (const t of names) {
+      const r = fromCustom(id, { [t]: b.tokens[t] });
+      assert.equal(r.ok, true, id + ' ' + t + ': ' + r.error);
+      assert.deepEqual(r.tokens, b.tokens, id + ' ' + t);
+      assert.deepEqual(r.adjusted, [], id + ' ' + t);
+    }
+  }
+});
+
+test('from: a real override moves only that token plus the ones the report lists as adjusted', () => {
+  for (const [id, b] of Object.entries(BASELINES)) {
+    for (const [t, c] of [['accent-fill', '#b91c1c'], ['fg-muted', '#445566'], ['surface-raised', '#303a4a']]) {
+      const r = fromCustom(id, { [t]: c });
+      if (!r.ok) continue;
+      const moved = Object.keys(b.tokens).filter((k) => r.tokens[k] !== b.tokens[k]);
+      const allowed = new Set([t, ...r.adjusted.map((a) => a.token)]);
+      assert.ok(moved.includes(t) || r.adjusted.some((a) => a.token === t), id + ' ' + t + ' moves');
+      for (const k of moved) assert.ok(allowed.has(k), id + ' ' + t + ': unexpected move of ' + k);
+      assert.ok(r.report.every((x) => x.pass), id + ' ' + t);
+    }
+  }
+  assert.equal(fromCustom('dark', { 'accent-fill': '#b91c1c' }).tokens['accent-fill'] !== BASELINES.dark.tokens['accent-fill'], true);
+});
+
+test('from without a baseline fails with a clear message; the seeds path is unchanged', () => {
+  const r = E.resolveCustom({ base: 'light', from: 'paper', overrides: {} }, { data, pairs: pairsGen.pairs });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /paper/);
+  const a = E.resolveCustom({ base: 'dark', seeds: data.seeds.dark, overrides: {}, modifiers: {} }, { data, pairs: pairsGen.pairs, level: 'AA' });
+  assert.equal(a.ok, true);
+});

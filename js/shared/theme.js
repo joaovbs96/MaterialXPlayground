@@ -59,7 +59,8 @@
         let v = [];
         try { v = JSON.parse(root.localStorage.getItem(CKEY) || '[]'); } catch (e) { /* empty */ }
         (Array.isArray(v) ? v : []).slice(0, 50).forEach(function (x) {
-            if (x && SLUG.test(x.id) && typeof x.label === 'string' && x.label.length <= 80 && !/[\u0000-\u001f<>]/.test(x.label) && /^(dark|light)$/.test(x.base)) cache.push({ id: x.id, label: x.label, base: x.base });
+            if (x && /^\s*mtlx1\./.test(String(x.code))) unlabelled = true;
+            else if (x && SLUG.test(x.id) && typeof x.label === 'string' && x.label.length <= 80 && !/[\u0000-\u001f<>]/.test(x.label) && /^(dark|light)$/.test(x.base)) cache.push({ id: x.id, label: x.label, base: x.base });
             else if (x) unlabelled = true;
         });
     }
@@ -316,16 +317,16 @@
     }
 
     // Custom theme API (contract in docs/local/theme-tokens.md) until theme-custom.js is in: the async calls load it
-    // first; setCustomThemes and deleteCustom run once it is in; listCustom, encodeTheme and decodeTheme start loading
+    // first (the first five names); setCustomThemes and deleteCustom run once it is in; listCustom, encodeTheme and decodeTheme start loading
     // it (mtlx-custom-themes-change follows) and meanwhile return [] or throw a short "still loading" error.
-    'saveCustom previewDraft loadEngine getTokenGroups setCustomThemes deleteCustom listCustom encodeTheme decodeTheme clearDraft'.split(' ').forEach(function (n, i) {
+    'saveCustom previewDraft loadEngine getTokenGroups resolveCustomTheme setCustomThemes deleteCustom listCustom encodeTheme decodeTheme clearDraft'.split(' ').forEach(function (n, i) {
         api[n] = function () {
             const a = arguments;
-            if (i < 4) return new Promise(function (res, rej) { loadExt(function () { if (ext) res(ext.api[n].apply(null, a)); else rej(new Error('Custom themes could not be loaded')); }); });
-            if (i > 8) return;
-            loadExt(function () { if (ext && i < 6) ext.api[n].apply(null, a); });
-            if (i > 6) throw new Error('Theme tools are still loading; try again in a moment');
-            return i === 5 ? cache.some(function (c) { return c.id === a[0]; }) : [];
+            if (i < 5) return new Promise(function (res, rej) { loadExt(function () { if (ext) res(ext.api[n].apply(null, a)); else rej(new Error('Custom themes could not be loaded')); }); });
+            if (i > 9) return;
+            loadExt(function () { if (ext && i < 7) ext.api[n].apply(null, a); });
+            if (i > 7) throw new Error('Theme tools are still loading; try again in a moment');
+            return i === 6 ? cache.some(function (c) { return c.id === a[0]; }) : [];
         };
     });
 })(typeof self !== 'undefined' ? self : this);
