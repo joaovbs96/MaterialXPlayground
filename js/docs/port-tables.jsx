@@ -284,7 +284,7 @@
                         </thead>
                         <tbody>
                             {Object.entries(table.ports).map(([portName, portData]) => (
-                                <tr className="border-b border-line/50 last:border-b-0 hover:bg-hover/40" key={portName}>
+                                <tr className="border-b border-line/50 last:border-b-0 hover:bg-hover/60" key={portName}>
                                     {columns.map(col => {
                                         const overridden = col === 'default' && defaultsOverride
                                             && Object.prototype.hasOwnProperty.call(defaultsOverride, portName);

@@ -229,7 +229,7 @@ function GalleryCard({ m, onOpen }) {
             type="button"
             onClick={() => onOpen(m.id)}
             title={m.name}
-            className="group flex flex-col text-left bg-surface-raised border border-line-subtle rounded-xl overflow-hidden transition-colors hover:border-accent-base/50 hover:bg-surface-raised/80"
+            className="group flex flex-col text-left bg-surface-raised border border-line-subtle rounded-xl overflow-hidden transition-colors hover:border-accent-base/50 hover:bg-hover-subtle"
         >
             {showPlaceholder ? (
                 <div

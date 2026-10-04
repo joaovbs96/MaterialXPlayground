@@ -124,7 +124,7 @@ function PresetPickerRow({ entry, highlighted, onClick, onDoubleClick, setRowEl 
             onDoubleClick={onDoubleClick}
             title={entry.name}
             className={'w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md text-left transition-colors border '
-                + (highlighted ? 'bg-selection/20 border-accent-base/60' : 'border-transparent hover:bg-hover/50')}
+                + (highlighted ? 'bg-selection/20 border-accent-base/60' : 'border-transparent hover:bg-hover/60')}
         >
             {showPlaceholder ? (
                 <div

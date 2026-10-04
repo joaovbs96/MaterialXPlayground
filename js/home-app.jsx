@@ -70,7 +70,7 @@ function ComingSoonMedia() {
     return (
         <div
             className="w-full aspect-video border-b border-line flex items-center justify-center"
-            style={{ backgroundImage: 'repeating-linear-gradient(135deg, rgb(var(--mtlx-line-strong) / calc(46 / 255)) 0 10px, transparent 10px 20px)' }}
+            style={{ backgroundImage: 'repeating-linear-gradient(135deg, rgb(var(--mtlx-line-heavy) / calc(41 / 255)) 0 10px, transparent 10px 20px)' }}
         >
             <span className="text-xs text-fg-subtle">Coming soon</span>
         </div>
@@ -116,7 +116,7 @@ function HomeCard({ card }) {
             )}
         </div>
     );
-    const linkClass = 'group flex flex-col bg-surface-raised border border-line-subtle rounded-xl overflow-hidden transition-colors hover:border-accent-base/50 hover:bg-surface-raised/80';
+    const linkClass = 'group flex flex-col bg-surface-raised border border-line-subtle rounded-xl overflow-hidden transition-colors hover:border-accent-base/50 hover:bg-hover-subtle';
 
     if (isLink && card.external) {
         return (

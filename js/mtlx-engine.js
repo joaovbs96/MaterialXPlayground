@@ -12224,7 +12224,7 @@ const watchFullscreen = (cb) => {
     const st = document.createElement('style');
     st.id = 'mtlx-shared-css';
     st.textContent = [
-        '.mtlx-loading-bar{position:relative;overflow:hidden;height:6px;border-radius:9999px;background:rgb(var(--mtlx-line-strong) / calc(115 / 255));}',
+        '.mtlx-loading-bar{position:relative;overflow:hidden;height:6px;border-radius:9999px;background:rgb(var(--mtlx-chip));}',
         '.mtlx-loading-bar::after{content:"";position:absolute;top:0;bottom:0;left:0;width:40%;border-radius:9999px;',
         'background:linear-gradient(90deg,transparent,rgb(var(--mtlx-progress)),transparent);animation:mtlx-loading-slide 1.1s ease-in-out infinite;}',
         ':root[data-theme-base="light"] .mtlx-loading-overlay{background-color:rgb(var(--mtlx-veil));}',

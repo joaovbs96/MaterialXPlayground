@@ -2749,7 +2749,7 @@
                 }
             };
             return (
-                <div className="border-t border-line/70 first:border-t-0">
+                <div className="border-t border-line/60 first:border-t-0">
                     <div className="w-full flex items-center gap-1.5 py-1.5 px-1 -mx-1 rounded hover:bg-hover-subtle/60">
                         <button
                             type="button"
@@ -3728,7 +3728,7 @@
                             {Number(lightRecord.specular) !== 1 && lightRecord.specular != null ? <LightInfoRow label="Specular multiplier" raw="inputs:specular">{lightNumber(lightRecord.specular) + ' (not applied)'}</LightInfoRow> : null}
                             {lightRecord.textureFile ? <LightInfoRow label="Texture" raw="inputs:texture:file">{String(lightRecord.textureFile)}</LightInfoRow> : null}
                         </div>
-                        <div className="pt-2 border-t border-line/70">
+                        <div className="pt-2 border-t border-line/60">
                             <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">In the viewport</div>
                             <LightInfoRow label="Status" testId="usd-scene-light-status">{status}</LightInfoRow>
                             <LightInfoRow label="Imported as" testId="usd-scene-light-imported">{imported}</LightInfoRow>
@@ -3746,7 +3746,7 @@
                             ) : null}
                         </div>
                         {notes.length ? (
-                            <div data-testid="usd-scene-light-notes" className="pt-2 border-t border-line/70 space-y-1">
+                            <div data-testid="usd-scene-light-notes" className="pt-2 border-t border-line/60 space-y-1">
                                 <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">Notes</div>
                                 {notes.map((text, i) => <div key={i} className="text-[11px] text-fg-muted break-words">{text}</div>)}
                             </div>

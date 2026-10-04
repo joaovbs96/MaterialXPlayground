@@ -576,7 +576,7 @@ function PresetsDialog({ open, onClose, onPick, busy, busyPath, overlayClassName
                             disabled={busy}
                             title={presetKey(preset)}
                             className={'w-full text-left px-2.5 py-2 rounded flex items-center justify-between gap-2 transition-colors '
-                                + (busy ? 'cursor-not-allowed opacity-60' : 'hover:bg-hover/70 cursor-pointer')}
+                                + (busy ? 'cursor-not-allowed opacity-60' : 'hover:bg-hover/60 cursor-pointer')}
                         >
                             <span className="min-w-0">
                                 <span className="block text-fg font-medium truncate">{preset.label}</span>

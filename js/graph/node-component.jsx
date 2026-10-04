@@ -134,7 +134,7 @@
                         >{expanded ? '\u2212' : '+'}</button>
                     )}
                     <div className={'px-2 py-1.5 border-b rounded-t-lg leading-tight '
-                            + (isIface ? 'border-line/70 border-dashed bg-transparent'
+                            + (isIface ? 'border-line/60 border-dashed bg-transparent'
                                        : 'border-line bg-graph-node-header/70')}>
                         <div className="flex items-center gap-1.5 min-w-0">
                             {isIface ? (

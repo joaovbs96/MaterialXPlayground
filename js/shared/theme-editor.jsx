@@ -335,7 +335,7 @@ function TeContrastPill({ report, labelOf, showSeq }) {
     };
     const tone = bad
         ? 'bg-warning-bg/30 border-warning-border/50 text-warning-text hover:bg-warning-bg/40'
-        : n ? 'bg-hover/40 border-line text-fg-soft hover:bg-hover/60' : 'border-line-subtle text-fg-muted hover:text-fg-soft';
+        : n ? 'bg-hover/60 border-line text-fg-soft hover:bg-hover/60' : 'border-line-subtle text-fg-muted hover:text-fg-soft';
     return (
         <div ref={wrapRef} className="relative flex-none" onMouseEnter={enter} onMouseLeave={leave} onKeyDown={onKeyDown}>
             <button type="button" aria-expanded={open} aria-controls={popId} aria-haspopup="dialog"

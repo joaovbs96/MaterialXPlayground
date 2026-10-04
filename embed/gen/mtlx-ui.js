@@ -745,7 +745,7 @@ function PresetsDialog({
       onClick: () => onPick(preset),
       disabled: busy,
       title: presetKey(preset),
-      className: 'w-full text-left px-2.5 py-2 rounded flex items-center justify-between gap-2 transition-colors ' + (busy ? 'cursor-not-allowed opacity-60' : 'hover:bg-hover/70 cursor-pointer')
+      className: 'w-full text-left px-2.5 py-2 rounded flex items-center justify-between gap-2 transition-colors ' + (busy ? 'cursor-not-allowed opacity-60' : 'hover:bg-hover/60 cursor-pointer')
     }, /*#__PURE__*/React.createElement("span", {
       className: "min-w-0"
     }, /*#__PURE__*/React.createElement("span", {
