@@ -1677,32 +1677,8 @@ export const contrast = [
     }
 ];
 
-// Pre-existing dark-theme failures ("fg|bg"), frozen: dark values must not change. check-theme-contrast fails on any dark failure not listed here.
-export const knownDarkFailures = [
-    "fg-subtle|surface-raised",
-    "fg-subtle|surface-sunken",
-    "fg-faint|surface-base",
-    "stage-fg-subtle|stage",
-    "on-accent-muted|accent-fill",
-    "on-accent|success-fill",
-    "code-muted|surface-raised",
-    "line-strong|surface-raised",
-    "line-strong|surface-sunken",
-    "hud-line|hud",
-    "scrollbar-thumb|scrollbar-track",
-    "graph-node-line|graph-canvas",
-    "type-bsdf|graph-node",
-    "type-float|graph-node",
-    "type-float|graph-canvas",
-    "type-integer|graph-node",
-    "type-integer|graph-canvas",
-    "type-matrix44|graph-node",
-    "type-nodegraph|graph-node",
-    "type-nodegraph|graph-canvas",
-    "line-control|surface-sunken",
-    "line-control|surface-raised",
-    "line-control|surface-base",
-];
+// Dark-theme failures allowed to remain ("fg|bg"). Empty: dark enforces AA. check-theme-contrast fails on any dark failure not listed.
+export const knownDarkFailures = [];
 
 // Presets resolved by scripts/build-theme.mjs through js/shared/theme-engine.js (deriveTheme, then enforceContrast
 // at the registry's contrast level) into js/gen/themes/<id>.css and .js. Every non-dark, non-light registry id needs

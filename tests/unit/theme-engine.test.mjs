@@ -32,7 +32,9 @@ test('derivation is deterministic and reproduces the hand-authored dark and ligh
     const b = E.deriveTheme({ base, seeds: { ...data.seeds[base] } });
     assert.deepEqual(a.tokens, b.tokens);
     assert.deepEqual(Object.keys(a.tokens), Object.keys(data.themes.dark));
-    const d = Object.keys(data.themes[base]).map((t) => E.deltaE(a.tokens[t], data.themes[base][t]));
+    // Dark tokens lifted to AA on purpose are no longer what the recipes derive.
+    const lifted = base === 'dark' ? new Set(['fg-subtle','fg-faint','on-accent-muted','code-muted','line-strong','hud-line','scrollbar-thumb','graph-node-line','stage-fg-subtle','type-bsdf','type-float','type-integer','type-matrix44','type-nodegraph','line-control','success-fill']) : new Set();
+    const d = Object.keys(data.themes[base]).filter((t) => !lifted.has(t)).map((t) => E.deltaE(a.tokens[t], data.themes[base][t]));
     assert.ok(mean(d) < 0.5, `${base} mean deltaE ${mean(d)}`);
     assert.ok(Math.max(...d) < 2, `${base} max deltaE ${Math.max(...d)}`);
     for (const [t, src] of Object.entries(a.sources)) {
@@ -67,7 +69,8 @@ test('recipes follow the seeds: a new background moves the neutral ladder, a new
 });
 
 test('the contrast pass moves only failing foregrounds, minimally, and reaches the target', () => {
-  const map = { ...data.themes.dark };
+  // Dark now passes AA, so pin the three tokens to their old failing values.
+  const map = { ...data.themes.dark, 'fg-subtle': '#6b7280', 'fg-faint': '#4b5563', 'type-float': '#3949ab' };
   const pairs = meta.contrast.filter((p) => ['fg-subtle', 'fg-faint', 'type-float'].includes(p.fg));
   const out = E.enforceContrast(map, pairs, 'AA', { params: data.params.dark });
   const changed = Object.keys(map).filter((t) => out.tokens[t] !== map[t]);
