@@ -242,7 +242,6 @@ const EMBED_MIRRORED_TOKEN_CLASSES = [
   "border-error-border/60", // was border-red-800/60
   "border-hud-line", // was border-gray-600
   "border-line-strong", // was border-gray-600
-  "text-error-text-strong", // was text-red-200
   "text-fg-secondary", // was text-gray-300
   "text-hud-fg", // was text-gray-300
 ];

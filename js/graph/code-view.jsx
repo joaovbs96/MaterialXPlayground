@@ -1249,7 +1249,7 @@
                                         <button
                                             type="button"
                                             onClick={() => editorApiRef.current && editorApiRef.current.revealDiagnostic(0)}
-                                            className="block mt-1 underline decoration-dotted underline-offset-2 hover:text-error-text-strong"
+                                            className="block mt-1 underline decoration-dotted underline-offset-2 hover:text-error-text"
                                         >
                                             Go to line {errorLine}
                                         </button>
@@ -1265,7 +1265,7 @@
                                             type="button"
                                             onClick={() => editorApiRef.current && editorApiRef.current.undo()}
                                             title="Put back the code this replaced (Ctrl+Z in the code)"
-                                            className="flex-none underline decoration-dotted underline-offset-2 hover:text-success-text-strong"
+                                            className="flex-none underline decoration-dotted underline-offset-2 hover:text-success-text"
                                         >
                                             Undo
                                         </button>

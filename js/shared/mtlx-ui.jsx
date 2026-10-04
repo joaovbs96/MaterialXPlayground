@@ -135,7 +135,7 @@ const DialogFrame = ({
         '.mtlx-rec-seg-btn.is-active{background:rgb(var(--mtlx-accent-fill));color:rgb(var(--mtlx-on-accent));}',
         '.mtlx-rec-seg-btn:disabled{opacity:.5;cursor:not-allowed;}',
         '.mtlx-rec-hint{font-size:11px;color:rgb(var(--mtlx-fg-muted));}',
-        '.mtlx-rec-error{font-size:11px;color:rgb(var(--mtlx-error-fill));}',
+        '.mtlx-rec-error{font-size:11px;color:rgb(var(--mtlx-error));}',
         '.mtlx-rec-success{font-size:11px;color:rgb(var(--mtlx-fg-muted));}',
         '.mtlx-rec-progress{height:6px;border-radius:4px;background:rgb(var(--mtlx-chip));overflow:hidden;}',
         '.mtlx-rec-progress-fill{height:100%;background:rgb(var(--mtlx-accent-fill));transition:width .15s ease;}',
@@ -991,7 +991,7 @@ function renderStageBody(stage, loadState, startStageLoad) {
     if (status === 'error') {
         return (
             <div className="px-4 py-3 flex flex-col gap-2">
-                <div className="bg-error-bg-strong/40 border border-error-border-strong text-error-text-strong rounded px-3 py-2 text-[12px]">
+                <div className="bg-error-bg/60 border border-error-border/60 text-error-text rounded px-3 py-2 text-[12px]">
                     {loadState.error}
                 </div>
                 <div>{retryBtn}</div>
@@ -1312,7 +1312,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                     )}
                     {error ? (
                         <div className="px-4 py-3">
-                            <div className="bg-error-bg-strong/40 border border-error-border-strong text-error-text-strong rounded px-3 py-2 text-[12px]">
+                            <div className="bg-error-bg/60 border border-error-border/60 text-error-text rounded px-3 py-2 text-[12px]">
                                 {error}
                             </div>
                         </div>
@@ -4106,7 +4106,7 @@ class PreviewErrorBoundary extends React.Component {
     render() {
         if (this.state.error) {
             return (
-                <div className="rounded-lg border border-error-bg-strong/60 bg-error-bg/30 text-error-text text-xs p-3">
+                <div className="rounded-lg border border-error-border/60 bg-error-bg/60 text-error-text text-xs p-3">
                     {'3D preview crashed: ' + String((this.state.error && this.state.error.message) || this.state.error)}
                 </div>
             );

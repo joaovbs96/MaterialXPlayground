@@ -12,6 +12,5 @@
 .border-error-border\/60 { border-color: rgb(var(--mtlx-error-border) / 0.6); }
 .border-hud-line { border-color: rgb(var(--mtlx-hud-line) / 1); }
 .border-line-strong { border-color: rgb(var(--mtlx-line-strong) / 1); }
-.text-error-text-strong { color: rgb(var(--mtlx-error-text-strong) / 1); }
 .text-fg-secondary { color: rgb(var(--mtlx-fg-secondary) / 1); }
 .text-hud-fg { color: rgb(var(--mtlx-hud-fg) / 1); }

@@ -1088,7 +1088,7 @@
                                                     title="Copy a direct link to this node"
                                                     className={'inline-flex items-center gap-1 h-6 px-2 rounded-md border text-[11px] font-medium transition-colors ' + (
                                                         copied
-                                                            ? 'bg-success-border/30 border-success-fill/60 text-success-text'
+                                                            ? 'bg-success-bg/30 border-success-border/60 text-success-text'
                                                             : 'border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong'
                                                     )}
                                                 >

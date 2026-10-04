@@ -70,12 +70,12 @@
                                                 rel="noopener noreferrer"
                                                 title={'Nodegraph implementation — view source: ' + row.graphFile}
                                                 aria-label="View nodegraph implementation source"
-                                                className={badgeBase + ' border-info-border-alt/60 bg-info-bg/40 text-accent-fg-strong'}
+                                                className={badgeBase + ' border-info-border/60 bg-info-bg/40 text-info'}
                                             >
                                                 Graph (all targets)
                                             </a>
                                         ) : (
-                                            <span className={badgeBase + ' border-info-border-alt/60 bg-info-bg/40 text-accent-fg-strong'}>
+                                            <span className={badgeBase + ' border-info-border/60 bg-info-bg/40 text-info'}>
                                                 Graph (all targets)
                                             </span>
                                         )
@@ -92,7 +92,7 @@
                                                 explicit
                                                     ? ' border-success-border/60 bg-success-bg/30 text-success'
                                                     : inherited
-                                                        ? ' border-success-border-muted/40 border-dashed bg-success-bg/10 text-success-fill'
+                                                        ? ' border-success-border/30 border-dashed bg-success-bg/10 text-success/75'
                                                         : ' border-line bg-surface-sunken text-fg-disabled'
                                             );
                                             const badgeChildren = (

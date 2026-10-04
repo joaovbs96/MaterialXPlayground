@@ -1650,7 +1650,7 @@ function MaterialViewerApp({
   }, IN_VSCODE && status && !busy && /*#__PURE__*/React.createElement("div", {
     className: "text-sm text-fg-muted mb-3"
   }, status), IN_VSCODE && error && /*#__PURE__*/React.createElement("div", {
-    className: "bg-error-bg/40 border border-error-border/60 text-error-text-strong text-sm rounded-lg px-4 py-3 mb-3 break-words"
+    className: "bg-error-bg/60 border border-error-border/60 text-error-text text-sm rounded-lg px-4 py-3 mb-3 break-words"
   }, error), /*#__PURE__*/React.createElement("div", {
     ref: viewportRef,
     className: `overflow-hidden ${bgClass} ${IN_VSCODE ? 'relative flex-1 min-h-0' : 'absolute inset-0'}`
@@ -1860,7 +1860,7 @@ function MaterialViewerApp({
   })()))), !IN_VSCODE && status && !busy && /*#__PURE__*/React.createElement("div", {
     className: "absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-hud-raised/90 backdrop-blur border border-hud-line text-hud-fg text-sm rounded-lg px-4 py-2 break-words shadow-lg"
   }, status), !IN_VSCODE && error && /*#__PURE__*/React.createElement("div", {
-    className: "absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-error-bg/90 border border-error-border/60 text-error-text-strong text-sm rounded-lg px-4 py-2.5 break-words shadow-lg"
+    className: "absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-error-bg/90 border border-error-border/60 text-error-text text-sm rounded-lg px-4 py-2.5 break-words shadow-lg"
   }, error), !IN_VSCODE && !chromeless && !sidebarOpen && /*#__PURE__*/React.createElement("button", {
     onClick: () => setSidebarOpen(true),
     title: "Expand the viewer panel",

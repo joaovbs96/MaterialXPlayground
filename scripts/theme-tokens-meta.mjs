@@ -926,14 +926,6 @@ export const tokens = {
         "drift": true,
         "mergeInto": "on-accent"
     },
-    "success-border-muted": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "green",
-        "role": "Inherited (dashed) success badge border (/40).",
-        "drift": true,
-        "mergeInto": "success-border"
-    },
     "warning-bg-strong": {
         "group": "drift",
         "kind": "independent",
@@ -949,46 +941,6 @@ export const tokens = {
         "role": "Warning toast/banner border (/50) in shell and site header.",
         "drift": true,
         "mergeInto": "warning-border"
-    },
-    "error-text-strong": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "red",
-        "role": "Text in error toasts and boxes (red-200 recipe).",
-        "drift": true,
-        "mergeInto": "error-text"
-    },
-    "success-text-strong": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "green",
-        "role": "Hover text on success messages (green-200 recipe).",
-        "drift": true,
-        "mergeInto": "success-text"
-    },
-    "error-bg-strong": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "red",
-        "role": "Error box ground (/40) in mtlx-ui recipe A.",
-        "drift": true,
-        "mergeInto": "error-bg"
-    },
-    "error-border-strong": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "red",
-        "role": "Error box border (solid) in mtlx-ui recipe A.",
-        "drift": true,
-        "mergeInto": "error-border"
-    },
-    "info-border-alt": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "blue",
-        "role": "Info badge border (/60) in the implementation matrix.",
-        "drift": true,
-        "mergeInto": "info-border"
     },
     "notice-bg": {
         "group": "drift",
@@ -1917,14 +1869,8 @@ export const labels = {
     "surface-deep": "Deep wells",
     "scrim-alt": "Sidebar dialog backdrop",
     "on-accent-soft": "Soft text on accent fills",
-    "success-border-muted": "Inherited success border",
     "warning-bg-strong": "Warning action button",
     "warning-border-alt": "Warning toast border",
-    "error-text-strong": "Error toast text",
-    "success-text-strong": "Success message hover",
-    "error-bg-strong": "Error box background",
-    "error-border-strong": "Error box border",
-    "info-border-alt": "Info badge border",
     "notice-bg": "Notice background",
     "notice-line": "Notice border",
     "notice-text": "Notice text",

@@ -1585,7 +1585,7 @@
                                 <div className="text-sm text-fg-muted mb-3">{status}</div>
                             )}
                             {IN_VSCODE && error && (
-                                <div className="bg-error-bg/40 border border-error-border/60 text-error-text-strong text-sm rounded-lg px-4 py-3 mb-3 break-words">
+                                <div className="bg-error-bg/60 border border-error-border/60 text-error-text text-sm rounded-lg px-4 py-3 mb-3 break-words">
                                     {error}
                                 </div>
                             )}
@@ -1815,7 +1815,7 @@
                         <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-hud-raised/90 backdrop-blur border border-hud-line text-hud-fg text-sm rounded-lg px-4 py-2 break-words shadow-lg">{status}</div>
                     )}
                     {!IN_VSCODE && error && (
-                        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-error-bg/90 border border-error-border/60 text-error-text-strong text-sm rounded-lg px-4 py-2.5 break-words shadow-lg">{error}</div>
+                        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-error-bg/90 border border-error-border/60 text-error-text text-sm rounded-lg px-4 py-2.5 break-words shadow-lg">{error}</div>
                     )}
 
                     {/* Collapsed-sidebar pill, only shown while the docked

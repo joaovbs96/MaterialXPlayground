@@ -8252,7 +8252,7 @@
 
                             {/* Error banner, centered along the top */}
                             {error && (
-                                <div className={'absolute left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-error-bg/90 border border-error-border/60 text-error-text-strong text-sm rounded-lg px-4 py-2.5 break-words shadow-lg'} style={{ top: hudTop }}>
+                                <div className={'absolute left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-error-bg/90 border border-error-border/60 text-error-text text-sm rounded-lg px-4 py-2.5 break-words shadow-lg'} style={{ top: hudTop }}>
                                     {error}
                                 </div>
                             )}

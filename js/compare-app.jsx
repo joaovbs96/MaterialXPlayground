@@ -1258,7 +1258,7 @@ function MaterialCompareApp({ active = true } = {}) {
                 barWidthClass="w-40"
             />
             {slot.error && (
-                <div className="absolute top-2 left-2 right-2 z-20 bg-error-bg/90 border border-error-border/60 text-error-text-strong text-xs rounded-lg px-3 py-2 break-words shadow-lg">
+                <div className="absolute top-2 left-2 right-2 z-20 bg-error-bg/90 border border-error-border/60 text-error-text text-xs rounded-lg px-3 py-2 break-words shadow-lg">
                     {slot.error}
                 </div>
             )}
