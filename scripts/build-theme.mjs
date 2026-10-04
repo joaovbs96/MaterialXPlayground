@@ -17,6 +17,7 @@ const OUTPUT_PATH = path.join(REPO_ROOT, "js", "gen", "theme-tokens.css");
 const PRESET_DIR = path.join(REPO_ROOT, "js", "gen", "themes");
 const PAIRS_PATH = path.join(REPO_ROOT, "js", "gen", "theme-pairs.js");
 const GROUPS_PATH = path.join(REPO_ROOT, "js", "gen", "theme-groups.js");
+const SWATCHES_PATH = path.join(REPO_ROOT, "js", "gen", "theme-swatches.js");
 const CHECK_MODE = process.argv.includes("--check");
 
 const require = createRequire(import.meta.url);
@@ -267,16 +268,36 @@ function groupsJs() {
 `;
 }
 
+// HUD colors (accent, surface, text) of every registry theme, small enough to load eagerly for the Embed Builder tiles.
+function swatchesJs(table) {
+  const rows = Object.keys(table).map((id) => `        ${JSON.stringify(id)}: ${JSON.stringify(table[id])},`).join("\n");
+  return `// GENERATED FILE, DO NOT EDIT BY HAND. HUD swatches (accent-base, hud-raised, hud-fg) per theme from
+// js/shared/theme-tokens.js and the resolved presets by scripts/build-theme.mjs. Read by js/builder-app.jsx.
+(function (root) {
+    'use strict';
+    var swatches = {
+${rows}
+    };
+    if (typeof module === 'object' && module.exports) { module.exports = swatches; return; }
+    if (root.MTLX_THEME_TOKENS) root.MTLX_THEME_TOKENS.swatches = swatches;
+})(typeof self !== 'undefined' ? self : this);
+`;
+}
+
 function outputs() {
   const files = new Map([[OUTPUT_PATH, render()], [PAIRS_PATH, pairsJs()], [GROUPS_PATH, groupsJs()]]);
+  const swatch = (t) => ({ accent: t["accent-base"], surface: t["hud-raised"], text: t["hud-fg"] });
+  const table = { dark: swatch(data.themes.dark), light: swatch({ ...data.themes.dark, ...data.themes.light }) };
   for (const id of sourceIds) files.set(path.join(PRESET_DIR, `${id}.js`), sourceJs(id));
   for (const id of presetIds) {
     const r = resolvePreset(id);
+    table[id] = swatch({ ...data.themes.dark, ...r.tokens });
     files.set(path.join(PRESET_DIR, `${id}.css`), presetCss(id, r));
     files.set(path.join(PRESET_DIR, `${id}.js`), presetJs(id, r));
     const moved = Object.keys(r.moved);
     console.log(`[build-theme] ${id}: ${r.base} base, ${registry.find((e) => e.id === id).contrast}, contrast pass moved ${moved.length} token(s)${moved.length ? ": " + moved.join(", ") : ""}`);
   }
+  files.set(SWATCHES_PATH, swatchesJs(table));
   return files;
 }
 
