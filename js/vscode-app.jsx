@@ -10,7 +10,7 @@ const TAG_PILL_CLASS = 'text-[10px] font-medium uppercase tracking-wide px-[7px]
 const STRONG_CLASS = 'text-fg-soft font-medium';
 const CODE_BLOCK_CLASS = 'bg-code-block-bg border border-line rounded-[10px] px-3.5 py-3 font-mono text-[12.5px] leading-[18px] text-fg-soft';
 // Inline `<code>` styling: the site has no global rule for bare <code>.
-const CODE_CLASS = 'font-mono text-[0.9em] text-fg-soft bg-code-inline-bg/50 border border-line rounded px-1 py-px';
+const CODE_CLASS = 'font-mono text-[0.9em] text-code-inline-fg bg-code-inline-bg/50 border border-line rounded px-1 py-px';
 
 // "How it works" flow-diagram cards, in mockup order.
 const VSCODE_HOW = [

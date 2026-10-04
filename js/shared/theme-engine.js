@@ -283,8 +283,6 @@
             'native-window-bg': { from: 'background', mixToward: 'foreground', amount: -0.053 },
             'native-titlebar': { from: 'background' },
             'native-titlebar-symbol': { from: 'background', mixToward: 'foreground', amount: 0.948 },
-            'code-inline-fg-alt': { fixedFromBase: true },
-            'code-block-bg-alt': { from: 'background', mixToward: 'foreground', amount: -0.004 },
         },
         light: {
             'surface-base': { from: 'background' },
@@ -438,8 +436,6 @@
             'native-window-bg': { from: 'background' },
             'native-titlebar': { from: 'background' },
             'native-titlebar-symbol': { from: 'background', mixToward: 'foreground', amount: 0.785 },
-            'code-inline-fg-alt': { fixedFromBase: true },
-            'code-block-bg-alt': { from: 'background', mixToward: 'foreground', amount: -0.011 },
         },
     };
 

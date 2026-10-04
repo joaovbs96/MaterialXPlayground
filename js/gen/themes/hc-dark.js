@@ -155,9 +155,7 @@
         "type-untyped": "#94a3b8",
         "native-window-bg": "#000000",
         "native-titlebar": "#000000",
-        "native-titlebar-symbol": "#eeeeee",
-        "code-inline-fg-alt": "#fca5a5",
-        "code-block-bg-alt": "#000000"
+        "native-titlebar-symbol": "#eeeeee"
     };
     var params = {
         "typeFallback": {

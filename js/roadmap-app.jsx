@@ -39,7 +39,7 @@ function roadmapInline(text, keyPrefix) {
             return <strong key={key} className="font-semibold text-fg">{part.slice(2, -2)}</strong>;
         }
         if (/^`[^`]+`$/.test(part)) {
-            return <code key={key} className="font-mono text-[0.9em] text-fg-soft bg-code-inline-bg/50 border border-line rounded px-1 py-px">{part.slice(1, -1)}</code>;
+            return <code key={key} className="font-mono text-[0.9em] text-code-inline-fg bg-code-inline-bg/50 border border-line rounded px-1 py-px">{part.slice(1, -1)}</code>;
         }
         const linkMatch = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(part);
         if (linkMatch) {

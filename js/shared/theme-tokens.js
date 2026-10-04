@@ -173,8 +173,6 @@
         'native-window-bg': '#0b0f19',
         'native-titlebar': '#111827',
         'native-titlebar-symbol': '#e5e7eb',
-        'code-inline-fg-alt': '#fca5a5',
-        'code-block-bg-alt': '#0f172a',
     };
 
     // Palette rationale: docs/local/theme-tokens.md. Any token missing here falls back to dark.
@@ -330,8 +328,6 @@
         'native-window-bg': '#f3f4f6',
         'native-titlebar': '#f3f4f6',
         'native-titlebar-symbol': '#374151',
-        'code-inline-fg-alt': '#b45309',
-        'code-block-bg-alt': '#f5f7fa',
     };
 
     const themes = { dark: dark, light: light };

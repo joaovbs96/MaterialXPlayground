@@ -907,22 +907,6 @@ export const tokens = {
         "kind": "independent",
         "derive": "matches the header icon color",
         "role": "Electron title bar overlay window-control symbol color."
-    },
-    "code-inline-fg-alt": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "red",
-        "role": "Inline code text in the Embed Builder help doc.",
-        "drift": true,
-        "mergeInto": "code-inline-fg"
-    },
-    "code-block-bg-alt": {
-        "group": "drift",
-        "kind": "derivable",
-        "derive": "background, slate tint",
-        "role": "Code block ground in the Embed Builder help doc.",
-        "drift": true,
-        "mergeInto": "code-block-bg"
     }
 };
 
@@ -1668,7 +1652,6 @@ export const groupLabels = {
     graph: "Graph editor",
     type: "Value types",
     native: "Desktop window",
-    drift: "Legacy variants",
 };
 
 export const labels = {
@@ -1801,6 +1784,4 @@ export const labels = {
     "native-window-bg": "Window background",
     "native-titlebar": "Title bar",
     "native-titlebar-symbol": "Title bar buttons",
-    "code-inline-fg-alt": "Help inline code",
-    "code-block-bg-alt": "Help code block background",
 };

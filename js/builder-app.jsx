@@ -721,9 +721,9 @@ const BUILDER_HELP_DOC_CSS = `
 .embed-help-doc li { margin: 0.25rem 0; }
 .embed-help-doc a { color: rgb(var(--mtlx-accent-fg)); text-decoration: underline; }
 .embed-help-doc a:hover { color: rgb(var(--mtlx-accent-fg-strong)); }
-.embed-help-doc code { background: rgb(var(--mtlx-surface-sunken)); color: rgb(var(--mtlx-code-inline-fg-alt)); padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.85em; }
-.embed-help-doc pre { background: rgb(var(--mtlx-code-block-bg-alt)); border: 1px solid rgb(var(--mtlx-line)); border-radius: 6px; padding: 0.75rem; overflow-x: auto; margin: 0.75rem 0; }
-.embed-help-doc pre code { background: none; color: rgb(var(--mtlx-code-fg)); padding: 0; border-radius: 0; font-size: 0.85em; }
+.embed-help-doc code { background: rgb(var(--mtlx-code-inline-bg) / calc(128 / 255)); color: rgb(var(--mtlx-code-inline-fg)); border: 1px solid rgb(var(--mtlx-line)); padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.85em; }
+.embed-help-doc pre { background: rgb(var(--mtlx-code-block-bg)); border: 1px solid rgb(var(--mtlx-line)); border-radius: 6px; padding: 0.75rem; overflow-x: auto; margin: 0.75rem 0; }
+.embed-help-doc pre code { background: none; border: 0; color: rgb(var(--mtlx-code-fg)); padding: 0; border-radius: 0; font-size: 0.85em; }
 .embed-help-doc table { border-collapse: collapse; width: 100%; margin: 0.75rem 0; font-size: 0.85em; }
 .embed-help-doc th, .embed-help-doc td { border: 1px solid rgb(var(--mtlx-line)); padding: 0.35rem 0.5rem; text-align: left; vertical-align: top; }
 .embed-help-doc th { background: rgb(var(--mtlx-surface-raised)); color: rgb(var(--mtlx-fg-soft)); }
@@ -731,19 +731,11 @@ const BUILDER_HELP_DOC_CSS = `
 `;
 
 // Renders js/gen/embedding-docs.html (fetched/cached by BuilderApp so it
-// survives this component unmounting) inside a DialogFrame. Highlights
-// code blocks with highlight.js if it happens to already be loaded.
+// survives this component unmounting) inside a DialogFrame. Code blocks arrive
+// already highlighted (build-embed-docs.mjs).
 function BuilderHelpDialog({ open, onClose, html, loading, error }) {
     const bodyRef = React.useRef(null);
     useEscapeToClose(onClose, open);
-
-    React.useEffect(() => {
-        if (!open || !html || !bodyRef.current) return;
-        if (!window.hljs || typeof window.hljs.highlightElement !== 'function') return;
-        bodyRef.current.querySelectorAll('pre code').forEach((el) => {
-            try { window.hljs.highlightElement(el); } catch (e) { /* leave it unhighlighted */ }
-        });
-    }, [open, html]);
 
     // Intercepts in-page "#anchor" links so they scroll within the dialog
     // instead of changing location.hash, which the site's hash router

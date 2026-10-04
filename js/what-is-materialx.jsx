@@ -3,7 +3,7 @@
 // static, scrollable page like vscode-app.jsx; no imports, self-registers.
 
 const STRONG_CLASS = 'text-fg-soft font-medium';
-const CODE_CLASS = 'font-mono text-[0.9em] text-fg-soft bg-code-inline-bg/50 border border-line rounded px-1 py-px';
+const CODE_CLASS = 'font-mono text-[0.9em] text-code-inline-fg bg-code-inline-bg/50 border border-line rounded px-1 py-px';
 
 // 1x1 transparent PNG data URI, copied from home-app.jsx's HeroStage so a
 // <materialx-viewer> never flashes its placeholder before the first frame.

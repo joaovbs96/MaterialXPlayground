@@ -12247,6 +12247,12 @@ const watchFullscreen = (cb) => {
         '.hljs-attr{color:rgb(var(--mtlx-code-attr));}',
         '.hljs-string{color:rgb(var(--mtlx-code-string));}',
         '.hljs-comment{color:rgb(var(--mtlx-code-muted));font-style:italic;}',
+        '.hljs-keyword,.hljs-selector-tag,.hljs-literal{color:rgb(var(--mtlx-code-syntax-keyword));}',
+        '.hljs-number,.hljs-symbol{color:rgb(var(--mtlx-code-syntax-number));}',
+        '.hljs-built_in,.hljs-type,.hljs-class .hljs-title,.hljs-title.class_{color:rgb(var(--mtlx-code-syntax-type));}',
+        '.hljs-title,.hljs-title.function_,.hljs-selector-id,.hljs-selector-class{color:rgb(var(--mtlx-code-syntax-function));}',
+        '.hljs-property,.hljs-variable,.hljs-params,.hljs-subst{color:rgb(var(--mtlx-code-syntax-param));}',
+        '.hljs-meta,.hljs-meta .hljs-keyword{color:rgb(var(--mtlx-code-syntax-directive));}',
     ].join('');
     document.head.appendChild(st);
 })();

@@ -22,7 +22,7 @@ const GALLERY_TAG_CLASS = 'text-[10px] font-medium uppercase tracking-wide px-[7
 // Same idiom, but clickable: the overlay's family/Textured/Procedural
 // pills, which apply a filter and need an obvious hover affordance.
 const GALLERY_TAG_CLASS_LINK = GALLERY_TAG_CLASS + ' cursor-pointer transition-colors hover:border-accent-base/60 hover:text-fg';
-const GALLERY_CODE_CLASS = 'font-mono text-[0.9em] text-fg-soft bg-code-inline-bg/50 border border-line rounded px-1 py-px';
+const GALLERY_CODE_CLASS = 'font-mono text-[0.9em] text-code-inline-fg bg-code-inline-bg/50 border border-line rounded px-1 py-px';
 // Filter-chip idiom, shared by the family chips, the tag chips and the
 // numbered page pills.
 const GALLERY_CHIP_ACTIVE = 'border-accent-base bg-selection/20 text-accent-fg-strong';

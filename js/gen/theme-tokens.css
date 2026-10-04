@@ -153,8 +153,6 @@
   --mtlx-native-window-bg: 11 15 25;
   --mtlx-native-titlebar: 17 24 39;
   --mtlx-native-titlebar-symbol: 229 231 235;
-  --mtlx-code-inline-fg-alt: 252 165 165;
-  --mtlx-code-block-bg-alt: 15 23 42;
   --mtlx-type-fallback-saturation: 65;
   --mtlx-type-fallback-lightness: 62;
   --mtlx-graph-minimap-mask-alpha: 0.75;
@@ -314,8 +312,6 @@
   --mtlx-native-window-bg: 243 244 246;
   --mtlx-native-titlebar: 243 244 246;
   --mtlx-native-titlebar-symbol: 55 65 81;
-  --mtlx-code-inline-fg-alt: 180 83 9;
-  --mtlx-code-block-bg-alt: 245 247 250;
   --mtlx-type-fallback-saturation: 65;
   --mtlx-type-fallback-lightness: 34;
   --mtlx-graph-minimap-mask-alpha: 0.5;

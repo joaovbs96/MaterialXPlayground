@@ -16,7 +16,7 @@
         // <nodename> tokens render in monospace. Vector needs >=2
         // comma-sep numbers; token must start with a letter ("a < b" is safe).
         const INLINE_STYLE_RE = /(\[\s*[+-]?\d[\d.eE+-]*(?:\s*,\s*[+-]?\d[\d.eE+-]*)+\s*\]|<[A-Za-z_][\w.:-]*>)/g;
-        const MONO = 'font-mono text-[0.9em] bg-surface-sunken/70 border border-line rounded px-1 py-0.5';
+        const MONO = 'font-mono text-[0.9em] bg-code-inline-bg/50 border border-line rounded px-1 py-px';
         const styleInlinePlain = (text, kp) => {
             const parts = String(text).split(INLINE_STYLE_RE);
             return parts.map((part, i) => {

@@ -155,9 +155,7 @@
         "type-untyped": "#94a3b8",
         "native-window-bg": "#171c28",
         "native-titlebar": "#1f2430",
-        "native-titlebar-symbol": "#d7dce3",
-        "code-inline-fg-alt": "#fca5a5",
-        "code-block-bg-alt": "#1e232f"
+        "native-titlebar-symbol": "#d7dce3"
     };
     var params = {
         "typeFallback": {
