@@ -21,9 +21,16 @@ const themeArg = process.argv.find((a) => a.startsWith('--mtlx-theme='));
 const themePref = themeArg ? themeArg.slice('--mtlx-theme='.length) : 'system';
 contextBridge.exposeInMainWorld('__MTLX_THEME_PREF__', /^[a-z0-9-]{1,32}$/.test(themePref) ? themePref : 'system');
 // base is the resolved base of a custom preference; main cannot decode theme codes.
-function sendTheme(pref, base) {
+// native holds the applied theme's frame colors; any invalid value drops the whole object.
+const HEX6 = /^#[0-9a-f]{6}$/i;
+function sendTheme(pref, base, native) {
     if (typeof pref !== 'string') return;
-    ipcRenderer.send('mtlx-set-theme', { preference: pref, base: base === 'light' || base === 'dark' ? base : null });
+    const ok = native && typeof native === 'object' && HEX6.test(native.windowBg) && HEX6.test(native.titlebar) && HEX6.test(native.titlebarSymbol);
+    ipcRenderer.send('mtlx-set-theme', {
+        preference: pref,
+        base: base === 'light' || base === 'dark' ? base : null,
+        ...(ok ? { native: { windowBg: native.windowBg, titlebar: native.titlebar, titlebarSymbol: native.titlebarSymbol } } : {}),
+    });
 }
 contextBridge.exposeInMainWorld('__mtlxThemePersist', sendTheme);
 contextBridge.exposeInMainWorld('__mtlxThemeReport', sendTheme);
