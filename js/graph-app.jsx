@@ -7850,7 +7850,7 @@
                                     {docReadOnly && (
                                         <span
                                             title={'View only: material from ' + (docReadOnlySource || 'a scene')}
-                                            className="inline-flex items-center align-middle ml-1.5 px-1 rounded text-[10px] font-semibold uppercase tracking-[0.08em] text-warning bg-warning-bg/40 border border-warning-border/40"
+                                            className="inline-flex items-center align-middle ml-1.5 px-1 rounded text-[10px] font-semibold uppercase tracking-[0.08em] text-warning bg-warning-hue/10 border border-warning-hue/40"
                                         >
                                             View only
                                         </span>
@@ -8159,7 +8159,7 @@
                                 sits below its measured height (hudTop); min-w-0
                                 lets the text wrap instead of overflowing. */}
                             {scopeLocked && (
-                                <div ref={lockBannerRef} className="absolute top-2 left-2 right-2 z-20 flex flex-wrap items-center justify-center gap-2 px-3 py-1.5 bg-warning-bg/40 border border-warning-border/50 rounded-md text-[11px] text-warning-text backdrop-blur">
+                                <div ref={lockBannerRef} className="absolute top-2 left-2 right-2 z-20 flex flex-wrap items-center justify-center gap-2 px-3 py-1.5 bg-warning-bg/30 border border-warning-border/50 rounded-md text-[11px] text-warning-text backdrop-blur">
                                     <MtlxIcon name="lock" className="w-3.5 h-3.5 shrink-0" />
                                     {docReadOnly ? (
                                         <>
@@ -8168,7 +8168,7 @@
                                             </span>
                                             <button
                                                 onClick={openExportDialog}
-                                                className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium bg-warning-bg-strong/60 hover:bg-warning-bg-strong text-warning-text-strong transition-colors"
+                                                className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium bg-warning-bg/70 hover:bg-warning-bg text-warning-text-strong transition-colors"
                                             >
                                                 Export .mtlx
                                             </button>

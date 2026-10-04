@@ -934,7 +934,7 @@
                         </div>
                     )}
                     {autoLoad === 'failed' && (
-                        <div className="bg-surface-raised p-4 rounded-xl border border-warning-border/60 text-sm text-fg-secondary">
+                        <div className="bg-surface-raised p-4 rounded-xl border border-warning-hue/40 text-sm text-fg-secondary">
                             Could not load the pregenerated node library data
                             (js/gen/nodelib.json, js/gen/nodelib-index.json). Reload the
                             page, or if you're building from source, run

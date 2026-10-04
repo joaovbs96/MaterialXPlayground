@@ -926,62 +926,6 @@ export const tokens = {
         "drift": true,
         "mergeInto": "on-accent"
     },
-    "warning-bg-strong": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "amber",
-        "role": "Action button on a warning banner (/60, hover solid).",
-        "drift": true,
-        "mergeInto": "warning-bg"
-    },
-    "warning-border-alt": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "amber",
-        "role": "Warning toast/banner border (/50) in shell and site header.",
-        "drift": true,
-        "mergeInto": "warning-border"
-    },
-    "notice-bg": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "slate",
-        "role": "Non-warning shell toast ground (/30).",
-        "drift": true,
-        "mergeInto": "surface-raised"
-    },
-    "notice-line": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "slate",
-        "role": "Non-warning shell toast border (/50).",
-        "drift": true,
-        "mergeInto": "line-strong"
-    },
-    "notice-text": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "slate",
-        "role": "Non-warning shell toast text (and /80 dismiss).",
-        "drift": true,
-        "mergeInto": "fg-soft"
-    },
-    "notice-text-strong": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "slate",
-        "role": "Non-warning shell toast dismiss hover.",
-        "drift": true,
-        "mergeInto": "fg"
-    },
-    "experimental-fill": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "amber",
-        "role": "Small Experimental badge fill (/30, hover /40).",
-        "drift": true,
-        "mergeInto": "experimental-hue"
-    },
     "code-inline-fg-alt": {
         "group": "drift",
         "kind": "independent",
@@ -1647,7 +1591,6 @@ export const presets = {
             "line-strong": "#a3a3a3",
             "line-heavy": "#d4d4d4",
             "hud-line": "#a3a3a3",
-            "notice-line": "#a3a3a3",
             "graph-node-line": "#a3a3a3",
             "graph-node-line-iface": "#d4d4d4",
             "scrollbar-thumb": "#a3a3a3",
@@ -1675,7 +1618,6 @@ export const presets = {
             "line-strong": "#404040",
             "line-heavy": "#262626",
             "hud-line": "#404040",
-            "notice-line": "#404040",
             "graph-node-line": "#525252",
             "graph-node-line-iface": "#262626",
             "scrollbar-thumb": "#525252",
@@ -1869,13 +1811,6 @@ export const labels = {
     "surface-deep": "Deep wells",
     "scrim-alt": "Sidebar dialog backdrop",
     "on-accent-soft": "Soft text on accent fills",
-    "warning-bg-strong": "Warning action button",
-    "warning-border-alt": "Warning toast border",
-    "notice-bg": "Notice background",
-    "notice-line": "Notice border",
-    "notice-text": "Notice text",
-    "notice-text-strong": "Notice text, strong",
-    "experimental-fill": "Experimental badge fill",
     "code-inline-fg-alt": "Help inline code",
     "code-block-bg-alt": "Help code block background",
 };

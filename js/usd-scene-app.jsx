@@ -4030,7 +4030,7 @@
                             aria-expanded={knownIssuesOpen}
                             title="Known issues"
                             onClick={() => setKnownIssuesOpen((o) => !o)}
-                            className="ml-2 text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-experimental-fill/30 border border-experimental-hue/50 text-experimental hover:bg-experimental-fill/40 hover:border-experimental-hue/70"
+                            className="ml-2 text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-experimental-hue/10 border border-experimental-hue/40 text-experimental hover:bg-experimental-hue/20 hover:border-experimental-hue/60"
                         >Experimental</button>
                         <button
                             onClick={() => setSidebarOpen(false)}
@@ -4258,7 +4258,7 @@
                         (3s, see showDoubleClickNote) so it never crowds the
                         status pill further down. */}
                     {doubleClickNote && (
-                        <div data-testid="usd-scene-dblclick-note" className="absolute bottom-[4.5rem] left-2 z-10 pointer-events-none px-2 py-1 rounded-full bg-warning-hue/20 border border-warning-hue/40 text-[11px] text-warning-text">
+                        <div data-testid="usd-scene-dblclick-note" className="absolute bottom-[4.5rem] left-2 z-10 pointer-events-none px-2 py-1 rounded-full bg-warning-hue/10 border border-warning-hue/40 text-[11px] text-warning-text">
                             {doubleClickNote}
                         </div>
                     )}

@@ -2007,7 +2007,7 @@
                     </div>
                 )}
                 {!notice && error && (
-                    <div className="text-sm text-warning-hue/90 bg-surface-sunken border border-warning-border/40 rounded-lg px-4 py-3">
+                    <div className="text-sm text-warning bg-surface-sunken border border-warning-hue/40 rounded-lg px-4 py-3">
                         {error}
                     </div>
                 )}

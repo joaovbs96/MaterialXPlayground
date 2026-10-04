@@ -790,7 +790,7 @@ const rowMeta = (key, surface) => {
 
 // Scene settings rows carry a quality-level dirty dot and a cost badge.
 const SETTINGS_EXP_BADGE = /*#__PURE__*/React.createElement("span", {
-  className: "text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-experimental-fill/30 border border-experimental-hue/50 text-experimental"
+  className: "text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-experimental-hue/10 border border-experimental-hue/40 text-experimental"
 }, "Experimental");
 const SettingsDirtyDot = ({
   show
@@ -996,7 +996,7 @@ function RenderSettingsSection({
     const labelNode = /*#__PURE__*/React.createElement("span", {
       className: labelClassName + ' inline-flex items-center gap-1.5'
     }, row.label, row.experimental && /*#__PURE__*/React.createElement("span", {
-      className: "text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-experimental-fill/30 border border-experimental-hue/50 text-experimental"
+      className: "text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-experimental-hue/10 border border-experimental-hue/40 text-experimental"
     }, "Experimental"));
     if (row.type === 'bool') {
       return /*#__PURE__*/React.createElement("div", {
@@ -3609,7 +3609,7 @@ const SELECT_BADGE_TONES = {
 // warn's text color is the MXS_BADGE_WARN var (applied inline per row);
 // the tint/border stay literal, there's no separate themed var for them.
 const SELECT_BADGE_TONE_CLS = {
-  warn: 'bg-experimental-fill/30 border-experimental-hue/50',
+  warn: 'bg-experimental-hue/10 border-experimental-hue/40',
   neutral: 'bg-chip/60 border-line-heavy/50 text-fg-secondary'
 };
 const resolveSelectBadge = badge => {

@@ -391,7 +391,7 @@
                             {format === 'zip' && (
                                 <div className="flex items-center gap-1.5 pl-6">
                                     <span className="text-[10px] text-fg-subtle flex-none font-mono">Texture format</span>
-                                    <span className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded border border-warning-border/60 bg-warning-bg/20 text-warning-marker">Experimental</span>
+                                    <span className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded border border-warning-hue/40 bg-warning-hue/10 text-warning">Experimental</span>
                                     <MtlxSelect
                                         value={convertTo}
                                         options={['keep', 'png', 'jpeg', 'exr']}
@@ -417,11 +417,11 @@
                             </div>
                         )}
                         {unresolved.length > 0 && (
-                            <div className="rounded border border-warning-border/60 bg-warning-bg/20 px-2.5 py-2 space-y-1">
+                            <div className="rounded border border-warning-hue/40 bg-warning-hue/10 px-2.5 py-2 space-y-1">
                                 <div className="text-warning-marker font-bold text-[11px]">
                                     Not found in this session, will not be packaged:
                                 </div>
-                                <ul className="list-disc list-inside space-y-0.5 text-warning-text/90 font-mono text-[11px]">
+                                <ul className="list-disc list-inside space-y-0.5 text-warning-text font-mono text-[11px]">
                                     {unresolved.map((ref, i) => <li key={i}>{ref}</li>)}
                                 </ul>
                             </div>

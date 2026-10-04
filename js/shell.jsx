@@ -612,14 +612,14 @@ function DesktopNoticeBar() {
                     id={'mtlx-desktop-notice-' + n.kind}
                     className={'pointer-events-auto flex items-start gap-2 rounded-lg border backdrop-blur px-3 py-2 text-[12px] shadow-lg '
                         + (n.level === 'warn'
-                            ? 'border-warning-border-alt/50 bg-warning-bg/30 text-warning-text'
-                            : 'border-notice-line/50 bg-notice-bg/30 text-notice-text')}
+                            ? 'border-warning-border/50 bg-warning-bg/30 text-warning-text'
+                            : 'border-line-strong/50 bg-surface-raised/30 text-fg-soft')}
                 >
                     <span className="flex-1">{n.text}</span>
                     <button
                         type="button"
                         onClick={() => dismiss(n.kind)}
-                        className={(n.level === 'warn' ? 'text-warning-text/80 hover:text-warning-text-strong' : 'text-notice-text/80 hover:text-notice-text-strong')
+                        className={(n.level === 'warn' ? 'text-warning-text hover:text-warning-text-strong' : 'text-fg-soft hover:text-fg')
                             + ' leading-none'}
                         aria-label="Dismiss"
                     >
@@ -1415,12 +1415,12 @@ function Shell() {
                 // own `md:h-full` resolves. Docs works without WebGL2
                 // (only 3D previews are affected) — warn, don't block.
                 const webglBanner = !hasWebGL2() && !docsWebglBannerDismissed ? (
-                    <div className="mb-2 flex-shrink-0 flex items-center justify-between gap-3 rounded-lg border border-warning-border-alt/50 bg-warning-bg/30 text-warning-text text-xs px-3 py-2">
+                    <div className="mb-2 flex-shrink-0 flex items-center justify-between gap-3 rounded-lg border border-warning-border/50 bg-warning-bg/30 text-warning-text text-xs px-3 py-2">
                         <span>WebGL2 is unavailable in this browser — node documentation works, but 3D previews won't render.</span>
                         <button
                             type="button"
                             onClick={() => setDocsWebglBannerDismissed(true)}
-                            className="text-warning-text/80 hover:text-warning-text-strong leading-none"
+                            className="text-warning-text hover:text-warning-text-strong leading-none"
                             aria-label="Dismiss"
                         >
                             ×

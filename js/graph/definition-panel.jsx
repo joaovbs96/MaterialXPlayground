@@ -416,7 +416,7 @@
                 <div>
                     {!entry.local && (
                         <div className="px-2.5">
-                            <div className="mb-2 p-2 rounded border border-warning-border/50 bg-warning-bg/20 text-[10px] text-warning space-y-1.5">
+                            <div className="mb-2 p-2 rounded border border-warning-hue/40 bg-warning-hue/10 text-[10px] text-warning space-y-1.5">
                                 <div>This definition comes from the library.</div>
                                 {entry.nodedef && (
                                     <button type="button" className={PILL_PAGE_SM}

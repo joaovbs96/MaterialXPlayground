@@ -158,13 +158,6 @@
         "surface-deep": "#000000",
         "scrim-alt": "#000000",
         "on-accent-soft": "#ffffff",
-        "warning-bg-strong": "#92400e",
-        "warning-border-alt": "#d97706",
-        "notice-bg": "#020202",
-        "notice-line": "#a3a3a3",
-        "notice-text": "#eeeeee",
-        "notice-text-strong": "#ffffff",
-        "experimental-fill": "#d97706",
         "code-inline-fg-alt": "#fca5a5",
         "code-block-bg-alt": "#000000"
     };

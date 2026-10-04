@@ -1020,16 +1020,16 @@ function PreviewStage({
             )}
 
             {errors.length > 0 && (
-                <div className="rounded-lg border border-warning-border/50 bg-warning-bg/20 text-warning-text text-xs p-3 space-y-1.5">
+                <div className="rounded-lg border border-warning-hue/40 bg-warning-hue/10 text-warning-text text-xs p-3 space-y-1.5">
                     <div className="flex items-center justify-between">
                         <span className="font-medium flex items-center gap-1.5">
                             <MtlxIcon name="alert-triangle" className="w-4 h-4" />
                             {`Preview reported ${errors.length} issue${errors.length > 1 ? 's' : ''}`}
                         </span>
-                        <button type="button" onClick={onClearErrors} className="text-warning/80 hover:text-warning-text-strong">Clear</button>
+                        <button type="button" onClick={onClearErrors} className="text-warning hover:text-warning-text-strong">Clear</button>
                     </div>
                     <ul className="space-y-1 max-h-32 overflow-y-auto custom-scrollbar">
-                        {errors.map((e) => <li key={e.id} className="text-warning-text-strong/90">{e.message}</li>)}
+                        {errors.map((e) => <li key={e.id} className="text-warning-text-strong">{e.message}</li>)}
                     </ul>
                 </div>
             )}

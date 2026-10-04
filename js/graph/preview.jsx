@@ -1573,7 +1573,7 @@
                                 <div className="flex items-center justify-between gap-2">
                                     <span className="inline-flex items-center gap-1.5 text-fg-soft">
                                         {(rowMeta('graphCompoundCompile', 'graph') || {}).label || 'Compound compile'}
-                                        <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-experimental-fill/30 border border-experimental-hue/50 text-experimental">Experimental</span>
+                                        <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-experimental-hue/10 border border-experimental-hue/40 text-experimental">Experimental</span>
                                     </span>
                                     <button
                                         onClick={() => setCompoundRoot(!compoundRoot)}

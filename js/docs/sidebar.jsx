@@ -308,7 +308,7 @@
                                                                         className={`cursor-pointer py-1 px-2 rounded font-mono text-xs break-all ${rowCls}`}
                                                                     >
                                                                         {nodeName}
-                                                                        {undoc && <span className="inline-block w-1.5 h-1.5 rounded-full bg-warning-marker/80 ml-1.5 align-middle" />}
+                                                                        {undoc && <span className="inline-block w-1.5 h-1.5 rounded-full bg-warning-marker ml-1.5 align-middle" />}
                                                                     </div>
                                                                 )
                                                             })}
