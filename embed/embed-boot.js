@@ -164,7 +164,7 @@
     function applyTheme(name, value) {
         if (name === 'theme') {
             // Unknown or cleared values behave as dark, the default; auto follows the OS. Any registry id is accepted
-            // except 'vscode' (webview-only); a theme code (mtlx1.) passes through and theme.js decodes it strictly.
+            // except 'vscode' (webview-only); a theme code (mtlx2.) passes through and theme.js decodes it strictly.
             var raw = String(value == null ? '' : value).trim();
             var t = raw.toLowerCase();
             var known = window.MtlxTheme && window.MtlxTheme.list ? window.MtlxTheme.list() : [{ id: 'dark' }, { id: 'light' }];

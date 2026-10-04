@@ -308,19 +308,27 @@ Theme ids and labels:
 | `paper` | Paper |
 
 **Custom themes.** `theme` also accepts a custom theme code, the string the Playground's theme editor
-copies when you share a theme. It starts with `mtlx1.`, for example:
+copies when you share a theme. It starts with `mtlx2.`. A code is either based on one of the built-in themes
+(`dark`, `light`, `hc-dark`, `hc-light`, `dim`, `paper`) plus a few color changes, or built from three
+colors (background, text, accent) with optional contrast and tint adjustments:
 
 ```html
-<materialx-viewer src="..." theme="mtlx1.LPbx5ysmICZZyQRzYW5kBFNhbmQA"></materialx-viewer>
+<!-- three colors -->
+<materialx-viewer src="..." theme="mtlx2.DAALHSrm8fglY-sFb2NlYW4FT2NlYW4A"></materialx-viewer>
+<!-- based on Paper, with one color changed -->
+<materialx-viewer src="..." theme="mtlx2.LAVwYXBlcgR3YXJtCldhcm0gcGFwZXIBC2FjY2VudC1maWxstFMJ"></materialx-viewer>
 ```
 
-The viewer decodes the code, derives the full palette and applies it, keeping every text and control at WCAG AA
-contrast. A code is case-sensitive (keep its letters exactly as copied) and is at most 8192 characters. The
-placeholder reads the theme's base from the code itself (`mtlx1.L...` is light-based, `mtlx1.D...` dark-based),
-so it matches before the viewer loads. A code that cannot be decoded behaves as `dark`; a valid code whose colors
-cannot reach AA contrast shows its base theme (`light` or `dark`). Codes are strictly validated: they carry only
-`#rrggbb` colors for known color roles, a short name and two numeric modifiers, so a code cannot inject CSS,
-markup or URLs into the viewer.
+A theme based on a built-in theme starts from that theme's exact colors, so it follows that theme if the
+Playground updates it. The viewer decodes the code, applies it, and keeps every text and control at WCAG
+contrast (AA, or AAA when it is based on a high contrast theme). A code is case-sensitive (keep its letters
+exactly as copied) and is at most 8192 characters. The placeholder reads the theme's base from the first
+character of the code itself (`mtlx2.L...` is light-based, `mtlx2.D...` dark-based), so it matches before the
+viewer loads. A code that cannot be decoded behaves as `dark`, and so do codes from older versions of the
+Playground (`mtlx1.`), which are no longer accepted; re-copy the code from the theme editor. A valid code whose
+colors cannot reach the required contrast shows its base theme (`light` or `dark`). Codes are strictly validated:
+they carry only `#rrggbb` colors for known color roles, a short name and, for three-color themes, two numeric
+modifiers, so a code cannot inject CSS, markup or URLs into the viewer.
 
 Four params (`accent`, `surface`, `text`, `radius`) map to CSS custom properties consumed by
 `embed/embed-controls.css` (the HUD strip's own stylesheet), which defines them on `:root`

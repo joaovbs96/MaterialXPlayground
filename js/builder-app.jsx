@@ -20,8 +20,8 @@ const BUILDER_CONTROLS = [
 // radius is stored/edited as a bare number (the field is numeric, docs/
 // EMBEDDING.md); the "px" suffix is appended wherever it's emitted, since
 // embed-boot.js validates with CSS.supports and rejects a bare number.
-// A custom theme travels as its code (mtlx1.<payload>); the embed validates it and falls back to dark.
-const builderIsThemeCode = (v) => typeof v === 'string' && /^mtlx1\.[A-Za-z0-9_-]{1,8000}$/.test(v);
+// A custom theme travels as its code (mtlx2.<payload>); the embed validates it and falls back to dark.
+const builderIsThemeCode = (v) => typeof v === 'string' && /^mtlx2\.[A-Za-z0-9_-]{1,8000}$/.test(v);
 // Built-in presets from the registry (not custom, vscode or system), read live so new registry entries appear.
 const builderPresetThemes = () => {
     try { return ((window.MtlxTheme && window.MtlxTheme.list && window.MtlxTheme.list()) || []).filter((e) => e && e.group !== 'custom' && e.id !== 'system' && e.id !== 'vscode' && e.id !== 'dark' && e.id !== 'light' && !builderIsThemeCode(e.id)); } catch (e) { return []; }
@@ -39,13 +39,9 @@ const builderThemeSwatch = (id) => {
 };
 // HUD colors of a theme code, resolved through the engine like the embed does; null if it cannot be built.
 const builderCodeSwatch = async (code) => {
-    const T = window.MtlxTheme;
-    const eng = await T.loadEngine();
-    const spec = T.decodeTheme(code);
-    const D = window.MTLX_THEME_TOKENS;
-    const r = eng.resolveCustom(spec, { data: D, pairs: D.customPairs.pairs, level: D.customPairs.contrast });
+    const r = await window.MtlxTheme.resolveCustomTheme(code);
     const t = r && r.tokens;
-    return t ? { accent: t['accent-base'], surface: t['hud-raised'], text: t['hud-fg'] } : null;
+    return t && t['accent-base'] ? { accent: t['accent-base'], surface: t['hud-raised'], text: t['hud-fg'] } : null;
 };
 const builderRadiusPx = (v) => { const t = String(v == null ? '' : v).trim(); return t ? t + 'px' : ''; };
 
@@ -1077,7 +1073,7 @@ function BuilderApp({ active } = {}) {
     const applyPastedCode = () => {
         const code = pasteText.trim();
         if (!code) return;
-        if (!builderIsThemeCode(code)) { setPasteError('Not a theme code. Theme codes start with mtlx1.'); return; }
+        if (!builderIsThemeCode(code)) { setPasteError('Not a theme code. Theme codes start with mtlx2.'); return; }
         window.MtlxTheme.loadEngine().then(() => {
             try { window.MtlxTheme.decodeTheme(code); } catch (e) { setPasteError(String((e && e.message) || 'Damaged theme code')); return; }
             setPasteError('');
@@ -1744,7 +1740,7 @@ function BuilderApp({ active } = {}) {
                         onChange={(e) => { setPasteText(e.target.value); setPasteError(''); }}
                         onBlur={applyPastedCode}
                         onKeyDown={(e) => { if (e.key === 'Enter') applyPastedCode(); }}
-                        placeholder="mtlx1...."
+                        placeholder="mtlx2...."
                         className={TEXT_INPUT_CLS}
                     />
                     {pasteError && <p className="text-[11px] mt-1 text-warning-text">{pasteError}</p>}

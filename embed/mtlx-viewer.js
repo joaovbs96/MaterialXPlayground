@@ -333,8 +333,8 @@ window.MTLX_DIFFUSE_ENV = 'sh';
             style.textContent =
                 ':host{--ph-bg:#111827;--ph-fg:#9ca3af;}' +
                 // The host page has no registry: known light-base ids get the light literals, anything else dark.
-                // A theme code carries its base in its first payload character: mtlx1.L is light, mtlx1.D dark.
-                LIGHT_THEME_IDS.map(function (id) { return ':host([theme="' + id + '" i])'; }).join(',') + ',:host([theme^="mtlx1.L"]){--ph-bg:#f3f4f6;--ph-fg:#4b5563;}' +
+                // A theme code carries its base in its first payload character: mtlx2.L is light, mtlx2.D dark.
+                LIGHT_THEME_IDS.map(function (id) { return ':host([theme="' + id + '" i])'; }).join(',') + ',:host([theme^="mtlx2.L" i]){--ph-bg:#f3f4f6;--ph-fg:#4b5563;}' +
                 '@media (prefers-color-scheme:light){:host([theme="auto" i]){--ph-bg:#f3f4f6;--ph-fg:#4b5563;}}' +
                 ':host{display:block;position:relative;width:100%;aspect-ratio:16/9;' +
                 'background:var(--ph-bg);overflow:hidden;box-sizing:border-box;}' +
