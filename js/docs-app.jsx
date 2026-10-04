@@ -1074,7 +1074,7 @@
                                                         href={specUrlForNode(selectedNode)}
                                                         target="_blank" rel="noopener noreferrer"
                                                         title="Open this node in the official MaterialX specification on GitHub"
-                                                        className="inline-flex items-center gap-1 h-6 px-2 rounded-md border border-hud-line/50 bg-hud/70 text-[11px] font-medium text-accent-fg-strong hover:text-accent-fg-bright hover:border-accent-base/60 transition-colors"
+                                                        className="inline-flex items-center gap-1 h-6 px-2 rounded-md border border-line-strong/50 bg-chrome/70 text-[11px] font-medium text-accent-fg-strong hover:text-accent-fg-bright hover:border-accent-base/60 transition-colors"
                                                     >
                                                         Official spec <MtlxIcon name="external-link" className="w-3.5 h-3.5" />
                                                     </a>
@@ -1089,7 +1089,7 @@
                                                     className={'inline-flex items-center gap-1 h-6 px-2 rounded-md border text-[11px] font-medium transition-colors ' + (
                                                         copied
                                                             ? 'bg-success-bg/30 border-success-border/60 text-success-text'
-                                                            : 'border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong'
+                                                            : 'border-line-strong/50 bg-chrome/70 text-fg-muted hover:bg-hover hover:border-line-strong hover:text-fg'
                                                     )}
                                                 >
                                                     {copied ? (
@@ -1113,7 +1113,7 @@
                                                     className={'inline-flex items-center gap-1 h-6 px-2 rounded-md border text-[11px] font-medium transition-colors ' + (
                                                         implPanelOpen
                                                             ? 'bg-accent-fill-pressed/30 border-accent-fill/60 text-accent-fg-strong'
-                                                            : 'border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong'
+                                                            : 'border-line-strong/50 bg-chrome/70 text-fg-muted hover:bg-hover hover:border-line-strong hover:text-fg'
                                                     )}
                                                 >
                                                     <MtlxIcon name="transfer" className="w-3.5 h-3.5" />

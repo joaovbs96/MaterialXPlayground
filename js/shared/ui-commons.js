@@ -135,9 +135,9 @@ const MtlxIcon = (props) => {
     });
 };
 
-// Shared floating-pill family, two sizes: PILL_ACTION (default) and
-// PILL_ACTION_SM (compact). The PILL_ACTION* pair is the over-render (hud)
-// variant; PILL_PAGE* is the same look on ordinary page surfaces.
+// Shared pill family, two sizes each. PILL_ACTION* (hud tokens) is for pills
+// floating over a render or canvas; PILL_PAGE* (page tokens) is for pills on
+// ordinary page surfaces. Pick by what is behind the pill.
 // disabled:cursor-not-allowed, not cursor-wait: `disabled` on these
 // buttons is not always "an async op is in flight" (e.g. the Scene Apply
 // pill is also disabled when there is simply nothing staged to apply),
