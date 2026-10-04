@@ -416,7 +416,7 @@
             const commit = () => { if (draft !== (value || '')) onCommit(draft); };
             return (
                 <input
-                    className={'flex-1 min-w-0 h-6 py-0 px-1.5 placeholder-fg-faint bg-surface-sunken border border-line-strong rounded text-[11px] font-mono text-fg-soft focus:border-focus focus:outline-none'
+                    className={'flex-1 min-w-0 h-6 py-0 px-1.5 placeholder-fg-subtle bg-surface-sunken border border-line-strong rounded text-[11px] font-mono text-fg-soft focus:border-focus focus:outline-none'
                         + (readOnly ? ' opacity-60' : '') + (className ? ' ' + className : '')}
                     value={draft}
                     placeholder={placeholder}
@@ -593,7 +593,7 @@
 
             const textField = () => (
                 <input
-                    className={'flex-1 min-w-0 px-1.5 py-0.5 placeholder-fg-faint ' + boxCls}
+                    className={'flex-1 min-w-0 px-1.5 py-0.5 placeholder-fg-subtle ' + boxCls}
                     value={draft}
                     placeholder="(no value)"
                     spellCheck={false}

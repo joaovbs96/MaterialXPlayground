@@ -282,7 +282,7 @@ function ViewerPane({ src, label, glow, className, geometry, transparent, autoro
                                     onClick={() => elRef.current && elRef.current.resetCamera()}
                                     title="Reset camera"
                                     aria-label="Reset camera"
-                                    className={'absolute right-2 inline-flex items-center justify-center w-7 h-7 rounded-md border border-hud-line/50 bg-hud/70 text-hud-fg-muted opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong [@media(hover:none)]:opacity-100 '
+                                    className={'absolute right-2 inline-flex items-center justify-center w-7 h-7 rounded-md border border-hud-line/50 bg-hud/70 text-hud-fg opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong [@media(hover:none)]:opacity-100 '
                                         // Bumped above the pill row (bottom-2, h-6) when one is
                                         // present, so the two never overlap on a narrow pane.
                                         + (actions && actions.length > 0 ? 'bottom-9' : 'bottom-2')}

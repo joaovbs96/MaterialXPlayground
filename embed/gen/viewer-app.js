@@ -1892,7 +1892,7 @@ function MaterialViewerApp({
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex-none flex items-center gap-1.5 px-3 py-2 border-b border-line"
     }, /*#__PURE__*/React.createElement("span", {
-      className: "text-[13px] font-semibold text-fg-soft"
+      className: "text-[13px] font-semibold text-fg"
     }, "Material Viewer"), /*#__PURE__*/React.createElement("button", {
       onClick: () => setSidebarOpen(false),
       title: "Collapse the viewer panel",

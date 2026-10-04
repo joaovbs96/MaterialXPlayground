@@ -1041,7 +1041,7 @@
                                             <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-accent-fg-strong mb-1">
                                                 {selectedNode.lib}<span className="text-fg-faint">/</span><span className="text-fg-muted">{selectedNode.group}</span>
                                             </div>
-                                            <h2 className="flex items-center gap-2 sm:gap-2.5 text-xl sm:text-3xl font-bold text-fg-strong font-mono tracking-[-0.01em] min-w-0">
+                                            <h2 className="flex items-center gap-2 sm:gap-2.5 text-xl sm:text-3xl font-bold text-fg font-mono tracking-[-0.01em] min-w-0">
                                                 <span
                                                     className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5 rounded-full shrink-0"
                                                     style={{ backgroundColor: typeColor(previewType) }}

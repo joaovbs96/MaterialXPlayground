@@ -258,7 +258,7 @@
                             onClick={() => elRef.current && elRef.current.resetCamera()}
                             title="Reset camera"
                             aria-label="Reset camera"
-                            className="flex items-center justify-center w-6 h-6 rounded-md border border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-line-strong hover:text-hud-fg-strong transition-colors absolute bottom-1.5 right-1.5 z-10"
+                            className="flex items-center justify-center w-6 h-6 rounded-md border border-hud-line/50 bg-hud/70 text-hud-fg hover:bg-hud-hover hover:border-line-strong hover:text-hud-fg-strong transition-colors absolute bottom-1.5 right-1.5 z-10"
                         >
                             <MtlxIcon name="camera-reset" className="w-3.5 h-3.5" />
                         </button>
@@ -817,7 +817,7 @@
                     title={previewCollapsed ? 'Show 3D preview' : 'Hide 3D preview'}
                     aria-label={previewCollapsed ? 'Show 3D preview' : 'Hide 3D preview'}
                     aria-expanded={!previewCollapsed}
-                    className="flex items-center justify-center w-6 h-6 rounded-md border border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-line-strong hover:text-hud-fg-strong transition-colors absolute top-1.5 right-1.5 z-10"
+                    className="flex items-center justify-center w-6 h-6 rounded-md border border-hud-line/50 bg-hud/70 text-hud-fg hover:bg-hud-hover hover:border-line-strong hover:text-hud-fg-strong transition-colors absolute top-1.5 right-1.5 z-10"
                 >
                     {/* chevron-left doesn't exist in MTLX_ICON_PATHS; chevrons-left is the nearest "point back open" glyph */}
                     <MtlxIcon name={previewCollapsed ? 'chevrons-left' : 'chevrons-right'} className="w-3.5 h-3.5" />

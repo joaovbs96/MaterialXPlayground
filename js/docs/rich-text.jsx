@@ -200,7 +200,7 @@
                         const h = block.match(SUBHEADING_RE);
                         if (h) {
                             return (
-                                <h4 key={i} className="text-xs font-semibold text-fg-soft uppercase tracking-wider mt-5 mb-2">
+                                <h4 key={i} className="text-xs font-semibold text-fg uppercase tracking-wider mt-5 mb-2">
                                     {h[1]}
                                 </h4>
                             );

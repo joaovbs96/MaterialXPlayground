@@ -186,7 +186,7 @@
                             <button
                                 type="button"
                                 title="Collapse the node list"
-                                className="flex-none w-6 h-6 flex items-center justify-center rounded text-fg-muted hover:text-fg-soft hover:bg-hover/80 transition-colors"
+                                className="flex-none w-6 h-6 flex items-center justify-center rounded text-fg-secondary hover:text-fg hover:bg-hover/80 transition-colors"
                                 onClick={onCollapse}
                             >
                                 <MtlxIcon name="chevrons-left" className="w-4 h-4" />

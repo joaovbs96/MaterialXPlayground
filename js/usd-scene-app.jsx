@@ -1624,7 +1624,7 @@
     const SidebarSectionHeader = ({ icon, title, summary, testId }) => (
         <div data-testid={testId} className="flex items-center gap-2 min-w-0">
             <MtlxIcon name={icon} className="w-4 h-4 text-fg-muted shrink-0" />
-            <span className="text-[13px] font-semibold text-fg-soft shrink-0">{title}</span>
+            <span className="text-[13px] font-semibold text-fg shrink-0">{title}</span>
             {summary ? <span className="flex-1 min-w-0 text-right text-xs text-fg-subtle truncate" title={summary}>{summary}</span> : null}
         </div>
     );
@@ -3615,7 +3615,7 @@
             <div className="shrink-0 border-t border-line px-3.5 py-3.5 space-y-1" style={{ background: PANEL_SURFACE }} data-testid="usd-stage-counts">
                 <div className="flex items-center gap-2 mb-1.5">
                     <MtlxIcon name="cube" className="w-4 h-4 text-fg-muted shrink-0" />
-                    <span className="text-[13px] font-semibold text-fg-soft shrink-0">Statistics</span>
+                    <span className="text-[13px] font-semibold text-fg shrink-0">Statistics</span>
                     {diagnosticsButton}
                 </div>
                 <div className="space-y-1 text-[11px] text-fg-secondary">
@@ -3643,11 +3643,11 @@
             <div className="flex-none flex items-center gap-2 px-3 py-2 border-b border-line">
                 <MtlxIcon name={icon} className="w-4 h-4 text-fg-muted shrink-0" />
                 <div className="flex-1 min-w-0 flex flex-col">
-                    <span className="text-[13px] font-semibold text-fg-soft truncate">{title}</span>
+                    <span className="text-[13px] font-semibold text-fg truncate">{title}</span>
                     {subtitle ? <span className={'text-[11px] text-fg-subtle truncate' + (mono ? ' font-mono' : '')} title={subtitle}>{subtitle}</span> : null}
                 </div>
                 {tag ? <span className="shrink-0 text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border border-line-strong text-fg-muted">{tag}</span> : null}
-                <button type="button" aria-label="Close" onClick={onClose} className="shrink-0 p-1 rounded text-fg-muted hover:text-fg-soft hover:bg-hover">
+                <button type="button" aria-label="Close" onClick={onClose} className="shrink-0 p-1 rounded text-fg-secondary hover:text-fg hover:bg-hover">
                     <MtlxIcon name="x" className="w-3.5 h-3.5" />
                 </button>
             </div>
@@ -4022,7 +4022,7 @@
             {sidebarOpen && (
                 <div data-testid="usd-scene-sidebar" className="flex-none w-80 max-w-[90%] flex flex-col bg-surface-base border-r border-line overflow-hidden">
                     <div className="flex-none flex items-center px-3 py-2 border-b border-line">
-                        <span className="text-[13px] font-semibold text-fg-soft">Scene Viewer</span>
+                        <span className="text-[13px] font-semibold text-fg">Scene Viewer</span>
                         <button
                             ref={knownIssuesBtnRef}
                             type="button"
@@ -4047,7 +4047,7 @@
                             className="backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden"
                         >
                             <div className="px-3 py-2.5 space-y-1.5">
-                                <div className="text-[12px] font-semibold text-fg-soft">Known issues</div>
+                                <div className="text-[12px] font-semibold text-fg">Known issues</div>
                                 <ul className="list-disc pl-4 space-y-1 text-[11px] text-fg-muted">
                                     {SCENE_KNOWN_ISSUES.map((issue, i) => <li key={i}>{issue}</li>)}
                                 </ul>

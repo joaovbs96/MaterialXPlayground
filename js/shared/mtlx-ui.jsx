@@ -13,7 +13,7 @@
 // disabled:* added so a disabled secondary button (e.g. the Scene Render
 // settings popover's Reset/Cancel) actually looks non-interactive instead
 // of reading as clickable while silently doing nothing.
-const BTN_SECONDARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors disabled:opacity-50 disabled:text-fg-subtle disabled:cursor-not-allowed disabled:pointer-events-none';
+const BTN_SECONDARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors disabled:opacity-50 disabled:text-fg-disabled disabled:cursor-not-allowed disabled:pointer-events-none';
 const BTN_PRIMARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border mtlx-fill-accent-translucent border-accent-base text-on-accent mtlx-fill-accent-translucent-hover transition-colors';
 // Graph editor toolbar button style. `whitespace-nowrap shrink-0` matters:
 // js/graph-app.jsx's label-collapse measurement needs buttons that don't
@@ -38,7 +38,7 @@ const GROUP_HEADER_CLASS = 'w-[calc(100%+1.25rem)] flex items-center gap-1.5 -mx
     + 'hover:bg-chrome/70 hover:text-fg-soft transition-colors';
 
 // Small square icon buttons for list rows (reorder controls, etc).
-const ICON_BTN_SM = 'flex-none w-6 h-6 inline-flex items-center justify-center rounded border border-line-strong bg-control/80 text-fg-muted hover:bg-hover/80 hover:text-fg-soft transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-control/80 disabled:hover:text-fg-muted';
+const ICON_BTN_SM = 'flex-none w-6 h-6 inline-flex items-center justify-center rounded border border-line-strong bg-control/80 text-fg-secondary hover:bg-hover/80 hover:text-fg transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-control/80 disabled:hover:text-fg-muted';
 const ICON_BTN_SM_PRIMARY = 'flex-none w-6 h-6 inline-flex items-center justify-center rounded border mtlx-fill-accent-translucent border-accent-base text-on-accent mtlx-fill-accent-translucent-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-on-accent';
 const ICON_BTN_SM_DANGER = ICON_BTN_SM + ' hover:text-error hover:border-error-border/60';
 
@@ -2229,7 +2229,7 @@ function SectionCard({ icon, title, pill, summary, defaultOpen, dense, children 
                 className="w-full h-[42px] flex items-center gap-2 px-3.5 text-left"
             >
                 <MtlxIcon name={icon} className="w-4 h-4 text-fg-muted shrink-0" />
-                <span className="text-[13px] font-semibold text-fg-soft shrink-0">{title}</span>
+                <span className="text-[13px] font-semibold text-fg shrink-0">{title}</span>
                 {pill}
                 <span className="flex-1 min-w-0 text-right text-xs text-fg-subtle truncate" title={typeof summary === 'string' ? summary : undefined}>{summary}</span>
                 <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="w-3.5 h-3.5 text-fg-subtle shrink-0" />
@@ -2255,7 +2255,7 @@ function GeometryTile({ label, icon, selected, disabled, title, onClick, badge }
             title={title}
             onClick={onClick}
             className={'relative h-[84px] rounded-lg border flex flex-col items-center pt-3 px-1.5 gap-1.5 transition-colors '
-                + (disabled ? 'opacity-50 cursor-not-allowed border-line text-fg-subtle'
+                + (disabled ? 'opacity-50 cursor-not-allowed border-line text-fg-disabled'
                     : selected ? 'border-accent-base text-accent-fg-bright ring-1 ring-accent-wash/15 bg-selection/20' : 'border-line-control text-fg-secondary hover:border-line-strong')}
         >
             {badge && (

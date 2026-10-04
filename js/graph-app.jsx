@@ -8394,7 +8394,7 @@
                                             key="collapse"
                                             onClick={() => setParamsOpen(false)}
                                             title="Collapse the preview panel"
-                                            className="flex-none w-6 h-6 flex items-center justify-center rounded text-fg-muted hover:text-fg-soft hover:bg-hover/80 transition-colors"
+                                            className="flex-none w-6 h-6 flex items-center justify-center rounded text-fg-secondary hover:text-fg hover:bg-hover/80 transition-colors"
                                         >
                                             <MtlxIcon name="chevrons-right" className="w-4 h-4" />
                                         </button>
@@ -8609,7 +8609,7 @@
                                             </button>
                                             <div className="flex items-center gap-1.5">
                                                 <input
-                                                    className="flex-1 min-w-0 px-1.5 py-0.5 placeholder-fg-faint bg-surface-sunken border border-line-strong rounded text-[11px] font-mono text-fg-soft focus:border-accent-base focus:outline-none"
+                                                    className="flex-1 min-w-0 px-1.5 py-0.5 placeholder-fg-subtle bg-surface-sunken border border-line-strong rounded text-[11px] font-mono text-fg-soft focus:border-accent-base focus:outline-none"
                                                     value={promoteNameDraft}
                                                     placeholder="node name"
                                                     spellCheck={false}

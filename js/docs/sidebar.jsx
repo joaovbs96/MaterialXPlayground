@@ -230,7 +230,7 @@
                                         <button
                                             onClick={() => fileInputRef.current && fileInputRef.current.click()}
                                             title="Filter the node tree to categories used in one or more .mtlx files"
-                                            className="text-xs px-2 py-1 rounded border border-line-control text-fg-muted hover:text-fg-soft hover:bg-hover"
+                                            className="text-xs px-2 py-1 rounded border border-line-control text-fg-secondary hover:text-fg hover:bg-hover"
                                         >
                                             Filter by file
                                         </button>
@@ -348,7 +348,7 @@
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="flex items-start justify-between gap-4 mb-3">
-                            <h2 className="text-lg font-semibold text-fg-strong">How to use the Node Library</h2>
+                            <h2 className="text-lg font-semibold text-fg">How to use the Node Library</h2>
                             <button
                                 onClick={onClose}
                                 title="Close (Esc)"

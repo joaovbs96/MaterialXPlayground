@@ -1055,7 +1055,7 @@
                             autoComplete="off"
                             autoCorrect="off"
                             autoCapitalize="off"
-                            className={CODE_TEXT_CLASS + ' slx-input relative flex-1 min-w-0 m-0 px-2 resize-none overflow-auto custom-scrollbar bg-transparent placeholder-fg-faint whitespace-pre focus:outline-none'}
+                            className={CODE_TEXT_CLASS + ' slx-input relative flex-1 min-w-0 m-0 px-2 resize-none overflow-auto custom-scrollbar bg-transparent placeholder-fg-subtle whitespace-pre focus:outline-none'}
                             style={{ paddingTop: CODE_PAD_Y, paddingBottom: CODE_PAD_Y, tabSize: CODE_TAB_SIZE }}
                         />
                         <div ref={codeClipRef} aria-hidden="true" className="absolute left-0 top-0 overflow-hidden pointer-events-none">
@@ -1217,7 +1217,7 @@
                             <button
                                 type="button"
                                 title="Collapse the code view"
-                                className="flex-none w-6 h-6 flex items-center justify-center rounded text-fg-muted hover:text-fg-soft hover:bg-hover/80 transition-colors"
+                                className="flex-none w-6 h-6 flex items-center justify-center rounded text-fg-secondary hover:text-fg hover:bg-hover/80 transition-colors"
                                 onClick={onCollapse}
                             >
                                 <MtlxIcon name="chevrons-left" className="w-4 h-4" />

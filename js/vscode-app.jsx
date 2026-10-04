@@ -192,7 +192,7 @@ function CopyButton({ text, className }) {
             type="button"
             onClick={onCopy}
             aria-label="Copy to clipboard"
-            className={'w-[26px] h-[26px] rounded-md border border-line-control bg-control text-fg-muted hover:text-fg flex items-center justify-center transition-colors ' + (className || '')}
+            className={'w-[26px] h-[26px] rounded-md border border-line-control bg-control text-fg-secondary hover:text-fg flex items-center justify-center transition-colors ' + (className || '')}
         >
             <MtlxIcon name={copied ? 'copy-check' : 'copy'} className="w-3.5 h-3.5" />
         </button>
@@ -589,7 +589,7 @@ function VscodeApp({ active } = {}) {
                             Download .vsix
                             <span className="font-normal text-on-accent/75 text-xs ml-0.5 pl-2.5 border-l border-on-accent/30">{version || 'latest release'}</span>
                         </a>
-                        <span role="link" aria-disabled="true" tabIndex={0} className="inline-flex items-center gap-2 h-11 px-4 rounded-[10px] border border-line bg-control/50 text-fg-subtle text-sm font-medium cursor-not-allowed">
+                        <span role="link" aria-disabled="true" tabIndex={0} className="inline-flex items-center gap-2 h-11 px-4 rounded-[10px] border border-line bg-control/50 text-fg-disabled text-sm font-medium cursor-not-allowed">
                             <MtlxIcon name="brand-vscode" className="w-[18px] h-[18px] text-fg-subtle" />
                             VS Code Marketplace
                             <span className="text-[10px] font-semibold uppercase tracking-wide px-[7px] py-px rounded-full border border-line text-fg-subtle bg-surface-sunken/60">Soon</span>

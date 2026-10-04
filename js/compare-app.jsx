@@ -1601,7 +1601,7 @@ function MaterialCompareApp({ active = true } = {}) {
             {sidebarOpen ? (
                 <div className="absolute inset-y-0 left-0 z-30 w-80 max-w-[90%] flex flex-col bg-surface-base border-r border-line overflow-hidden">
                     <div className="flex-none flex items-center px-3 py-2 border-b border-line">
-                        <span className="text-[13px] font-semibold text-fg-soft">Compare</span>
+                        <span className="text-[13px] font-semibold text-fg">Compare</span>
                         <button
                             onClick={() => setSidebarOpen(false)}
                             title="Collapse the panel"
@@ -1628,7 +1628,7 @@ function MaterialCompareApp({ active = true } = {}) {
                             </div>
                             <div className="flex items-center gap-2">
                                 <label
-                                    className={'flex items-center gap-2 text-[11px] ' + (displayMode === 'diff' || gpuDiffOk === false ? 'text-fg-subtle' : 'text-fg-secondary cursor-pointer')}
+                                    className={'flex items-center gap-2 text-[11px] ' + (displayMode === 'diff' || gpuDiffOk === false ? 'text-fg-disabled' : 'text-fg-secondary cursor-pointer')}
                                     title={gpuDiffOk === false ? 'Difference rendering unavailable (WebGL)' : undefined}
                                 >
                                     <Toggle
@@ -1765,7 +1765,7 @@ function MaterialCompareApp({ active = true } = {}) {
                     <div className="shrink-0 border-t border-line px-3.5 py-3.5 space-y-2.5" style={{ background: STATS_PANEL_SURFACE }}>
                         <div className="flex items-center gap-2">
                             <MtlxIcon name="compare" className="w-4 h-4 text-fg-muted shrink-0" />
-                            <span className="text-[13px] font-semibold text-fg-soft shrink-0">Statistics</span>
+                            <span className="text-[13px] font-semibold text-fg shrink-0">Statistics</span>
                             {bothLive && <span className="shrink-0 text-[10px] text-fg-faint">·</span>}
                             {bothLive && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">live</span>}
                             {bothLive && stats && <span className="shrink-0 text-[10px] text-fg-faint">·</span>}

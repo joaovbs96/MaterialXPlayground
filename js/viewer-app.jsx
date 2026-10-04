@@ -1858,7 +1858,7 @@
                     {!IN_VSCODE && !chromeless && sidebarOpen && (
                         <div className="flex-none w-80 max-w-[90%] flex flex-col bg-surface-base border-r border-line overflow-hidden">
                             <div className="flex-none flex items-center gap-1.5 px-3 py-2 border-b border-line">
-                                <span className="text-[13px] font-semibold text-fg-soft">Material Viewer</span>
+                                <span className="text-[13px] font-semibold text-fg">Material Viewer</span>
                                 <button
                                     onClick={() => setSidebarOpen(false)}
                                     title="Collapse the viewer panel"

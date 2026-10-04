@@ -1904,7 +1904,7 @@
             // toggle is harmless since all values live in state here.
             const renderParamsHeader = (extraButtons) => (
                 <div className="flex items-center justify-between px-3 py-2 border-b border-line flex-none">
-                    <span className="text-sm font-semibold text-fg-soft">Parameters</span>
+                    <span className="text-sm font-semibold text-fg">Parameters</span>
                     <div className="flex items-center gap-1.5">
                         <button
                             onClick={onExportMtlx}

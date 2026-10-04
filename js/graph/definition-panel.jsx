@@ -18,7 +18,7 @@
 
         // Class for the name/value fields inside add rows (input/output/enum),
         // matching IfaceMetaField's own box but without its flex-1 sizing.
-        const DEF_ADD_FIELD = 'flex-1 min-w-0 h-6 py-0 px-1.5 placeholder-fg-faint bg-surface-sunken border border-line-strong rounded '
+        const DEF_ADD_FIELD = 'flex-1 min-w-0 h-6 py-0 px-1.5 placeholder-fg-subtle bg-surface-sunken border border-line-strong rounded '
             + 'text-[11px] font-mono text-fg-soft focus:border-focus focus:outline-none disabled:opacity-50';
 
         // Label + control row, same idiom as graph-app.jsx's Interface group.
@@ -63,7 +63,7 @@
             return (
                 <div className="relative w-full">
                     <textarea
-                        className={'block w-full pl-1.5 pr-4 py-0.5 placeholder-fg-faint bg-surface-sunken border border-line-strong rounded '
+                        className={'block w-full pl-1.5 pr-4 py-0.5 placeholder-fg-subtle bg-surface-sunken border border-line-strong rounded '
                             + 'text-[11px] font-mono text-fg-soft focus:border-focus focus:outline-none resize-none custom-scrollbar'
                             + (readOnly ? ' opacity-60' : '')}
                         style={{ height }}
