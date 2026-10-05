@@ -34,6 +34,11 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 - [done] **USD Scene Viewer**: load USD stages with MaterialX materials rendered through the MaterialX shader generator, with per phase load progress and a render settings popover.
 - [done] **UsdPreviewSurface materials**: UsdPreviewSurface shader networks are converted to MaterialX UsdPreviewSurface documents, so they render through the same pipeline as MaterialX materials. Binary layers fall back to a flattened conversion.
 - [done] **glTF scenes**: glTF and GLB files load with their PBR materials converted to MaterialX glTF PBR shaders, including anisotropy, specular-glossiness and unlit materials, together with their cameras and KHR_lights_punctual lights. OBJ files load with MTL materials converted to OpenPBR.
+- [done] **Export USD**: export a glTF, GLB or OBJ scene as USD from the Scene Viewer, as USDA, USDC or USDZ. Materials are written either as referenced MaterialX files or as UsdShade networks (USDZ uses networks, since it cannot hold .mtlx files). Cameras, lights in UsdLux units and double-sided meshes carry over.
+- [idea] **Export from USD scenes**: export is limited to glTF and OBJ scenes; stages loaded from USD cannot be re-exported yet.
+- [idea] **Skinning and animation in USD export**: skinned meshes and animations are not written yet.
+- [idea] **glTF tangents in USD export**: write authored glTF tangents as a primvar so normal maps keep their original orientation.
+- [idea] **KTX2 textures in USDZ**: compressed textures are not packaged into USDZ yet.
 - [planned] **Survive broken stages**: a malformed prim currently takes down the whole USD runtime. Recover and skip the offending prim instead.
 - [idea] **Geometry budgets and instancing**: stages already stop subdividing at a triangle budget; bound the geometry a stage can load overall and draw repeated meshes with GPU instancing.
 - [idea] **Variants and purposes**: let the user pick variant selections and render purposes; the runtime already supports both.
