@@ -39,6 +39,18 @@ test('custom preferences pass through by id shape; base comes from the renderer'
   assert.equal(P.themeBase('custom:x', data.registry, 'bogus'), 'dark');
 });
 
+test('native frame colors accept only three strict hex values', () => {
+  const ok = { windowBg: '#101010', titlebar: '#202020', titlebarSymbol: '#ABCDEF' };
+  const want = { windowBg: '#101010', titlebar: '#202020', titlebarSymbol: '#abcdef' };
+  assert.deepEqual(P.sanitizeNativeColors(ok), want);
+  assert.deepEqual(P.sanitizeNativeColors({ ...ok, extra: 'x' }), want);
+  assert.equal(P.sanitizeNativeColors({ ...ok, titlebar: '#fff' }), null);
+  assert.equal(P.sanitizeNativeColors({ ...ok, titlebar: 'rgb(1,2,3)' }), null);
+  assert.equal(P.sanitizeNativeColors({ ...ok, windowBg: '#101010;</style><script>' }), null);
+  assert.equal(P.sanitizeNativeColors({ windowBg: '#101010', titlebar: '#202020' }), null);
+  for (const v of [null, undefined, 'x', 5, []]) assert.equal(P.sanitizeNativeColors(v), null);
+});
+
 test('custom theme codes are string-checked and capped, never interpreted', () => {
   assert.deepEqual(P.sanitizeCustomThemes('nope'), []);
   assert.deepEqual(P.sanitizeCustomThemes(['mtlx1.abc', 5, null, '', 'x'.repeat(P.MAX_CUSTOM_CODE_LENGTH + 1)]), ['mtlx1.abc']);

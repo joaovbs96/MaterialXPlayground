@@ -46,8 +46,8 @@ window.MTLX_VENDOR_DEPS = {
   "mxslc": {
     "dir": "mxslc",
     "name": "ShadingLanguageX compiler (mxslc)",
-    "version": "0.3.0",
-    "licenseUrl": "https://github.com/jakethorn/ShadingLanguageX/blob/mxslcxx-0.3.0/LICENSE",
+    "version": "0.3.1",
+    "licenseUrl": "https://github.com/jakethorn/ShadingLanguageX/blob/mxslcxx-0.3.1/LICENSE",
     "module": {
       "entry": "JsMxslc.js",
       "kind": "emscripten-esm"

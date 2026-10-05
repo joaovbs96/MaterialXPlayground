@@ -213,6 +213,11 @@ const VIEW_DEPS = {
             'js/graph/panels.jsx',
             'js/graph/reorder-list.jsx',
             'js/graph/scope-list.jsx',
+            'js/graph/slx-syntax.jsx',
+            'js/graph/slx-language.jsx',
+            'js/graph/slx-assist.jsx',
+            'js/graph/code-view.jsx',
+            'js/graph/slx-node.jsx',
             'js/graph/definition-panel.jsx',
             'js/graph/texture-convert.jsx',
         ],
@@ -308,7 +313,7 @@ const VIEW_DEPS = {
         // vendor/utif/UTIF.js: loadTifTexture (js/mtlx-engine.js) needs it for
         // scene TIF/UDIM tiles, same dependency the viewer route already has.
         // Decodes .ktx2 compressed textures (loadKtx2Texture, js/mtlx-engine.js).
-        scripts: ['vendor/utif/UTIF.js', 'vendor/three/KTX2Loader.js', 'js/usd-scene-runtime.js', 'js/usd-scene-sources.js', 'js/usd-scene-environment.js', 'js/usd-scene-lights.js', 'js/usd-scene-skyvis.js', 'js/usd-scene-localenv.js', 'js/usd-scene-post.js', 'js/usd-scene-renderer.js', 'js/shared/gif-encoder.js', 'js/shared/mtlx-turntable.js'],
+        scripts: ['vendor/utif/UTIF.js', 'vendor/three/KTX2Loader.js', 'js/usd-scene-runtime.js', 'js/usd-scene-sources.js', 'js/usd-scene-lights.js', 'js/usd-scene-skyvis.js', 'js/usd-scene-localenv.js', 'js/shared/render-stage-environment.js', 'js/shared/fx-post.js', 'js/shared/fx-ssao.js', 'js/shared/fx-thickness.js', 'js/shared/fx-shadow-atlas.js', 'js/usd-scene-renderer.js', 'js/shared/gif-encoder.js', 'js/shared/mtlx-turntable.js'],
         babelScripts: ['js/shared/mtlx-ui.jsx'],
         app: 'js/usd-scene-app.jsx',
         globalName: 'SceneViewerApp',
@@ -324,7 +329,7 @@ const VIEW_DEPS = {
         css: [],
         // Dependency-free, self-registering custom element (docs/EMBEDDING.md)
         // that drives the live preview - a plain script, not a babelScript.
-        scripts: ['embed/mtlx-viewer.js'],
+        scripts: ['embed/mtlx-viewer.js', 'js/gen/theme-swatches.js'],
         babelScripts: ['js/shared/mtlx-ui.jsx', 'js/shared/hero-grid.jsx', 'js/shared/preset-picker.jsx'],
         app: 'js/builder-app.jsx',
         globalName: 'BuilderApp',
@@ -470,7 +475,7 @@ class ViewErrorBoundary extends React.Component {
                 <div className="flex flex-col items-center justify-center h-40 gap-3 text-error text-sm text-center px-4">
                     <span>This view crashed: {String((error && error.message) || error)}</span>
                     {info && info.componentStack && (
-                        <pre className="max-w-full max-h-24 overflow-auto text-left text-[10px] leading-snug text-fg-subtle bg-surface-deep/50 border border-line-subtle rounded p-2 whitespace-pre-wrap">
+                        <pre className="max-w-full max-h-24 overflow-auto text-left text-[10px] leading-snug text-fg-subtle bg-surface-sunken/50 border border-line-subtle rounded p-2 whitespace-pre-wrap">
                             {info.componentStack.trim()}
                         </pre>
                     )}
@@ -478,14 +483,14 @@ class ViewErrorBoundary extends React.Component {
                         <button
                             type="button"
                             onClick={this.handleReload}
-                            className="text-xs px-3 py-1.5 rounded-lg border bg-control border-line-strong text-fg-soft hover:bg-hover transition-colors"
+                            className="text-xs px-3 py-1.5 rounded-lg border bg-control/80 border-line-strong text-fg-soft hover:bg-hover transition-colors"
                         >
                             Reload page
                         </button>
                         <button
                             type="button"
                             onClick={this.handleCopy}
-                            className="text-xs px-3 py-1.5 rounded-lg border bg-control border-line-strong text-fg-soft hover:bg-hover transition-colors"
+                            className="text-xs px-3 py-1.5 rounded-lg border bg-control/80 border-line-strong text-fg-soft hover:bg-hover transition-colors"
                         >
                             {this.state.copied ? 'Copied!' : 'Copy diagnostics'}
                         </button>
@@ -553,11 +558,11 @@ function DesktopCloseConfirmDialog() {
         // is closing here, so the usual below-header scrim convention
         // does not apply.
         <div
-            className="fixed inset-0 z-[70] flex items-center justify-center bg-scrim/70"
+            className="fixed inset-0 z-[70] flex items-center justify-center bg-scrim/85"
             onMouseDown={() => respond('cancel')}
         >
             <div
-                className="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
+                className="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
                 onMouseDown={(e) => e.stopPropagation()}
             >
                 <div className="text-sm font-semibold text-fg mb-1">This document has unsaved changes.</div>
@@ -617,14 +622,14 @@ function DesktopNoticeBar() {
                     id={'mtlx-desktop-notice-' + n.kind}
                     className={'pointer-events-auto flex items-start gap-2 rounded-lg border backdrop-blur px-3 py-2 text-[12px] shadow-lg '
                         + (n.level === 'warn'
-                            ? 'border-warning-border-alt/50 bg-warning-bg/30 text-warning-text'
-                            : 'border-notice-line/50 bg-notice-bg/30 text-notice-text')}
+                            ? 'border-warning-border/50 bg-warning-bg/30 text-warning-text'
+                            : 'border-line-strong/50 bg-surface-raised/30 text-fg-soft')}
                 >
                     <span className="flex-1">{n.text}</span>
                     <button
                         type="button"
                         onClick={() => dismiss(n.kind)}
-                        className={(n.level === 'warn' ? 'text-warning-text/80 hover:text-warning-text-strong' : 'text-notice-text/80 hover:text-notice-text-strong')
+                        className={(n.level === 'warn' ? 'text-warning-text hover:text-warning-text-strong' : 'text-fg-soft hover:text-fg')
                             + ' leading-none'}
                         aria-label="Dismiss"
                     >
@@ -757,12 +762,12 @@ function DesktopSettingsDialog() {
         // top: header height (not inset-0/z-[70]): a normal popup, not the
         // window-closing dialog above, so it stops below the header.
         <div
-            className="fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-scrim/70"
+            className="fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-scrim/85"
             style={{ top: 'var(--mtlx-header-h, 0px)' }}
         >
             <div
                 ref={panelRef}
-                className="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
+                className="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-80 max-w-[90%] p-4"
             >
                 <div className="flex items-center justify-between mb-3">
                     <div className="text-sm font-semibold text-fg">Settings</div>
@@ -1006,12 +1011,12 @@ function AboutDialog() {
 
     return (
         <div
-            className="fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-scrim/70"
+            className="fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-scrim/85"
             style={{ top: 'var(--mtlx-header-h, 0px)' }}
         >
             <div
                 ref={panelRef}
-                className="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[32rem] max-w-[92%] max-h-[85%] p-4 flex flex-col"
+                className="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[32rem] max-w-[92%] max-h-[85%] p-4 flex flex-col"
             >
                 <div className="flex items-center justify-between gap-3 mb-3">
                     <div className="flex items-center gap-3 mtlx-dialog-brand">
@@ -1384,7 +1389,7 @@ function Shell() {
                     <button
                         type="button"
                         onClick={() => setViewState((prev) => ({ ...prev, [view]: { mounted: true, status: 'loading' } }))}
-                        className="text-xs px-3 py-1.5 rounded-lg border bg-control border-line-strong text-fg-soft hover:bg-hover transition-colors"
+                        className="text-xs px-3 py-1.5 rounded-lg border bg-control/80 border-line-strong text-fg-soft hover:bg-hover transition-colors"
                     >
                         Retry
                     </button>
@@ -1420,12 +1425,12 @@ function Shell() {
                 // own `md:h-full` resolves. Docs works without WebGL2
                 // (only 3D previews are affected) — warn, don't block.
                 const webglBanner = !hasWebGL2() && !docsWebglBannerDismissed ? (
-                    <div className="mb-2 flex-shrink-0 flex items-center justify-between gap-3 rounded-lg border border-warning-border-alt/50 bg-warning-bg/30 text-warning-text text-xs px-3 py-2">
+                    <div className="mb-2 flex-shrink-0 flex items-center justify-between gap-3 rounded-lg border border-warning-border/50 bg-warning-bg/30 text-warning-text text-xs px-3 py-2">
                         <span>WebGL2 is unavailable in this browser — node documentation works, but 3D previews won't render.</span>
                         <button
                             type="button"
                             onClick={() => setDocsWebglBannerDismissed(true)}
-                            className="text-warning-text/80 hover:text-warning-text-strong leading-none"
+                            className="text-warning-text hover:text-warning-text-strong leading-none"
                             aria-label="Dismiss"
                         >
                             ×

@@ -820,9 +820,10 @@ const makeConvolvedIrradianceTexture = (pixels) => {
 // that has a WebGL2 renderer with a float color-buffer extension. Fail-soft
 // at every step: env.irradiance (the SH map) is never touched here, so any
 // guard failure or thrown error leaves diffuse shading exactly as it was.
-const ensureConvolvedIrradiance = (renderer, env) => {
+// `method` lets the Scene (its own stage setting) override the shared one.
+const ensureConvolvedIrradiance = (renderer, env, method) => {
     if (!env || !env.radiance || env.irradianceTried) return env;
-    if (getDiffuseEnvMethod() !== 'convolve') return env;
+    if ((method || getDiffuseEnvMethod()) !== 'convolve') return env;
     if (!renderer || !renderer.capabilities || !renderer.capabilities.isWebGL2) return env;
     env.irradianceTried = true;
     if (!renderer.extensions.get('EXT_color_buffer_float')) {
@@ -895,11 +896,13 @@ const resolveShadingEnv = (renderer, env) => {
     return { radiance: envRadianceForShading(env), irradiance: envIrradianceForShading(env) };
 };
 
-const buildEnvFromParsedTexture = (raw) => {
+const buildEnvFromParsedTexture = (raw, keyOn = host.keyLightEnabled(), source = null) => {
+    // keyOn overrides the global switch for one build (the Scene's own key
+    // light); source keeps the pristine bytes for such rebuilds.
     // Extraction mutates raw's pixels (clamps the sun) BEFORE mips/SH/
     // background are built below, so it disappears from all three,
     // matching official "split" env assets.
-    const keyLight = host.keyLightEnabled() ? extractKeyLight(raw) : null;
+    const keyLight = keyOn ? extractKeyLight(raw) : null;
     // extractKeyLight only mutates raw on a SUCCESSFUL extraction (both
     // its null-return paths run before the clamp), so raw is still
     // pristine here whenever the soft fallback is actually needed.
@@ -912,7 +915,26 @@ const buildEnvFromParsedTexture = (raw) => {
     // Correctly-oriented copy for the visible skybox mesh, see
     // makeBackgroundTexture and the env-prep header above.
     const background = makeBackgroundTexture(radiance);
-    return { radiance, irradiance, irradianceConvolved: null, mips, background, prefilteredIrr: false, keyLight, softKeyDir };
+    return { radiance, irradiance, irradianceConvolved: null, mips, background, prefilteredIrr: false, keyLight, softKeyDir, keyLightBuilt: !!keyOn, envSource: source };
+};
+
+// The same environment built with key light extraction on or off, without
+// touching the global switch (the Scene keeps its own). Environments with no
+// remembered source (stage dome lights, flat colours) come back unchanged.
+const envWithKeyLight = (env, on) => {
+    if (!env) return env;
+    const base = env.keyOrigin || env;
+    const want = !!on;
+    if (!base.envSource || base.keyLightBuilt === want) return base;
+    base.keyVariants = base.keyVariants || {};
+    if (!base.keyVariants[want]) {
+        const raw = parseEnvBuffer(base.envSource.buf, base.envSource.ext);
+        if (!raw || !raw.image || !raw.image.data) return base;
+        const variant = buildEnvFromParsedTexture(raw, want, base.envSource);
+        variant.keyOrigin = base;
+        base.keyVariants[want] = variant;
+    }
+    return base.keyVariants[want];
 };
 
 // Mirrors the same curve onto three's BUILT-IN materials: the backdrop sky
@@ -1326,6 +1348,9 @@ const createShaderPrewarmer = ({ getContext, perfLog }) => {
             console.log('[mtlx-perf] GL compile submit: '
                 + (performance.now() - __warmPerfStart).toFixed(1) + 'ms (target: ' + label + ')');
         }
+        // Deleting at once cancels an abandoned parallel link so the next build's
+        // first frame is not held up; ANGLE may log a harmless GL_INVALID_VALUE
+        // glGetProgramiv for the cancelled program.
         const cleanup = () => {
             try { if (warmProgram) gl.deleteProgram(warmProgram); } catch (e) { /* context lost etc. */ }
             try { if (warmVShader) gl.deleteShader(warmVShader); } catch (e) { /* ditto */ }
@@ -1425,6 +1450,7 @@ globalThis.MtlxSceneAssembly = {
     makeConvolvedIrradianceTexture,
     resolveShadingEnv,
     buildEnvFromParsedTexture,
+    envWithKeyLight,
     applyThreeToneMappingChunk,
     applyPeelMaterialMode,
     effectiveFullSceneVFov,

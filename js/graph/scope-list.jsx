@@ -31,7 +31,7 @@
                     type="button"
                     data-row-id={r.id}
                     className={'w-full flex items-center gap-2 px-2 py-1 rounded text-[12px] font-mono text-left transition-colors '
-                        + (selected ? 'bg-selection/30 text-fg' : (hi ? 'bg-hover/60 text-fg-soft' : 'text-fg-secondary hover:bg-hover/60'))}
+                        + (selected ? 'bg-selection/20 text-fg' : (hi ? 'bg-hover/60 text-fg-soft' : 'text-fg-secondary hover:bg-hover/60'))}
                     title={r.category + (r.type ? ' : ' + r.type : '')}
                     onClick={() => onSelect(r.id)}
                     onDoubleClick={() => {
@@ -186,7 +186,7 @@
                             <button
                                 type="button"
                                 title="Collapse the node list"
-                                className="flex-none w-6 h-6 flex items-center justify-center rounded text-fg-muted hover:text-fg-soft hover:bg-hover/80 transition-colors"
+                                className="flex-none w-6 h-6 flex items-center justify-center rounded text-fg-secondary hover:text-fg hover:bg-hover/80 transition-colors"
                                 onClick={onCollapse}
                             >
                                 <MtlxIcon name="chevrons-left" className="w-4 h-4" />

@@ -519,7 +519,7 @@
                         // documents loaded before this fix existed.
                         mxSafe(() => stripValuesFromConnectedInputs(loaded.doc), 0);
                         xml = preserveSourceFormatting(loaded.sourceXml,
-                            withXmlEnvelope(loaded.mx.writeToXmlString(loaded.doc), splitXmlEnvelope(loaded.sourceXml)));
+                            withXmlEnvelope(escapeXmlAttrSpecials(loaded.mx.writeToXmlString(loaded.doc)), splitXmlEnvelope(loaded.sourceXml)));
                     } catch (e) {
                         console.warn('Send to Editor: failed to serialize the document', e);
                         return;
@@ -1330,7 +1330,7 @@
             const hudChipClass = (active) => IN_VSCODE
                 ? `h-7 w-7 justify-center inline-flex items-center rounded-lg border transition-colors ${
                     active
-                        ? 'bg-accent-fill/80 border-accent-base text-on-accent'
+                        ? 'mtlx-fill-accent-translucent border-accent-base text-on-accent'
                         : 'border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong'
                 }`
                 : (active ? HUD_PILL_ACTIVE : HUD_PILL);
@@ -1353,7 +1353,7 @@
                             </div>
                             <label
                                 title="Choose a folder"
-                                className="h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-line-control rounded-md bg-control hover:bg-hover text-fg-secondary cursor-pointer"
+                                className="h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-line-control rounded-md bg-control/80 hover:bg-hover text-fg-secondary cursor-pointer"
                             >
                                 <MtlxIcon name="folder" className="w-3.5 h-3.5" />
                                 <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={onPickFiles} />
@@ -1585,7 +1585,7 @@
                                 <div className="text-sm text-fg-muted mb-3">{status}</div>
                             )}
                             {IN_VSCODE && error && (
-                                <div className="bg-error-bg/40 border border-error-border/60 text-error-text-strong text-sm rounded-lg px-4 py-3 mb-3 break-words">
+                                <div className="bg-error-bg/60 border border-error-border/60 text-error-text text-sm rounded-lg px-4 py-3 mb-3 break-words">
                                     {error}
                                 </div>
                             )}
@@ -1815,7 +1815,7 @@
                         <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-hud-raised/90 backdrop-blur border border-hud-line text-hud-fg text-sm rounded-lg px-4 py-2 break-words shadow-lg">{status}</div>
                     )}
                     {!IN_VSCODE && error && (
-                        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-error-bg/90 border border-error-border/60 text-error-text-strong text-sm rounded-lg px-4 py-2.5 break-words shadow-lg">{error}</div>
+                        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-error-bg/90 border border-error-border/60 text-error-text text-sm rounded-lg px-4 py-2.5 break-words shadow-lg">{error}</div>
                     )}
 
                     {/* Collapsed-sidebar pill, only shown while the docked
@@ -1858,7 +1858,7 @@
                     {!IN_VSCODE && !chromeless && sidebarOpen && (
                         <div className="flex-none w-80 max-w-[90%] flex flex-col bg-surface-base border-r border-line overflow-hidden">
                             <div className="flex-none flex items-center gap-1.5 px-3 py-2 border-b border-line">
-                                <span className="text-[13px] font-semibold text-fg-soft">Material Viewer</span>
+                                <span className="text-[13px] font-semibold text-fg">Material Viewer</span>
                                 <button
                                     onClick={() => setSidebarOpen(false)}
                                     title="Collapse the viewer panel"
@@ -1884,7 +1884,7 @@
                     {!chromeless && (
                     <MtlxPresetPicker open={presetPickerOpen} onClose={() => setPresetPickerOpen(false)}
                         onSelect={handlePresetPickerSelect}
-                        overlayClassName="fixed left-0 right-0 bottom-0 top-[var(--mtlx-header-h,0px)] z-50 flex items-center justify-center bg-scrim/70" />
+                        overlayClassName="fixed left-0 right-0 bottom-0 top-[var(--mtlx-header-h,0px)] z-50 flex items-center justify-center bg-scrim/85" />
                     )}
                     {/* Same `fixed` escape hatch as the preset picker above,
                         but intentionally left covering the header too; this
@@ -1892,7 +1892,7 @@
                     {!chromeless && shaderExportOpen && loadedRef.current && (
                         <ShaderExportDialog open={true} onClose={() => setShaderExportOpen(false)}
                             renderables={renderables} initialIndex={chosenMat}
-                            overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-scrim/70"
+                            overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-scrim/85"
                             generate={({ renderable, label, targetKey }) =>
                                 targetKey === "slx"
                                     ? generateSlxExportStages()

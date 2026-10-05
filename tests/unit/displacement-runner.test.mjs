@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const engineSource = fs.readFileSync(path.join(root, 'js/mtlx-engine.js'), 'utf8');
-const sceneSource = fs.readFileSync(path.join(root, 'js/usd-scene-renderer.js'), 'utf8');
+// The Scene's resolveDisplacementLevel was deleted in P6 S5; its frozen text is the oracle.
+const sceneSource = fs.readFileSync(path.join(root, 'tests/unit/fixtures/scene-legacy-p5.js'), 'utf8');
 
 // ---- createTriangleBudget, sliced verbatim from the engine. ----
 const budgetStart = engineSource.indexOf('// Highest triangle count a preview mesh may reach');

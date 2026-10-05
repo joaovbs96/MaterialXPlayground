@@ -19,7 +19,9 @@
         // filterMode/filterType drive the port-dot double-click flow:
         // 'in' matches nodes whose OUTPUT feeds the port, 'out' matches
         // an INPUT that can consume it; null/'' is the normal flow.
-        function AddNodeSearch({ catalog, docCatalog = [], ifaceMode, onAddInterface, defMode, onCreateDefinition, initialMode = null, onPick, onClose, filterMode = null, filterType = '' }) {
+        // slxMode/onAddSlx offer a synthetic "ShadingLanguageX node" row
+        // (document root only, where a nodegraph can live).
+        function AddNodeSearch({ catalog, docCatalog = [], ifaceMode, onAddInterface, defMode, onCreateDefinition, slxMode = false, onAddSlx, initialMode = null, onPick, onClose, filterMode = null, filterType = '' }) {
             const [q, setQ] = React.useState('');
             const [typeFilter, setTypeFilter] = React.useState(filterType || '');
             const [hi, setHi] = React.useState(0);
@@ -78,6 +80,11 @@
                         synth.push({ synthetic: 'definition', category: 'node definition' });
                     }
                 }
+                if (slxMode) {
+                    if (!s || ['shadinglanguagex', 'slx', 'mxsl', 'code', 'shading language'].some((k) => k.indexOf(s) !== -1)) {
+                        synth.push({ synthetic: 'slx', category: 'ShadingLanguageX node' });
+                    }
+                }
                 if (!catalog) return synth;
                 // Rank on category first, group second (see catalog.jsx's
                 // searchFilter comment): a group-only match still shows,
@@ -110,7 +117,11 @@
                 if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
             }, [hi, items]);
             const pick = (c) => {
-                if (c.synthetic === 'definition') {
+                if (c.synthetic === 'slx') {
+                    onAddSlx();
+                    onClose();
+                }
+                else if (c.synthetic === 'definition') {
                     setDefDraft({ node: '', type: 'color3', nodegroup: '', withGraph: true });
                 }
                 else if (c.synthetic) {
@@ -272,7 +283,7 @@
                                     <div className="flex items-center gap-2 pt-0.5">
                                         <button
                                             onClick={confirmIface}
-                                            className="h-7 text-[11px] px-2.5 rounded border bg-accent-fill/80 border-accent-base text-on-accent-soft hover:bg-accent-fill transition-colors"
+                                            className="h-7 text-[11px] px-2.5 rounded border mtlx-fill-accent-translucent border-accent-base text-on-accent mtlx-fill-accent-translucent-hover transition-colors"
                                         >Add</button>
                                         <button
                                             onClick={() => setIfaceDraft(null)}
@@ -325,7 +336,7 @@
                                         <button
                                             onClick={confirmDef}
                                             disabled={!defDraft.node.trim()}
-                                            className="h-7 text-[11px] px-2.5 rounded border bg-accent-fill/80 border-accent-base text-on-accent-soft hover:bg-accent-fill transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                            className="h-7 text-[11px] px-2.5 rounded border mtlx-fill-accent-translucent border-accent-base text-on-accent mtlx-fill-accent-translucent-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                         >Create</button>
                                         <button
                                             onClick={() => setDefDraft(null)}
@@ -376,13 +387,13 @@
                                     onMouseEnter={() => setHi(i)}
                                     onClick={() => pick(c)}
                                     className={'w-full flex items-center gap-2 px-3 py-1.5 text-left text-[12px] font-mono transition-colors '
-                                        + (i === hi ? 'bg-selection/30 text-fg' : 'text-fg-secondary hover:bg-hover/60')}
+                                        + (i === hi ? 'bg-selection/20 text-fg' : 'text-fg-secondary hover:bg-hover/60')}
                                 >
                                     {c.synthetic ? (
                                         <React.Fragment>
                                             <span className="w-2 h-2 rotate-45 flex-none border" style={{ background: 'transparent', borderColor: MtlxTheme.get('type-untyped') }} />
                                             <span className="truncate italic">{c.category}</span>
-                                            <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-fg-subtle border border-line-strong border-dashed rounded px-1">{c.synthetic === 'definition' ? 'new' : 'interface'}</span>
+                                            <span className="ml-auto flex-none text-[8px] uppercase tracking-wider text-fg-subtle border border-line-strong border-dashed rounded px-1">{c.synthetic === 'definition' ? 'new' : (c.synthetic === 'slx' ? 'code' : 'interface')}</span>
                                         </React.Fragment>
                                     ) : (
                                         <React.Fragment>
@@ -416,7 +427,7 @@
             const commit = () => { if (draft !== (value || '')) onCommit(draft); };
             return (
                 <input
-                    className={'flex-1 min-w-0 h-6 py-0 px-1.5 placeholder-fg-faint bg-surface-sunken border border-line-strong rounded text-[11px] font-mono text-fg-soft focus:border-focus focus:outline-none'
+                    className={'flex-1 min-w-0 h-6 py-0 px-1.5 placeholder-fg-subtle bg-surface-sunken border border-line-strong rounded text-[11px] font-mono text-fg-soft focus:border-focus focus:outline-none'
                         + (readOnly ? ' opacity-60' : '') + (className ? ' ' + className : '')}
                     value={draft}
                     placeholder={placeholder}
@@ -495,7 +506,9 @@
         // One row per param: connected inputs jump to their source node;
         // unconnected ones edit the value, debounced (each commit writes
         // the doc and recompiles); onLive fires per tick for a live preview.
-        function ParamRow({ nodeId, inp, readOnly, sourceId, onJump, onCommit, onLive, onPickFile, onSetColorspace, hideHeader }) {
+        // `disabled`: the reason, shown as a tooltip, the controls are shown
+        // greyed out and inert (a code node's inputs are set by its code).
+        function ParamRow({ nodeId, inp, readOnly, disabled, sourceId, onJump, onCommit, onLive, onPickFile, onSetColorspace, hideHeader }) {
             // A ref (not state): blurring alone must never re-trigger the
             // re-seed effects below, only an actual value change should.
             const focusedRef = React.useRef(false);
@@ -593,7 +606,7 @@
 
             const textField = () => (
                 <input
-                    className={'flex-1 min-w-0 px-1.5 py-0.5 placeholder-fg-faint ' + boxCls}
+                    className={'flex-1 min-w-0 px-1.5 py-0.5 placeholder-fg-subtle ' + boxCls}
                     value={draft}
                     placeholder="(no value)"
                     spellCheck={false}
@@ -873,6 +886,10 @@
             ) : readOnly ? (
                 <div className={(hideHeader ? '' : 'mt-1 ') + 'text-[11px] text-fg-muted font-mono truncate'} title={inp.value}>
                     {inp.value !== '' ? inp.value : '\u2014'}
+                </div>
+            ) : disabled ? (
+                <div className={(hideHeader ? '' : 'mt-1 ') + 'cursor-not-allowed'} title={disabled}>
+                    <fieldset disabled className="min-w-0 opacity-50 pointer-events-none">{control()}</fieldset>
                 </div>
             ) : (
                 hideHeader ? control() : <div className="mt-1">{control()}</div>

@@ -136,17 +136,17 @@ const MtlxIcon = (props) => {
     });
 };
 
-// Shared floating-pill family, two sizes: PILL_ACTION (default) and
-// PILL_ACTION_SM (compact). The PILL_ACTION* pair is the over-render (hud)
-// variant; PILL_PAGE* is the same look on ordinary page surfaces.
+// Shared pill family, two sizes each. PILL_ACTION* (hud tokens) is for pills
+// floating over a render or canvas; PILL_PAGE* (page tokens) is for pills on
+// ordinary page surfaces. Pick by what is behind the pill.
 // disabled:cursor-not-allowed, not cursor-wait: `disabled` on these
 // buttons is not always "an async op is in flight" (e.g. the Scene Apply
 // pill is also disabled when there is simply nothing staged to apply),
 // so a wait cursor there is a false busy signal.
-const PILL_ACTION = 'inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-hud-line/50 bg-hud/70 text-xs font-medium text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong [&:hover_svg]:text-hud-fg-strong transition-colors disabled:opacity-60 disabled:cursor-not-allowed';
-const PILL_ACTION_SM = 'inline-flex items-center gap-1 h-6 px-2 rounded-md border border-hud-line/50 bg-hud/70 text-[11px] font-medium text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong [&:hover_svg]:text-hud-fg-strong transition-colors disabled:opacity-60 disabled:cursor-not-allowed';
-const PILL_PAGE = 'inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-line-strong/50 bg-chrome/70 text-xs font-medium text-fg-muted hover:bg-hover hover:border-line-strong hover:text-fg [&:hover_svg]:text-fg transition-colors disabled:opacity-60 disabled:cursor-not-allowed';
-const PILL_PAGE_SM = 'inline-flex items-center gap-1 h-6 px-2 rounded-md border border-line-strong/50 bg-chrome/70 text-[11px] font-medium text-fg-muted hover:bg-hover hover:border-line-strong hover:text-fg [&:hover_svg]:text-fg transition-colors disabled:opacity-60 disabled:cursor-not-allowed';
+const PILL_ACTION = 'inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-hud-line/50 bg-hud/70 text-xs font-medium text-hud-fg hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong [&:hover_svg]:text-hud-fg-strong transition-colors disabled:opacity-60 disabled:cursor-not-allowed';
+const PILL_ACTION_SM = 'inline-flex items-center gap-1 h-6 px-2 rounded-md border border-hud-line/50 bg-hud/70 text-[11px] font-medium text-hud-fg hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong [&:hover_svg]:text-hud-fg-strong transition-colors disabled:opacity-60 disabled:cursor-not-allowed';
+const PILL_PAGE = 'inline-flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-line-strong/50 bg-chrome/70 text-xs font-medium text-fg-secondary hover:bg-hover hover:border-line-strong hover:text-fg [&:hover_svg]:text-fg transition-colors disabled:opacity-60 disabled:cursor-not-allowed';
+const PILL_PAGE_SM = 'inline-flex items-center gap-1 h-6 px-2 rounded-md border border-line-strong/50 bg-chrome/70 text-[11px] font-medium text-fg-secondary hover:bg-hover hover:border-line-strong hover:text-fg [&:hover_svg]:text-fg transition-colors disabled:opacity-60 disabled:cursor-not-allowed';
 
 // React hook: re-render when the active theme changes; returns the theme name.
 const useMtlxTheme = () => {

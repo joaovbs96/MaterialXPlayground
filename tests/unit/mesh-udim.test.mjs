@@ -18,7 +18,8 @@ function loadMeshUdim() {
 // The Scene's own sceneUdimCode/sceneUdimTile/sceneUdimTriangle, sliced
 // read-only for parity (js/usd-scene-renderer.js ~1241-1263).
 function loadSceneHelpers() {
-  const source = fs.readFileSync(path.join(root, 'js/usd-scene-renderer.js'), 'utf8');
+  // Frozen pre-P6 Scene copies (deleted from the renderer in P6 S4).
+  const source = fs.readFileSync(path.join(root, 'tests/unit/fixtures/scene-legacy-p5.js'), 'utf8');
   const start = source.indexOf('const sceneUdimCode =');
   const end = source.indexOf('\nconst sceneUdimRefs =', start);
   assert.ok(start >= 0 && end > start, 'could not slice sceneUdim* helpers from js/usd-scene-renderer.js');

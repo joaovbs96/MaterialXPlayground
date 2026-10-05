@@ -77,7 +77,7 @@
     <script>
         // `theme` (auto, a registry id or a theme code): read before theme.js, so a preset or a custom theme applies
         // before first paint; never persisted. Absent, unknown, host-limited (vscode) or an invalid code means dark.
-        // A code (mtlx1.) passes through untouched: theme.js decodes it strictly and loads the engine on demand.
+        // A code (mtlx2.) passes through untouched: theme.js decodes it strictly and loads the engine on demand.
         (function () {
             var raw = (new URLSearchParams(window.location.search).get('theme') || '').trim();
             var t = raw.toLowerCase();

@@ -517,7 +517,7 @@
                                 view = await createMtlxRenderView({
                                     canvas, mx, gen, genContext, renderable: built.renderable, lightData,
                                     materialName: built.materialName || null,
-                                    label: built.label || parsed.label,
+                                    label: built.label || parsed.label, surface: 'graph',
                                     needsLighting: true,
                                     geomName: wantGeom,
                                     // 3D geometries orbit by default; the full scene opts
@@ -654,13 +654,13 @@
                                 <div className="flex items-center justify-between gap-2">
                                     <span className="inline-flex items-center gap-1.5 text-fg-soft">
                                         {(rowMeta('graphCompoundCompile', 'graph') || {}).label || 'Compound compile'}
-                                        <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-experimental-fill/30 border border-experimental-hue/50 text-experimental">Experimental</span>
+                                        <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-experimental-hue/10 border border-experimental-hue/40 text-experimental">Experimental</span>
                                     </span>
                                     <button
                                         onClick={() => setCompoundRoot(!compoundRoot)}
                                         title={compoundRoot ? 'Disable compound compile' : 'Enable compound compile'}
                                         className={`h-5 px-2 rounded border transition-colors shrink-0 ${
-                                            compoundRoot ? 'bg-accent-fill/80 border-accent-base text-on-accent' : 'bg-control/80 border-line-strong text-fg-secondary'
+                                            compoundRoot ? 'mtlx-fill-accent-translucent border-accent-base text-on-accent' : 'bg-control/80 border-line-strong text-fg-secondary'
                                         }`}
                                     >
                                         {compoundRoot ? 'On' : 'Off'}
@@ -714,7 +714,7 @@
                             barWidthClass="w-32"
                         />
                         {notice && (
-                            <div className="absolute inset-0 flex items-center justify-center text-[11px] text-fg-subtle px-3 text-center bg-veil/60">
+                            <div className="absolute inset-0 flex items-center justify-center text-[11px] text-fg-subtle px-3 text-center bg-veil/70">
                                 {notice}
                             </div>
                         )}

@@ -135,6 +135,7 @@
             'surface-base': { from: 'background' },
             'surface-raised': { from: 'background', mixToward: 'foreground', amount: 0.09 },
             'surface-sunken': { from: 'background' },
+            'surface-card': { from: 'background', mixToward: 'foreground', amount: 0.0315 },
             'chrome': { from: 'background' },
             'control': { from: 'background', mixToward: 'foreground', amount: 0.09 },
             'chip': { from: 'background', mixToward: 'foreground', amount: 0.215 },
@@ -227,6 +228,21 @@
             'code-inline-bg': { from: 'background', mixToward: 'foreground', amount: 0.215 },
             'code-inline-fg': { fixedFromBase: true },
             'code-block-bg': { from: 'background', mixToward: 'foreground', amount: -0.039 },
+            'code-syntax-text': { from: 'background', mixToward: 'foreground', amount: 0.871 },
+            'code-syntax-comment': { fixedFromBase: true },
+            'code-syntax-string': { fixedFromBase: true },
+            'code-syntax-number': { fixedFromBase: true },
+            'code-syntax-keyword': { fixedFromBase: true },
+            'code-syntax-type': { fixedFromBase: true },
+            'code-syntax-directive': { fixedFromBase: true },
+            'code-syntax-function': { fixedFromBase: true },
+            'code-syntax-param': { fixedFromBase: true },
+            'code-syntax-link': { fixedFromBase: true },
+            'code-syntax-error': { fixedFromBase: true },
+            'code-syntax-caret': { from: 'background', mixToward: 'foreground', amount: 0.719 },
+            'code-syntax-selection': { fixedFromBase: true },
+            'code-syntax-highlight': { fixedFromBase: true },
+            'code-syntax-assist-selected': { fixedFromBase: true },
             'graph-canvas': { from: 'background' },
             'graph-grid': { from: 'background', mixToward: 'foreground', amount: 0.215 },
             'builder-stage': { from: 'background', mixToward: 'foreground', amount: -0.036 },
@@ -267,28 +283,12 @@
             'native-window-bg': { from: 'background', mixToward: 'foreground', amount: -0.053 },
             'native-titlebar': { from: 'background' },
             'native-titlebar-symbol': { from: 'background', mixToward: 'foreground', amount: 0.948 },
-            'surface-deep': { from: 'background', mixToward: 'foreground', amount: -0.106 },
-            'scrim-alt': { fixedFromBase: true },
-            'on-accent-soft': { from: 'background', mixToward: 'foreground', amount: 1 },
-            'success-border-muted': { fixedFromBase: true },
-            'warning-bg-strong': { fixedFromBase: true },
-            'warning-border-alt': { fixedFromBase: true },
-            'error-text-strong': { fixedFromBase: true },
-            'error-bg-strong': { fixedFromBase: true },
-            'error-border-strong': { fixedFromBase: true },
-            'info-border-alt': { fixedFromBase: true },
-            'notice-bg': { from: 'background', mixToward: 'foreground', amount: 0.091 },
-            'notice-line': { from: 'background', mixToward: 'foreground', amount: 0.31 },
-            'notice-text': { from: 'background', mixToward: 'foreground', amount: 0.949 },
-            'notice-text-strong': { from: 'background', mixToward: 'foreground', amount: 1.002 },
-            'experimental-fill': { fixedFromBase: true },
-            'code-inline-fg-alt': { fixedFromBase: true },
-            'code-block-bg-alt': { from: 'background', mixToward: 'foreground', amount: -0.004 },
         },
         light: {
             'surface-base': { from: 'background' },
             'surface-raised': { from: 'background', mixToward: 'foreground', amount: -0.044 },
             'surface-sunken': { from: 'background', mixToward: 'foreground', amount: -0.023 },
+            'surface-card': { from: 'background', mixToward: 'foreground', amount: -0.015 },
             'chrome': { from: 'background' },
             'control': { from: 'background', mixToward: 'foreground', amount: -0.044 },
             'chip': { from: 'background', mixToward: 'foreground', amount: 0.052 },
@@ -381,6 +381,21 @@
             'code-inline-bg': { from: 'background', mixToward: 'foreground', amount: 0.052 },
             'code-inline-fg': { fixedFromBase: true },
             'code-block-bg': { from: 'background', mixToward: 'foreground', amount: -0.011 },
+            'code-syntax-text': { from: 'background', mixToward: 'foreground', amount: 1 },
+            'code-syntax-comment': { fixedFromBase: true },
+            'code-syntax-string': { fixedFromBase: true },
+            'code-syntax-number': { fixedFromBase: true },
+            'code-syntax-keyword': { fixedFromBase: true },
+            'code-syntax-type': { fixedFromBase: true },
+            'code-syntax-directive': { fixedFromBase: true },
+            'code-syntax-function': { fixedFromBase: true },
+            'code-syntax-param': { fixedFromBase: true },
+            'code-syntax-link': { fixedFromBase: true },
+            'code-syntax-error': { fixedFromBase: true },
+            'code-syntax-caret': { from: 'background', mixToward: 'foreground', amount: 1 },
+            'code-syntax-selection': { fixedFromBase: true },
+            'code-syntax-highlight': { fixedFromBase: true },
+            'code-syntax-assist-selected': { fixedFromBase: true },
             'graph-canvas': { from: 'background' },
             'graph-grid': { from: 'background', mixToward: 'foreground', amount: 0.314 },
             'builder-stage': { from: 'background' },
@@ -421,23 +436,6 @@
             'native-window-bg': { from: 'background' },
             'native-titlebar': { from: 'background' },
             'native-titlebar-symbol': { from: 'background', mixToward: 'foreground', amount: 0.785 },
-            'surface-deep': { from: 'background', mixToward: 'foreground', amount: -0.023 },
-            'scrim-alt': { fixedFromBase: true },
-            'on-accent-soft': { from: 'background', mixToward: 'foreground', amount: -0.044 },
-            'success-border-muted': { fixedFromBase: true },
-            'warning-bg-strong': { fixedFromBase: true },
-            'warning-border-alt': { fixedFromBase: true },
-            'error-text-strong': { fixedFromBase: true },
-            'error-bg-strong': { fixedFromBase: true },
-            'error-border-strong': { fixedFromBase: true },
-            'info-border-alt': { fixedFromBase: true },
-            'notice-bg': { from: 'background', mixToward: 'foreground', amount: -0.044 },
-            'notice-line': { from: 'background', mixToward: 'foreground', amount: 0.478 },
-            'notice-text': { from: 'background', mixToward: 'foreground', amount: 0.91 },
-            'notice-text-strong': { from: 'background', mixToward: 'foreground', amount: 1 },
-            'experimental-fill': { fixedFromBase: true },
-            'code-inline-fg-alt': { fixedFromBase: true },
-            'code-block-bg-alt': { from: 'background', mixToward: 'foreground', amount: -0.011 },
         },
     };
 
@@ -619,14 +617,29 @@
         return moved;
     }
 
-    // A validated custom spec ({ base, seeds, overrides, modifiers }) to { ok, base, tokens, params, adjusted, report, error }.
+    // A validated custom spec ({ base, seeds, overrides, modifiers } or { base, from, overrides } plus opts.baseline) to { ok, base, tokens, params, adjusted, report, error }.
     // adjusted: [{ fg, bg, token, from, to }] per fixed pair (token is the color that moved; only surface-base and fg are
     // locked, as for VS Code). ok false: tokens are the uncorrected derivation and error is a short user-facing message.
     function resolveCustom(spec, opts) {
         const o = opts || {};
         const pairs = o.pairs || [];
-        const level = o.level || 'AA';
-        const d = deriveTheme({ base: spec.base, seeds: spec.seeds, overrides: spec.overrides, modifiers: spec.modifiers, data: o.data });
+        let level = o.level || 'AA';
+        let d;
+        if (spec.from) {
+            // Based on a built-in theme: its exact map and params plus the overrides, at that theme's level.
+            const bl = o.baseline;
+            if (!bl || !bl.tokens) return { ok: false, base: spec.base, tokens: {}, params: {}, adjusted: [], report: [], error: 'The theme "' + spec.from + '" it is based on is not available' };
+            level = bl.level || level;
+            const tokens = Object.assign({}, bl.tokens);
+            const ov = spec.overrides || {};
+            Object.keys(ov).forEach(function (t) {
+                if (!(t in tokens)) throw new Error('theme-engine: override of unknown token "' + t + '"');
+                tokens[t] = normHex(ov[t]);
+            });
+            d = { base: spec.base, tokens: tokens, params: JSON.parse(JSON.stringify(bl.params || {})) };
+        } else {
+            d = deriveTheme({ base: spec.base, seeds: spec.seeds, overrides: spec.overrides, modifiers: spec.modifiers, data: o.data });
+        }
         const out = { ok: true, base: d.base, tokens: d.tokens, params: d.params, adjusted: [], report: [], error: null };
         try {
             const fitted = Object.assign({}, d.tokens);

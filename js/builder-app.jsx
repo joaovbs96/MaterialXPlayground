@@ -20,20 +20,30 @@ const BUILDER_CONTROLS = [
 // radius is stored/edited as a bare number (the field is numeric, docs/
 // EMBEDDING.md); the "px" suffix is appended wherever it's emitted, since
 // embed-boot.js validates with CSS.supports and rejects a bare number.
-// A custom theme travels as its code (mtlx1.<payload>); the embed validates it and falls back to dark.
-const builderIsThemeCode = (v) => typeof v === 'string' && /^mtlx1\.[A-Za-z0-9_-]{1,8000}$/.test(v);
-const builderThemeAttrValue = (v) => (v === 'light' ? 'light' : builderIsThemeCode(v) ? v : 'dark');
-const BUILDER_THEME_DEFAULTS = { accent: '#3b82f6', surface: '#1f2937', text: '#d1d5db', radius: '4' };
+// A custom theme travels as its code (mtlx2.<payload>); the embed validates it and falls back to dark.
+const builderIsThemeCode = (v) => typeof v === 'string' && /^mtlx2\.[A-Za-z0-9_-]{1,8000}$/.test(v);
+// Built-in presets from the registry (not custom, vscode or system), read live so new registry entries appear.
+const builderPresetThemes = () => {
+    try { return ((window.MtlxTheme && window.MtlxTheme.list && window.MtlxTheme.list()) || []).filter((e) => e && e.group !== 'custom' && e.id !== 'system' && e.id !== 'vscode' && e.id !== 'dark' && e.id !== 'light' && !builderIsThemeCode(e.id)); } catch (e) { return []; }
+};
+// Valid embed theme value: dark, light, a registry preset id or a theme code.
+const builderIsEmbedTheme = (v) => v === 'dark' || v === 'light' || builderIsThemeCode(v) || (typeof v === 'string' && builderPresetThemes().some((e) => e.id === v));
+const builderThemeAttrValue = (v) => (builderIsEmbedTheme(v) ? v : 'dark');
+// HUD color overrides are optional: empty means the theme's own color, and only non-empty values are emitted or applied.
+const builderThemeOverride = (v) => String(v == null ? '' : v).trim();
+const BUILDER_THEME_DEFAULTS = { radius: '4' };
+// HUD colors (accent, surface, text) of a registry theme from the generated swatch table; dark when unknown.
+const builderThemeSwatch = (id) => {
+    const t = (window.MTLX_THEME_TOKENS && window.MTLX_THEME_TOKENS.swatches) || {};
+    return t[id] || t.dark || { accent: '#3b82f6', surface: '#1f2937', text: '#d1d5db' };
+};
+// HUD colors of a theme code, resolved through the engine like the embed does; null if it cannot be built.
+const builderCodeSwatch = async (code) => {
+    const r = await window.MtlxTheme.resolveCustomTheme(code);
+    const t = r && r.tokens;
+    return t && t['accent-base'] ? { accent: t['accent-base'], surface: t['hud-raised'], text: t['hud-fg'] } : null;
+};
 const builderRadiusPx = (v) => { const t = String(v == null ? '' : v).trim(); return t ? t + 'px' : ''; };
-
-// The three documented Look presets (see docs/EMBEDDING.md's Theming
-// section). "Card" keeps the dark palette but turns the page transparent
-// and rounds corners more, for sitting inside a host card.
-const BUILDER_THEME_PRESETS = [
-    { id: 'dark', label: 'Dark', theme: 'dark', accent: '#3b82f6', surface: '#1f2937', text: '#d1d5db', radius: '4', transparent: false },
-    { id: 'light', label: 'Light', theme: 'light', accent: '#2563eb', surface: '#f9fafb', text: '#374151', radius: '4', transparent: false },
-    { id: 'card', label: 'Transparent Card', theme: 'dark', accent: '#3b82f6', surface: '#1f2937', text: '#d1d5db', radius: '8', transparent: true },
-];
 
 // Checkerboard backdrop shown behind the preview element while Transparent
 // is checked, so an actually-transparent render is visible (the
@@ -157,9 +167,9 @@ const BUILDER_DEFAULTS = {
     envmap: '',
     geometryUrl: '',
     theme: 'dark',
-    accent: BUILDER_THEME_DEFAULTS.accent,
-    surface: BUILDER_THEME_DEFAULTS.surface,
-    text: BUILDER_THEME_DEFAULTS.text,
+    accent: '',
+    surface: '',
+    text: '',
     radius: BUILDER_THEME_DEFAULTS.radius,
     width: 640,
     height: 480,
@@ -324,7 +334,7 @@ const buildShareParams = (s) => {
     if (cs) params.set('controls', cs);
     if (!isBuilderDefault('backdrop', s.backdrop)) params.set('backdrop', s.backdrop);
     if (s.transparent) params.set('transparent', '1');
-    if (s.theme === 'light' || builderIsThemeCode(s.theme)) params.set('theme', s.theme);
+    if (s.theme !== 'dark' && builderIsEmbedTheme(s.theme)) params.set('theme', s.theme);
     if (!isBuilderDefault('accent', s.accent)) params.set('accent', s.accent.trim());
     if (!isBuilderDefault('surface', s.surface)) params.set('surface', s.surface.trim());
     if (!isBuilderDefault('text', s.text)) params.set('text', s.text.trim());
@@ -390,19 +400,13 @@ const builderBehaviorSummary = (autorotate, wheelZoom) =>
 const builderSizeSummary = (s) => (s.sizing === 'responsive'
     ? `${builderAspectLabel(s.width, s.height)}, responsive`
     : `${s.width} x ${s.height}, fixed`);
-const builderActiveThemePreset = (s) => BUILDER_THEME_PRESETS.find((p) =>
-    (p.theme || 'dark') === (s.theme || 'dark')
-    && builderNorm(p.accent) === builderNorm(s.accent)
-    && builderNorm(p.surface) === builderNorm(s.surface)
-    && builderNorm(p.text) === builderNorm(s.text)
-    && normForCompare('radius', p.radius) === normForCompare('radius', s.radius)
-    && !!p.transparent === !!s.transparent) || null;
-
 // A CSS-color text field paired with a native swatch (hex-only). The
 // text field is the source of truth and accepts any CSS color, including
 // an invalid one - the error banner below is meant to catch exactly that.
 function ColorField({ label, value, onChange, placeholder }) {
-    const hex = /^#[0-9a-fA-F]{6}$/.test(value) ? value : '#000000';
+    const own = /^#[0-9a-fA-F]{6}$/.test(value);
+    const hex = own ? value : /^#[0-9a-fA-F]{6}$/.test(placeholder) ? placeholder : '#000000';
+    const unset = !String(value || '').trim();
     return (
         <div className="min-w-0">
             <FieldLabel label={label} />
@@ -412,7 +416,7 @@ function ColorField({ label, value, onChange, placeholder }) {
                     value={hex}
                     onChange={(e) => onChange(e.target.value)}
                     title="Pick a color (hex only - type any CSS color in the field for anything else)"
-                    className="h-[26px] w-[26px] p-0 rounded border border-line bg-surface-sunken shrink-0 cursor-pointer"
+                    className={'h-[26px] w-[26px] p-0 rounded bg-surface-sunken shrink-0 cursor-pointer ' + (unset ? 'border border-dashed border-line-strong opacity-60' : 'border border-line')}
                 />
                 <input
                     type="text"
@@ -477,25 +481,24 @@ function LivePill({ className }) {
     );
 }
 
-// One Look theme preset (58px tall, fills its grid column): three small
-// color squares + a label.
-function ThemeTile({ preset, active, disabled, title, onClick }) {
+// One Look theme tile (58px tall, fills its grid column): three small
+// HUD color squares + a label.
+function ThemeTile({ label, swatch, active, title, onClick }) {
+    const sw = swatch || builderThemeSwatch('dark');
     return (
         <button
             type="button"
-            disabled={disabled}
             title={title}
             onClick={onClick}
-            className={'h-[58px] w-full rounded-lg border flex flex-col items-center justify-center gap-1.5 transition-colors '
-                + (disabled ? 'opacity-50 cursor-not-allowed border-line'
-                    : active ? 'border-accent-base ring-1 ring-accent-wash/15 bg-accent-wash/5' : 'border-line-control hover:border-line-strong')}
+            className={'h-[58px] w-full min-w-0 rounded-lg border flex flex-col items-center justify-center gap-1.5 transition-colors '
+                + (active ? 'border-accent-base ring-1 ring-accent-wash/15 bg-selection/20' : 'border-line-control hover:border-line-strong')}
         >
             <div className="flex gap-1">
-                <span className="w-3 h-3 rounded-sm border border-black/25" style={{ background: preset.accent }} />
-                <span className="w-3 h-3 rounded-sm border border-black/25" style={{ background: preset.surface }} />
-                <span className="w-3 h-3 rounded-sm border border-black/25" style={{ background: preset.text }} />
+                <span className="w-3 h-3 rounded-sm border border-black/25" style={{ background: sw.accent }} />
+                <span className="w-3 h-3 rounded-sm border border-black/25" style={{ background: sw.surface }} />
+                <span className="w-3 h-3 rounded-sm border border-black/25" style={{ background: sw.text }} />
             </div>
-            <span className="text-[10px] text-fg-secondary">{preset.label}</span>
+            <span className="text-[10px] text-fg-secondary max-w-full truncate px-1">{label}</span>
         </button>
     );
 }
@@ -609,7 +612,7 @@ function SnippetsCard({ tab, onTab, iframeSnippet, elementSnippet, copied, onCop
         try { return window.hljs.highlight(code, { language: 'xml' }).value; } catch (e) { return null; }
     }, [code]);
     return (
-        <div id="builder-snippets" className="rounded-lg border border-line bg-surface-base overflow-hidden h-[142px] md:h-full flex flex-col min-w-0">
+        <div id="builder-snippets" className="rounded-lg border border-line bg-surface-raised overflow-hidden h-[142px] md:h-full flex flex-col min-w-0">
             <div className="flex items-center justify-between gap-2 py-1 bg-surface-raised/60 shrink-0">
                 <div className="flex items-stretch">
                     {SNIPPET_TABS.map((s) => (
@@ -648,7 +651,7 @@ function LegendBlock() {
     // the plain ground fill (not /60): 60% of the ground over the ground is the same
     // colour, but opaque, so the hero grid cannot show through it.
     return (
-        <div className="rounded-lg border border-line bg-surface-base p-2 h-[142px] md:h-full min-w-0 overflow-auto custom-scrollbar space-y-1.5">
+        <div className="rounded-lg border border-line bg-surface-raised p-2 h-[142px] md:h-full min-w-0 overflow-auto custom-scrollbar space-y-1.5">
             <div className="flex items-center gap-1.5 text-[11px] text-fg-subtle flex-wrap">
                 <LivePill />
                 lighting, look, camera, size update in place
@@ -714,9 +717,9 @@ const BUILDER_HELP_DOC_CSS = `
 .embed-help-doc li { margin: 0.25rem 0; }
 .embed-help-doc a { color: rgb(var(--mtlx-accent-fg)); text-decoration: underline; }
 .embed-help-doc a:hover { color: rgb(var(--mtlx-accent-fg-strong)); }
-.embed-help-doc code { background: rgb(var(--mtlx-surface-sunken)); color: rgb(var(--mtlx-code-inline-fg-alt)); padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.85em; }
-.embed-help-doc pre { background: rgb(var(--mtlx-code-block-bg-alt)); border: 1px solid rgb(var(--mtlx-line)); border-radius: 6px; padding: 0.75rem; overflow-x: auto; margin: 0.75rem 0; }
-.embed-help-doc pre code { background: none; color: rgb(var(--mtlx-code-fg)); padding: 0; border-radius: 0; font-size: 0.85em; }
+.embed-help-doc code { background: rgb(var(--mtlx-code-inline-bg) / calc(128 / 255)); color: rgb(var(--mtlx-code-inline-fg)); border: 1px solid rgb(var(--mtlx-line)); padding: 0.1rem 0.35rem; border-radius: 3px; font-size: 0.85em; }
+.embed-help-doc pre { background: rgb(var(--mtlx-code-block-bg)); border: 1px solid rgb(var(--mtlx-line)); border-radius: 6px; padding: 0.75rem; overflow-x: auto; margin: 0.75rem 0; }
+.embed-help-doc pre code { background: none; border: 0; color: rgb(var(--mtlx-code-fg)); padding: 0; border-radius: 0; font-size: 0.85em; }
 .embed-help-doc table { border-collapse: collapse; width: 100%; margin: 0.75rem 0; font-size: 0.85em; }
 .embed-help-doc th, .embed-help-doc td { border: 1px solid rgb(var(--mtlx-line)); padding: 0.35rem 0.5rem; text-align: left; vertical-align: top; }
 .embed-help-doc th { background: rgb(var(--mtlx-surface-raised)); color: rgb(var(--mtlx-fg-soft)); }
@@ -724,19 +727,11 @@ const BUILDER_HELP_DOC_CSS = `
 `;
 
 // Renders js/gen/embedding-docs.html (fetched/cached by BuilderApp so it
-// survives this component unmounting) inside a DialogFrame. Highlights
-// code blocks with highlight.js if it happens to already be loaded.
+// survives this component unmounting) inside a DialogFrame. Code blocks arrive
+// already highlighted (build-embed-docs.mjs).
 function BuilderHelpDialog({ open, onClose, html, loading, error }) {
     const bodyRef = React.useRef(null);
     useEscapeToClose(onClose, open);
-
-    React.useEffect(() => {
-        if (!open || !html || !bodyRef.current) return;
-        if (!window.hljs || typeof window.hljs.highlightElement !== 'function') return;
-        bodyRef.current.querySelectorAll('pre code').forEach((el) => {
-            try { window.hljs.highlightElement(el); } catch (e) { /* leave it unhighlighted */ }
-        });
-    }, [open, html]);
 
     // Intercepts in-page "#anchor" links so they scroll within the dialog
     // instead of changing location.hash, which the site's hash router
@@ -756,8 +751,8 @@ function BuilderHelpDialog({ open, onClose, html, loading, error }) {
             open={open}
             title="Embedding reference"
             onClose={onClose}
-            overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-scrim/70"
-            panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[46rem] max-w-[92%] max-h-[85vh] overflow-hidden flex flex-col"
+            overlayClassName="fixed inset-0 z-50 flex items-center justify-center bg-scrim/85"
+            panelClassName="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[46rem] max-w-[92%] max-h-[85vh] overflow-hidden flex flex-col"
         >
             <style>{BUILDER_HELP_DOC_CSS}</style>
             <div ref={bodyRef} onClick={handleBodyClick} className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-5 py-4">
@@ -1013,16 +1008,16 @@ function PreviewStage({
             )}
 
             {errors.length > 0 && (
-                <div className="rounded-lg border border-warning-border/50 bg-warning-bg/20 text-warning-text text-xs p-3 space-y-1.5">
+                <div className="rounded-lg border border-warning-hue/40 bg-warning-hue/10 text-warning-text text-xs p-3 space-y-1.5">
                     <div className="flex items-center justify-between">
                         <span className="font-medium flex items-center gap-1.5">
                             <MtlxIcon name="alert-triangle" className="w-4 h-4" />
                             {`Preview reported ${errors.length} issue${errors.length > 1 ? 's' : ''}`}
                         </span>
-                        <button type="button" onClick={onClearErrors} className="text-warning/80 hover:text-warning-text-strong">Clear</button>
+                        <button type="button" onClick={onClearErrors} className="text-warning hover:text-warning-text-strong">Clear</button>
                     </div>
                     <ul className="space-y-1 max-h-32 overflow-y-auto custom-scrollbar">
-                        {errors.map((e) => <li key={e.id} className="text-warning-text-strong/90">{e.message}</li>)}
+                        {errors.map((e) => <li key={e.id} className="text-warning-text-strong">{e.message}</li>)}
                     </ul>
                 </div>
             )}
@@ -1040,24 +1035,52 @@ function BuilderApp({ active } = {}) {
         window.addEventListener('mtlx-custom-themes-change', bump);
         return () => window.removeEventListener('mtlx-custom-themes-change', bump);
     }, []);
-    const themeChoice = React.useMemo(() => {
-        const options = ['dark', 'light'];
-        const labels = { dark: 'Dark', light: 'Light' };
+    // Saved custom themes as { code, label }, re-listed when they change.
+    const customThemeList = React.useMemo(() => {
         let specs = [];
         try { specs = (window.MtlxTheme && window.MtlxTheme.listCustom && window.MtlxTheme.listCustom()) || []; } catch (e) { specs = []; }
+        const out = [];
         for (const spec of specs) {
-            try {
-                const code = window.MtlxTheme.encodeTheme(spec);
-                if (!options.includes(code)) { options.push(code); labels[code] = String(spec.label || spec.id); }
-            } catch (e) { /* unencodable theme: not offered */ }
+            try { out.push({ code: window.MtlxTheme.encodeTheme(spec), label: String(spec.label || spec.id) }); } catch (e) { /* unencodable theme: not offered */ }
         }
-        return { options, labels };
+        return out;
     }, [customThemeTick]);
     const {
         src, geometry, controls, backdrop, transparent, autorotate, env, exposure, envmap,
         geometryUrl, theme, accent, surface, text, radius, width, height, sizing, material, camera,
         wheelZoom, version, poster, eager, displacement, subdivision,
     } = settings;
+    // HUD colors of theme codes (saved or pasted) come from the engine, as the embed derives its HUD from the full theme.
+    const [codeSwatches, setCodeSwatches] = React.useState({});
+    const [pasteText, setPasteText] = React.useState('');
+    const [pasteError, setPasteError] = React.useState('');
+    const swatchCodes = customThemeList.map((c) => c.code).concat(builderIsThemeCode(theme) ? [theme] : []);
+    const swatchKey = swatchCodes.join('|');
+    React.useEffect(() => {
+        let live = true;
+        swatchCodes.forEach((code) => {
+            if (codeSwatches[code]) return;
+            builderCodeSwatch(code).then((sw) => { if (live && sw) setCodeSwatches((m) => ({ ...m, [code]: sw })); }).catch(() => { /* tile keeps the dark colors */ });
+        });
+        return () => { live = false; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [swatchKey]);
+    const themeSwatchOf = (id) => (builderIsThemeCode(id) ? codeSwatches[id] || builderThemeSwatch('dark') : builderThemeSwatch(id));
+    const standardThemes = [{ id: 'dark', label: 'Dark' }, { id: 'light', label: 'Light' }].concat(builderPresetThemes().map((e) => ({ id: e.id, label: String(e.label || e.id) })));
+    const savedTheme = customThemeList.find((c) => c.code === theme);
+    const pastedTheme = builderIsThemeCode(theme) && !savedTheme;
+    const themeLabel = savedTheme ? savedTheme.label : pastedTheme ? 'Pasted theme' : (standardThemes.find((t) => t.id === theme) || { label: 'Dark' }).label;
+    const applyPastedCode = () => {
+        const code = pasteText.trim();
+        if (!code) return;
+        if (!builderIsThemeCode(code)) { setPasteError('Not a theme code. Theme codes start with mtlx2.'); return; }
+        window.MtlxTheme.loadEngine().then(() => {
+            try { window.MtlxTheme.decodeTheme(code); } catch (e) { setPasteError(String((e && e.message) || 'Damaged theme code')); return; }
+            setPasteError('');
+            setPasteText('');
+            patch({ theme: code });
+        }).catch(() => setPasteError('Theme tools could not be loaded'));
+    };
 
     // { origin, docPath } of the last preset picked via MtlxPresetPicker, or
     // null. Lets the public-URL derivation below (Change 2) tell "src came
@@ -1135,9 +1158,9 @@ function BuilderApp({ active } = {}) {
         el.backdrop = backdrop;
         el.transparent = transparent;
         el.theme = theme;
-        el.accent = accent;
-        el.surface = surface;
-        el.text = text;
+        el.accent = builderThemeOverride(accent);
+        el.surface = builderThemeOverride(surface);
+        el.text = builderThemeOverride(text);
         el.radius = builderRadiusPx(radius);
         if (material) el.material = material;
         if (camera.trim()) el.camera = camera.trim();
@@ -1182,9 +1205,9 @@ function BuilderApp({ active } = {}) {
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.backdrop = backdrop; }, [backdrop]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.transparent = transparent; }, [transparent]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.theme = theme; }, [theme]);
-    React.useEffect(() => { if (previewElRef.current) previewElRef.current.accent = accent; }, [accent]);
-    React.useEffect(() => { if (previewElRef.current) previewElRef.current.surface = surface; }, [surface]);
-    React.useEffect(() => { if (previewElRef.current) previewElRef.current.text = text; }, [text]);
+    React.useEffect(() => { if (previewElRef.current) previewElRef.current.accent = builderThemeOverride(accent); }, [accent]);
+    React.useEffect(() => { if (previewElRef.current) previewElRef.current.surface = builderThemeOverride(surface); }, [surface]);
+    React.useEffect(() => { if (previewElRef.current) previewElRef.current.text = builderThemeOverride(text); }, [text]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.radius = builderRadiusPx(radius); }, [radius]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.material = material; }, [material]);
     React.useEffect(() => { if (previewElRef.current) previewElRef.current.camera = camera.trim(); }, [camera]);
@@ -1368,10 +1391,10 @@ function BuilderApp({ active } = {}) {
         if (controlsStr) entries.push(['controls', controlsStr]);
         if (backdrop !== BUILDER_DEFAULTS.backdrop) entries.push(['backdrop', backdrop]);
         if (transparent) entries.push(['transparent', '1']);
-        if (theme === 'light' || builderIsThemeCode(theme)) entries.push(['theme', theme]);
-        if (builderNorm(accent) !== builderNorm(BUILDER_THEME_DEFAULTS.accent)) entries.push(['accent', accent.trim()]);
-        if (builderNorm(surface) !== builderNorm(BUILDER_THEME_DEFAULTS.surface)) entries.push(['surface', surface.trim()]);
-        if (builderNorm(text) !== builderNorm(BUILDER_THEME_DEFAULTS.text)) entries.push(['text', text.trim()]);
+        if (theme !== 'dark' && builderIsEmbedTheme(theme)) entries.push(['theme', theme]);
+        if (accent.trim()) entries.push(['accent', accent.trim()]);
+        if (surface.trim()) entries.push(['surface', surface.trim()]);
+        if (text.trim()) entries.push(['text', text.trim()]);
         if (radius.trim() && builderNorm(radius) !== builderNorm(BUILDER_THEME_DEFAULTS.radius)) entries.push(['radius', builderRadiusPx(radius)]);
         if (material) entries.push(['material', material]);
         if (camera.trim()) entries.push(['camera', camera.trim()]);
@@ -1415,10 +1438,10 @@ function BuilderApp({ active } = {}) {
         if (controlsStr) attrs.push(`controls="${controlsStr}"`);
         if (backdrop !== BUILDER_DEFAULTS.backdrop) attrs.push(`backdrop="${backdrop}"`);
         if (transparent) attrs.push('transparent');
-        if (theme === 'light' || builderIsThemeCode(theme)) attrs.push(`theme="${builderEscAttr(theme)}"`);
-        if (builderNorm(accent) !== builderNorm(BUILDER_THEME_DEFAULTS.accent)) attrs.push(`accent="${builderEscAttr(accent.trim())}"`);
-        if (builderNorm(surface) !== builderNorm(BUILDER_THEME_DEFAULTS.surface)) attrs.push(`surface="${builderEscAttr(surface.trim())}"`);
-        if (builderNorm(text) !== builderNorm(BUILDER_THEME_DEFAULTS.text)) attrs.push(`text="${builderEscAttr(text.trim())}"`);
+        if (theme !== 'dark' && builderIsEmbedTheme(theme)) attrs.push(`theme="${builderEscAttr(theme)}"`);
+        if (accent.trim()) attrs.push(`accent="${builderEscAttr(accent.trim())}"`);
+        if (surface.trim()) attrs.push(`surface="${builderEscAttr(surface.trim())}"`);
+        if (text.trim()) attrs.push(`text="${builderEscAttr(text.trim())}"`);
         if (radius.trim() && builderNorm(radius) !== builderNorm(BUILDER_THEME_DEFAULTS.radius)) attrs.push(`radius="${builderEscAttr(builderRadiusPx(radius))}"`);
         if (material) attrs.push(`material="${builderEscAttr(material)}"`);
         if (camera.trim()) attrs.push(`camera="${builderEscAttr(camera.trim())}"`);
@@ -1439,8 +1462,8 @@ function BuilderApp({ active } = {}) {
     // ---- Derived display bits ----
     const defaultOpen = columns !== 1;
     const matchedAspect = builderMatchedAspect(width, height);
-    const activeThemePreset = builderActiveThemePreset(settings);
-    const themeSummary = activeThemePreset ? activeThemePreset.label : 'Custom';
+    const themeSummary = themeLabel;
+    const hudSwatch = themeSwatchOf(theme);
     const docSummary = src.trim() ? builderFileNameFromUrl(src.trim()) : 'Built-in default material';
     const lightingAtDefault = (env.trim() === '' || Number(env) === 0) && (exposure.trim() === '' || Number(exposure) === 1);
     // Std. Shader Ball w/ Backdrop is an opaque authored room; several
@@ -1691,37 +1714,46 @@ function BuilderApp({ active } = {}) {
         </SectionCard>,
 
         <SectionCard key="look" icon="palette" title="Look" summary={themeSummary} defaultOpen={defaultOpen}>
-            <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-medium text-fg-muted">Theme</span>
-                <MtlxSelect
-                    value={theme}
-                    options={themeChoice.options.includes(theme) ? themeChoice.options : [...themeChoice.options, theme]}
-                    labels={themeChoice.options.includes(theme) ? themeChoice.labels : { ...themeChoice.labels, [theme]: 'Shared theme' }}
-                    onChange={(v) => patch({ theme: v })}
-                    defValue="dark"
-                    size="sm"
-                />
-            </div>
             <div>
-                <FieldLabel label="Theme preset" />
+                <FieldLabel label="Theme" />
                 <div className="grid grid-cols-3 gap-2">
-                    {BUILDER_THEME_PRESETS.map((p) => {
-                        const presetDisabled = p.id === 'card' && geometry === 'shaderball-scene';
-                        return (
-                            <ThemeTile
-                                key={p.id} preset={p} active={activeThemePreset && activeThemePreset.id === p.id}
-                                disabled={presetDisabled}
-                                title={presetDisabled ? 'Std. Shader Ball w/ Backdrop cannot be transparent. Pick another geometry to enable this preset.' : undefined}
-                                onClick={() => patch({ theme: p.theme, accent: p.accent, surface: p.surface, text: p.text, radius: p.radius, transparent: p.transparent })}
-                            />
-                        );
-                    })}
+                    {standardThemes.map((t) => (
+                        <ThemeTile key={t.id} label={t.label} swatch={themeSwatchOf(t.id)} active={theme === t.id} onClick={() => patch({ theme: t.id })} />
+                    ))}
+                </div>
+                {(customThemeList.length > 0 || pastedTheme) && (
+                    <div className="mt-2.5">
+                        <FieldLabel label="My themes" />
+                        <div className="grid grid-cols-3 gap-2">
+                            {customThemeList.map((c) => (
+                                <ThemeTile key={c.code} label={c.label} swatch={themeSwatchOf(c.code)} active={theme === c.code} onClick={() => patch({ theme: c.code })} />
+                            ))}
+                            {pastedTheme && <ThemeTile label="Pasted theme" swatch={themeSwatchOf(theme)} active onClick={() => {}} />}
+                        </div>
+                    </div>
+                )}
+                <div className="mt-2.5">
+                    <FieldLabel label="Paste a theme code" />
+                    <input
+                        type="text"
+                        value={pasteText}
+                        onChange={(e) => { setPasteText(e.target.value); setPasteError(''); }}
+                        onBlur={applyPastedCode}
+                        onKeyDown={(e) => { if (e.key === 'Enter') applyPastedCode(); }}
+                        placeholder="mtlx2...."
+                        className={TEXT_INPUT_CLS}
+                    />
+                    {pasteError && <p className="text-[11px] mt-1 text-warning-text">{pasteError}</p>}
                 </div>
             </div>
-            <div className="grid grid-cols-3 gap-2.5">
-                <ColorField label="Accent" value={accent} onChange={(v) => patch({ accent: v })} placeholder={BUILDER_THEME_DEFAULTS.accent} />
-                <ColorField label="Surface" value={surface} onChange={(v) => patch({ surface: v })} placeholder={BUILDER_THEME_DEFAULTS.surface} />
-                <ColorField label="Text" value={text} onChange={(v) => patch({ text: v })} placeholder={BUILDER_THEME_DEFAULTS.text} />
+            <div>
+                <FieldLabel label="HUD color overrides" />
+                <p className="text-[11px] -mt-0.5 mb-1.5 text-fg-subtle">Leave empty to use the theme's own colors.</p>
+                <div className="grid grid-cols-3 gap-2.5">
+                    <ColorField label="Accent" value={accent} onChange={(v) => patch({ accent: v })} placeholder={hudSwatch.accent} />
+                    <ColorField label="Surface" value={surface} onChange={(v) => patch({ surface: v })} placeholder={hudSwatch.surface} />
+                    <ColorField label="Text" value={text} onChange={(v) => patch({ text: v })} placeholder={hudSwatch.text} />
+                </div>
             </div>
             <SliderField
                 label="HUD corner radius" unit="px" value={radius} min={0} max={24} step={1} placeholder={BUILDER_THEME_DEFAULTS.radius}
@@ -1748,7 +1780,7 @@ function BuilderApp({ active } = {}) {
                     <p className="text-[11px] mt-1 text-fg-subtle">Not compatible with Std. Shader Ball w/ Backdrop.</p>
                 )}
             </div>
-            <HudMiniPreview accent={accent} surface={surface} text={text} radius={radius} />
+            <HudMiniPreview accent={accent.trim() || hudSwatch.accent} surface={surface.trim() || hudSwatch.surface} text={text.trim() || hudSwatch.text} radius={radius} />
         </SectionCard>,
 
         <SectionCard key="hud" icon="layout-grid" title="HUD controls" pill={<ReloadsPill />} summary={builderHudSummary(controls)} defaultOpen={defaultOpen}>
@@ -2009,7 +2041,7 @@ function BuilderApp({ active } = {}) {
                 open={presetPickerOpen}
                 onClose={() => setPresetPickerOpen(false)}
                 onSelect={handlePresetPickerSelect}
-                overlayClassName="fixed left-0 right-0 bottom-0 top-[var(--mtlx-header-h,0px)] z-50 flex items-center justify-center bg-scrim/70"
+                overlayClassName="fixed left-0 right-0 bottom-0 top-[var(--mtlx-header-h,0px)] z-50 flex items-center justify-center bg-scrim/85"
             />
         </div>
     );

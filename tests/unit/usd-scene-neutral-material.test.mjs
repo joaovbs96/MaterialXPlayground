@@ -8,6 +8,28 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SOURCE = fs.readFileSync(path.join(ROOT, 'js', 'usd-scene-renderer.js'), 'utf8');
 
+// The Scene resolves files through the engine's exact resolvers (P6 S4); a
+// window carrying the real ones, extracted from js/shared/mtlx-gen-core.js.
+function engineResolverWindow() {
+  const engine = fs.readFileSync(path.join(ROOT, 'js', 'shared', 'mtlx-gen-core.js'), 'utf8');
+  const extract = (name) => {
+    const idx = engine.indexOf('const ' + name + ' = ');
+    assert.ok(idx >= 0, name + ' is present in mtlx-gen-core.js');
+    let depth = 0;
+    for (let i = idx; i < engine.length; i++) {
+      const c = engine[i];
+      if (c === '(' || c === '{' || c === '[') depth++;
+      else if (c === ')' || c === '}' || c === ']') depth--;
+      else if (c === ';' && depth === 0) return engine.slice(idx, i + 1);
+    }
+    throw new Error('unterminated ' + name);
+  };
+  const context = {};
+  vm.runInNewContext(['normPath', 'joinRefPath', 'findFileForRef', 'findFilesForRef', 'preferKtx2Sibling'].map(extract).join('\n')
+    + '\nthis.window = { normPath, joinRefPath, findFileForRef, findFilesForRef, preferKtx2Sibling };', context);
+  return context.window;
+}
+
 // Slices a run of top-level renderer definitions and evaluates it with a stand-in THREE.
 function slice(startMarker, endMarker, exportsText, context) {
   const start = SOURCE.indexOf(startMarker);
@@ -50,7 +72,7 @@ test('the unsupported-material fallback is a lightless neutral grey, not normal 
 
 test('a package key in an inline document resolves against the published stage assets', () => {
   const context = slice('const sceneArray =', 'const sceneMatrix =',
-    'this.api = { sceneFileMap, canonicalizeSceneFilenameInputs, sceneExactFile };', { Blob, Math, String, Object, Set });
+    'this.api = { sceneFileMap, canonicalizeSceneFilenameInputs, sceneExactFile };', { Blob, Math, String, Object, Set, window: engineResolverWindow() });
   const { sceneFileMap, canonicalizeSceneFilenameInputs, sceneExactFile } = context.api;
   const stage = { assets: [{ path: 'models/glove.usdz[0/bc.jpg]', data: new Uint8Array(4) }] };
   const map = sceneFileMap([{ path: 'models/glove.usdz', data: new Uint8Array(4) }], stage);

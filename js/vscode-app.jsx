@@ -10,7 +10,7 @@ const TAG_PILL_CLASS = 'text-[10px] font-medium uppercase tracking-wide px-[7px]
 const STRONG_CLASS = 'text-fg-soft font-medium';
 const CODE_BLOCK_CLASS = 'bg-code-block-bg border border-line rounded-[10px] px-3.5 py-3 font-mono text-[12.5px] leading-[18px] text-fg-soft';
 // Inline `<code>` styling: the site has no global rule for bare <code>.
-const CODE_CLASS = 'font-mono text-[0.9em] text-fg-soft bg-code-inline-bg/50 border border-line rounded px-1 py-px';
+const CODE_CLASS = 'font-mono text-[0.9em] text-code-inline-fg bg-code-inline-bg/50 border border-line rounded px-1 py-px';
 
 // "How it works" flow-diagram cards, in mockup order.
 const VSCODE_HOW = [
@@ -192,7 +192,7 @@ function CopyButton({ text, className }) {
             type="button"
             onClick={onCopy}
             aria-label="Copy to clipboard"
-            className={'w-[26px] h-[26px] rounded-md border border-line-control bg-control text-fg-muted hover:text-fg flex items-center justify-center transition-colors ' + (className || '')}
+            className={'w-[26px] h-[26px] rounded-md border border-line-control bg-control/80 text-fg-secondary hover:text-fg flex items-center justify-center transition-colors ' + (className || '')}
         >
             <MtlxIcon name={copied ? 'copy-check' : 'copy'} className="w-3.5 h-3.5" />
         </button>
@@ -312,7 +312,7 @@ function VscodeApp({ active } = {}) {
                                 role="link"
                                 aria-disabled="true"
                                 tabIndex={0}
-                                className="group relative inline-flex items-center gap-2 h-11 px-4 rounded-[10px] border border-line bg-control/50 text-fg-subtle text-sm font-medium cursor-not-allowed"
+                                className="group relative inline-flex items-center gap-2 h-11 px-4 rounded-[10px] border border-line bg-control/80 text-fg-subtle text-sm font-medium cursor-not-allowed"
                             >
                                 <MtlxIcon name="brand-vscode" className="w-[18px] h-[18px] text-fg-subtle" />
                                 VS Code Marketplace
@@ -449,7 +449,7 @@ function VscodeApp({ active } = {}) {
                                 <h3 className="text-[15px] font-semibold text-fg">Download the package</h3>
                                 <p className="text-sm leading-[21px] text-fg-muted">Grab the latest <code className={CODE_CLASS}>.vsix</code> from the button above. It is a single file that bundles the whole app for offline use.</p>
                                 <div>
-                                    <a href={downloadHref} className="inline-flex items-center gap-1.5 h-[34px] px-3 rounded-lg border border-line-strong bg-control hover:bg-hover text-[13px] font-medium text-fg max-w-full transition-colors">
+                                    <a href={downloadHref} className="inline-flex items-center gap-1.5 h-[34px] px-3 rounded-lg border border-line-strong bg-control/80 hover:bg-hover text-[13px] font-medium text-fg max-w-full transition-colors">
                                         <MtlxIcon name="download" className="w-[15px] h-[15px] text-accent-fg shrink-0" />
                                         <span className="truncate">{fileName}</span>
                                     </a>
@@ -589,7 +589,7 @@ function VscodeApp({ active } = {}) {
                             Download .vsix
                             <span className="font-normal text-on-accent/75 text-xs ml-0.5 pl-2.5 border-l border-on-accent/30">{version || 'latest release'}</span>
                         </a>
-                        <span role="link" aria-disabled="true" tabIndex={0} className="inline-flex items-center gap-2 h-11 px-4 rounded-[10px] border border-line bg-control/50 text-fg-subtle text-sm font-medium cursor-not-allowed">
+                        <span role="link" aria-disabled="true" tabIndex={0} className="inline-flex items-center gap-2 h-11 px-4 rounded-[10px] border border-line bg-control/80 text-fg-disabled text-sm font-medium cursor-not-allowed">
                             <MtlxIcon name="brand-vscode" className="w-[18px] h-[18px] text-fg-subtle" />
                             VS Code Marketplace
                             <span className="text-[10px] font-semibold uppercase tracking-wide px-[7px] py-px rounded-full border border-line text-fg-subtle bg-surface-sunken/60">Soon</span>
@@ -613,7 +613,7 @@ function VscodeApp({ active } = {}) {
                         type="button"
                         aria-label="Close"
                         onClick={() => setExpanded(false)}
-                        className="absolute top-4 right-4 w-9 h-9 rounded-lg border border-line-strong bg-control text-fg-soft flex items-center justify-center cursor-pointer hover:bg-hover transition-colors"
+                        className="absolute top-4 right-4 w-9 h-9 rounded-lg border border-line-strong bg-control/80 text-fg-soft flex items-center justify-center cursor-pointer hover:bg-hover transition-colors"
                     >
                         <MtlxIcon name="x" className="w-[18px] h-[18px]" />
                     </button>

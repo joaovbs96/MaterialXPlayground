@@ -41,6 +41,15 @@ function normalizeBase(value) {
     return value === 'light' || value === 'dark' ? value : null;
 }
 
+// Frame colors reported by the renderer: all three strict #rrggbb or null, lowercased, extra keys dropped.
+const HEX6_RE = /^#[0-9a-f]{6}$/i;
+function sanitizeNativeColors(obj) {
+    if (!obj || typeof obj !== 'object') return null;
+    const { windowBg, titlebar, titlebarSymbol } = obj;
+    for (const v of [windowBg, titlebar, titlebarSymbol]) if (typeof v !== 'string' || !HEX6_RE.test(v)) return null;
+    return { windowBg: windowBg.toLowerCase(), titlebar: titlebar.toLowerCase(), titlebarSymbol: titlebarSymbol.toLowerCase() };
+}
+
 // customBase is the renderer-reported base of a custom preference.
 function themeBase(pref, registry, customBase) {
     if (isCustomPref(pref)) return normalizeBase(customBase) || 'dark';
@@ -57,5 +66,5 @@ function themeSource(pref, registry, customBase) {
 
 module.exports = {
     electronRegistry, themePrefs, normalizeThemePref, themeBase, themeSource,
-    isCustomPref, sanitizeCustomThemes, normalizeBase, MAX_CUSTOM_THEMES, MAX_CUSTOM_CODE_LENGTH,
+    isCustomPref, sanitizeCustomThemes, normalizeBase, sanitizeNativeColors, MAX_CUSTOM_THEMES, MAX_CUSTOM_CODE_LENGTH,
 };

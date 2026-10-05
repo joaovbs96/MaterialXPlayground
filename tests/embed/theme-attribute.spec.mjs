@@ -87,23 +87,40 @@ test('changing theme live updates the iframe without reloading it', async ({ pag
 });
 
 test('theme accepts a custom theme code: decoded in the iframe, base on the placeholder, invalid is dark', async ({ page, embedURL }) => {
-  // "Sand": light base, seeds #f6f1e7 / #2b2620 / #2659c9 (the docs/EMBEDDING.md example).
-  const code = 'mtlx1.LPbx5ysmICZZyQRzYW5kBFNhbmQA';
-  await page.emulateMedia({ colorScheme: 'dark' });
+  // "Ocean": dark base, seeds #0b1d2a / #e6f1f8 / #2563eb (the docs/EMBEDDING.md example).
+  const code = 'mtlx2.DAALHSrm8fglY-sFb2NlYW4FT2NlYW4A';
+  await page.emulateMedia({ colorScheme: 'light' });
   const { idx, frame } = await open(page, embedURL, { theme: code });
-  expect(await dataTheme(frame)).toBe('custom:sand');
-  expect(await frame.evaluate(() => document.documentElement.dataset.themeBase)).toBe('light');
+  expect(await dataTheme(frame)).toBe('custom:ocean');
+  expect(await frame.evaluate(() => document.documentElement.dataset.themeBase)).toBe('dark');
   const surface = () => frame.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--mtlx-surface-base').trim());
-  expect(await surface()).toBe('246 241 231');
+  expect(await surface()).toBe('11 29 42');
   const phBg = () => page.evaluate((i) => getComputedStyle(window.__viewers[i]).getPropertyValue('--ph-bg').trim(), idx);
-  expect(await phBg(), 'the placeholder reads the base from the code').toBe('#f3f4f6');
+  expect(await phBg(), 'the placeholder reads the base from the code').toBe('#111827');
 
   await frame.evaluate(() => { window.__themeMarker = 1; });
-  await setProp(page, idx, 'theme', 'mtlx1.not-a-real-code');
+  await setProp(page, idx, 'theme', 'mtlx2.not-a-real-code');
   await expect.poll(() => dataTheme(frame)).toBe('dark');
+  await setProp(page, idx, 'theme', 'mtlx1.' + code.slice(6));
+  await expect.poll(() => dataTheme(frame), 'a version 1 code is no longer accepted').toBe('dark');
   await setProp(page, idx, 'theme', code);
-  await expect.poll(() => dataTheme(frame)).toBe('custom:sand');
+  await expect.poll(() => dataTheme(frame)).toBe('custom:ocean');
   expect(await frame.evaluate(() => window.__themeMarker)).toBe(1);
+  expect(await frame.evaluate(() => [window.localStorage.getItem('mtlxCustomThemes'), window.localStorage.getItem('mtlxTheme')])).toEqual([null, null]);
+});
+
+test('theme accepts a code based on Paper: its exact colors, light base on the placeholder', async ({ page, embedURL }) => {
+  // "Warm paper": based on paper with accent-fill overridden (the docs/EMBEDDING.md example).
+  const code = 'mtlx2.LAVwYXBlcgR3YXJtCldhcm0gcGFwZXIBC2FjY2VudC1maWxstFMJ';
+  await page.emulateMedia({ colorScheme: 'dark' });
+  const { idx, frame } = await open(page, embedURL, { theme: code });
+  expect(await dataTheme(frame)).toBe('custom:warm');
+  expect(await frame.evaluate(() => document.documentElement.dataset.themeBase)).toBe('light');
+  const token = (t) => frame.evaluate((n) => getComputedStyle(document.documentElement).getPropertyValue('--mtlx-' + n).trim(), t);
+  expect(await token('surface-base'), 'Paper surface-base, not re-derived').toBe('244 239 230');
+  expect(await token('accent-fill')).toBe('180 83 9');
+  const phBg = () => page.evaluate((i) => getComputedStyle(window.__viewers[i]).getPropertyValue('--ph-bg').trim(), idx);
+  expect(await phBg(), 'the placeholder reads the light base from the code').toBe('#f3f4f6');
   expect(await frame.evaluate(() => [window.localStorage.getItem('mtlxCustomThemes'), window.localStorage.getItem('mtlxTheme')])).toEqual([null, null]);
 });
 

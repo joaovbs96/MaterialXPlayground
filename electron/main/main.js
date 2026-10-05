@@ -938,7 +938,7 @@ function saveSettings() {
     try {
         fsSync.writeFileSync(
             getSettingsPath(),
-            JSON.stringify({ openInNewWindow, showRecentInSystem, documentOpenView, safeMode, windowBounds, theme: themePref, themeBase: customThemeBase, customThemes }),
+            JSON.stringify({ openInNewWindow, showRecentInSystem, documentOpenView, safeMode, windowBounds, theme: themePref, themeBase: customThemeBase, themeNative: reportedNative, themeNativePref: themePref, customThemes }),
             'utf8'
         );
     } catch (e) {
@@ -1449,10 +1449,14 @@ let customThemeBase = themePrefsLib.normalizeBase(initialSettings.themeBase);
 // Opaque theme codes: stored and handed to the renderer, never decoded here.
 let customThemes = themePrefsLib.sanitizeCustomThemes(initialSettings.customThemes);
 applyThemeSource(themePref);
+// Frame colors of the applied theme as reported by the renderer; kept from the last run only for the same preference.
+let reportedNative = themePref !== 'system' && initialSettings.themeNativePref === themePref ? themePrefsLib.sanitizeNativeColors(initialSettings.themeNative) : null;
+const NATIVE_KEYS = { 'native-window-bg': 'windowBg', 'native-titlebar': 'titlebar', 'native-titlebar-symbol': 'titlebarSymbol' };
 
 // Native chrome token of the resolved theme. A preset without its own
 // native-* value falls back to its base theme's, then dark.
 function nativeColor(key) {
+    if (reportedNative) return reportedNative[NATIVE_KEYS[key]];
     const custom = themePrefsLib.isCustomPref(themePref);
     const id = themePref === 'system' || (custom && !customThemeBase)
         ? (nativeTheme.shouldUseDarkColors ? 'dark' : 'light')
@@ -1485,9 +1489,13 @@ ipcMain.on('mtlx-set-theme', (event, payload) => {
     const custom = themePrefsLib.isCustomPref(value);
     if (!custom && !THEME_PREFS.includes(value)) return;
     const base = custom ? themePrefsLib.normalizeBase(payload && payload.base) : null;
-    if (value === themePref && base === customThemeBase) return;
+    // No valid colors for the same preference is "no news": keep what the page already reported.
+    const native = themePrefsLib.sanitizeNativeColors(payload && payload.native) || (value === themePref ? reportedNative : null);
+    const sameNative = JSON.stringify(native) === JSON.stringify(reportedNative);
+    if (value === themePref && base === customThemeBase && sameNative) return;
     themePref = value;
     customThemeBase = base;
+    reportedNative = native;
     applyThemeSource(value);
     saveSettings();
     applyNativeTheme();

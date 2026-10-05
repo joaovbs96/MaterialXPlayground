@@ -3,7 +3,7 @@
 // envIrradiance match what the shader was generated for regardless of
 // session history (P4-DESIGN.md Findings F1). Pins two things: the shared
 // resolveShadingEnv helper runs ensure*/read-back in the right order, and
-// createMtlxRenderView's first-build path and setEnvironment both go
+// the render session's first-build path and setEnvironment both go
 // through it rather than calling ensurePrefilteredEnv/ensureConvolvedIrradiance
 // directly.
 import assert from 'node:assert/strict';
@@ -77,6 +77,10 @@ test('resolveShadingEnv is the ONLY caller of ensurePrefilteredEnv/ensureConvolv
 });
 
 test('the first-build env fetch and setEnvironment both call resolveShadingEnv', () => {
-    const calls = ENGINE_SOURCE.match(/\bresolveShadingEnv\(renderer, env\)/g) || [];
+    // Both moved with the environment state into the render session (P6 S1).
+    const sessionSource = fs.readFileSync(path.join(ROOT, 'js', 'shared', 'render-session.js'), 'utf8');
+    const calls = sessionSource.match(/\bENGINE\.resolveShadingEnv\(renderer, env\)/g) || [];
     assert.equal(calls.length, 2, 'expected exactly two call sites: first build and setEnvironment');
+    assert.equal((ENGINE_SOURCE.match(/\bresolveShadingEnv\(renderer, env\)/g) || []).length, 0,
+        'the engine no longer binds a view environment itself');
 });

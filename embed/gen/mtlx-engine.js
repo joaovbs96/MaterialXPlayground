@@ -18,14 +18,14 @@ try{if(localStorage.getItem('mtlxPerfLog'))performance.mark('mtlx-engine-exec-st
 // js/gen/mtlx-version.json.
 const MTLX_DEFAULT_VERSION='1.39.5';// The shader-generation core lives in js/shared/mtlx-gen-core.js (plain
 // script, loaded before this file) so the thumbnail worker can run it too.
-const{LIGHT_TYPE_DIRECTIONAL,LIGHT_TYPE_POINT,LIGHT_TYPE_SPOT,LIGHT_SOURCE_KIND_AREA,STAGE_LIGHT_SLOTS,readLightLimit,STAGE_LIGHT_TIERS,PREVIEW_STAGE_LIGHT_COUNT,readFeatureGated,PREVIEW_FEATURE_OPTIONS,chooseStageLightTier,mxExclusive,mxWarnIfLocked,mtlxWarn,parseUniforms,countFragmentSamplers,estimateFragmentUniformVectors,stripVersion,parseVertexInputs,INT_GEOMPROP_TYPES,isIntGeompropType,patchGeompropVaryings,findGlslCalls,splitGlslArgs,findAllCallStatements,findFunctionDefs,findEnclosingFunction,isIdentityVec2Arg,HEIGHTTONORMAL_TEXEL_FN,HEIGHTTONORMAL_HEXTILE_TEXEL_FN,CHANNEL_EXTRACT_FN_RE,traceHeightSource,applyHeightToNormalTexel,patchUnlitLightingRefs,patchScenePhysicalLightFalloff,TONE_CURVE_GLSL,DISPLAY_TRANSFORM_IDS,displayTransformId,DISPLAY_TRANSFORM_SWITCH_GLSL,ACES_SRGB_GLSL,encodeDisplay,PEEL_REFRACTION_SCALE,patchShadowBounds,SHADOW_FACE_SLOTS,SHADOW_LIGHT_SLOTS_MAX,SHADOW_NORMAL_OFFSET_TEXELS,SHADOW_DEPTH_BIAS_TEXELS,patchShadowLightScope,patchLightSourceKindStruct,patchAreaLightSourceCosine,patchSpecularAA,ensureEnvOcclusionGlobal,patchAmbientOcclusion,patchDiffuseBounceAdd,patchSceneThinWalledTransmission,patchLightTransportPayload,patchTransmissionThickness,patchTransmissionAlpha,patchLocalEnvironmentRadiance,patchScreenSpaceReflection,patchRgbtPayload,injectPeelDiscard,mxErr,mxWriteValue,vecToArray,mxSafe,mxElCat,mxElType,mxElName,mxElAttr,materialPowerNodeNames,materialGeompropDefaults,POWER_NODE_REAL_GLSL,patchMaterialPowerNodes,mxElHasAttr,mxSetAttr,mxRemoveAttr,mxSetColorspace,findConvertChain,ensureTypedInput,readConstInputs,CONST_INPUT_NAMES,CONST_INPUT_DENY,CONST_INPUT_GLSL_TYPES,DISPLACEMENT_CONST_INPUT_NAMES,readDisplacementConstInputs,constInputLiteral,constInputKey,stripGlslForUsage,USAGE_IDENT_RE,addIdents,addComparisonIdents,balancedSpan,ternaryCondition,selectDynamicIndexUniforms,SELECTOR_CONST_INPUTS,constifyInputUniforms,stripValuesFromConnectedInputs,COLORSPACE_ALIASES,applyColorspaceAliases,COLORSPACE_TO_WORKING_NODE,applyColorspaceTransforms,applyMaterialWorkspaceTransforms,normPath,joinRefPath,findFileForRef,findFilesForRef,preferKtx2Sibling,readMtlxXml,isExportAttribution,splitXmlEnvelope,withXmlEnvelope,XML_ENTITIES,xmlDecode,xmlTagParts,xmlTokenKey,xmlTokenize,xmlPatchTag,xmlTokenMatches,preserveSourceFormatting,hasBlobIdentity,textureCacheKey,fnv1aBytesHex,BLOB_FINGERPRINT,fingerprintBlob,textureCacheKeyAsync,normalizeSamplerAddressMode,readMxInputValue,collectImageSamplerModes,samplerCacheKey,mxDataToPlainArray,collectMxUniforms,VECTOR_MX_TYPES,plainizeMxUniformData,annotateFilenameSamplerModes,COLOR_VIEWABLE,mxOutputTypeAndNode,mxResolveConnection,MTLX_TYPE_WALK_MAX_DEPTH,findTypeMismatches,describeUnresolvedNodes,unresolvedNodesText,MERGEABLE_IMAGE_CATEGORIES,MERGE_IGNORED_ATTRIBUTES,mxNodeSignature,mergeDuplicateImageNodes,generatePreviewSourcesUnlocked,mxFollowDisplacementInput,resolveDisplacementSource,detectDisplacementMode,fnv1aHex,generateDisplacementSourcesUnlocked,generatePreviewSources,DEFAULT_SAMPLER_BUDGET,joinWithAnd,SAMPLER_BUDGET_DROP_ORDER,samplerBudgetNotice,generatePreviewSourcesWithinBudget}=MtlxGenCore;// Host providers for the core: each reads exactly what the code did before
+const{LIGHT_TYPE_DIRECTIONAL,LIGHT_TYPE_POINT,LIGHT_TYPE_SPOT,LIGHT_SOURCE_KIND_AREA,STAGE_LIGHT_SLOTS,readLightLimit,STAGE_LIGHT_TIERS,PREVIEW_STAGE_LIGHT_COUNT,readFeatureGated,PREVIEW_FEATURE_OPTIONS,chooseStageLightTier,mxExclusive,mxWarnIfLocked,mtlxWarn,parseUniforms,countFragmentSamplers,estimateFragmentUniformVectors,stripVersion,parseVertexInputs,INT_GEOMPROP_TYPES,isIntGeompropType,patchGeompropVaryings,findGlslCalls,splitGlslArgs,findAllCallStatements,findFunctionDefs,findEnclosingFunction,isIdentityVec2Arg,HEIGHTTONORMAL_TEXEL_FN,HEIGHTTONORMAL_HEXTILE_TEXEL_FN,CHANNEL_EXTRACT_FN_RE,traceHeightSource,applyHeightToNormalTexel,patchUnlitLightingRefs,patchScenePhysicalLightFalloff,TONE_CURVE_GLSL,DISPLAY_TRANSFORM_IDS,displayTransformId,DISPLAY_TRANSFORM_SWITCH_GLSL,ACES_SRGB_GLSL,encodeDisplay,PEEL_REFRACTION_SCALE,patchShadowBounds,SHADOW_FACE_SLOTS,SHADOW_LIGHT_SLOTS_MAX,SHADOW_NORMAL_OFFSET_TEXELS,SHADOW_DEPTH_BIAS_TEXELS,patchShadowLightScope,patchLightSourceKindStruct,patchAreaLightSourceCosine,patchSpecularAA,ensureEnvOcclusionGlobal,patchAmbientOcclusion,patchDiffuseBounceAdd,patchSceneThinWalledTransmission,patchLightTransportPayload,patchTransmissionThickness,patchTransmissionAlpha,patchLocalEnvironmentRadiance,patchScreenSpaceReflection,patchRgbtPayload,injectPeelDiscard,mxErr,mxWriteValue,vecToArray,mxSafe,mxElCat,mxElType,mxElName,mxElAttr,materialPowerNodeNames,materialGeompropDefaults,POWER_NODE_REAL_GLSL,patchMaterialPowerNodes,mxElHasAttr,mxSetAttr,mxRemoveAttr,mxSetColorspace,findConvertChain,ensureTypedInput,readConstInputs,CONST_INPUT_NAMES,CONST_INPUT_DENY,CONST_INPUT_GLSL_TYPES,DISPLACEMENT_CONST_INPUT_NAMES,readDisplacementConstInputs,constInputLiteral,constInputKey,stripGlslForUsage,USAGE_IDENT_RE,addIdents,addComparisonIdents,balancedSpan,ternaryCondition,selectDynamicIndexUniforms,SELECTOR_CONST_INPUTS,constifyInputUniforms,stripValuesFromConnectedInputs,COLORSPACE_ALIASES,applyColorspaceAliases,COLORSPACE_TO_WORKING_NODE,applyColorspaceTransforms,applyMaterialWorkspaceTransforms,normPath,joinRefPath,findFileForRef,findFilesForRef,preferKtx2Sibling,readMtlxXml,isExportAttribution,splitXmlEnvelope,withXmlEnvelope,escapeXmlAttrSpecials,XML_ENTITIES,xmlDecode,xmlTagParts,xmlTokenKey,xmlTokenize,xmlPatchTag,xmlTokenMatches,preserveSourceFormatting,hasBlobIdentity,textureCacheKey,fnv1aBytesHex,BLOB_FINGERPRINT,fingerprintBlob,textureCacheKeyAsync,normalizeSamplerAddressMode,readMxInputValue,collectImageSamplerModes,samplerCacheKey,mxDataToPlainArray,collectMxUniforms,VECTOR_MX_TYPES,plainizeMxUniformData,annotateFilenameSamplerModes,COLOR_VIEWABLE,mxOutputTypeAndNode,mxResolveConnection,MTLX_TYPE_WALK_MAX_DEPTH,findTypeMismatches,describeUnresolvedNodes,unresolvedNodesText,MERGEABLE_IMAGE_CATEGORIES,MERGE_IGNORED_ATTRIBUTES,mxNodeSignature,mergeDuplicateImageNodes,generatePreviewSourcesUnlocked,mxFollowDisplacementInput,resolveDisplacementSource,detectDisplacementMode,fnv1aHex,generateDisplacementSourcesUnlocked,generatePreviewSources,DEFAULT_SAMPLER_BUDGET,joinWithAnd,SAMPLER_BUDGET_DROP_ORDER,SCENE_SAMPLER_DROPS,samplerBudgetNotice,generatePreviewSourcesWithinBudget}=MtlxGenCore;// Host providers for the core: each reads exactly what the code did before
 // the extraction, lazily per call (the const names are defined further down).
 MtlxGenCore.setHost({lightLimit:()=>{try{return localStorage.getItem(LIGHT_LIMIT_KEY)!=='0';}catch(e){return true;}},featureGated:()=>{try{return localStorage.getItem(FEATURE_GATED_KEY)!=='0';}catch(e){return true;}},constInputs:()=>{try{return localStorage.getItem(CONST_INPUTS_KEY)!=='0';}catch(e){return true;}},displacementConstInputs:()=>{try{return localStorage.getItem(DISPLACEMENT_CONST_INPUTS_KEY)!=='0';}catch(e){return true;}},specularEnvMethod:()=>getSpecularEnvMethod(),heightToNormalTexel:()=>getHeightToNormalTexel(),samplerBudgetOverride:()=>typeof window!=='undefined'?window.__mtlxSamplerBudgetOverride:undefined,perfLog:()=>!!window.MTLX_PERF_LOG,debugShaders:()=>DEBUG_SHADERS});// The three.js side of a material (uniforms, textures, geometry, lights) lives
 // in js/shared/mtlx-three-material.js so the thumbnail worker can build it too.
 const{getDummyTex,shadowOffMatrix,getDummyTexWhite,getDummyTex3DWhite,loadExrTexture,loadHdrTexture,UTIF_SUPPORTED_COMPRESSION,loadTifTexture,loadBoundedBitmapTexture,readImageDimensions,mxValueToThreeUniform,linToSrgb,srgbToLin,rgbToHex,hexToRgb,DEFAULT_VALUE_TEXTURES,DEFAULT_VALUE_TEXTURE_SET,defaultValueToRgba,getFilenameDefaultTexture,defaultValueTexture,isFilenameDefaultTexture,samplerHoldsDefault,rebindFilenameDefault,configureLoadedTexture,UV_GEOMPROP_ALIASES,aliasUvGeomprops,prepGeometry,GEOMPROP_ITEM_SIZE,bindGeompropAttributes,makeLightEntry,currentLights,activeLightCount,envRadianceForShading,envIrradianceForShading,bindEnvironmentSamplers,createMtlxSceneUniforms,PREVIEW_TRANSFORM_UNIFORM_NAMES,applyIntrospectedUniformDefaults,updateTransformUniforms,createPreviewMaterial}=MtlxThreeMaterial;// Host providers for it: each reads exactly what the code did before the move.
 MtlxThreeMaterial.setHost({keyLightRotation:rad=>keyLightRotationMatrix(rad),displayExposureScale:()=>displayExposureScale(),displayTransform:()=>getDisplayTransform(),clock:()=>MTLX_CLOCK,specularEnvMethod:()=>getSpecularEnvMethod(),diffuseEnvMethod:()=>getDiffuseEnvMethod(),sceneTextureFast:()=>sceneTextureFastPathEnabled(),texturePerf:(key,ms)=>addTexturePerf(key,ms)});// Environment preparation (equirect prep, key-light extraction, GGX prefilter,
 // irradiance convolution) lives in js/shared/mtlx-scene-assembly.js.
-const{makeEnvTexture,padToRGBA,prepareEnv,makeBackgroundTexture,floatToHalf,sanitizeHalfEnvData,halfToFloat,shIrradianceFromEquirect,parseEnvBuffer,KEYLIGHT_MIN_CONTRAST,KEYLIGHT_RADIUS_RAD,dataDirToWorld,extractKeyLight,extractSoftKeyDir,PREFILTER_SAMPLES,PREFILTER_GLSL,ensurePrefilteredEnv,makePrefilteredTexture,IRRADIANCE_CONV_W,IRRADIANCE_CONV_H,IRRADIANCE_OUT_W,IRRADIANCE_OUT_H,IRRADIANCE_GLSL,ensureConvolvedIrradiance,makeConvolvedIrradianceTexture,resolveShadingEnv,buildEnvFromParsedTexture,applyThreeToneMappingChunk,applyPeelMaterialMode,effectiveFullSceneVFov,envRotationMatrix3,instantiateShaderballGltf,adoptSceneCamera,fullSceneFov,configureSceneOrbit,createShaderPrewarmer}=MtlxSceneAssembly;// Evaluated once at load, as before; the provider returns the cached value.
+const{makeEnvTexture,padToRGBA,prepareEnv,makeBackgroundTexture,floatToHalf,sanitizeHalfEnvData,halfToFloat,shIrradianceFromEquirect,parseEnvBuffer,KEYLIGHT_MIN_CONTRAST,KEYLIGHT_RADIUS_RAD,dataDirToWorld,extractKeyLight,extractSoftKeyDir,PREFILTER_SAMPLES,PREFILTER_GLSL,ensurePrefilteredEnv,makePrefilteredTexture,IRRADIANCE_CONV_W,IRRADIANCE_CONV_H,IRRADIANCE_OUT_W,IRRADIANCE_OUT_H,IRRADIANCE_GLSL,ensureConvolvedIrradiance,makeConvolvedIrradianceTexture,resolveShadingEnv,buildEnvFromParsedTexture,envWithKeyLight,applyThreeToneMappingChunk,applyPeelMaterialMode,effectiveFullSceneVFov,envRotationMatrix3,instantiateShaderballGltf,adoptSceneCamera,fullSceneFov,configureSceneOrbit,createShaderPrewarmer}=MtlxSceneAssembly;// Evaluated once at load, as before; the provider returns the cached value.
 // A caller with no renderer yet must not latch prefilterTried, see ensurePrefilteredEnv.
 const legacyPrefilterLatch=(()=>{try{return localStorage.getItem('mtlx_scene_prefilter_fix')==='0';}catch(e){return false;}})();MtlxSceneAssembly.setHost({specularEnvMethod:()=>getSpecularEnvMethod(),diffuseEnvMethod:()=>getDiffuseEnvMethod(),keyLightEnabled:()=>keyLightEnabled,legacyPrefilterLatch:()=>legacyPrefilterLatch,perfLog:()=>!!window.MTLX_PERF_LOG});// Light-limit kill switch, default ON. '0' disables it, read per
 // generation (one localStorage hit) so toggling it needs no reload.
@@ -101,7 +101,13 @@ try{if(!window.MTLX_PERF_LOG&&localStorage.getItem('mtlxPerfLog')){window.MTLX_P
 let FORCE_TRANSPARENCY=(()=>{try{return!!window.MtlxRenderSettings.get('transparency',{surface:'viewer'});}catch(e){return false;}})();const getForceTransparency=()=>FORCE_TRANSPARENCY;const setForceTransparency=(v,{persist=true}={})=>{FORCE_TRANSPARENCY=!!v;try{window.MtlxRenderSettings.set('transparency',FORCE_TRANSPARENCY,{surface:'viewer',persist});}catch(e){/* best-effort */}// Settings-dialog/Scene-card callers persist (default); embed-boot.js's
 // query-param and postMessage paths pass persist:false. Mutates each
 // live view's flags in place regardless, see refreshRenderMode.
-LIVE_VIEWS.forEach(view=>{try{view.refreshRenderMode&&view.refreshRenderMode();}catch(e){/* view mid-teardown */}});try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'forceTransparency',value:FORCE_TRANSPARENCY}}));}catch(e){/* best-effort */}};// NOTE: no separate "depth peeling" setting exists, Force Transparency
+LIVE_VIEWS.forEach(view=>{try{view.refreshRenderMode&&view.refreshRenderMode();}catch(e){/* view mid-teardown */}});try{window.dispatchEvent(new CustomEvent('mtlx-settings-changed',{detail:{key:'forceTransparency',value:FORCE_TRANSPARENCY}}));}catch(e){/* best-effort */}};// Preview transmission model ('scalar' | 'rgbt', manifest row `transmission`),
+// read per material build. The embed page and the docs iframe read their own
+// level (Performance), never the Viewer's stored one.
+const previewLevelSurface=()=>window.__MTLX_EMBED_PAGE__?'embed':window.__MTLX_EMBED?'docs':'viewer';// Preview Quality codegen (SSAO block, specular AA) for a view's surface; below
+// Quality this is PREVIEW_FEATURE_OPTIONS itself, so the sources stay identical.
+const previewSetting=(key,surface)=>{try{return window.MtlxRenderSettings.get(key,{surface:surface||previewLevelSurface()});}catch(e){return undefined;}};const previewFeatureOptions=surface=>{const ao=!!previewSetting('ao',surface),specularAA=!!previewSetting('specularAA',surface);if(!ao&&!specularAA)return PREVIEW_FEATURE_OPTIONS;return Object.assign({},PREVIEW_FEATURE_OPTIONS,ao?{skipOcclusion:false,skipSkyVis:true,skipAoVolume:true}:null,specularAA?{specularAA:true}:null);};// A view's own surface (createMtlxRenderView `surface`) when given.
+const getPreviewTransmission=surface=>{try{return window.MtlxRenderSettings.get('transmission',{surface:surface||previewLevelSurface()})==='rgbt'?'rgbt':'scalar';}catch(e){return'scalar';}};// NOTE: no separate "depth peeling" setting exists, Force Transparency
 // always means front-to-back depth-peeled OIT now (a naive single-pass
 // blended mode was collapsed into this one flag). renderFrame()/
 // syncMeshMaterialMode() gate the peel graph on FORCE_TRANSPARENCY &&
@@ -322,10 +328,14 @@ const textureSourceBytes=proto=>{if(!proto||!proto.image)return 0;const w=proto.
 // with capKtx2MipLevels; exr/hdr/tif through the shared heavy-decode
 // limiter, then boundDecodedTexture when a finite tier is requested; else
 // (png/jpg at a finite tier) the bounded ImageBitmap path.
-const decodeTextureSource=async(blob,ext,path,tier,renderer)=>{if(ext==='ktx2'){const tex=await loadKtx2Texture(blob,renderer?{renderer}:null,path);if(tex&&Number.isFinite(tier))capKtx2MipLevels(tex,tier);return tex;}if(ext==='exr'||ext==='hdr'||ext==='tif'||ext==='tiff'){const startDecode=()=>ext==='exr'?loadExrTexture(blob):ext==='hdr'?loadHdrTexture(blob):loadTifTexture(blob,path);let tex=await runHeavyTextureDecode(startDecode);if(tex&&Number.isFinite(tier))tex=await boundDecodedTexture(tex,tier);return tex;}if(Number.isFinite(tier)&&typeof createImageBitmap==='function'){return loadBoundedBitmapTexture(blob,tier,null);}const url=URL.createObjectURL(blob);try{return await new Promise((resolve,reject)=>{new THREE.TextureLoader().load(url,resolve,undefined,reject);});}finally{URL.revokeObjectURL(url);}};// R:2384-2446's ladder/estimate math, generalized over a session's own
+// bounded (Scene materials): the bounded decoders at every tier, Infinity
+// included (TIF gets mipmaps, PNG/JPG through createImageBitmap); a failed
+// bound keeps the undecimated texture. bitmapsOnly (Scene displacement):
+// only bitmap formats are bounded; KTX2 and float/TIF height maps stay native.
+const decodeTextureSource=async(blob,ext,path,tier,renderer,bounded,bitmapsOnly)=>{if(ext==='ktx2'){const tex=await loadKtx2Texture(blob,renderer?{renderer}:null,path);if(tex&&Number.isFinite(tier)&&!bitmapsOnly)capKtx2MipLevels(tex,tier);return tex;}if(ext==='exr'||ext==='hdr'||ext==='tif'||ext==='tiff'){const startDecode=()=>ext==='exr'?loadExrTexture(blob):ext==='hdr'?loadHdrTexture(blob):loadTifTexture(blob,path);let tex=await runHeavyTextureDecode(startDecode);if(tex&&bounded){try{tex=await boundDecodedTexture(tex,tier);}catch(e){/* keep the undecimated texture */}}else if(tex&&Number.isFinite(tier)&&!bitmapsOnly)tex=await boundDecodedTexture(tex,tier);return tex;}if((bounded||bitmapsOnly||Number.isFinite(tier))&&typeof createImageBitmap==='function'){return loadBoundedBitmapTexture(blob,tier,null);}const url=URL.createObjectURL(blob);try{return await new Promise((resolve,reject)=>{new THREE.TextureLoader().load(url,resolve,undefined,reject);});}finally{URL.revokeObjectURL(url);}};// R:2384-2446's ladder/estimate math, generalized over a session's own
 // fileMap resolver (exact or fuzzy) instead of the Scene's sceneExactFile.
 const planTextureSession=async(session,refs,fileMap)=>{const entries=new Map();// key -> blob
-for(const raw of refs||[]){if(raw==null)continue;const ref=String(raw);if(/<UDIM>/i.test(ref)){for(const hit of session.resolveTiles(fileMap,ref)){if(hit&&!entries.has(hit.key))entries.set(hit.key,hit.blob);}continue;}const hit=session.resolve(fileMap,ref);if(hit&&!entries.has(hit.key))entries.set(hit.key,hit.blob);}const dims=await Promise.all(Array.from(entries.entries()).map(async([key,blob])=>{const ext=String(key).split('.').pop().toLowerCase();let dimensions=null;try{dimensions=await readImageDimensions(blob);}catch(e){dimensions=null;}const w=dimensions&&dimensions.width||4096;const h=dimensions&&dimensions.height||4096;const isFloat=ext==='exr'||ext==='hdr';const mipmapped=!isFloat;const bytesPerPixel=ext==='ktx2'?1:isFloat?16:4;return{key,w,h,bytesPerPixel,mipmapped};}));const textureCount=dims.length;const requested=Number.isFinite(session.maxSize)?session.maxSize:Infinity;const ladder=Array.from(new Set([requested].concat(session.tiers).filter(v=>v<=requested))).sort((a,b)=>b-a);if(!ladder.length)ladder.push(session.tiers[session.tiers.length-1]||512);const estimateAt=tier=>dims.reduce((total,d)=>{const w=Math.min(d.w,tier),h=Math.min(d.h,tier);return total+w*h*d.bytesPerPixel*(d.mipmapped?4/3:1);},0);const fullBytes=estimateAt(requested===Infinity?Math.max(4096,...dims.map(d=>Math.max(d.w,d.h)),1):requested);let chosen=ladder[ladder.length-1];let plannedBytes=estimateAt(chosen);for(const tier of ladder){const estimate=estimateAt(tier);if(estimate<=session.budgetBytes){chosen=tier;plannedBytes=estimate;break;}plannedBytes=estimate;}const udimTileCount=dims.filter(d=>/\.(\d{4})\./.test(d.key)||/1[0-9]{3}/.test(d.key)).length;return{tier:chosen,plannedBytes,fullBytes,textureCount,udimTileCount};};const createTextureSession=opts=>{const options=opts||{};const cache=options.cache||TEXTURE_SOURCES;const tiers=options.tiers||[4096,2048,1024,512];const exact=!!options.exact;const maxSize=options.maxSize!=null?options.maxSize:Infinity;const budgetBytes=options.budgetBytes!=null?options.budgetBytes:Infinity;const concurrency=options.concurrency||5;const renderer=options.renderer||null;const isAlive=typeof options.isAlive==='function'?options.isAlive:()=>true;const sourceRefs=new Map();// sourceKey -> ref count this session holds
+for(const raw of refs||[]){if(raw==null)continue;const ref=String(raw);if(/<UDIM>/i.test(ref)){for(const hit of session.resolveTiles(fileMap,ref)){if(hit&&!entries.has(hit.key))entries.set(hit.key,hit.blob);}continue;}const hit=session.resolve(fileMap,ref);if(hit&&!entries.has(hit.key))entries.set(hit.key,hit.blob);}const dims=await Promise.all(Array.from(entries.entries()).map(async([key,blob])=>{const ext=String(key).split('.').pop().toLowerCase();let dimensions=null;try{dimensions=await readImageDimensions(blob);}catch(e){dimensions=null;}const w=dimensions&&dimensions.width||4096;const h=dimensions&&dimensions.height||4096;const isFloat=ext==='exr'||ext==='hdr';const mipmapped=!isFloat;const bytesPerPixel=ext==='ktx2'?1:isFloat?16:4;return{key,w,h,bytesPerPixel,mipmapped};}));const textureCount=dims.length;const requested=Number.isFinite(session.maxSize)?session.maxSize:Infinity;const ladder=Array.from(new Set([requested].concat(session.tiers).filter(v=>v<=requested))).sort((a,b)=>b-a);if(!ladder.length)ladder.push(session.tiers[session.tiers.length-1]||512);const estimateAt=tier=>dims.reduce((total,d)=>{const w=Math.min(d.w,tier),h=Math.min(d.h,tier);return total+w*h*d.bytesPerPixel*(d.mipmapped?4/3:1);},0);const fullBytes=estimateAt(requested===Infinity?Math.max(4096,...dims.map(d=>Math.max(d.w,d.h)),1):requested);let chosen=ladder[ladder.length-1];let plannedBytes=estimateAt(chosen);for(const tier of ladder){const estimate=estimateAt(tier);if(estimate<=session.budgetBytes){chosen=tier;plannedBytes=estimate;break;}plannedBytes=estimate;}const udimTileCount=dims.filter(d=>/\.(\d{4})\./.test(d.key)||/1[0-9]{3}/.test(d.key)).length;return{tier:chosen,plannedBytes,fullBytes,textureCount,udimTileCount};};const createTextureSession=opts=>{const options=opts||{};const cache=options.cache||TEXTURE_SOURCES;const tiers=options.tiers||[4096,2048,1024,512];const exact=!!options.exact;const maxSize=options.maxSize!=null?options.maxSize:Infinity;const budgetBytes=options.budgetBytes!=null?options.budgetBytes:Infinity;const concurrency=options.concurrency||5;const renderer=options.renderer||null;const isAlive=typeof options.isAlive==='function'?options.isAlive:()=>true;const boundedDecode=!!options.boundedDecode;const boundBitmapsOnly=!!options.boundBitmapsOnly;const sourceRefs=new Map();// sourceKey -> ref count this session holds
 const wrappers=new Map();// wrapperKey -> { texture, sourceKey }
 const inflight=new Map();// sourceKey -> Promise<entry|null>, dedupes concurrent decodes
 const reservations=new Set();let reservedBytes=0;let anisotropy=options.anisotropy!=null?options.anisotropy:8;let disposed=false;const queueTails=Array.from({length:concurrency},()=>Promise.resolve());let queueNext=0;const enqueue=fn=>{const slot=queueNext%queueTails.length;queueNext+=1;const chained=queueTails[slot].catch(()=>{}).then(fn);queueTails[slot]=chained.catch(()=>{});return chained;};const resolve=(fileMap,ref,opts2)=>{const fromDir=opts2&&opts2.fromDir;let hit=exact?findFileForRef(fileMap,ref,{exact:true,fromDir}):findFileForRef(fileMap,ref);if(!hit)return null;hit=preferKtx2Sibling(fileMap,hit);return Object.assign({},hit,{blob:fileMap[hit.key]});};const resolveTiles=(fileMap,ref,opts2)=>{const fromDir=opts2&&opts2.fromDir;const hits=exact?findFilesForRef(fileMap,ref,{exact:true,fromDir}):findFilesForRef(fileMap,ref);return hits.map(hit=>{const subbed=preferKtx2Sibling(fileMap,hit);return Object.assign({},hit,subbed,{blob:fileMap[subbed.key]});});};// acquire()'s body once the raw source key is known.
@@ -337,14 +347,16 @@ const buildWrapper=proto=>{const already=wrappers.get(wrapperKey);if(already)ret
 // sampler modes) bound in the same pass call acquire() before
 // either await lands; share one in-flight decode instead of
 // starting a second one for the same sourceKey.
-if(inflight.has(sourceKey)){return inflight.get(sourceKey).then(entry=>{if(!entry)return null;sourceRefs.set(sourceKey,(sourceRefs.get(sourceKey)||0)+1);acquireTextureSourceRef(cache,sourceKey);return{texture:buildWrapper(entry.proto),bytes:entry.bytes};});}const decodePromise=enqueue(()=>decodeTextureSource(hit.blob,ext,hit.key,Number.isFinite(tier)?tier:Infinity,renderer)).then(proto=>{if(!proto)return null;if(disposed||!isAlive()){proto.dispose&&proto.dispose();return null;}let entry=cache.get(sourceKey);if(entry){// Another session raced this decode and stored first.
+if(inflight.has(sourceKey)){return inflight.get(sourceKey).then(entry=>{if(!entry)return null;sourceRefs.set(sourceKey,(sourceRefs.get(sourceKey)||0)+1);acquireTextureSourceRef(cache,sourceKey);return{texture:buildWrapper(entry.proto),bytes:entry.bytes};});}const decodePromise=enqueue(()=>decodeTextureSource(hit.blob,ext,hit.key,Number.isFinite(tier)?tier:Infinity,renderer,boundedDecode,boundBitmapsOnly)).then(proto=>{if(!proto)return null;if(disposed||!isAlive()){proto.dispose&&proto.dispose();return null;}let entry=cache.get(sourceKey);if(entry){// Another session raced this decode and stored first.
 proto.dispose&&proto.dispose();}else{entry={proto,bytes:textureSourceBytes(proto),refs:0};cache.set(sourceKey,entry);}return entry;});inflight.set(sourceKey,decodePromise);decodePromise.then(()=>inflight.delete(sourceKey),()=>inflight.delete(sourceKey));return decodePromise.then(entry=>{if(!entry)return null;sourceRefs.set(sourceKey,(sourceRefs.get(sourceKey)||0)+1);acquireTextureSourceRef(cache,sourceKey);return{texture:buildWrapper(entry.proto),bytes:entry.bytes};});};// Named `api`, not the handle-builder's own binding name: check-render-
 // parity.mjs's guard (g) locates that pair of object literals further
 // down this file by a naive first-match regex, which a same-named local
 // here anywhere earlier in the file would shadow.
 const api={tiers,maxSize,budgetBytes,exact,resolve,resolveTiles,plan:(refs,fileMap)=>planTextureSession(api,refs,fileMap),reserve:(key,opts2)=>{const options2=opts2||{};const k=String(key||'');if(reservations.has(k))return true;if(!Number.isFinite(budgetBytes)){reservations.add(k);return true;}const side=Number.isFinite(maxSize)?maxSize:4096;const estimate=options2.bytes!=null?options2.bytes:Math.ceil(4*side*side*4/3);if(reservedBytes+estimate>budgetBytes)return false;reservations.add(k);reservedBytes+=estimate;return true;},// Identity-bearing Files key synchronously; nameless Blobs (the VS Code webview's
 // fetched textures) are fingerprinted first so a texture replaced on disk reloads.
-acquire:(hit,opts2)=>{if(!hit||disposed)return null;const blob=hit.blob;const canHash=blob&&typeof blob.slice==='function'&&typeof blob.arrayBuffer==='function';if(hasBlobIdentity(blob)||!canHash)return acquireKeyed(hit,opts2,textureCacheKey(blob,hit.key));return textureCacheKeyAsync(blob,hit.key).then(rawKey=>disposed?null:acquireKeyed(hit,opts2,rawKey));},bind:(target,fileMap,onBound)=>{target.textureSession=api;return bindDroppedTextures(target,fileMap,onBound);},setAnisotropy:value=>{anisotropy=value;wrappers.forEach(w=>{w.texture.anisotropy=value;w.texture.needsUpdate=true;});},stats:()=>({wrapperCount:wrappers.size,sourceCount:sourceRefs.size,reservedBytes,anisotropy}),dispose:()=>{if(disposed)return;disposed=true;wrappers.forEach(w=>{w.texture.dispose&&w.texture.dispose();});wrappers.clear();sourceRefs.forEach((count,key)=>{for(let i=0;i<count;i++)releaseTextureSource(cache,key);});sourceRefs.clear();}};return api;};// ---- Preview geometry ----
+acquire:(hit,opts2)=>{if(!hit||disposed)return null;const blob=hit.blob;const canHash=blob&&typeof blob.slice==='function'&&typeof blob.arrayBuffer==='function';if(hasBlobIdentity(blob)||!canHash)return acquireKeyed(hit,opts2,textureCacheKey(blob,hit.key));return textureCacheKeyAsync(blob,hit.key).then(rawKey=>disposed?null:acquireKeyed(hit,opts2,rawKey));},bind:(target,fileMap,onBound)=>{target.textureSession=api;return bindDroppedTextures(target,fileMap,onBound);},// Drops one wrapper this session handed out (e.g. a texture the
+// caller's budget then refused) and releases its source reference.
+release:texture=>{for(const[key,w]of wrappers){if(w.texture!==texture)continue;wrappers.delete(key);if(texture.dispose)texture.dispose();const count=sourceRefs.get(w.sourceKey)||0;if(count>1)sourceRefs.set(w.sourceKey,count-1);else sourceRefs.delete(w.sourceKey);if(count>0)releaseTextureSource(cache,w.sourceKey);return true;}return false;},setAnisotropy:value=>{anisotropy=value;wrappers.forEach(w=>{w.texture.anisotropy=value;w.texture.needsUpdate=true;});},stats:()=>({wrapperCount:wrappers.size,sourceCount:sourceRefs.size,reservedBytes,anisotropy}),dispose:()=>{if(disposed)return;disposed=true;wrappers.forEach(w=>{w.texture.dispose&&w.texture.dispose();});wrappers.clear();sourceRefs.forEach((count,key)=>{for(let i=0;i<count;i++)releaseTextureSource(cache,key);});sourceRefs.clear();}};return api;};// ---- Preview geometry ----
 // Center a geometry at the origin and scale it to bounding radius 1
 // so all preview shapes frame identically.
 const normalizeGeometry=geometry=>{geometry.computeBoundingSphere();const bs=geometry.boundingSphere;if(bs&&bs.radius>0){geometry.translate(-bs.center.x,-bs.center.y,-bs.center.z);const s=1/bs.radius;geometry.scale(s,s,s);}return geometry;};// ---- Custom preview geometry (experimental) ----
@@ -538,14 +550,14 @@ const updateKeyLightUniformEntry=(uniforms,rigCount,keyLight,rotRad,envScale)=>{
 const ext=ENV_MAP_URL.slice(ENV_MAP_URL.lastIndexOf('.')).toLowerCase();envPromise=fetch(ENV_MAP_URL).then(r=>r.ok?r.arrayBuffer():null).catch(()=>null).then(buf=>{if(!buf)return null;// no file / fetch failed → synthesized sky
 const raw=parseEnvBuffer(buf,ext);if(!raw||!raw.image||!raw.image.data)return null;// parse failed → synthesized sky
 defaultEnvSource={buf,ext};// pristine bytes, for the key-light toggle rebuild
-const built=buildEnvFromParsedTexture(raw);defaultEnvBuilt=built;return built;});}return envPromise;};// Builds an environment from raw bytes into the same shape getEnvironment()
+const built=buildEnvFromParsedTexture(raw,keyLightEnabled,defaultEnvSource);defaultEnvBuilt=built;return built;});}return envPromise;};// Builds an environment from raw bytes into the same shape getEnvironment()
 // returns. `label` only names the source in error messages; `remember` caches
 // the pristine bytes for the key-light toggle and belongs to the session-wide
 // override alone, so a stage's own dome light passes false.
 const loadEnvironmentFromBuffer=async(buf,ext,label,remember=true)=>{const lower=String(ext||'').toLowerCase();if(lower!=='.hdr'&&lower!=='.exr'){throw new Error('Unsupported environment file "'+label+'", expected .hdr or .exr.');}// Loader-presence checks run BEFORE parseEnvBuffer purely so the
 // dialog can report which specific script is missing, parseEnvBuffer
 // itself just returns null on this, with no message.
-if(lower==='.hdr'&&typeof THREE.RGBELoader==='undefined'){throw new Error('RGBELoader unavailable (script blocked/offline), cannot load .hdr environments.');}if(lower==='.exr'&&typeof THREE.EXRLoader==='undefined'){throw new Error('EXRLoader unavailable (script blocked/offline), cannot load .exr environments.');}const raw=parseEnvBuffer(buf,lower);if(!raw||!raw.image||!raw.image.data){throw new Error('Failed to parse the environment image "'+label+'".');}if(remember)overrideEnvSource={buf,ext:lower};return buildEnvFromParsedTexture(raw);};// Constant-colour environment in the same shape, for a USD dome light that
+if(lower==='.hdr'&&typeof THREE.RGBELoader==='undefined'){throw new Error('RGBELoader unavailable (script blocked/offline), cannot load .hdr environments.');}if(lower==='.exr'&&typeof THREE.EXRLoader==='undefined'){throw new Error('EXRLoader unavailable (script blocked/offline), cannot load .exr environments.');}const raw=parseEnvBuffer(buf,lower);if(!raw||!raw.image||!raw.image.data){throw new Error('Failed to parse the environment image "'+label+'".');}if(remember)overrideEnvSource={buf,ext:lower};return buildEnvFromParsedTexture(raw,keyLightEnabled,remember?overrideEnvSource:null);};// Constant-colour environment in the same shape, for a USD dome light that
 // carries a colour but no texture. Small on purpose: every texel is equal,
 // so resolution buys nothing and the mip chain still builds normally.
 const FLAT_ENV_W=32;const FLAT_ENV_H=16;const makeFlatEnvironment=rgb=>{const[r,g,b]=Array.isArray(rgb)&&rgb.length>=3?rgb:[1,1,1];const data=new Uint16Array(FLAT_ENV_W*FLAT_ENV_H*4);const half=[floatToHalf(r),floatToHalf(g),floatToHalf(b),floatToHalf(1)];for(let i=0;i<data.length;i+=4){data[i]=half[0];data[i+1]=half[1];data[i+2]=half[2];data[i+3]=half[3];}const tex=new THREE.DataTexture(data,FLAT_ENV_W,FLAT_ENV_H,THREE.RGBAFormat,THREE.HalfFloatType);tex.flipY=false;return buildEnvFromParsedTexture(tex);};// Loads a user-dropped environment file into the same shape
@@ -567,7 +579,7 @@ getEnvironment().then(def=>{if(!envOverride){LIVE_VIEWS.forEach(v=>{try{v.setEnv
 const getKeyLightEnabled=()=>keyLightEnabled;// Where the active environment came from, so a worker can rebuild it: the
 // default's URL or the override's bytes, plus the page's prefiltered chains.
 const getEnvironmentSource=()=>{const env=envOverride||defaultEnvBuilt;let source;if(envOverride){const o=overrideEnvSource||{};source={id:'override:'+envOverrideSerial,buf:o.buf,ext:o.ext};}else{source={id:'default',url:ENV_MAP_URL,ext:ENV_MAP_URL.slice(ENV_MAP_URL.lastIndexOf('.')).toLowerCase()};}if(env&&(env.radiancePrefiltered||env.irradianceConvolvedData)){source.prefiltered={mipmaps:env.radiancePrefiltered?env.radiancePrefiltered.mipmaps:null,irradiance:env.irradianceConvolvedData||null};}return source;};const notifyEnvironmentChanged=()=>{try{window.dispatchEvent(new CustomEvent('mtlx-environment-changed',{detail:getEnvironmentSource()}));}catch(e){/* no window */}};const setKeyLightEnabled=on=>{keyLightEnabled=!!on;try{window.MtlxRenderSettings.set('keyLight',keyLightEnabled,{surface:'viewer'});}catch(e){/* unavailable */}const src=envOverride?overrideEnvSource:defaultEnvSource;if(!src){notifyEnvironmentChanged();return;}// nothing loaded yet; the next load already honors the flag
-const raw=parseEnvBuffer(src.buf,src.ext);if(!raw||!raw.image||!raw.image.data){notifyEnvironmentChanged();return;}const rebuilt=buildEnvFromParsedTexture(raw);if(envOverride){setEnvOverride(rebuilt);// re-broadcasts via each view's setEnvironment()
+const raw=parseEnvBuffer(src.buf,src.ext);if(!raw||!raw.image||!raw.image.data){notifyEnvironmentChanged();return;}const rebuilt=buildEnvFromParsedTexture(raw,keyLightEnabled,src);if(envOverride){setEnvOverride(rebuilt);// re-broadcasts via each view's setEnvironment()
 }else{envPromise=Promise.resolve(rebuilt);defaultEnvBuilt=rebuilt;LIVE_VIEWS.forEach(v=>{try{v.setEnvironment(rebuilt);}catch(e){/* view has no lighting/env, no-op */}});notifyEnvironmentChanged();}};// Standard MaterialX color spaces accepted on filename inputs. Changing
 // one is a CODEGEN decision (the CMS inserts the shader transform), so
 // the picker goes through the regen override path, not a uniform.
@@ -585,9 +597,9 @@ const DISPLACEMENT_PREWARM_KEY='mtlx_displacement_prewarm';const readDisplacemen
 // generates, and pre-compiles inside ONE mxExclusive hold (so a transient
 // __pv_* wrapper is never observable by a concurrent op). NEVER call from
 // inside an existing mxExclusive (deadlock).
-const prewarmPreviewTarget=async({mx,gen,genContext,buildRenderable,label,isMounted=()=>true})=>{// No warm context (no WebGL2 / no KHR_parallel_shader_compile) means
+const prewarmPreviewTarget=async({mx,gen,genContext,buildRenderable,label,isMounted=()=>true,surface=null})=>{// No warm context (no WebGL2 / no KHR_parallel_shader_compile) means
 // generating sources here would only be thrown away, skip the work.
-if(!getWarmContext())return'skipped';let srcs=null;try{srcs=await mxExclusive(()=>{const built=buildRenderable();if(!built||!built.renderable)return null;try{return generatePreviewSourcesUnlocked({mx,gen,genContext,renderable:built.renderable,label,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:PREVIEW_FEATURE_OPTIONS});}finally{// Best-effort, ALWAYS: the transient __pv_* wrappers must
+if(!getWarmContext())return'skipped';let srcs=null;try{srcs=await mxExclusive(()=>{const built=buildRenderable();if(!built||!built.renderable)return null;try{return generatePreviewSourcesUnlocked({mx,gen,genContext,renderable:built.renderable,label,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:previewFeatureOptions(surface),transmission:getPreviewTransmission(surface)});}finally{// Best-effort, ALWAYS: the transient __pv_* wrappers must
 // never survive past this hold (same single-hold rule),
 // including when generation itself threw.
 try{built.cleanup();}catch(e){/* best-effort */}}});}catch(e){// Silent by design (see the doc comment above): a generation
@@ -605,8 +617,8 @@ const DEFAULT_UNIFORM_VECTOR_BUDGET=1024;const compileMtlxSceneMaterial=async({m
 // spec can force a tight budget without a real ANGLE context.
 const overrideBudget=typeof window!=='undefined'?window.__mtlxSamplerBudgetOverride:undefined;const budget=Number.isFinite(overrideBudget)?overrideBudget:Number.isFinite(samplerBudget)?samplerBudget:DEFAULT_SAMPLER_BUDGET;const uniformLimit=Number.isFinite(uniformVectorBudget)?uniformVectorBudget:DEFAULT_UNIFORM_VECTOR_BUDGET;const dropped=[];let srcs=null;let samplerInfo=null;let neededInfo=null;// the full-feature count, what the notice reports
 let budgetAttempts=0;for(let attempt=0;;attempt++){budgetAttempts=attempt+1;// The scene's live feature set is the base; budget drops add to it.
-const sceneFeatureOptions=Object.assign({materialWorkspace,specularAA},featureOptions||null);for(const d of dropped)sceneFeatureOptions[d.key]=true;srcs=await generatePreviewSources({mx,gen,genContext,renderable,label,materialName,isMounted,document:documentArg,sceneRgbt,lightTransport,sceneFeatureOptions,stageLightCount});if(!srcs)return null;samplerInfo=countFragmentSamplers(srcs.fs);if(!neededInfo)neededInfo=samplerInfo;if(samplerInfo.count<=budget)break;if(attempt>=SAMPLER_BUDGET_DROP_ORDER.length)break;// hooks exhausted, still over
-dropped.push(SAMPLER_BUDGET_DROP_ORDER[attempt]);}const declared=parseUniforms(srcs.vs).concat(parseUniforms(srcs.fs));const overBudget=samplerInfo.count>budget;const uniformInfo=estimateFragmentUniformVectors(srcs.fs);return{...srcs,declared,// Program identity excludes uniforms and object transforms. Source
+const sceneFeatureOptions=Object.assign({materialWorkspace,specularAA},featureOptions||null);for(const d of dropped)sceneFeatureOptions[d.key]=true;srcs=await generatePreviewSources({mx,gen,genContext,renderable,label,materialName,isMounted,document:documentArg,sceneRgbt,lightTransport,sceneFeatureOptions,stageLightCount});if(!srcs)return null;samplerInfo=countFragmentSamplers(srcs.fs);if(!neededInfo)neededInfo=samplerInfo;if(samplerInfo.count<=budget)break;if(attempt>=SCENE_SAMPLER_DROPS.length)break;// hooks exhausted, still over
+dropped.push(SCENE_SAMPLER_DROPS[attempt]);}const declared=parseUniforms(srcs.vs).concat(parseUniforms(srcs.fs));const overBudget=samplerInfo.count>budget;const uniformInfo=estimateFragmentUniformVectors(srcs.fs);return{...srcs,declared,// Program identity excludes uniforms and object transforms. Source
 // text is already fully adapted by generatePreviewSources.
 programKey:srcs.vs+'\\n/* scene-fs */\\n'+srcs.fs+'\\n/* displacement */\\n'+(srcs.displacement?srcs.displacement.key:'')+'\\n/* material-workspace */\\n'+materialWorkspace,sceneRgbt,lightTransport:lightTransport===true||lightTransport===4||lightTransport==='transfer'?4:0,lightTransportSupported:!!srcs.lightTransportSupported,payloadSupported:!!srcs.payloadSupported,label,samplerCount:samplerInfo.count,samplerNames:samplerInfo.names,samplerBudget:{limit:budget,count:samplerInfo.count,material:samplerInfo.material,scene:samplerInfo.scene,needed:(neededInfo||samplerInfo).count,dropped:dropped.map(d=>d.label),droppedLabels:dropped.map(d=>d.userLabel),// Ready-made sentence for the scene's warnings list, so the
 // count and its material/scene split stay together.
@@ -673,7 +685,7 @@ const previousTarget=renderer.getRenderTarget();const previousClearColor=rendere
 const perf=window.MTLX_PERF_LOG?{compileMs:0,readbackMs:0}:null;const __compileStart=perf?performance.now():0;try{compileFilteringDriverNoise(renderer,scene,camera);if(perf)perf.compileMs=performance.now()-__compileStart;// Attribute to THIS material's own program, not the first broken
 // program anywhere in the shared renderer (an unrelated material
 // would otherwise blame every displacement evaluation). Mirrors
-// reportBadPrograms in js/usd-scene-renderer.js. Falls back to the
+// MtlxRender.findUnrunnableMaterials (render-session.js). Falls back to the
 // old scan if r128 hasn't recorded a currentProgram yet.
 const props=renderer.properties.get(material);const ownProgram=props&&props.currentProgram;const badProg=ownProgram?ownProgram.diagnostics&&ownProgram.diagnostics.runnable===false?ownProgram:null:(renderer.info.programs||[]).find(p=>p.diagnostics&&p.diagnostics.runnable===false);if(badProg){const d=badProg.diagnostics;const log=(d.programLog||'')+(d.vertexShader&&d.vertexShader.log?' VERT: '+d.vertexShader.log:'')+(d.fragmentShader&&d.fragmentShader.log?' FRAG: '+d.fragmentShader.log:'');notices.push('Displacement evaluation failed: '+(log.split('\n')[0]||'program not runnable').slice(0,200));return{offsets:null,mode,notices};}// rgba32f: readRenderTargetPixels wants a Float32Array and hands
 // back the exact bytes the shader wrote (0..1, no UNORM8 clamp);
@@ -760,7 +772,7 @@ const createUdimVariantUniforms=(base,tileBindings,{shareSlots=true}={})=>{const
 // ------------------------------------------------------------------
 const tryRefreshRenderView=async({view,mx,gen,genContext,renderable,label,materialName=null,isMounted=()=>true})=>{const __t=window.MTLX_PERF_LOG?performance.now():0;let srcs;try{// Same generation options the live view was built with, else the
 // byte compare below can never match.
-srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,materialName,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:PREVIEW_FEATURE_OPTIONS,allowConstInputs:view?view.allowConstInputs!==false:true});}catch(e){return{refreshed:false,srcs:null};}if(!srcs)return{refreshed:false,srcs:null};// Belt-and-suspenders: compare the transparency verdict explicitly
+srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,materialName,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:previewFeatureOptions(view&&view.renderSurface),transmission:getPreviewTransmission(view&&view.renderSurface),allowConstInputs:view?view.allowConstInputs!==false:true});}catch(e){return{refreshed:false,srcs:null};}if(!srcs)return{refreshed:false,srcs:null};// Belt-and-suspenders: compare the transparency verdict explicitly
 // rather than relying on srcs.vs/fs alone. Gated on FORCE_TRANSPARENCY:
 // when off, a verdict flip is irrelevant and forcing rebuild is pointless.
 if(srcs.vs!==view.vs||srcs.fs!==view.fs||FORCE_TRANSPARENCY&&!!srcs.transparent!==!!view.isTransparent)return{refreshed:false,srcs};// A filename value can change without the GLSL text changing, so
@@ -925,265 +937,43 @@ const saved=new Map();for(const m of meshes){const mat=m.material;if(saved.has(m
 // above), disabled explicitly anyway for defensiveness.
 mat.depthTest=false;}renderer.setRenderTarget(peel.accumRT);renderer.render(scene,camera);saved.forEach((state,mat)=>{Object.assign(mat,state);mat.uniforms.u_peelMode.value=0;});hidden.forEach(o=>{o.visible=true;});hidden.length=0;// 5. composite accum (+opaqueRT, linear mode) onto the caller's target.
 restoreRenderDestination(renderer,outputDestination);peel.quadMesh.material=peel.finalMat;peel.finalMat.uniforms.tAccum.value=peel.accumRT.texture;if(peelLinearOk){peel.finalMat.uniforms.tOpaque.value=peel.opaqueRT.texture;peel.finalMat.uniforms.u_displayTransform.value=opts.outputLinear?2:displayTransformId(getDT());peel.finalMat.uniforms.u_displayExposure.value=opts.outputLinear?1:getExposure();}renderer.render(peel.quadScene,peel.quadCam);}finally{// restore GL state even if a pass above threw
-restoreRenderDestination(renderer,outputDestination);renderer.autoClear=prevAutoClear;renderer.setClearColor(prevClearColor,prevClearAlpha);renderer.shadowMap.autoUpdate=prevShadowAutoUpdate;meshes.forEach(m=>{if(m.material.uniforms&&m.material.uniforms.u_peelMode)m.material.uniforms.u_peelMode.value=0;});linearUniforms.forEach((value,uniform)=>{uniform.value=value;});if(hidden.length){hidden.forEach(o=>{o.visible=true;});hidden.length=0;}}};return{render,setMeshMode:applyPeelMaterialMode,peelLinearOk,dispose:()=>{freePeel();}};};const createMtlxRenderView=async({canvas,mx,gen,genContext,renderable,lightData,label,needsLighting,geomName,autoRotate=true,envBackground=false,// Background switch: 'studio' | 'studio-dark' | 'environment' |
-// 'none'. No default here (see backdropMode below), undefined lets
-// envBackground's back-compat rule decide the initial mode.
-backdrop,// 'zoom' (default): plain wheel zooms. 'scroll': plain wheel is gated
-// (page scrolls), Ctrl/Cmd+wheel zooms; see the wheel-gate block below.
-// 'none': no zoom at all (wheel, Ctrl+wheel, pinch), orbit still works.
-wheelMode='zoom',// isMounted: PERMANENT lifecycle bail (component unmounted). isActive:
-// TEMPORARY visibility (backgrounded view skips render, keeps looping).
-// isAlive: OPTIONAL, read only by animate() via `aliveFn` below.
-isMounted=()=>true,isActive=()=>true,isAlive=null,debugKind='',// OPTIONAL: true keeps this view's context while inactive (compare's diff mode reads its pixels).
-holdContext=()=>false,// Opt-out for views whose sliders write uniforms with no regeneration
+restoreRenderDestination(renderer,outputDestination);renderer.autoClear=prevAutoClear;renderer.setClearColor(prevClearColor,prevClearAlpha);renderer.shadowMap.autoUpdate=prevShadowAutoUpdate;meshes.forEach(m=>{if(m.material.uniforms&&m.material.uniforms.u_peelMode)m.material.uniforms.u_peelMode.value=0;});linearUniforms.forEach((value,uniform)=>{uniform.value=value;});if(hidden.length){hidden.forEach(o=>{o.visible=true;});hidden.length=0;}}};return{render,setMeshMode:applyPeelMaterialMode,peelLinearOk,dispose:()=>{freePeel();}};};// ------------------------------------------------------------------
+// createPreviewContent: the preview content adapter driven by
+// MtlxRender.createRenderSession (js/shared/render-session.js, P6-CONTRACT.md):
+// codegen, the GLB shaderball scene, framing, geometry, displacement, UDIM, material binding.
+// ------------------------------------------------------------------
+const createPreviewContent=({canvas,mx,gen,genContext,renderable,lightData,label,needsLighting,geomName,isMounted=()=>true,debugKind='',// Opt-out for views whose sliders write uniforms with no regeneration
 // path (the docs node preview); see constifyInputUniforms.
-allowConstInputs=true,// Initial camera pull-back. 3.6 is roomy framing; ~2.55 fills the
-// frame for small square previews. IGNORED in full-scene mode, the
-// camera there is copied verbatim from the GLB's own embedded camera.
-cameraDistance=3.6,// false (default) = fixed, non-interactive authored GLB camera (graph
+allowConstInputs=true,// false (default) = fixed, non-interactive authored GLB camera (graph
 // editor); true (docs/viewer) = OrbitControls with pivot/zoom/polar
 // clamp and Box3 containment. Ignored outside full-scene mode.
-sceneOrbit=false,// Caps setPixelRatio; lower it for cheap side-by-side/compare views.
-maxPixelRatio=2,// Names the <material> element whose displacementshader input to
+sceneOrbit=false,// Names the <material> element whose displacementshader input to
 // follow (see resolveDisplacementSource); null scans the document.
-materialName=null,// Highest triangle count this view's subdivided preview mesh may
-// reach; window.__mtlxTriangleBudgetOverride (test hook) wins over
-// this at each use, mirroring the sampler-budget override pattern above.
-triangleBudget=PREVIEW_TRIANGLE_BUDGET})=>{// See the isAlive doc above: defaulting to isMounted here preserves
-// today's exact behavior for every caller that doesn't pass isAlive.
-const aliveFn=isAlive||isMounted;// Mode derived from geomName: 'shaderball-scene' -> full authored GLB
-// scene with detached embedded camera; 'shaderball' -> simple
-// (ball-only) GLB; anything else -> null (ordinary sphere/cube path).
+materialName=null,// Highest triangle count this view's subdivided preview mesh may reach;
+// window.__mtlxTriangleBudgetOverride (test hook) wins at each use.
+triangleBudget=PREVIEW_TRIANGLE_BUDGET,// Settings surface whose quality level this view follows (viewer, compare,
+// docs, graph, embed); defaults from the host.
+surface=null})=>{const renderSurface=surface||previewLevelSurface();// 'shaderball-scene' -> full authored GLB scene with its detached camera;
+// 'shaderball' -> ball-only GLB; anything else -> sphere/cube path.
 const sceneMode=geomName==='shaderball-scene'?'full':geomName==='shaderball'?'simple':null;// 'buffer2d': Shadertoy-style fullscreen quad, fixed ortho camera,
-// no controls/spin, no visible backdrop. Orthogonal to sceneMode
-// (null there, so the ordinary buildPreviewGeometry path runs).
-const flat2d=geomName==='buffer2d';// Known before the renderer exists, so the shadow map can be configured
-// up front. Flipping shadowMap.enabled after the PMREM and the materials
-// are built invalidated program state and blacked out scene.environment.
-const wantsStudio=!flat2d&&sceneMode!=='full';// Unrecognized/missing values fall back to 'studio'. envBackground
-// back-compat only applies when `backdrop` itself was never passed
-// at all; an explicit `backdrop` (even 'studio') always wins.
-const normalizeBackdropMode=v=>v==='environment'||v==='none'||v==='studio-dark'?v:'studio';let backdropMode=normalizeBackdropMode(backdrop!==undefined?backdrop:envBackground?'environment':'studio');let reqId=null;let renderer=null;// Context budget: suspendedByUs marks a loss WE caused, so real GPU resets keep their own path.
-let viewGl=null,loseExt=null,suspendedByUs=false,lastRenderAt=0,applyBusy=0;// Declared here (not inside the try block below) so disposePartial,
-// defined outside that block, can still remove them on every teardown path.
-let onGlLost=null,onGlRestored=null;// Sizing (applySize/syncSize/ResizeObserver) and the snapshot/capture
-// trio now live in MtlxRender.createSizer/createCaptureController
-// (js/shared/render-session.js), built once the renderer exists below;
-// declared here so disposePartial, defined outside that block, can
-// still reach them on every teardown path.
-let sizer=null;let captureController=null;// setUniforms/renderFrame are declared later, after an await point; the
-// sizer's resize-frame render checks this first to avoid their TDZ.
-let renderPathReady=false;let controls=null;let orbitDragging=false;let orbitEndedAt=-Infinity;let stopped=false;// Sleep gate (P3-DESIGN.md section 5), built once the renderer/scene/
-// previewBackdrop exist below; declared here so disposePartial can
-// read getSleepState()'s resident bits without a TDZ error on an
-// early bail.
-let sleepGate=null;let onContextLostSleep=null,onContextRestoredWake=null;let unsubDiffuseEnv=null;// Shell-level material/geometry/uniforms state, reassigned by
-// applyMaterialInternal() on every swap so one shell backs many edits.
-// `uniforms` MUST be `let`: every closure below shares this binding.
-let mesh=null,material=null,geometry=null,uniforms=null;// Displacement (P5) state: originalGeometry as built (kept until
-// teardown), baseGeometry subdivided-but-undisplaced, displacedGeometry
-// the CPU-displaced result on `mesh` (null when nothing is displaced).
-let originalGeometry=null,baseGeometry=null,displacedGeometry=null;let displacementSources=null;let materialNotices=[];// P4d stage 1: owns dispToken/dispState/dispSettlePromise/notices/
-// debounce, assigned once the renderer/textureSession exist below.
-let dispRunner=null;// P4d stage 2: custom-geometry UDIM split state. udimParts: child
-// THREE.Mesh objects added under `mesh`, one per successfully bound
-// tile beyond the lowest (which `mesh` itself keeps). udimFullIndex:
-// mesh.geometry's ORIGINAL index/attribute-count, saved once so a
-// later material with no UDIM refs can restore the whole mesh.
-// udimBucketsKey/udimBuckets: partitionTriangles() cached per
-// (CUSTOM_GEOM.epoch, ref) since the base geometry doesn't change
-// between material swaps. udimNoticeText: the one notice covering
-// crossing/missing/over-cap tiles, folded into syncHandleNotices.
-let udimParts=[],udimFullIndex=null,udimSplitActive=false;let udimBucketsKey=null,udimBuckets=null,udimFileMap=null;let udimNoticeText=null,udimTileCount=0;const PREVIEW_UDIM_MAX_TILES=64;// Reassigned once, below, to the real handle object literal; declared
-// here (with the rest of this shell's state) so displacement closures
-// defined ahead of it can still dispatch { view: handle } once it exists.
-let handle=null;// F3 fix: this view's own refcounted texture session (createTextureSession),
-// replacing the shared TEXTURE_CACHE Map so a rebuild's GL copies are
-// freed instead of leaked. Built once the renderer exists, disposed by
-// disposePartial BEFORE MtlxRender.disposeRendererCore.
-let textureSession=null;let unsubTextureAnisotropy=null;// Scene-mode state, null/empty when sceneMode is null (sphere/cube
-// path guards with `if (sceneGroup)`). sceneGroup: instantiated GLB
-// root. sceneOwnedMaterials/pmremRT: disposed by disposePartial below.
-let sceneGroup=null,sceneOwnedMaterials=[],pmremRT=null;// Depth-peel shell state (see the FORCE_TRANSPARENCY flag's header
-// comment above and createPeelPipeline/renderFrame further down).
-// viewIsTransparent: a shell-local MIRROR of the handle's
-// isTransparent (raw srcs.transparent from generation), needed
-// because renderFrame() is invoked synchronously by the FIRST
-// animate() call below, which runs BEFORE `handle` exists (the
-// object literal is constructed further down, after animate() has
-// already been called once), renderFrame can't read
-// handle.isTransparent yet, so it reads this instead. Kept in sync
-// with handle.isTransparent at every point that field is set.
-let viewIsTransparent=false;// Outer-scope binding for the createPeelPipeline instance (created
-// deep inside the try block below, out of disposePartial's reach):
-// every call site resolves this instead, assigned once it's built.
-let peelPipeline=null;// The radiance texture, kept so the caller can toggle it as the
-// visible backdrop (setEnvBackground) via bgMesh below; the IBL
-// uniforms are bound regardless.
-let envBgTexture=null;let envRotationRad=0;// Skybox mesh + studio cyclorama/shadow rig, owned by
-// js/shared/render-environment.js's createPreviewBackdrop (built once
-// `scene` exists, below).
-let previewBackdrop=null;// Shell-level env (IBL) state, fetched ONCE (not per material
-// apply) since env textures never change across a document edit.
-// shadingEnv()/createMtlxSceneUniforms read these on every apply.
-let envRadiance=null,envIrradiance=null,envMips=0,envExposure=1.0;// The full env object last applied (fetch, setEnvironment or
-// setEnvMap), kept ONLY so a diffuseEnv method switch can rebind this
-// view's irradiance sampler via handle.setEnvironment(currentEnvRef)
-// without a shader rebuild (P3-DESIGN.md section 4 S4).
-let currentEnvRef=null;// Last caller-supplied owner tag from setEnvironment(env, {user}); this
-// slice only records it (P3-DESIGN.md section 4 S5), no behavior reads it yet.
-let envOwner=null;// envHasFile/envPrefilteredIrr: used only by logPreviewUniformDebug's
-// DEBUG_SHADERS log, to reproduce the old descriptive message now
-// that `env` no longer lives past the one-time shell-level fetch.
-let envHasFile=false,envPrefilteredIrr=false;// The active env's auto-extracted key light (null = none), see
-// extractKeyLight/currentLights. rigCount fixes u_lightData's length.
-let envKeyLight=null;// Cheaper fallback direction for the studio shadow ONLY (no direct
-// light emitted) when there's no strong-enough sun for envKeyLight;
-// see extractSoftKeyDir/placeStudioLight.
-let envSoftKeyDir=null;const rigCount=lightData&&lightData.length||0;// Per-view state for the handle's setEnvMap(url): the textures from
-// the last URL this view privately fetched, never shared with other
-// views, so a later swap or teardown can free them safely. Gate and
-// disposeFetchedEnv moved to MtlxRender.createEnvMapGate/disposeFetchedEnv
-// (js/shared/render-environment.js).
-const envMapGate=MtlxRender.createEnvMapGate();const disposeFetchedEnv=MtlxRender.disposeFetchedEnv;// No-OrbitControls fallback only (script blocked): mirrors the
-// autoRotate state so the fallback spin can be toggled too.
-let fallbackSpin=!!autoRotate;// wheelMode 'scroll' state: the gate listener plus the zoom-hint
-// overlay, both moved to MtlxRender (js/shared/render-session.js);
-// wheelGate is attached further down, before OrbitControls exists.
-let wheelGate=null;const wheelHint=MtlxRender.createWheelHint(canvas);const suspendGl=()=>{// Kept: a lost context answers getExtension with null, so resume needs the object from now.
-loseExt=viewGl&&!viewGl.isContextLost()&&viewGl.getExtension('WEBGL_lose_context');if(!loseExt)return false;suspendedByUs=true;loseExt.loseContext();return true;};const resumeGl=()=>{suspendedByUs=false;glCapLog('resumed '+label);try{if(loseExt)loseExt.restoreContext();}catch(e){/* context already gone */}};const disposePartial=()=>{stopped=true;if(dispRunner)dispRunner.cancel();if(reqId)cancelAnimationFrame(reqId);if(sizer)sizer.dispose();if(controls)controls.dispose();// wheelMode 'scroll' teardown: the capture listener and the
-// hint overlay, if either was ever created.
-if(wheelGate)wheelGate.dispose();wheelHint.dispose();// Best-effort: renderer.dispose() below only frees the
-// renderer's OWN GL state, not material/geometry, dispose those
-// too (each swap already disposes its own previous ones).
-try{if(material)material.dispose();}catch(e){/* already disposed/invalid */}try{if(geometry)geometry.dispose();}catch(e){/* ditto */}// Displacement (P5): `geometry` (just disposed) is whichever of
-// these three is active; a Set dedupes by reference so the other
-// two are each disposed exactly once, never twice.
-try{const dispGeoms=new Set([originalGeometry,baseGeometry,displacedGeometry].filter(Boolean));dispGeoms.delete(geometry);dispGeoms.forEach(g=>{try{g.dispose();}catch(e2){/* already disposed/invalid */}});}catch(e){/* best-effort */}// P4d stage 2: UDIM split child meshes' own material clones (their
-// geometries only own an index buffer over shared attributes,
-// already covered above/left to GC); referenced directly here
-// rather than through teardownUdimParts, which may not exist yet
-// on an early bail (TDZ before that const's declaration runs).
-try{udimParts.forEach(p=>{try{if(p.material)p.material.dispose();}catch(e2){/* already disposed/invalid */}});udimParts=[];}catch(e){/* best-effort */}// bgMesh + studio backdrop, owned by createPreviewBackdrop.
-if(previewBackdrop)previewBackdrop.dispose();// sceneGroup (scene-mode only): drops the GLB hierarchy and
-// disposes its per-view material CLONES (sceneOwnedMaterials).
-// Does NOT dispose geometries, shared with other cached views.
-try{if(sceneGroup){scene.remove(sceneGroup);sceneOwnedMaterials.forEach(m=>{try{m.dispose();}catch(e){/* already disposed/invalid */}});}}catch(e){/* already disposed/invalid, or scene never got this far */}// pmremRT: this view's OWN render target, safe to dispose.
-// Do NOT dispose the PMREMGenerator instance itself: r128 shares
-// its LOD-plane geometries at MODULE scope across all instances.
-try{if(pmremRT)pmremRT.dispose();}catch(e){/* already disposed/invalid */}// setEnvMap()'s privately-fetched env, if any: this view's own
-// textures (unlike bgMesh.material.map above), safe to dispose.
-try{envMapGate.disposeAll();}catch(e){/* already disposed/invalid */}// Depth-peel render targets/quad materials, owned by the
-// createPeelPipeline instance, this view's OWN GPU resources,
-// same disposal rationale as pmremRT immediately above.
-try{if(peelPipeline)peelPipeline.dispose();}catch(e){/* already disposed/invalid */}// No forceContextLoss() here (handle.destroy() does it for discarded canvases): this same disposePartial() backs both
-// the superseded-rebuild bail AND the public handle.dispose(), and
-// every call site (viewer-app.jsx, node-preview.jsx, graph/preview.jsx)
-// disposes the old view then immediately builds a new one on the
-// SAME canvas ref. Forcing context loss would leave that reused
-// canvas's context stuck lost until an async restore, breaking the
-// very next build; the canvas is never actually discarded here.
-try{if(canvas&&onContextLostSleep)canvas.removeEventListener('webglcontextlost',onContextLostSleep);if(canvas&&onContextRestoredWake)canvas.removeEventListener('webglcontextrestored',onContextRestoredWake);}catch(e){/* already disposed/invalid */}// F3: dispose the session's wrapper clones BEFORE the renderer, so
-// texture.dispose() still runs against live GL state (renderer.dispose
-// clears the WebGLProperties map onTextureDispose needs to find them).
-if(unsubTextureAnisotropy){unsubTextureAnisotropy();unsubTextureAnisotropy=null;}try{if(textureSession)textureSession.dispose();}catch(e){/* already disposed/invalid */}MtlxRender.disposeRendererCore({canvas,onGlLost,onGlRestored,renderer});};// [mtlx-perf] whole-function total, from shader generation through
-// the GL compile. See the finer-grained timers further down for a
-// breakdown (gen.generate / WebGLRenderer init / GL compile).
-const __totalPerfStart=window.MTLX_PERF_LOG?performance.now():0;try{// Generates the shader from the renderable surface node.
-// See generatePreviewSources for the full breakdown;
-// extracted so tryRefreshRenderView can reuse it for a diff.
-const __srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,materialName,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:PREVIEW_FEATURE_OPTIONS,allowConstInputs});// Bail if this build was superseded while awaiting above:
-// nothing GL-side exists yet, so disposePartial() is a
-// safe, idempotent no-op beyond flagging `stopped`.
-if(!__srcs){disposePartial();return null;}// introspected: already plain JS, converted inside the
-// mxExclusive-locked generatePreviewSourcesUnlocked
-// before the lock released. No wasm reads left here.
-const{vs,fs,introspected,transparent,geomprops,notices,maxLights}=__srcs;// Pre-warms the driver compile BEFORE the display renderer
-// is created; the old after-renderer placement measured
-// 0.8-2.5s WebGLRenderer init stalls from queue contention.
-prewarmDisplacementSources(__srcs,isMounted,label);const warmResult=await prewarmShaderCompile({vs,fs,isMounted,label});if(warmResult==='bailed'||!isMounted()){disposePartial();return null;}// --- three.js scene (WebGL2) ---
-// clientWidth can be 0 before layout; fall back so the
-// viewport isn't 0×0 (which renders nothing → black).
-const cw=canvas.clientWidth||canvas.parentElement&&canvas.parentElement.clientWidth||400;const ch=canvas.clientHeight||256;// Bail before allocating the WebGL context if this build
-// was superseded during shader generation above,
-// disposePartial() is still a safe no-op here.
-if(!isMounted()){disposePartial();return null;}const __rendererPerfStart=window.MTLX_PERF_LOG?performance.now():0;// WebGL2 acquisition, shadow-map flag, size/pixel-ratio and
-// the display transform (encoding/tone-mapping/exposure),
-// moved verbatim to MtlxRender.acquireRenderer (js/shared/
-// render-session.js): same context options, same order.
-enforceGlContextCap(canvas);const __acquired=MtlxRender.acquireRenderer({canvas,wantsStudio,maxPixelRatio,width:cw,height:ch,isSuspended:()=>suspendedByUs});renderer=__acquired.renderer;viewGl=__acquired.gl;onGlLost=__acquired.onGlLost;onGlRestored=__acquired.onGlRestored;// F3: one texture session per preview handle (maxSize/budget
-// stay Infinity, matching today's unbounded preview loads);
-// tiers/exact are the Scene's own knobs (P6 adoption).
-textureSession=createTextureSession({renderer,isAlive:()=>!stopped,anisotropy:getTextureAnisotropy()});unsubTextureAnisotropy=window.MtlxRenderSettings&&window.MtlxRenderSettings.subscribe?window.MtlxRenderSettings.subscribe(detail=>{if(detail&&detail.key==='textureAnisotropy'&&textureSession)textureSession.setAnisotropy(detail.value);}):null;// P4d stage 1: onGeometry/onStatus close over swapMeshGeometry/
-// syncHandleNotices/dispDispatchStatus/updateStudioFloor, all
-// defined further below; safe, since dispRunner is only used
-// (never called) before those consts run (same TDZ-safe
-// pattern this file already uses for `handle`).
-dispRunner=createDisplacementRunner({renderer,isAlive:()=>!stopped,budget:createTriangleBudget({perMesh:triangleBudget,total:Infinity,enabled:true}),textureSession,cacheKey:level=>baseGeomCacheKey(geomName,sceneMode,level),creaseByNormals:true,firstBuildTimeoutMs:4000,debounceMs:150,onGeometry:built=>swapMeshGeometry(built||originalGeometry),onStatus:()=>{syncHandleNotices();dispDispatchStatus();},getWorldMatrix:()=>mesh?mesh.matrixWorld:new THREE.Matrix4()});// Hoisted once renderer exists: gates u_peelLinear binding,
-// peel-layer/accum half-float storage, and finalMat's shader
-// choice, all from this one extension check (see allocPeel).
-const peelLinearOk=__acquired.peelLinearOk;if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] WebGLRenderer init: '+(performance.now()-__rendererPerfStart).toFixed(1)+'ms');}// This shell's OWN peel pipeline instance (see
-// createPeelPipeline above); renderFrame() below routes
-// every peeling frame through it.
-peelPipeline=createPeelPipeline(renderer,{getDisplayTransform});const scene=MtlxRender.createRenderScene();previewBackdrop=MtlxRender.createPreviewBackdrop({scene,getDisplayTransform});// Instantiates the scene-mode GLB (if any) BEFORE the
-// camera: full-scene mode needs the GLB's embedded camera
-// to build the shell camera. isMounted bail is a safe no-op.
-const sceneInst=sceneMode?await instantiateShaderballScene(sceneMode):null;if(!isMounted()){disposePartial();return null;}if(sceneMode&&!sceneInst){// GLB missing/corrupt, no GLTFLoader, or the asset
-// lacks a material_surface mesh, degrade to the
-// plain sphere fallback with a warning, not a crash.
-console.warn('shaderball scene unavailable, falling back to sphere:',geomName);}if(sceneInst){sceneGroup=sceneInst.group;sceneOwnedMaterials=sceneInst.ownedMaterials;// Env-rotation patch: every neutral glTF PBR material
-// EXCEPT the backplanes' MeshBasicMaterial clones
-// (no envMap). Same duck-typing check as setEnvExposure.
-sceneOwnedMaterials.forEach(m=>{// BISECT: the env-rotation chunk is the only hand-injected
-// shader in the scene, and it is the last suspect for the
-// black neutral materials under an enabled shadow map.
-if('envMapIntensity'in m&&!wantsStudio)MtlxSceneAssembly.patchNeutralMaterialEnvRotation(m,()=>envRotationRad);});}// fullScene: the full authored preset (shaderball.glb),
-// fixed camera, no fallback spin by default; docs/viewer
-// opt into orbit/zoom via sceneOrbit. 'simple' is NOT fullScene.
-const fullScene=!!(sceneInst&&sceneMode==='full');// Populated only in the fullScene-adoption branch below;
-// read again by syncSize on every resize. null in every
-// other mode (fixed-45-degree camera untouched).
-let fullSceneAuthoredFov=null;let fullSceneAuthoredAspect=null;// Authored GLB camera pose cached at adoption time,
-// the scene-orbit config block restores it (OrbitControls
-// re-aims at (0,0,0)), and resetCamera() returns to it.
-let sceneAuthoredPose=null;// flat2d: ortho frustum whose x extent tracks the canvas
-// aspect (fitQuadToAspect rewrites left/right plus the
-// quad's positions/UVs), so the quad stays edge-to-edge
-// while pattern scale stays square in pixels. Head-on at
-// (0,0,1): the default camera orientation already faces
-// -Z, so no lookAt, and u_viewPosition becomes (0,0,1).
-// Default camera + pose, moved to MtlxRender.createDefaultCamera
-// (js/shared/render-session.js); fullScene overrides this
-// wholesale immediately below (GLB camera adoption stays here).
-const camera=MtlxRender.createDefaultCamera({flat2d,width:cw,height:ch,cameraDistance});if(fullScene&&sceneInst.glbCamera){const adopted=adoptSceneCamera(camera,sceneInst,cw/ch);sceneAuthoredPose=adopted.authoredPose;fullSceneAuthoredFov=adopted.authoredFov;fullSceneAuthoredAspect=adopted.authoredAspect;}// wheelMode 'scroll': register the gate BEFORE OrbitControls
-// exists, so it runs first on the canvas and can starve its
-// wheel handler via stopImmediatePropagation. The `controls`
-// check inside skips flat2d/fixed-camera views (no rig, no zoom).
-wheelGate=MtlxRender.createWheelGate({canvas,wheelMode,getControls:()=>controls,fullscreenElement,onGated:()=>wheelHint.show()});// Orbit + zoom + auto-rotate: rotating the CAMERA (not
-// the mesh) lets orbit/zoom/pause compose naturally.
-// Full-scene mode is FIXED by default; opt in with sceneOrbit.
-// Setup moved to MtlxRender.createOrbitControls (same
-// damping/pan/zoom/auto-rotate defaults as before).
-controls=null;if(THREE.OrbitControls&&!flat2d&&(!fullScene||sceneOrbit)){controls=MtlxRender.createOrbitControls({camera,canvas,wheelMode,autoRotate,maxDistance:window.MtlxStudio.studioMaxOrbitDistance});// Feeds handle.isInteracting(): a drag, plus the damping tail after it.
-controls.addEventListener('start',()=>{orbitDragging=true;});controls.addEventListener('end',()=>{orbitDragging=false;orbitEndedAt=performance.now();});}// No-OrbitControls fallback spin must also stay off in
-// full-scene mode and for the fixed 2D buffer, no
-// controls instance exists to gate it, so force it here.
-if(fullScene||flat2d)fallbackSpin=false;// Fullscreen "fit to ball": keeps the ball's bounding
-// sphere inside the frame, only ever WIDENING the fov on
-// top of the everyday framing. fullScene-only; pure fov change.
-let fullscreenFit=false;// World-space bounding sphere of the whole ball assembly,
-// computed ONCE per scene and cached here, see
-// getBallBoundingSphere just below.
-let ballBoundingSphere=null;// Scene-orbit hard-containment box (sceneGroup bounds
-// inset 2%/axis, expanded so the default pose stays
-// legal); null in every other mode.
-let sceneOrbitClampBox=null;// Reference camera->ball distance for scene-orbit framing,
-// captured from the AUTHORED pose so recomputeCameraFov's
-// fit-to-ball fov stays constant while the user zooms.
-let sceneOrbitFitDist=null;// Radius of the framing target (the ball proper, see the
-// config block below), paired with sceneOrbitFitDist for the
-// scene-orbit fov fit. null in every other mode.
-let sceneOrbitFitRadius=null;// Finds (and caches) the ball assembly's world bounding
+// no controls/spin, no visible backdrop.
+const flat2d=geomName==='buffer2d';// Known before the renderer exists, so the session can configure the
+// shadow map up front (flipping it later blacked out scene.environment).
+const wantsStudio=!flat2d&&sceneMode!=='full';// Session objects, handed over by the lifecycle hooks below.
+let host=null,renderer=null,scene=null,camera=null,controls=null;let orbitDragging=false,orbitEndedAt=-Infinity;let stopped=false;// First-build sources from prepare(); build() applies them.
+let firstSrcs=null;// Reassigned by applyMaterialInternal() on every swap; `uniforms` MUST be
+// `let`: every closure below shares this binding.
+let mesh=null,material=null,geometry=null,uniforms=null;// Displacement: originalGeometry as built (kept until teardown),
+// baseGeometry subdivided-but-undisplaced, displacedGeometry on `mesh`.
+let originalGeometry=null,baseGeometry=null,displacedGeometry=null;let displacementSources=null;let materialNotices=[];let dispRunner=null;// Custom-geometry UDIM split: child meshes per tile beyond the lowest,
+// the original index, partitionTriangles() cached per (epoch, ref), and
+// the one notice covering crossing/missing/over-cap tiles.
+let udimParts=[],udimFullIndex=null,udimSplitActive=false;let udimBucketsKey=null,udimBuckets=null,udimFileMap=null;let udimNoticeText=null,udimTileCount=0;const PREVIEW_UDIM_MAX_TILES=64;// This view's refcounted texture session (F3); disposed before the renderer.
+let textureSession=null;let unsubTextureAnisotropy=null;// Scene-mode state: instantiated GLB root and its per-view material clones.
+let sceneInst=null,sceneGroup=null,sceneOwnedMaterials=[];let fullScene=false;// Raw srcs.transparent of the live material (peel verdict input).
+let viewIsTransparent=false;// Full-scene framing: authored fov/aspect/pose, fullscreen fit, cached
+// ball sphere, scene-orbit containment box and fit distance/radius.
+let fullSceneAuthoredFov=null,fullSceneAuthoredAspect=null,sceneAuthoredPose=null;let fullscreenFit=false,ballBoundingSphere=null,sceneOrbitClampBox=null;let sceneOrbitFitDist=null,sceneOrbitFitRadius=null;const rigCount=lightData&&lightData.length||0;const handleRef=()=>host?host.handle():null;// Finds (and caches) the ball assembly's world bounding
 // sphere: 'shader_ball' by name, falling back to
 // material_surface's parent, then sceneGroup (never throws).
 // Framing always measures the undisplaced mesh, so displacement
@@ -1208,97 +998,14 @@ camera.fov=fullSceneFov({authoredFov:fullSceneAuthoredFov,authoredAspect:fullSce
 // so re-fitting at any previous aspect is idempotent.
 const fitQuadToAspect=aspect=>{camera.left=-aspect;camera.right=aspect;camera.updateProjectionMatrix();if(!geometry)return;const pos=geometry.getAttribute('position');const uv=geometry.getAttribute('uv');if(!pos||!uv)return;for(let i=0;i<pos.count;i++){pos.setX(i,pos.getX(i)>0?aspect:-aspect);uv.setX(i,uv.getX(i)>0?aspect:0);}pos.needsUpdate=true;uv.needsUpdate=true;// Frustum culling reads the bounding sphere; keep it
 // in sync with the rewritten positions.
-geometry.computeBoundingSphere();};// Sizing (renderer.setSize, ResizeObserver, resize-suspend)
-// moved to MtlxRender.createSizer (js/shared/render-session.js).
-// `layout` is this shell's content-specific frame hook: peel
-// targets are sized to the drawing buffer (see createPeelPipeline's
-// allocPeel), just free them here so renderFrame() lazily
-// reallocates at the new size; flat2d refits the quad/UVs
-// (fitQuadToAspect owns the projection there), everything
-// else re-aims the perspective camera.
-sizer=MtlxRender.createSizer({canvas,renderer,fallbackWidth:cw,fallbackHeight:ch,layout:(w,h)=>{if(peelPipeline)peelPipeline.dispose();if(flat2d){fitQuadToAspect(w/h);return;}camera.aspect=w/h;// fullScene only: resize can flip which side of the
-// canvasAspect >= authoredAspect comparison we're on,
-// so this must be recomputed every resize, not once.
-recomputeCameraFov();camera.updateProjectionMatrix();},// hidden = display:none (getClientRects, NOT visibility/
-// IntersectionObserver, see P3-DESIGN.md section 5).
-onVisibility:hidden=>{if(sleepGate)sleepGate.notify({hidden});},// setSize() cleared the buffer after this frame's rAF work; render
-// now through the animate() path or one blank frame is composited.
-onResized:()=>{if(stopped||!renderPathReady||sleepGate&&sleepGate.isAsleep())return;setUniforms();renderFrame();}});// Sleep gate: awake = explicitActive (isActive()) && !hidden
-// && !contextLost. Sleep frees the peel targets and the
-// studio spot's shadow map, then parks the drawing buffer
-// (largest per-view GPU allocation); wake restores the
-// layout size and resumes the rAF loop with one synchronous
-// frame. window.__mtlxNoSleep (checked inside the gate)
-// keeps every view permanently awake.
-// explicitActive: the handle's OWN setActive(v), independent
-// of the per-frame isActive() callback above (Compare's
-// paint gate, unrelated -- see P3-DESIGN.md section 5's
-// "isActive() stays a per-frame render gate"). Defaults
-// true, so no caller opting out of setActive ever sleeps
-// for this reason.
-let explicitActive=true;let drawingBufferParked=false;sleepGate=MtlxRender.createSleepGate({onSleep:()=>{if(reqId){cancelAnimationFrame(reqId);reqId=null;}if(peelPipeline)peelPipeline.dispose();previewBackdrop.disposeShadowMap();renderer.setSize(1,1,false);drawingBufferParked=true;},onWake:()=>{drawingBufferParked=false;sizer.forceSync();if(!stopped&&aliveFn())animate();}});// Feeds the SAME gate, alongside the mtlx-gl-context dispatch
-// acquireRenderer already wired (kept unchanged for external
-// rebuild listeners, see S6's recovery hook).
-// Our own cap suspension must not sleep the loop: animate() is what resumes the context.
-onContextLostSleep=()=>{if(!suspendedByUs)sleepGate.notify({contextLost:true});};onContextRestoredWake=()=>sleepGate.notify({contextLost:false});canvas.addEventListener('webglcontextlost',onContextLostSleep);canvas.addEventListener('webglcontextrestored',onContextRestoredWake);// Image-based lighting for lit surfaces/BSDFs AND/OR
-// scene-mode's glTF meshes (always lit via PMREM, even
-// under an unlit material). Fetched ONCE at shell level.
-if(needsLighting||sceneInst){const env=envOverride||(await getEnvironment());currentEnvRef=env||null;if(!isMounted()){disposePartial();return null;}// Independent of envRadiance/etc. below: scene-mode's
-// PMREM further down needs A radiance source even
-// when this material is unlit and never touches u_env*.
-const radianceSrc=env?env.radiance:makeEnvTexture(256,128,false);if(needsLighting){if(env){const shaded=resolveShadingEnv(renderer,env);envRadiance=shaded.radiance;envIrradiance=shaded.irradiance;envMips=env.mips;envBgTexture=env.background;envHasFile=true;envPrefilteredIrr=!!env.prefilteredIrr;envKeyLight=env.keyLight||null;envSoftKeyDir=env.softKeyDir||null;}else{envRadiance=makeEnvTexture(256,128,false);envIrradiance=makeEnvTexture(64,32,true);envMips=Math.floor(Math.log2(256))+1;// Same convention gap as the HDR path: the
-// synthesized data is top-first too, so the
-// background needs its own flipY=true copy.
-envBgTexture=makeBackgroundTexture(envRadiance);envHasFile=false;}// Shell-owned skybox mesh (createPreviewBackdrop).
-// flat2d: never created, the quad occupies the whole
-// viewport and must have no backdrop. bgMesh stays
-// null, which setEnvBackground/setEnvironment already
-// guard, while the env textures above keep IBL lit.
-if(!flat2d)previewBackdrop.buildBgMesh(envBgTexture,envRotationRad);}if(sceneInst){// Scene-mode lighting: bakes radianceSrc into a
-// PMREM driving scene.environment. NEVER dispose
-// the PMREMGenerator, r128 shares state module-wide.
-// three's equirectUv puts +Y at v=1, opposite
-// MaterialX's v=0, so reading the same texture
-// v-mirrors scene reflections vs the surface (ok for now).
-pmremRT=MtlxRender.buildScenePmrem(renderer,radianceSrc,THREE);scene.environment=pmremRT.texture;}}// Procedural studio cyclorama + contact shadow, the third
-// backdrop mode alongside bgMesh above (light/dark share
-// this same build). Skipped for flat2d and full-scene (its own authored room).
-if(wantsStudio)previewBackdrop.buildStudio(backdropMode,envKeyLight,envSoftKeyDir,envRotationRad);// Single source of truth for the spotlight's placement
-// (called here and by setEnvRotation), so the shadow tracks
-// envKeyLight, or failing that envSoftKeyDir, like u_lightData does.
-const applyStudioPolarClamp=()=>previewBackdrop.applyStudioPolarClamp(controls,camera,backdropMode);// Single source of truth for the four backdrop modes,
-// applied once below for the initial `backdrop` option,
-// and again by the handle's setBackdrop()/setEnvBackground().
-const applyBackdrop=mode=>{backdropMode=normalizeBackdropMode(mode);previewBackdrop.applyBackdrop(backdropMode,controls,camera);};applyBackdrop(backdropMode);// Non-MaterialX materials (skybox + studio + GLB clones),
-// fixed for this shell's lifetime, so cached once.
-// setSceneLinear detones them for the merged linear-opaque
-// pass (sRGB needs no flag: the RT's own texture.encoding
-// gates that, r128-verified).
-const sceneBuiltinMaterials=previewBackdrop.builtinMaterials().concat(sceneOwnedMaterials);const setSceneLinear=on=>{sceneBuiltinMaterials.forEach(m=>{if(m.toneMapped===!on)return;m.toneMapped=!on;m.needsUpdate=true;});previewBackdrop.setStudioLinearOut(on);};// Sticky toggler (MtlxRender.createLinearToggle,
-// js/shared/render-session.js): flips setSceneLinear only on
-// a real transition, never every frame; shared by
-// syncMeshMaterialMode and renderFrame below, the two call
-// sites that used to hand-roll this compare-and-set.
-const linearToggle=MtlxRender.createLinearToggle(setSceneLinear);// Selected preview geometry. Scene mode pre-assigns the
-// shell's `mesh`/`geometry` to material_surface, so the
-// first applyMaterialInternal() reuses it, not a fresh Mesh.
-if(sceneInst){scene.add(sceneGroup);mesh=sceneInst.surfaceMesh;geometry=mesh.geometry;// Forces sceneGroup's matrixWorld current NOW: the
-// first animate() tick reads mesh.matrixWorld in
-// setUniforms() before renderer.render() would sync it.
-sceneGroup.updateMatrixWorld(true);}else{geometry=prepGeometry(await buildPreviewGeometry(geomName));// Initial screen-proportional fit for the 2D buffer,
-// don't rely on the ResizeObserver's first fire
-// ordering against the first rendered frame.
-if(flat2d)fitQuadToAspect((canvas.clientWidth||cw)/(canvas.clientHeight||ch));}if(!isMounted()){disposePartial();return null;}// Displacement (P5): kept alive (never disposed) until
-// teardown; every geometry below derives from it, never
-// from a previous displaced result.
-originalGeometry=geometry;// Silhouette-bottom floor placement, factored out so a
+geometry.computeBoundingSphere();};// Silhouette-bottom floor placement, factored out so a
 // later geometry swap can re-run it too.
-const updateStudioFloor=()=>previewBackdrop.updateStudioFloor(sceneGroup||mesh);// Current, complete set of displacement-derived notices
+const updateStudioFloor=()=>host.boundsChanged();// Current, complete set of displacement-derived notices
 // (subdivision cap/drop, plus the latest evaluation run's
 // own notices), for getDisplacementState() and the status
 // event; owned by dispRunner (P4d stage 1).
 const currentDispNotices=()=>dispRunner.getState().notices;// Rebuilt, never appended, so re-runs cannot stack stale copies.
-const syncHandleNotices=()=>{if(handle)handle.notices=materialNotices.concat(currentDispNotices(),udimNoticeText?[udimNoticeText]:[]);};const dispDispatchStatus=()=>{if(!handle)return;try{window.dispatchEvent(new CustomEvent('mtlx-displacement-status',{detail:{view:handle,state:dispRunner.getState().state,notices:currentDispNotices()}}));}catch(e){/* best-effort */}};// Sets `mesh.geometry`/`geometry` to `g`; a genuine
+const syncHandleNotices=()=>{const handle=handleRef();if(handle)handle.notices=materialNotices.concat(currentDispNotices(),udimNoticeText?[udimNoticeText]:[]);};const dispDispatchStatus=()=>{const handle=handleRef();if(!handle)return;try{window.dispatchEvent(new CustomEvent('mtlx-displacement-status',{detail:{view:handle,state:dispRunner.getState().state,notices:currentDispNotices()}}));}catch(e){/* best-effort */}};// Sets `mesh.geometry`/`geometry` to `g`; a genuine
 // displaced result is disposed on the NEXT swap, the base/
 // original is left alone. Safe pre-`mesh` too (first build).
 // dispRunner's onGeometry calls this with the built geometry
@@ -1311,14 +1018,7 @@ const swapMeshGeometry=g=>{const prevDisplaced=displacedGeometry;displacedGeomet
 const ensureBaseGeometry=()=>{const result=dispRunner.build(originalGeometry,getPreviewSubdivisionLevel());baseGeometry=dispRunner.getBaseGeometry();syncHandleNotices();return result;};// Evaluates the current displacementSources/baseGeometry
 // and lands the result; shared by settings toggles, a
 // material debounce and an arriving file map.
-const runDisplacement=async()=>{if(stopped||flat2d||!displacementSources||!baseGeometry)return;bindDisplacementGeomprops();await dispRunner.evaluate();};// First build: subdivide + evaluate before the first apply
-// so the first frame shows the final geometry; a filename-
-// driven or slow (>4s) program lands later instead
-// (dispRunner.runFirstBuild, the 4s race extracted verbatim).
-displacementSources=__srcs.displacement;dispRunner.setSource(displacementSources);if(!flat2d&&displacementSources&&getDisplacementEnabled()){ensureBaseGeometry();bindDisplacementGeomprops();geometry=baseGeometry;if(mesh)mesh.geometry=baseGeometry;// See hasDisplacementFileRef's header comment above;
-// runFirstBuild no-ops (waits for setFileMap) when the
-// program is filename-driven.
-await dispRunner.runFirstBuild();}// P4d stage 2: custom-geometry UDIM split. Removes any
+const runDisplacement=async()=>{if(stopped||flat2d||!displacementSources||!baseGeometry)return;bindDisplacementGeomprops();await dispRunner.evaluate();};// P4d stage 2: custom-geometry UDIM split. Removes any
 // previous split's child meshes and restores mesh.geometry's
 // full index; a no-op when there is nothing to tear down.
 const teardownUdimParts=()=>{if(udimParts.length){udimParts.forEach(p=>{try{mesh.remove(p);}catch(e){/* mesh mid-teardown */}try{p.geometry.dispose();}catch(e){/* shares base attrs, index-only */}try{p.material.dispose();}catch(e){/* already disposed/invalid */}});udimParts=[];}if(udimSplitActive&&mesh&&mesh.geometry){if(udimFullIndex)mesh.geometry.setIndex(udimFullIndex);udimSplitActive=false;}if(udimNoticeText){udimNoticeText=null;syncHandleNotices();}};// A fresh BufferGeometry sharing baseGeom's attribute
@@ -1339,19 +1039,20 @@ const applyUdimSplit=(introspected,fileMap)=>{if(stopped||flat2d||sceneMode||geo
 // missing tiles, tiles past the cap) renders through
 // `mesh`'s own default/lowest-tile texture: no cracks,
 // degraded to the default look with one notice.
-const defaultTriangles=buckets.get(lowestKey).triangles.slice();const crossingBucket=buckets.get('crossing');if(crossingBucket)defaultTriangles.push(...crossingBucket.triangles);let overflowCount=0,missingCount=0,placed=0;for(const key of numericKeys){if(key===lowestKey)continue;const bucket=buckets.get(key);if(placed>=PREVIEW_UDIM_MAX_TILES-1){defaultTriangles.push(...bucket.triangles);overflowCount+=bucket.triangles.length;continue;}const hit=tileByCode.get(Number(key));if(!hit){defaultTriangles.push(...bucket.triangles);missingCount+=bucket.triangles.length;continue;}const acquired=textureSession.acquire(hit,{samplerModes:udimRefs[0].samplerModes||null});const bindVariant=result=>{if(!result||!result.texture||stopped||!mesh)return;const variantUniforms=createUdimVariantUniforms(uniforms,{[uName]:result.texture},{shareSlots:true});const variantMaterial=material.clone();variantMaterial.uniforms=variantUniforms;const partMesh=new THREE.Mesh(buildUdimPartGeometry(baseGeom,bucket.triangles),variantMaterial);partMesh.castShadow=mesh.castShadow;partMesh.receiveShadow=mesh.receiveShadow;partMesh.frustumCulled=false;mesh.add(partMesh);udimParts.push(partMesh);};if(acquired&&typeof acquired.then==='function')acquired.then(bindVariant);else bindVariant(acquired);placed+=1;}mesh.geometry=buildUdimPartGeometry(baseGeom,defaultTriangles);geometry=mesh.geometry;udimSplitActive=true;udimTileCount=placed+1;const badTriangles=crossingCount+overflowCount+missingCount;udimNoticeText=badTriangles>0?'UDIM: '+badTriangles+' triangle(s) had a crossing or unresolved tile and use the default tile':null;syncHandleNotices();};if(fullScene&&sceneOrbit&&controls){const orbit=configureSceneOrbit({camera,controls,sceneGroup,mesh,authoredPose:sceneAuthoredPose,withFramingGeometry,sphere:getBallBoundingSphere()});sceneOrbitClampBox=orbit.clampBox;sceneOrbitFitRadius=orbit.fitRadius;sceneOrbitFitDist=orbit.fitDist;recomputeCameraFov();camera.updateProjectionMatrix();// Snapshot for resetCamera(): position0/target0 now
+const defaultTriangles=buckets.get(lowestKey).triangles.slice();const crossingBucket=buckets.get('crossing');if(crossingBucket)defaultTriangles.push(...crossingBucket.triangles);let overflowCount=0,missingCount=0,placed=0;for(const key of numericKeys){if(key===lowestKey)continue;const bucket=buckets.get(key);if(placed>=PREVIEW_UDIM_MAX_TILES-1){defaultTriangles.push(...bucket.triangles);overflowCount+=bucket.triangles.length;continue;}const hit=tileByCode.get(Number(key));if(!hit){defaultTriangles.push(...bucket.triangles);missingCount+=bucket.triangles.length;continue;}const acquired=textureSession.acquire(hit,{samplerModes:udimRefs[0].samplerModes||null});const bindVariant=result=>{if(!result||!result.texture||stopped||!mesh)return;const variantUniforms=createUdimVariantUniforms(uniforms,{[uName]:result.texture},{shareSlots:true});const variantMaterial=material.clone();variantMaterial.uniforms=variantUniforms;const partMesh=new THREE.Mesh(buildUdimPartGeometry(baseGeom,bucket.triangles),variantMaterial);partMesh.castShadow=mesh.castShadow;partMesh.receiveShadow=mesh.receiveShadow;partMesh.frustumCulled=false;mesh.add(partMesh);udimParts.push(partMesh);};if(acquired&&typeof acquired.then==='function')acquired.then(bindVariant);else bindVariant(acquired);placed+=1;}mesh.geometry=buildUdimPartGeometry(baseGeom,defaultTriangles);geometry=mesh.geometry;udimSplitActive=true;udimTileCount=placed+1;const badTriangles=crossingCount+overflowCount+missingCount;udimNoticeText=badTriangles>0?'UDIM: '+badTriangles+' triangle(s) had a crossing or unresolved tile and use the default tile':null;syncHandleNotices();};// Scene-orbit framing: pivot, distance limits, containment box and the
+// fit-to-ball fov, configured once the session has built the controls.
+const configureOrbit=()=>{if(fullScene&&sceneOrbit&&controls){const orbit=configureSceneOrbit({camera,controls,sceneGroup,mesh,authoredPose:sceneAuthoredPose,withFramingGeometry,sphere:getBallBoundingSphere()});sceneOrbitClampBox=orbit.clampBox;sceneOrbitFitRadius=orbit.fitRadius;sceneOrbitFitDist=orbit.fitDist;recomputeCameraFov();camera.updateProjectionMatrix();// Snapshot for resetCamera(): position0/target0 now
 // hold the authored pose + derived pivot, so
 // controls.reset() restores this exact framing.
-controls.saveState();}// Hoisted above the first material apply: applyMaterialInternal
+controls.saveState();}};// Hoisted above the first material apply: applyMaterialInternal
 // calls this after every swap, and animate() calls it every
 // frame. The guard is defensive only.
-const setUniforms=()=>{if(!mesh||!uniforms)return;updateTransformUniforms(uniforms,mesh,camera);if(uniforms.u_time)uniforms.u_time.value=MTLX_CLOCK.time;if(uniforms.u_frame)uniforms.u_frame.value=MTLX_CLOCK.frame;};// Shell env state in the shape createMtlxSceneUniforms
-// expects; no radiancePrefiltered/irradianceConvolved
-// fields, so envRadianceForShading returns it as-is.
-const shadingEnv=()=>({radiance:envRadiance,irradiance:envIrradiance,mips:envMips,keyLight:envKeyLight});// DEBUG_SHADERS logging the old bindMaterialUniforms fork
+const setUniforms=()=>{if(!mesh||!uniforms)return;updateTransformUniforms(uniforms,mesh,camera);if(uniforms.u_time)uniforms.u_time.value=MTLX_CLOCK.time;if(uniforms.u_frame)uniforms.u_frame.value=MTLX_CLOCK.frame;};// Session env state in the shape createMtlxSceneUniforms expects; no
+// radiancePrefiltered/irradianceConvolved fields, so it binds as-is.
+const shadingEnv=()=>{const e=host.env();return{radiance:e.radiance,irradiance:e.irradiance,mips:e.mips,keyLight:e.keyLight};};// DEBUG_SHADERS logging the old bindMaterialUniforms fork
 // used to print inline; kept as its own helper so
 // createMtlxSceneUniforms stays free of console noise.
-const logPreviewUniformDebug=(srcs,newUniforms)=>{if(!DEBUG_SHADERS)return;const introspected=srcs.introspected||[];console.log('introspected uniforms:',introspected.map(u=>`${u.type} ${u.name}${u.data!=null?' (default uploaded)':''}`));if(!introspected.length){console.warn('Shader introspection found NO uniform blocks, defaults not uploaded; expect black. (Binding API mismatch, report the mxShader/stage method names used by generatePreviewSourcesUnlocked.)');}const declared=srcs.declared||parseUniforms(srcs.fs||'').concat(parseUniforms(srcs.vs||''));console.group(`MaterialX preview: ${label}`);console.log('kind:',debugKind,'needsLighting:',needsLighting);console.log('declared uniforms:',declared.map(u=>`${u.type} ${u.name}`));console.log('VERTEX SHADER\n',srcs.vs);console.log('PIXEL SHADER\n',srcs.fs);console.groupEnd();if(needsLighting){const nLights=activeLightCount(lightData,envKeyLight,null,srcs.maxLights);console.log('env bound →',envHasFile?envPrefilteredIrr?'(radiance + prefiltered irradiance files)':'(radiance file; irradiance SH-synthesized)':'(synthesized)','| direct lights:',nLights,'(rig '+rigCount+' + key '+(envKeyLight?1:0)+')');const envUnbound=declared.filter(u=>/sampler/i.test(u.type)&&/env/i.test(u.name)&&!newUniforms[u.name]);if(envUnbound.length)mtlxWarn('UNBOUND env samplers (likely cause of black):',envUnbound.map(u=>u.name));}};// syncMeshMaterialMode, derives the mesh material's
+const logPreviewUniformDebug=(srcs,newUniforms)=>{if(!DEBUG_SHADERS)return;const introspected=srcs.introspected||[];console.log('introspected uniforms:',introspected.map(u=>`${u.type} ${u.name}${u.data!=null?' (default uploaded)':''}`));if(!introspected.length){console.warn('Shader introspection found NO uniform blocks, defaults not uploaded; expect black. (Binding API mismatch, report the mxShader/stage method names used by generatePreviewSourcesUnlocked.)');}const declared=srcs.declared||parseUniforms(srcs.fs||'').concat(parseUniforms(srcs.vs||''));console.group(`MaterialX preview: ${label}`);console.log('kind:',debugKind,'needsLighting:',needsLighting);console.log('declared uniforms:',declared.map(u=>`${u.type} ${u.name}`));console.log('VERTEX SHADER\n',srcs.vs);console.log('PIXEL SHADER\n',srcs.fs);console.groupEnd();if(needsLighting){const{keyLight:envKeyLight,hasFile:envHasFile,prefilteredIrr:envPrefilteredIrr}=host.env();const nLights=activeLightCount(lightData,envKeyLight,null,srcs.maxLights);console.log('env bound →',envHasFile?envPrefilteredIrr?'(radiance + prefiltered irradiance files)':'(radiance file; irradiance SH-synthesized)':'(synthesized)','| direct lights:',nLights,'(rig '+rigCount+' + key '+(envKeyLight?1:0)+')');const envUnbound=declared.filter(u=>/sampler/i.test(u.type)&&/env/i.test(u.name)&&!newUniforms[u.name]);if(envUnbound.length)mtlxWarn('UNBOUND env samplers (likely cause of black):',envUnbound.map(u=>u.name));}};// syncMeshMaterialMode, derives the mesh material's
 // blend/depth flags from viewIsTransparent/
 // FORCE_TRANSPARENCY, in place (no shader rebuild, the
 // peel discard block is baked into every shader
@@ -1367,14 +1068,14 @@ const logPreviewUniformDebug=(srcs,newUniforms)=>{if(!DEBUG_SHADERS)return;const
 // duration of its peel loop.
 const syncMeshMaterialMode=()=>{if(!material)return;const peelOn=viewIsTransparent&&FORCE_TRANSPARENCY;// Idempotent transition (renderFrame's own check below is
 // the other call site), flips scene built-ins' toneMapped.
-const wantLinear=peelOn&&peelLinearOk;linearToggle.sync(wantLinear);applyPeelMaterialMode(material,peelOn);};// ------------------------------------------------------
+host.syncLinear(peelOn);applyPeelMaterialMode(material,peelOn);};// ------------------------------------------------------
 // applyMaterialInternal: builds a new RawShaderMaterial
 // from `srcs` and swaps it onto the shell's mesh IN PLACE
 // (no renderer/scene/camera recreation). On a compile
 // error, restores the OLD material/uniforms and disposes
 // the bad one BEFORE throwing, see the badProg branch below.
 // ------------------------------------------------------
-const applyMaterialInternal=(srcs,applyLabel)=>{if(geometry&&srcs.geomprops&&srcs.geomprops.length){bindGeompropAttributes(geometry,srcs.geomprops,text=>{if(!srcs.notices)srcs.notices=[];if(!srcs.notices.includes(text))srcs.notices.push(text);});}const newUniforms=createMtlxSceneUniforms({compiled:srcs,env:needsLighting?shadingEnv():null,lightData:needsLighting?lightData:null,envRotationRad,envExposure});logPreviewUniformDebug(srcs,newUniforms);// Transparency verdict is srcs.transparent, gated on
+const applyMaterialInternal=(srcs,applyLabel)=>{if(geometry&&srcs.geomprops&&srcs.geomprops.length){bindGeompropAttributes(geometry,srcs.geomprops,text=>{if(!srcs.notices)srcs.notices=[];if(!srcs.notices.includes(text))srcs.notices.push(text);});}const{rotation:envRotationRad,exposure:envExposure}=host.env();const newUniforms=createMtlxSceneUniforms({compiled:srcs,env:needsLighting?shadingEnv():null,lightData:needsLighting?lightData:null,envRotationRad,envExposure});logPreviewUniformDebug(srcs,newUniforms);// Transparency verdict is srcs.transparent, gated on
 // FORCE_TRANSPARENCY. When on, translucency is produced
 // by renderFrame()'s depth-peel passes (syncMeshMaterialMode,
 // above), not three.js blend state, STRAIGHT alpha
@@ -1398,11 +1099,9 @@ mesh=new THREE.Mesh(geometry,material);scene.add(mesh);}else{mesh.material=mater
 setUniforms();// [mtlx-perf] timing for renderer.compile() alone.
 // With the pre-warm completed beforehand, this is
 // typically an ANGLE cache hit (~15-25ms) vs. 2.5-2.9s cold.
-const __compilePerfStart=window.MTLX_PERF_LOG?performance.now():0;compileFilteringDriverNoise(renderer,scene,camera);if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] GL compile: '+(performance.now()-__compilePerfStart).toFixed(1)+'ms (target: '+applyLabel+')');}// Detection moved to MtlxRender.findBadProgram
-// (js/shared/render-session.js); the rollback below
-// (restore old material, dispose the bad one, throw)
-// stays content-side.
-const badProg=MtlxRender.findBadProgram(renderer);if(badProg){// LOAD-BEARING ORDER: restore OLD material/uniforms
+const __compilePerfStart=window.MTLX_PERF_LOG?performance.now():0;// host.compile(): driver-noise filtered compile plus the
+// bad-program detection; the rollback below stays here.
+const badProg=host.compile();if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] GL compile: '+(performance.now()-__compilePerfStart).toFixed(1)+'ms (target: '+applyLabel+')');}if(badProg){// LOAD-BEARING ORDER: restore OLD material/uniforms
 // FIRST, then dispose the BAD one, reordering this
 // leaves the bad program in renderer.info.programs forever.
 mesh.material=oldMaterial;material=oldMaterial;uniforms=oldUniforms;newMaterial.dispose();const d=badProg.diagnostics;const log=(d.programLog||'')+'\n'+(d.fragmentShader&&d.fragmentShader.log?'FRAG: '+d.fragmentShader.log:'')+(d.vertexShader&&d.vertexShader.log?' VERT: '+d.vertexShader.log:'');console.error('MaterialX shader compile error:',log);throw new Error(`Shader compile error for "${applyLabel}". See console. ${log.slice(0,160)}`);}// Success: the swap stuck; the OLD material/program
@@ -1417,183 +1116,47 @@ if(oldMaterial)oldMaterial.dispose();// Land the new material in the correct ren
 // Transparency setting take effect immediately
 // without waiting for a toggle event from the
 // Settings dialog.
-syncMeshMaterialMode();};// First build: routes through the exact same helper every
-// later applyMaterial() call uses, throwing the same styled
-// Error on failure, identical to today's first-build path.
-applyMaterialInternal({vs,fs,introspected,transparent,geomprops,notices,maxLights},label);// Contact-shadow casters, only when a studioGroup exists
-// to receive them. Full-scene mode has no catcher, so
-// `mesh`/sceneGroup meshes there are left untouched.
-if(previewBackdrop.hasStudio()){// The whole model casts the contact shadow now: the
-// MaterialX surface plus, in scene mode, the neutral
-// glTF parts (same envMapIntensity duck-type as the env-rotation patch above).
-if(mesh)mesh.castShadow=true;if(sceneGroup){sceneGroup.traverse(obj=>{if(!obj.isMesh||!obj.material)return;const mats=Array.isArray(obj.material)?obj.material:[obj.material];if(mats.some(m=>'envMapIntensity'in m))obj.castShadow=true;});}// Factored out above as updateStudioFloor so a later
-// displacement swap can recompute it too.
-updateStudioFloor();}// renderFrame, the ONE render entry point for this view,
-// called by animate() below and by the handle's snapshot().
-// Byte-identical to the pre-feature `renderer.render(scene,
-// camera)` whenever depth peeling isn't active for this
-// frame; routes to peelPipeline.render([mesh]) otherwise
-// (see createPeelPipeline above for the 6-pass graph).
-const renderFrame=()=>{lastRenderAt=performance.now();const peelActive=FORCE_TRANSPARENCY&&viewIsTransparent&&!!mesh;// Idempotent transition (syncMeshMaterialMode is the
-// other call site), flips scene built-ins' toneMapped.
-const wantLinear=peelActive&&peelLinearOk;linearToggle.sync(wantLinear);if(!peelActive){renderer.render(scene,camera);return;}// byte-identical to the old path
-peelPipeline.render(scene,camera,[mesh]);};// From here on syncSize's resize-triggered render is safe
-// to call (setUniforms/renderFrame both exist above).
-renderPathReady=true;const animate=ts=>{if(stopped||!aliveFn())return;reqId=requestAnimationFrame(animate);// Idempotent per rAF timestamp: every view ticking this
-// frame reads the same MTLX_CLOCK value. Runs before
-// controls.update() (syncs a peer) and the paused return.
-clockTick(ts);if(controls){// Before update(): OrbitControls clamps phi in there,
-// so a zoom-out this frame is corrected in the same one.
-applyStudioPolarClamp();// damping + autoRotate, then scene-orbit hard
-// containment (null elsewhere); moved to
-// MtlxRender.updateControls (render-session.js).
-MtlxRender.updateControls({controls,camera,clampBox:sceneOrbitClampBox});}// Paused views must still track camera input (drag/damping);
-// compare's diff mode reads pixels on demand, not via this render.
-// Suspended by the context cap: restore once wanted again, never render meanwhile.
-if(suspendedByUs){if(isActive()||holdContext())resumeGl();return;}if(!isActive())return;if(!controls&&fallbackSpin){// OrbitControls script blocked → old behavior.
-// Spins the WHOLE assembled scene when present,
-// rotating just `mesh` would leave the backdrop static.
-(sceneGroup||mesh).rotation.y+=0.005;}setUniforms();renderFrame();};animate();if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] createMtlxRenderView total: '+(performance.now()-__totalPerfStart).toFixed(1)+'ms (target: '+label+')');}// snapshot/snapshotPixels/renderNow/beginCapture/captureFrame/
-// endCapture, moved to MtlxRender.createCaptureController
-// (js/shared/render-session.js); handle methods below delegate.
-captureController=MtlxRender.createCaptureController({renderer,canvas,sizer,renderFrame,setUniforms,ensureAwake:()=>{if(sleepGate.isAsleep())sleepGate.notify({explicitActive:true,hidden:false,contextLost:false});}});// Handle's camera methods, moved to
-// MtlxRender.createCameraHandleMethods (js/shared/render-session.js).
-const cameraHandle=MtlxRender.createCameraHandleMethods({camera,controls,fullScene,flat2d,cameraDistance,setFallbackSpin:v=>{fallbackSpin=v;}});// Session (renderer-core/camera/capture) and content (material,
-// displacement, env-bound uniforms) descriptions, composed into the
-// plain handle object by MtlxRender.buildHandle (js/shared/
-// render-session.js). P3-DESIGN.md section 4 S5: the boundary here
-// is the lighter-touch split (handle construction only), not a full
-// createPreviewContent/createRenderSession rewrite of this function.
-const session={fields:{renderer,controls},// Sleep model (P3-DESIGN.md section 5): explicit long-term
-// activity, independent of the per-frame isActive() callback.
-setActive:v=>{explicitActive=!!v;sleepGate.notify({explicitActive});},getSleepState:()=>({asleep:sleepGate.isAsleep(),reason:sleepGate.getReason(),resident:{peel:!!(peelPipeline&&peelPipeline.debug&&peelPipeline.debug().opaque),studioShadow:previewBackdrop.hasShadowMap(),drawingBuffer:!drawingBufferParked}}),// Live auto-orbit toggle (no regen needed). No-op in
-// full-scene mode by contract: every caller hides the rotate
-// button there, and fallbackSpin would rotate the authored scene.
-// Same contract for flat2d: no controls, and fallbackSpin
-// would spin the fullscreen quad.
-setAutoRotate:cameraHandle.setAutoRotate,// Resets the camera to this view's default. With OrbitControls,
-// saveState/reset does it uniformly. The graph's fixed-camera
-// full scene and the fixed-ortho 2D buffer have controls ===
-// null, nothing to do there.
-resetCamera:cameraHandle.resetCamera,// True while OrbitControls is dragged and for 600 ms after (damping).
-// False without controls and for autorotate.
-isInteracting:()=>!!controls&&(orbitDragging||performance.now()-orbitEndedAt<600),// Current camera pose for URL/state persistence. null when
-// there is no OrbitControls rig (flat2d, fixed full-scene).
-// Rounded to 4 decimals, plenty of precision for a short URL.
-getCamera:cameraHandle.getCamera,// Applies a saved pose from getCamera(); invalid input is
-// silently ignored. makeDefault also rebases resetCamera()'s
-// saveState() snapshot onto this pose (default: off).
-setCamera:cameraHandle.setCamera,// Pane drags: suspend buffer reallocation so the existing
-// frame just scales, then resync once on release.
-setResizeSuspended:on=>sizer.setResizeSuspended(on),// PNG snapshot of the CURRENT view. The drawing buffer isn't
-// preserved between frames (preserveDrawingBuffer:false), so
-// render synchronously right before reading it back.
-snapshot:()=>captureController.snapshot(),// Reads back the current view at caller-chosen dimensions:
-// syncs a render first, then resamples through a 2D canvas
-// so two compare views can be read at identical sizes.
-snapshotPixels:(w,h)=>captureController.snapshotPixels(w,h),// Cheap same-frame render (no readback), used by camera sync
-// to remove one-frame lag between two mirrored views. Optional
-// ts: pass the driving rAF timestamp so several views read one tick.
-renderNow:ts=>captureController.renderNow(ts),// Fixed-resolution capture mode for the turntable recorder:
-// syncSize's buffer pinned to width x height, canvas hidden.
-// Returns false if the view is gone or already capturing.
-beginCapture:opts=>stopped?false:captureController.beginCapture(opts),// Renders one frame at the capture resolution and reads it
-// back as ImageData, same cached-canvas path as snapshotPixels.
-captureFrame:()=>captureController.captureFrame(),// Leaves capture mode: restores on-screen visibility, pixel
-// ratio and layout-driven sizing. Idempotent, safe to call twice.
-endCapture:()=>captureController.endCapture(),// Wrapped (not disposePartial directly) so dispose() also
-// deregisters the handle from LIVE_VIEWS, otherwise
-// setEnvOverride's broadcast could touch a torn-down view.
-dispose:()=>{LIVE_VIEWS.delete(handle);if(unsubDiffuseEnv)unsubDiffuseEnv();disposePartial();},// Debug hook: raw GPU state for a headed diagnosis harness.
-__debug:()=>({renderer,scene,camera})};const content={fields:{uniforms,introspected,vs,fs,allowConstInputs,isTransparent:!!transparent,// Displacement (P5): the first-build subdivide/evaluate run
-// above happened before `handle` existed, so any notice it
-// produced couldn't append here yet, fold it in now.
-notices:(materialNotices=notices||[]).concat(currentDispNotices()),// F3: bindDroppedTextures reads this straight off the view
-// it's handed (this same handle) to route through the session.
-textureSession},// Background switch: 'studio'/'studio-dark' cyclorama /
-// 'environment' skybox / 'none', see applyBackdrop above.
-// Live, no view rebuild; setup already ran this once for the `backdrop` option.
-setBackdrop:mode=>applyBackdrop(mode),getBackdrop:()=>backdropMode,// Thin aliases kept for existing callers, on/off maps onto
-// the same two-mode slice of setBackdrop/getBackdrop.
-setEnvBackground:on=>applyBackdrop(on?'environment':'none'),// Capability, NOT current mode: whether this view has an env
-// texture to show at all. node-preview/graph preview call it
-// once at setup to gate the env control. getBackdrop() is state.
-hasEnvBackground:()=>!!envBgTexture,// Live rotation offset (radians) for the IBL environment,
-// takes effect next frame via uniform mutation, no rebuild.
-// Also fans out to sceneGroup's patched uEnvRotation uniforms.
-setEnvRotation:rad=>{if(uniforms.u_envMatrix){uniforms.u_envMatrix.value=new THREE.Matrix4().makeRotationY(Math.PI/2+rad);}envRotationRad=rad;// The extracted key light tracks the (clamped) sun's
-// position as the env rotates, rig lights don't.
-updateKeyLightUniformEntry(uniforms,rigCount,envKeyLight,rad,envExposure);// Studio spotlight follows the SAME rotated direction, so
-// the shadow agrees with the highlight (shadow.autoUpdate
-// defaults to true, so the shadow map redraws on its own),
-// and rotates the visible backdrop mesh to match.
-previewBackdrop.setEnvRotationBackdrop(rad,envKeyLight,envSoftKeyDir);// Scene-mode neutral parts: mirrors the SAME offset onto
-// every patched material's live uEnvRotation uniform, a
-// call before first compile is a safe no-op, seeded fresh.
-sceneOwnedMaterials.forEach(m=>{const u=m.userData.envRotationUniform;if(u)u.value=envRotationMatrix3(rad);});},// IBL-only exposure multiplier, direct lights are
-// unaffected, but IBL is the dominant light source in these
-// previews so this reads as a full exposure control.
-setEnvExposure:x=>{if(uniforms.u_envLightIntensity)uniforms.u_envLightIntensity.value=x;// Persist onto the shell too: applyMaterialInternal seeds a
-// NEW material's u_envLightIntensity from envExposure, so a
-// future swap keeps the user's setting, not resetting to 1.0.
-envExposure=x;// Key light is energy split OUT of the env map (D5): its
-// bound intensity must track exposure the same way the IBL
-// uniform above just did, in place, no rebuild.
-updateKeyLightUniformEntry(uniforms,rigCount,envKeyLight,envRotationRad,x);// Scene-mode's sceneGroup meshes are ordinary glTF PBR
-// materials lit via scene.environment/PMREM, their
-// envMapIntensity is the equivalent knob. Skip `mesh`.
-if(sceneGroup){sceneGroup.traverse(obj=>{if(obj.isMesh&&obj!==mesh&&obj.material&&'envMapIntensity'in obj.material){obj.material.envMapIntensity=x;}});}},// Re-derives the material's blend/depth flags from the stored
-// hwTransparency verdict + CURRENT FORCE_TRANSPARENCY, in
-// place, no shader change (syncMeshMaterialMode), so a
-// toggle never needs a rebuild. Broadcast to all live views
-// by setForceTransparency. Also frees this view's depth-peel
-// GPU resources the moment peeling is no longer active,
-// renderFrame() lazily reallocates them (allocPeel) next
-// time they're needed.
-refreshRenderMode:()=>{syncMeshMaterialMode();const peelOn=viewIsTransparent&&FORCE_TRANSPARENCY;if(!peelOn&&peelPipeline)peelPipeline.dispose();},// Camera exposure is a uniform (see ACES_SRGB_GLSL), so this costs
-// one write instead of the full regeneration a transform change
-// needs. Broadcast by setDisplayExposure through LIVE_VIEWS, which
-// is what keeps the docs node previews in sync too.
-refreshDisplaySettings:()=>{const scale=displayExposureScale();const mode=getDisplayTransform();const id=displayTransformId(mode);const push=u=>{if(!u)return;if(u.u_displayExposure)u.u_displayExposure.value=scale;if(u.u_displayTransform)u.u_displayTransform.value=id;};push(uniforms);sceneOwnedMaterials.forEach(m=>push(m.uniforms));if('toneMappingExposure'in renderer)renderer.toneMappingExposure=scale;applyThreeToneMappingChunk(mode);// The studio backdrop's inverseAcesSrgb is baked into its
-// fragment shader at build time, not driven by a uniform, so
-// a transform switch leaves it stale until rebuilt here.
-previewBackdrop.refreshStudioShader(mode);scene.traverse(obj=>{if(obj.material&&obj.material.toneMapped)obj.material.needsUpdate=true;});renderFrame();},// Live-swaps the environment without a shader rebuild, used
-// by the Environment dialog's Import/Reset. Also regenerates
-// scene-mode's PMREM. No-op on views with no lighting/env.
-setEnvironment:(env,opts)=>{if(!env)return;if(opts&&opts.user!==undefined)envOwner=opts.user;currentEnvRef=env;const shaded=resolveShadingEnv(renderer,env);// material's shader source is the same srcs.vs/fs
-// createMtlxSceneUniforms parsed at bind time (D7's
-// declared fallback).
-const declared=material?parseUniforms(material.fragmentShader).concat(parseUniforms(material.vertexShader)):[];bindEnvironmentSamplers(uniforms,declared,env);if(uniforms.u_envRadianceMips)uniforms.u_envRadianceMips.value=env.mips;// Persist onto the SHELL env state too, not just the
-// current material's uniforms, otherwise a future swap
-// silently reverts to the stale env.
-envRadiance=shaded.radiance;envIrradiance=shaded.irradiance;envMips=env.mips;envBgTexture=env.background;// New env => possibly a new (or no) key light; refresh the
-// bound uniform entry in place, honoring current rotation.
-envKeyLight=env.keyLight||null;envSoftKeyDir=env.softKeyDir||null;updateKeyLightUniformEntry(uniforms,rigCount,envKeyLight,envRotationRad,envExposure);// Same refresh for the shadow: without this the studio light
-// would keep aiming along the PREVIOUS env's key light until
-// the next rotation change. bgMesh is null for previews with
-// no env, guarded inside backdrop so an Import/Reset
-// broadcast (setEnvOverride's LIVE_VIEWS loop) can't throw
-// calling this standalone.
-previewBackdrop.setEnvironmentBackdrop(envBgTexture,envKeyLight,envSoftKeyDir,envRotationRad);// Scene-mode PMREM regen: a PMREM render target is baked
-// from a source texture at generation time, no live-swap
-// API, so rebuild from scratch. try/catch is a pure backstop.
-if(sceneGroup){try{const oldPmremRT=pmremRT;// Fresh PMREMGenerator, never disposed, disposing
-// one would break every other PMREMGenerator
-// (r128 shares LOD-plane state module-wide).
-pmremRT=MtlxRender.buildScenePmrem(renderer,env.radiance,THREE);scene.environment=pmremRT.texture;// The OLD render target IS this view's own,
-// ordinary GPU resource, safe to dispose once
-// superseded (unlike the generator that made it).
-if(oldPmremRT)oldPmremRT.dispose();}catch(e){console.warn('environment PMREM regeneration failed:',e);}}},// Fetches and applies an environment from a URL (decoder
-// chosen by extension, same pipeline as HDR import). Falsy
-// url restores the default; latest call always wins.
-setEnvMap:url=>{const callId=envMapGate.begin();// Applies env to this view via setEnvironment() (rotation/
-// exposure/background all persist there already), then
-// frees whatever WE previously fetched, if superseded.
-const swapIn=(env,owned)=>{if(!envMapGate.isLatest(callId))return;// a newer call already won
-handle.setEnvironment(env);envMapGate.swap(env,owned);};if(!url){if(!envMapGate.hasFetched())return Promise.resolve(true);// already default
-return getEnvironment().then(def=>{if(def)swapIn(def,false);return true;});}const clean=String(url).split('?')[0].split('#')[0];const ext=clean.slice(clean.lastIndexOf('.')).toLowerCase();if(ext!=='.hdr'&&ext!=='.exr'){return Promise.reject(new Error('Unsupported environment URL "'+url+'". Expected .hdr or .exr.'));}if(ext==='.hdr'&&typeof THREE.RGBELoader==='undefined'){return Promise.reject(new Error('RGBELoader unavailable (script blocked/offline). Cannot load .hdr environments.'));}if(ext==='.exr'&&typeof THREE.EXRLoader==='undefined'){return Promise.reject(new Error('EXRLoader unavailable (script blocked/offline). Cannot load .exr environments.'));}return fetch(url).then(r=>{if(!r.ok)throw new Error('Failed to fetch environment "'+url+'" (HTTP '+r.status+').');return r.arrayBuffer();}).then(buf=>{const raw=parseEnvBuffer(buf,ext);if(!raw||!raw.image||!raw.image.data){throw new Error('Failed to parse the environment image "'+url+'".');}swapIn(buildEnvFromParsedTexture(raw),true);return true;});},// Called by the P3 setters through LIVE_VIEWS on every live
+syncMeshMaterialMode();};const content={// studio is read before the renderer exists; the rest after instantiate().
+capabilities:()=>({lit:!!needsLighting,threeD:!flat2d,studio:wantsStudio,sceneEnvironment:!!sceneInst,autoRotate:!fullScene&&!flat2d,camera:flat2d?'ortho':fullScene&&!sceneOrbit?'fixed':'orbit',// Settings surface the session reads its preview Quality effects from.
+surface:renderSurface}),// Codegen, then the driver pre-warm BEFORE the display renderer
+// exists (the old after-renderer placement stalled WebGLRenderer init).
+prepare:async h=>{host=h;const srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,materialName,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:previewFeatureOptions(renderSurface),allowConstInputs,transmission:getPreviewTransmission(renderSurface)});if(!srcs)return false;firstSrcs=srcs;prewarmDisplacementSources(srcs,isMounted,label);const warmResult=await prewarmShaderCompile({vs:srcs.vs,fs:srcs.fs,isMounted,label});if(warmResult==='bailed'||!isMounted())return false;return true;},attach:h=>{renderer=h.renderer;// F3: one texture session per preview handle (unbounded, like
+// today's preview loads); tiers/exact are the Scene's knobs.
+textureSession=createTextureSession({renderer,isAlive:()=>!stopped,anisotropy:getTextureAnisotropy()});unsubTextureAnisotropy=window.MtlxRenderSettings&&window.MtlxRenderSettings.subscribe?window.MtlxRenderSettings.subscribe(detail=>{// Stage-profile writes belong to the Scene's own sessions.
+if(detail&&detail.key==='textureAnisotropy'&&detail.profile!=='stage'&&textureSession)textureSession.setAnisotropy(detail.value);}):null;dispRunner=createDisplacementRunner({renderer,isAlive:()=>!stopped,budget:createTriangleBudget({perMesh:triangleBudget,total:Infinity,enabled:true}),textureSession,cacheKey:level=>baseGeomCacheKey(geomName,sceneMode,level),creaseByNormals:true,firstBuildTimeoutMs:4000,debounceMs:150,onGeometry:built=>swapMeshGeometry(built||originalGeometry),onStatus:()=>{syncHandleNotices();dispDispatchStatus();},getWorldMatrix:()=>mesh?mesh.matrixWorld:new THREE.Matrix4()});},// Instantiates the scene-mode GLB BEFORE the camera: full-scene mode
+// builds the camera from the GLB's embedded one.
+instantiate:h=>{scene=h.scene;const finish=inst=>{sceneInst=inst;if(!isMounted())return false;if(sceneMode&&!sceneInst){// Missing/corrupt GLB: plain sphere fallback with a warning.
+console.warn('shaderball scene unavailable, falling back to sphere:',geomName);}if(sceneInst){sceneGroup=sceneInst.group;sceneOwnedMaterials=sceneInst.ownedMaterials;// Env-rotation patch on every neutral glTF PBR material
+// except the backplanes' MeshBasicMaterial clones (no envMap).
+sceneOwnedMaterials.forEach(m=>{if('envMapIntensity'in m&&!wantsStudio)MtlxSceneAssembly.patchNeutralMaterialEnvRotation(m,()=>host.env().rotation);});}fullScene=!!(sceneInst&&sceneMode==='full');return true;};if(!sceneMode)return finish(null);return instantiateShaderballScene(sceneMode).then(finish);},adoptCamera:(cam,{width:cw,height:ch})=>{camera=cam;if(fullScene&&sceneInst.glbCamera){const adopted=adoptSceneCamera(camera,sceneInst,cw/ch);sceneAuthoredPose=adopted.authoredPose;fullSceneAuthoredFov=adopted.authoredFov;fullSceneAuthoredAspect=adopted.authoredAspect;}},// flat2d refits the quad (fitQuadToAspect owns its projection);
+// everything else re-aims the perspective camera.
+layout:(w,h)=>{if(flat2d){fitQuadToAspect(w/h);return;}camera.aspect=w/h;// fullScene: a resize can flip the authored-aspect comparison.
+recomputeCameraFov();camera.updateProjectionMatrix();},clampBox:()=>sceneOrbitClampBox,build:async h=>{controls=h.controls;// Feeds isInteracting(): a drag, plus the damping tail after it.
+if(controls){controls.addEventListener('start',()=>{orbitDragging=true;});controls.addEventListener('end',()=>{orbitDragging=false;orbitEndedAt=performance.now();});}// Scene mode pre-assigns `mesh`/`geometry` to material_surface, so
+// the first applyMaterialInternal() reuses it, not a fresh Mesh.
+if(sceneInst){scene.add(sceneGroup);mesh=sceneInst.surfaceMesh;geometry=mesh.geometry;// The first frame reads mesh.matrixWorld before render() syncs it.
+sceneGroup.updateMatrixWorld(true);}else{geometry=prepGeometry(await buildPreviewGeometry(geomName));// Initial 2D fit; don't rely on the ResizeObserver's first fire.
+if(flat2d)fitQuadToAspect((canvas.clientWidth||h.width)/(canvas.clientHeight||h.height));}if(!isMounted())return false;// Kept until teardown; every displaced geometry derives from it.
+originalGeometry=geometry;// First build: subdivide + evaluate before the first apply so the
+// first frame shows the final geometry; filename-driven or slow
+// (>4s) programs land later (dispRunner.runFirstBuild).
+displacementSources=firstSrcs.displacement;dispRunner.setSource(displacementSources);if(!flat2d&&displacementSources&&getDisplacementEnabled()){ensureBaseGeometry();bindDisplacementGeomprops();geometry=baseGeometry;if(mesh)mesh.geometry=baseGeometry;await dispRunner.runFirstBuild();}configureOrbit();// Same helper every later applyMaterial() uses, same styled Error.
+// payloadSupported seeds the RGB-T selectors (false below preview Quality).
+const{vs,fs,introspected,transparent,geomprops,notices,maxLights,payloadSupported}=firstSrcs;applyMaterialInternal({vs,fs,introspected,transparent,geomprops,notices,maxLights,payloadSupported},label);return true;},// Spin target and floor bounds: the whole assembled scene when present.
+root:()=>sceneGroup||mesh,// The MaterialX surface plus, in scene mode, the neutral glTF parts.
+casters:()=>{const list=[];if(mesh)list.push(mesh);if(sceneGroup){sceneGroup.traverse(obj=>{if(!obj.isMesh||!obj.material)return;const mats=Array.isArray(obj.material)?obj.material:[obj.material];if(mats.some(m=>'envMapIntensity'in m))list.push(obj);});}return list;},builtinMaterials:()=>sceneOwnedMaterials,transparentMeshes:()=>viewIsTransparent&&mesh?[mesh]:[],beforeRender:()=>setUniforms(),// The session owns the env values; this rebinds what the material
+// and the neutral glTF parts read from them, in place.
+envChanged:(what,env)=>{const e=host.env();if(what==='rotation'){if(uniforms.u_envMatrix){uniforms.u_envMatrix.value=new THREE.Matrix4().makeRotationY(Math.PI/2+e.rotation);}// The extracted key light tracks the (clamped) sun; rig lights don't.
+updateKeyLightUniformEntry(uniforms,rigCount,e.keyLight,e.rotation,e.exposure);sceneOwnedMaterials.forEach(m=>{const u=m.userData.envRotationUniform;if(u)u.value=envRotationMatrix3(e.rotation);});}else if(what==='exposure'){// IBL-only multiplier; the key light is energy split out of the
+// env map (D5), so its bound intensity tracks it too.
+if(uniforms.u_envLightIntensity)uniforms.u_envLightIntensity.value=e.exposure;updateKeyLightUniformEntry(uniforms,rigCount,e.keyLight,e.rotation,e.exposure);if(sceneGroup){sceneGroup.traverse(obj=>{if(obj.isMesh&&obj!==mesh&&obj.material&&'envMapIntensity'in obj.material){obj.material.envMapIntensity=e.exposure;}});}}else if(what==='environment'){// Same shader source createMtlxSceneUniforms parsed at bind time.
+const declared=material?parseUniforms(material.fragmentShader).concat(parseUniforms(material.vertexShader)):[];bindEnvironmentSamplers(uniforms,declared,env);if(uniforms.u_envRadianceMips)uniforms.u_envRadianceMips.value=env.mips;updateKeyLightUniformEntry(uniforms,rigCount,e.keyLight,e.rotation,e.exposure);}},// Camera exposure and the transform id are uniforms: one write each.
+displayChanged:({scale,id})=>{const push=u=>{if(!u)return;if(u.u_displayExposure)u.u_displayExposure.value=scale;if(u.u_displayTransform)u.u_displayTransform.value=id;};push(uniforms);sceneOwnedMaterials.forEach(m=>push(m.uniforms));},// Re-derives blend/depth flags in place; returns the peel verdict.
+renderModeChanged:()=>{syncMeshMaterialMode();return viewIsTransparent&&FORCE_TRANSPARENCY;},// Called by the P3 setters through LIVE_VIEWS on every live
 // view; a no-op for flat2d or a material with no displacement.
-refreshDisplacement:()=>{if(flat2d||!displacementSources)return;if(!getDisplacementEnabled()){dispRunner.cancel();if(dispRunner.getState().state!=='off'){swapMeshGeometry(originalGeometry);dispRunner.off();dispDispatchStatus();}return;}const prevLevel=dispRunner.getState().level;const wasOff=dispRunner.getState().state==='off'||dispRunner.getState().state==='none';ensureBaseGeometry();if(wasOff||prevLevel!==dispRunner.getState().level)runDisplacement();},extras:{// Texture session stats (wrapper/source counts, reserved bytes,
+refreshDisplacement:()=>{if(flat2d||!displacementSources)return;if(!getDisplacementEnabled()){dispRunner.cancel();if(dispRunner.getState().state!=='off'){swapMeshGeometry(originalGeometry);dispRunner.off();dispDispatchStatus();}return;}const prevLevel=dispRunner.getState().level;const wasOff=dispRunner.getState().state==='off'||dispRunner.getState().state==='none';ensureBaseGeometry();if(wasOff||prevLevel!==dispRunner.getState().level)runDisplacement();},extras:{// True while OrbitControls is dragged and for 600 ms after (damping).
+// False without controls and for autorotate.
+isInteracting:()=>!!controls&&(orbitDragging||performance.now()-orbitEndedAt<600),// Texture session stats (wrapper/source counts, reserved bytes,
 // current anisotropy). Not a core handle-contract name; the
 // Textures card UI itself is deferred (P4-DESIGN.md section 3).
 getTextureStats:()=>textureSession?textureSession.stats():null,// Fullscreen "fit to ball" toggle: keeps the whole shaderball
@@ -1606,7 +1169,7 @@ applyMaterial:async({mx,gen,genContext,renderable,srcs=null,label,materialName:a
 // after teardown must do nothing, not resurrect GL state
 // on an already-disposed renderer/context.
 if(stopped||!isMounted())return null;if(!srcs){// A caller switching materials passes the new material's name.
-const genMaterialName=applyMaterialName!==undefined?applyMaterialName:materialName;srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,materialName:genMaterialName,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:PREVIEW_FEATURE_OPTIONS,allowConstInputs});}// A thrown generation error is NOT caught here, it
+const genMaterialName=applyMaterialName!==undefined?applyMaterialName:materialName;srcs=await generatePreviewSourcesWithinBudget({mx,gen,genContext,renderable,label,materialName:genMaterialName,isMounted,stageLightCount:PREVIEW_STAGE_LIGHT_COUNT,sceneFeatureOptions:previewFeatureOptions(renderSurface),allowConstInputs,transmission:getPreviewTransmission(renderSurface)});}// A thrown generation error is NOT caught here, it
 // propagates like a first-build failure, so the UI shows
 // the same overlay while the old material keeps rendering.
 if(!srcs||!isMounted()||stopped)return null;prewarmDisplacementSources(srcs,isMounted,label);const warmResult=await prewarmShaderCompile({vs:srcs.vs,fs:srcs.fs,isMounted,label});// 'bailed' or a lost isMounted(): must not touch the
@@ -1615,7 +1178,7 @@ if(!srcs||!isMounted()||stopped)return null;prewarmDisplacementSources(srcs,isMo
 if(warmResult==='bailed'||!isMounted()||stopped)return null;applyMaterialInternal(srcs,label);// Updates the handle's public fields IN PLACE: the
 // object-literal shorthand below captures a snapshot,
 // not a live binding, so every swap must re-assign these.
-handle.uniforms=uniforms;handle.introspected=srcs.introspected;handle.vs=srcs.vs;handle.fs=srcs.fs;materialNotices=srcs.notices||[];syncHandleNotices();handle.isTransparent=!!srcs.transparent;handle.syncDisplacementSources(srcs.displacement||null);// P4d stage 2: a material swap can change which (if any)
+const handle=handleRef();handle.uniforms=uniforms;handle.introspected=srcs.introspected;handle.vs=srcs.vs;handle.fs=srcs.fs;materialNotices=srcs.notices||[];syncHandleNotices();handle.isTransparent=!!srcs.transparent;handle.syncDisplacementSources(srcs.displacement||null);// P4d stage 2: a material swap can change which (if any)
 // UDIM refs are present; rebuild the split against the last
 // file map this view saw, if any.
 if(udimFileMap)applyUdimSplit(srcs.introspected,udimFileMap);if(window.MTLX_PERF_LOG){console.log('[mtlx-perf] applyMaterial total: '+(performance.now()-__applyPerfStart).toFixed(1)+'ms (target: '+label+')');}return handle;},// Syncs geometry to a (possibly unchanged) displacement program. Called by
@@ -1639,22 +1202,23 @@ onDisplacementFileMap:fileMap=>{dispRunner.setFileMap(fileMap);if(!flat2d&&getDi
 // splits custom geometry into per-UDIM-tile sub-meshes when the
 // current material has UDIM refs. Not a core handle-contract
 // name (guard (g) only reserves the HANDLE_CONTRACT list).
-bindTextureFileMap:fileMap=>{udimFileMap=fileMap;applyUdimSplit(handle.introspected,fileMap);},getUdimTileCount:()=>udimTileCount,// dispose() while the canvas is still in the page (rebuild on it), destroy() once React detached it.
-release:()=>{if(canvas&&canvas.isConnected)handle.dispose();else handle.destroy();},// One-way teardown for a canvas that is discarded for good (never rebuilt on it):
-// dispose, then free the GL context now instead of waiting for GC.
-destroy:()=>{handle.dispose();suspendedByUs=false;try{const ext=viewGl&&!viewGl.isContextLost()&&viewGl.getExtension('WEBGL_lose_context');if(ext)ext.loseContext();}catch(e){/* already lost */}viewGl=null;loseExt=null;},// Context budget hooks read by enforceGlContextCap; undefined on foreign LIVE_VIEWS members.
-glCtx:{canvas,label,lost:()=>!viewGl||viewGl.isContextLost(),lastRender:()=>lastRenderAt,suspendable:()=>!stopped&&!suspendedByUs&&!applyBusy&&!isActive()&&!holdContext(),suspend:suspendGl}},// end extras
-// Debug hook: raw GPU state for a headed diagnosis harness.
-// Not for production UI code.
-__debug:()=>({material:mesh?mesh.material:material,mesh,geometry,renderer})};// buildHandle (js/shared/render-session.js) composes the plain
-// handle object: session's core methods/fields, content's core
-// overrides plus its extras (applyMaterial, syncDisplacementSources,
-// ...), throwing if an extra shadows a reserved name.
-handle=MtlxRender.buildHandle(session,content);const applyInner=handle.applyMaterial;handle.applyMaterial=async(...args)=>{applyBusy++;try{return await applyInner(...args);}finally{applyBusy--;}};LIVE_VIEWS.add(handle);// Diffuse-environment method: setDiffuseEnvMethod broadcasts
-// 'mtlx-settings-changed' (key 'diffuseEnvMethod'); rebind via this
-// view's OWN setEnvironment(currentEnvRef), no shader rebuild.
-// needsLighting-only: unlit/2D shells have no env sampler to rebind.
-if(needsLighting){unsubDiffuseEnv=MtlxRender.onDiffuseEnvMethodChange(()=>{if(currentEnvRef)handle.setEnvironment(currentEnvRef);});}return handle;}catch(err){disposePartial();throw err;}};// ---- public API ----
+bindTextureFileMap:fileMap=>{udimFileMap=fileMap;applyUdimSplit(handleRef().introspected,fileMap);},getUdimTileCount:()=>udimTileCount},// end extras
+// Handle data fields at publish time; the first-build displacement
+// notices ran before the handle existed, so fold them in now.
+fields:()=>({uniforms,introspected:firstSrcs.introspected,vs:firstSrcs.vs,fs:firstSrcs.fs,allowConstInputs,renderSurface,isTransparent:!!firstSrcs.transparent,notices:(materialNotices=firstSrcs.notices||[]).concat(currentDispNotices()),// bindDroppedTextures routes through the view's own session.
+textureSession}),// Debug hook: raw GPU state for a headed diagnosis harness.
+__debug:()=>({material:mesh?mesh.material:material,mesh,geometry,renderer}),// Content teardown; the session disposes the renderer afterwards.
+dispose:()=>{stopped=true;if(dispRunner)dispRunner.cancel();try{if(material)material.dispose();}catch(e){/* already disposed/invalid */}try{if(geometry)geometry.dispose();}catch(e){/* ditto */}// `geometry` is whichever of these is active; the Set disposes the
+// other two exactly once.
+try{const dispGeoms=new Set([originalGeometry,baseGeometry,displacedGeometry].filter(Boolean));dispGeoms.delete(geometry);dispGeoms.forEach(g=>{try{g.dispose();}catch(e2){/* already disposed/invalid */}});}catch(e){/* best-effort */}// UDIM part meshes own their material clones; their geometries
+// only own an index over shared attributes.
+try{udimParts.forEach(p=>{try{if(p.material)p.material.dispose();}catch(e2){/* already disposed/invalid */}});udimParts=[];}catch(e){/* best-effort */}// Per-view GLB material clones; geometries are shared with other views.
+try{if(sceneGroup){if(scene)scene.remove(sceneGroup);sceneOwnedMaterials.forEach(m=>{try{m.dispose();}catch(e){/* already disposed/invalid */}});}}catch(e){/* already disposed/invalid */}// F3: wrapper clones BEFORE the renderer (renderer.dispose clears
+// the properties map onTextureDispose needs).
+if(unsubTextureAnisotropy){unsubTextureAnisotropy();unsubTextureAnisotropy=null;}try{if(textureSession)textureSession.dispose();}catch(e){/* already disposed/invalid */}}};return content;};// createMtlxRenderView: persistent render-pipeline shell for one preview
+// surface (renderer/scene/camera/env built ONCE; applyMaterial() swaps
+// materials on the same shell) = render session + preview content.
+const createMtlxRenderView=async opts=>MtlxRender.createRenderSession(Object.assign({},opts,{content:createPreviewContent(opts)})).start();// ---- public API ----
 // ------------------------------------------------------------------
 // Fullscreen helpers: native requestFullscreen when available; else a
 // CSS-maximize fallback (position:fixed + synthesized 'fullscreenchange')
@@ -1706,10 +1270,10 @@ if(cssMaxState)exitCssMaximize();else if(el)enterCssMaximize(el);return;}if(full
 // element (or null). Returns an unsubscribe function.
 const watchFullscreen=cb=>{const h=()=>cb(fullscreenElement());document.addEventListener('fullscreenchange',h);document.addEventListener('webkitfullscreenchange',h);return()=>{document.removeEventListener('fullscreenchange',h);document.removeEventListener('webkitfullscreenchange',h);};};// Shared indeterminate loading bar used by the viewer/graph/preview
 // views while a shader generates/compiles; injected once from the engine.
-(()=>{if(typeof document==='undefined'||document.getElementById('mtlx-shared-css'))return;const st=document.createElement('style');st.id='mtlx-shared-css';st.textContent=['.mtlx-loading-bar{position:relative;overflow:hidden;height:6px;border-radius:9999px;background:rgb(var(--mtlx-line-strong) / calc(115 / 255));}','.mtlx-loading-bar::after{content:"";position:absolute;top:0;bottom:0;left:0;width:40%;border-radius:9999px;','background:linear-gradient(90deg,transparent,rgb(var(--mtlx-progress)),transparent);animation:mtlx-loading-slide 1.1s ease-in-out infinite;}',':root[data-theme-base="light"] .mtlx-loading-overlay{background-color:rgb(var(--mtlx-veil));}','@keyframes mtlx-loading-slide{from{transform:translateX(-100%);}to{transform:translateX(350%);}}'].join('');document.head.appendChild(st);})();// Custom highlight.js theme for the XML "Document" dialog, matching the
+(()=>{if(typeof document==='undefined'||document.getElementById('mtlx-shared-css'))return;const st=document.createElement('style');st.id='mtlx-shared-css';st.textContent=['.mtlx-loading-bar{position:relative;overflow:hidden;height:6px;border-radius:9999px;background:rgb(var(--mtlx-chip));}','.mtlx-loading-bar::after{content:"";position:absolute;top:0;bottom:0;left:0;width:40%;border-radius:9999px;','background:linear-gradient(90deg,transparent,rgb(var(--mtlx-progress)),transparent);animation:mtlx-loading-slide 1.1s ease-in-out infinite;}',':root[data-theme-base="light"] .mtlx-loading-overlay{background-color:rgb(var(--mtlx-veil));}','@keyframes mtlx-loading-slide{from{transform:translateX(-100%);}to{transform:translateX(350%);}}'].join('');document.head.appendChild(st);})();// Custom highlight.js theme for the XML "Document" dialog, matching the
 // site's dark gray-900/800 + blue-400 palette. Background is explicitly
 // transparent so it doesn't paint over the dialog's own panel.
-(()=>{if(typeof document==='undefined'||document.getElementById('mtlx-hljs-theme'))return;const st=document.createElement('style');st.id='mtlx-hljs-theme';st.textContent=['.hljs{color:rgb(var(--mtlx-code-fg));background:transparent;}','.hljs-tag,.hljs-punctuation{color:rgb(var(--mtlx-code-muted));}','.hljs-name{color:rgb(var(--mtlx-code-name));}','.hljs-attr{color:rgb(var(--mtlx-code-attr));}','.hljs-string{color:rgb(var(--mtlx-code-string));}','.hljs-comment{color:rgb(var(--mtlx-code-muted));font-style:italic;}'].join('');document.head.appendChild(st);})();Object.assign(window,{getMxEnv,DEBUG_SHADERS,mtlxWarn,mxExclusive,MTLX_CLOCK,clockTick,getForceTransparency,setForceTransparency,getDisplacementEnabled,setDisplacementEnabled,getTextureAnisotropy,setTextureAnisotropy,getDisplacementNormalsMode,setDisplacementNormalsMode,getPreviewSubdivisionLevel,setPreviewSubdivisionLevel,PREVIEW_TRIANGLE_BUDGET,pickSubdivisionLevel,getHeightToNormalTexel,setHeightToNormalTexel,parseUniforms,parseVertexInputs,stripVersion,encodeDisplay,countFragmentSamplers,mergeDuplicateImageNodes,mxNodeSignature,mxErr,mxWriteValue,vecToArray,mxSafe,mxElName,mxElCat,mxElType,mxElAttr,mxSetAttr,mxRemoveAttr,mxSetColorspace,nextFrame,findConvertChain,ensureTypedInput,stripValuesFromConnectedInputs,listDocRenderables,normPath,joinRefPath,readDroppedItems,expandZips,isHiddenSideFile,findFileForRef,findFilesForRef,preferKtx2Sibling,resolveIncludes,readMtlxText,readMtlxXml,isExportAttribution,splitXmlEnvelope,withXmlEnvelope,preserveSourceFormatting,TEXTURE_CACHE,TEXTURE_SOURCES,textureCacheKey,textureCacheKeyAsync,hasBlobIdentity,samplerCacheKey,normalizeSamplerAddressMode,collectImageSamplerModes,annotateFilenameSamplerModes,bindDroppedTextures,createTextureSession,loadExrTexture,loadHdrTexture,loadTifTexture,loadKtx2Texture,capKtx2MipLevels,runHeavyTextureDecode,loadBoundedBitmapTexture,resetTexturePerf,sceneTextureFastPathEnabled,readImageDimensions,boundDecodedTexture,collectMxUniforms,mxValueToThreeUniform,linToSrgb,srgbToLin,rgbToHex,hexToRgb,getFilenameDefaultTexture,rebindFilenameDefault,configureLoadedTexture,samplerHoldsDefault,prepGeometry,normalizeGeometry,buildPreviewGeometry,bindGeompropAttributes,loadCustomPreviewGeomFromFile,loadCustomPreviewGeomFromUrl,getCustomPreviewGeom,clearCustomPreviewGeom,getGlobalGeom,setGlobalGeom,getDisplayTransform,setDisplayTransform,getDisplayExposure,setDisplayExposure,displayExposureScale,applyThreeToneMappingChunk,getDisplayTransformValues,displayTransformId,sceneDisplayTransformGLSL:DISPLAY_TRANSFORM_SWITCH_GLSL,COLOR_VIEWABLE,resolveNodeKind,makeEnvTexture,getEnvironment,COLORSPACES,loadEnvironmentFromFile,loadEnvironmentFromBuffer,makeFlatEnvironment,setEnvOverride,getEnvOverride,getEnvironmentSource,getKeyLightEnabled,setKeyLightEnabled,prewarmShaderCompile,createMtlxRenderView,compileMtlxSceneMaterial,createMtlxSceneUniforms,bindEnvironmentSamplers,createLightTransportUniforms,generatePreviewSources,generatePreviewSourcesWithinBudget,evaluateDisplacement,generateDisplacementSourcesUnlocked,detectDisplacementMode,ensurePrefilteredEnv,resolveShadingEnv,getSpecularEnvMethod,ensureConvolvedIrradiance,envIrradianceForShading,getDiffuseEnvMethod,setDiffuseEnvMethod,getDummyTexWhite,getDummyTex3DWhite,SHADOW_FACE_SLOTS,SHADOW_LIGHT_SLOTS_MAX,SHADOW_NORMAL_OFFSET_TEXELS,SHADOW_DEPTH_BIAS_TEXELS,createPeelPipeline,createRgbtPeelPipeline,applyPeelMaterialMode,registerLiveView,unregisterLiveView,releaseGlContext,tryRefreshRenderView,prewarmPreviewTarget,checkTargetTransparency,EXPORT_TARGETS,generateTargetSources,fullscreenElement,toggleFullscreen,watchFullscreen});// Hands the render-session module (js/shared/render-session.js) the
+(()=>{if(typeof document==='undefined'||document.getElementById('mtlx-hljs-theme'))return;const st=document.createElement('style');st.id='mtlx-hljs-theme';st.textContent=['.hljs{color:rgb(var(--mtlx-code-fg));background:transparent;}','.hljs-tag,.hljs-punctuation{color:rgb(var(--mtlx-code-muted));}','.hljs-name{color:rgb(var(--mtlx-code-name));}','.hljs-attr{color:rgb(var(--mtlx-code-attr));}','.hljs-string{color:rgb(var(--mtlx-code-string));}','.hljs-comment{color:rgb(var(--mtlx-code-muted));font-style:italic;}','.hljs-keyword,.hljs-selector-tag,.hljs-literal{color:rgb(var(--mtlx-code-syntax-keyword));}','.hljs-number,.hljs-symbol{color:rgb(var(--mtlx-code-syntax-number));}','.hljs-built_in,.hljs-type,.hljs-class .hljs-title,.hljs-title.class_{color:rgb(var(--mtlx-code-syntax-type));}','.hljs-title,.hljs-title.function_,.hljs-selector-id,.hljs-selector-class{color:rgb(var(--mtlx-code-syntax-function));}','.hljs-property,.hljs-variable,.hljs-params,.hljs-subst{color:rgb(var(--mtlx-code-syntax-param));}','.hljs-meta,.hljs-meta .hljs-keyword{color:rgb(var(--mtlx-code-syntax-directive));}'].join('');document.head.appendChild(st);})();Object.assign(window,{getMxEnv,DEBUG_SHADERS,mtlxWarn,mxExclusive,MTLX_CLOCK,clockTick,getForceTransparency,setForceTransparency,getPreviewTransmission,getDisplacementEnabled,setDisplacementEnabled,getTextureAnisotropy,setTextureAnisotropy,getDisplacementNormalsMode,setDisplacementNormalsMode,getPreviewSubdivisionLevel,setPreviewSubdivisionLevel,PREVIEW_TRIANGLE_BUDGET,pickSubdivisionLevel,createTriangleBudget,prepareDisplacementBase,createDisplacementRunner,getHeightToNormalTexel,setHeightToNormalTexel,parseUniforms,parseVertexInputs,stripVersion,encodeDisplay,countFragmentSamplers,mergeDuplicateImageNodes,mxNodeSignature,mxErr,mxWriteValue,vecToArray,mxSafe,mxElName,mxElCat,mxElType,mxElAttr,mxSetAttr,mxRemoveAttr,mxSetColorspace,nextFrame,findConvertChain,ensureTypedInput,stripValuesFromConnectedInputs,listDocRenderables,normPath,joinRefPath,readDroppedItems,expandZips,isHiddenSideFile,findFileForRef,findFilesForRef,preferKtx2Sibling,resolveIncludes,readMtlxText,readMtlxXml,isExportAttribution,splitXmlEnvelope,withXmlEnvelope,escapeXmlAttrSpecials,preserveSourceFormatting,TEXTURE_CACHE,TEXTURE_SOURCES,textureCacheKey,textureCacheKeyAsync,hasBlobIdentity,samplerCacheKey,normalizeSamplerAddressMode,collectImageSamplerModes,annotateFilenameSamplerModes,bindDroppedTextures,createTextureSession,createUdimVariantUniforms,loadExrTexture,loadHdrTexture,loadTifTexture,loadKtx2Texture,capKtx2MipLevels,runHeavyTextureDecode,loadBoundedBitmapTexture,resetTexturePerf,sceneTextureFastPathEnabled,readImageDimensions,boundDecodedTexture,collectMxUniforms,mxValueToThreeUniform,linToSrgb,srgbToLin,rgbToHex,hexToRgb,getFilenameDefaultTexture,rebindFilenameDefault,configureLoadedTexture,samplerHoldsDefault,prepGeometry,normalizeGeometry,buildPreviewGeometry,bindGeompropAttributes,loadCustomPreviewGeomFromFile,loadCustomPreviewGeomFromUrl,getCustomPreviewGeom,clearCustomPreviewGeom,getGlobalGeom,setGlobalGeom,getDisplayTransform,setDisplayTransform,getDisplayExposure,setDisplayExposure,displayExposureScale,applyThreeToneMappingChunk,getDisplayTransformValues,displayTransformId,sceneDisplayTransformGLSL:DISPLAY_TRANSFORM_SWITCH_GLSL,COLOR_VIEWABLE,resolveNodeKind,makeEnvTexture,getEnvironment,COLORSPACES,loadEnvironmentFromFile,loadEnvironmentFromBuffer,makeFlatEnvironment,setEnvOverride,getEnvOverride,getEnvironmentSource,getKeyLightEnabled,setKeyLightEnabled,envWithKeyLight,prewarmShaderCompile,createMtlxRenderView,compileMtlxSceneMaterial,createMtlxSceneUniforms,bindEnvironmentSamplers,createLightTransportUniforms,generatePreviewSources,generatePreviewSourcesWithinBudget,evaluateDisplacement,generateDisplacementSourcesUnlocked,detectDisplacementMode,ensurePrefilteredEnv,resolveShadingEnv,getSpecularEnvMethod,ensureConvolvedIrradiance,envIrradianceForShading,getDiffuseEnvMethod,setDiffuseEnvMethod,getDummyTexWhite,getDummyTex3DWhite,SHADOW_FACE_SLOTS,SHADOW_LIGHT_SLOTS_MAX,SHADOW_NORMAL_OFFSET_TEXELS,SHADOW_DEPTH_BIAS_TEXELS,createPeelPipeline,createRgbtPeelPipeline,applyPeelMaterialMode,registerLiveView,unregisterLiveView,releaseGlContext,snapshotRenderDestination,restoreRenderDestination,tryRefreshRenderView,prewarmPreviewTarget,checkTargetTransparency,EXPORT_TARGETS,generateTargetSources,fullscreenElement,toggleFullscreen,watchFullscreen});// Hands the render-session module (js/shared/render-session.js) the
 // engine internals it needs at call time; must run after every const
 // above is defined, so this stays the file's last line.
-MtlxRender.bindEngine({getDisplayTransform,displayExposureScale,clockTick});
+MtlxRender.bindEngine({getDisplayTransform,applyThreeToneMappingChunk,displayExposureScale,clockTick,createPeelPipeline,getForceTransparency,getEnvironment,getEnvOverride,resolveShadingEnv,makeEnvTexture,makeBackgroundTexture,parseEnvBuffer,buildEnvFromParsedTexture,displayTransformId,fullscreenElement,registerLiveView,unregisterLiveView,compileFilteringDriverNoise,enforceGlContextCap});

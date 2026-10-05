@@ -868,7 +868,8 @@ const SHADOW_LIGHT_SLOTS_MAX = 32;
 const SHADOW_NORMAL_OFFSET_TEXELS = 1.0;
 const SHADOW_DEPTH_BIAS_TEXELS = 1.0;
 
-const patchShadowLightScope = (fs, { skipTransmittance = false } = {}) => {
+// faceSlots: compile-time face array size, a generation parameter (the Scene uses the full atlas).
+const patchShadowLightScope = (fs, { skipTransmittance = false, faceSlots = SHADOW_FACE_SLOTS } = {}) => {
     const call = 'occlusion = mx_shadow_occlusion(u_shadowMap, u_shadowMatrix, positionWorld);';
     const site = 'L = lightShader.direction;';
     if (fs.indexOf(call) === -1 || fs.indexOf(site) === -1) return fs;
@@ -886,12 +887,12 @@ const patchShadowLightScope = (fs, { skipTransmittance = false } = {}) => {
     // invocation (reset each main()), so light slots that share an omni
     // face reuse one lookup instead of repeating the atlas search.
     const lightLoop = '        // Light loop\n';
-    const transmitCacheInit = skipTransmittance ? '' : '        vec3 mx_shadowTransmit[' + SHADOW_FACE_SLOTS + '];\n'
-        + '        for (int mx_transmitIndex = 0; mx_transmitIndex < ' + SHADOW_FACE_SLOTS + '; ++mx_transmitIndex) {\n'
+    const transmitCacheInit = skipTransmittance ? '' : '        vec3 mx_shadowTransmit[' + faceSlots + '];\n'
+        + '        for (int mx_transmitIndex = 0; mx_transmitIndex < ' + faceSlots + '; ++mx_transmitIndex) {\n'
         + '            mx_shadowTransmit[mx_transmitIndex] = vec3(-1.0);\n'
         + '        }\n';
-    const cacheDecl = '        float mx_shadowVisibility[' + SHADOW_FACE_SLOTS + '];\n'
-        + '        for (int mx_shadowIndex = 0; mx_shadowIndex < ' + SHADOW_FACE_SLOTS + '; ++mx_shadowIndex) {\n'
+    const cacheDecl = '        float mx_shadowVisibility[' + faceSlots + '];\n'
+        + '        for (int mx_shadowIndex = 0; mx_shadowIndex < ' + faceSlots + '; ++mx_shadowIndex) {\n'
         + '            mx_shadowVisibility[mx_shadowIndex] = -1.0;\n'
         + '        }\n'
         + transmitCacheInit
@@ -957,34 +958,34 @@ const patchShadowLightScope = (fs, { skipTransmittance = false } = {}) => {
     if (out.indexOf('uniform sampler2D u_shadowAtlas;') !== -1) return out;
     const decl = [
         'uniform sampler2D u_shadowAtlas;',
-        'uniform mat4 u_shadowMatrices[' + SHADOW_FACE_SLOTS + '];',
+        'uniform mat4 u_shadowMatrices[' + faceSlots + '];',
         // xy = tile origin in atlas UV, zw = tile size.
-        'uniform vec4 u_shadowTiles[' + SHADOW_FACE_SLOTS + '];',
+        'uniform vec4 u_shadowTiles[' + faceSlots + '];',
         // Normalized positive light-view Z plane for linear moments.
-        'uniform vec4 u_shadowDepthPlanes[' + SHADOW_FACE_SLOTS + '];',
+        'uniform vec4 u_shadowDepthPlanes[' + faceSlots + '];',
         // x = near, y = far - near, in the same world units used by the
         // authored emitter radius. Kept separate because the normalized
         // plane alone cannot recover its near offset.
-        'uniform vec2 u_shadowDepthRanges[' + SHADOW_FACE_SLOTS + '];',
+        'uniform vec2 u_shadowDepthRanges[' + faceSlots + '];',
         // x/y = authored source radius in world units; z/w = explicit
         // perspective projection scale. Directional casters use all zeroes.
-        'uniform vec4 u_shadowSourceRadii[' + SHADOW_FACE_SLOTS + '];',
+        'uniform vec4 u_shadowSourceRadii[' + faceSlots + '];',
         // World-space size of one atlas texel at the caster's near plane
         // (perspective) or across the whole frustum (orthographic). Feeds
         // both the normal-offset and the depth bias below; zero disables
         // both for that slot.
-        'uniform float u_shadowTexelWorldSize[' + SHADOW_FACE_SLOTS + '];',
+        'uniform float u_shadowTexelWorldSize[' + faceSlots + '];',
         // Light position for an omni caster's face, used to pick which of
         // its six faces a shaded point falls into. Unused (zero) otherwise.
-        'uniform vec3 u_shadowFaceOrigin[' + SHADOW_FACE_SLOTS + '];',
+        'uniform vec3 u_shadowFaceOrigin[' + faceSlots + '];',
         // 1.0 where a face actually holds rendered data, 0.0 where the
         // renderer reserved the slot but never allocated a cell for it.
-        'uniform float u_shadowFaceValid[' + SHADOW_FACE_SLOTS + '];',
+        'uniform float u_shadowFaceValid[' + faceSlots + '];',
         // A cube group's own world +X/+Y/+Z, read only at the group's base
         // face index: world axes for omni, the emitter's own frame for area.
-        'uniform vec3 u_shadowFaceBasisX[' + SHADOW_FACE_SLOTS + '];',
-        'uniform vec3 u_shadowFaceBasisY[' + SHADOW_FACE_SLOTS + '];',
-        'uniform vec3 u_shadowFaceBasisZ[' + SHADOW_FACE_SLOTS + '];',
+        'uniform vec3 u_shadowFaceBasisX[' + faceSlots + '];',
+        'uniform vec3 u_shadowFaceBasisY[' + faceSlots + '];',
+        'uniform vec3 u_shadowFaceBasisZ[' + faceSlots + '];',
         // Per light slot: base face index (or -1 for none) and how many
         // consecutive faces it spans (1 for directional, 6 for a cube group).
         'uniform int u_shadowSlotFace[' + SHADOW_LIGHT_SLOTS_MAX + '];',
@@ -998,7 +999,7 @@ const patchShadowLightScope = (fs, { skipTransmittance = false } = {}) => {
         // R2 (product of all) is the same rect offset by half the height.
         // Zero size means no record for that face (dropped, or feature off).
         'uniform sampler2D u_shadowTransmittance;',
-        'uniform vec4 u_shadowRecordCells[' + SHADOW_FACE_SLOTS + '];',
+        'uniform vec4 u_shadowRecordCells[' + faceSlots + '];',
     ]).concat([
         '#define SHADOW_NORMAL_OFFSET_TEXELS ' + SHADOW_NORMAL_OFFSET_TEXELS.toFixed(4),
         '#define SHADOW_DEPTH_BIAS_TEXELS ' + SHADOW_DEPTH_BIAS_TEXELS.toFixed(4),
@@ -3049,7 +3050,7 @@ const findFileForRef = (fileMap, ref, opts) => {
 const findFilesForRef = (fileMap, ref, opts) => {
     if (opts && opts.exact) {
         const raw = String(ref || '');
-        const splitParts = raw.split(/<UDIM>/);
+        const splitParts = raw.split(/<UDIM>/i);
         if (splitParts.length !== 2) return [];
         const prefix = splitParts[0], suffix = splitParts[1];
         const hits = [];
@@ -3061,7 +3062,7 @@ const findFilesForRef = (fileMap, ref, opts) => {
             const code = Number(codeText);
             if (code < 1001) continue;
             const offset = code - 1001;
-            hits.push({ key, how: 'exact', ref: raw.replace(/<UDIM>/, codeText), code, u: offset % 10, v: Math.floor(offset / 10) });
+            hits.push({ key, how: 'exact', ref: raw.replace(/<UDIM>/i, codeText), code, u: offset % 10, v: Math.floor(offset / 10) });
         }
         return hits.sort((a, b) => a.code - b.code);
     }
@@ -3147,6 +3148,18 @@ const withXmlEnvelope = (xml, envelope) => {
     return text;
 };
 
+// MaterialX's XML writer escapes only &, " and line breaks inside attribute
+// values: a literal <, > or tab goes out as-is. < and > are not well-formed
+// XML (and > ends a tag early in xmlTokenize below), and a tab reads back
+// as a space, so attributes carrying them (a ShadingLanguageX node's
+// slxsource code, say) are re-escaped here. Comments are left untouched.
+const escapeXmlAttrSpecials = (xml) => {
+    const text = xml == null ? '' : String(xml);
+    if (!/="[^"]*[<>\t]/.test(text)) return text;
+    return text.replace(/<!--[\s\S]*?-->|="[^"]*"/g, (m) => (m[0] === '<' || !/[<>\t]/.test(m)) ? m
+        : '="' + m.slice(2, -1).replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\t/g, '&#9;') + '"');
+};
+
 // Source formatting survives a save: tags and comments are matched between the
 // loaded text and the writer's output, unchanged ones keep their original text
 // (wrapping, blank lines, quoting); only edited or new elements use the writer's.
@@ -3203,7 +3216,12 @@ const xmlPatchTag = (srcRaw, outRaw) => {
     if (!s || !o || s.tag !== o.tag || s.selfClosing !== o.selfClosing) return null;
     const sName = s.attrs.get('name'), oName = o.attrs.get('name');
     if ((sName && sName.value) !== (oName && oName.value)) return null;
-    const esc = (v, q) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(q === '"' ? /"/g : /'/g, q === '"' ? '&quot;' : '&apos;');
+    // Values arrive decoded (xmlTagParts), so line breaks and tabs must be
+    // re-encoded too: a literal one reads back as a space, which would flatten
+    // multi-line values such as a ShadingLanguageX node's slxsource code.
+    const esc = (v, q) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/\t/g, '&#9;').replace(/\n/g, '&#10;').replace(/\r/g, '&#13;')
+        .replace(q === '"' ? /"/g : /'/g, q === '"' ? '&quot;' : '&apos;');
     const edits = [];
     s.attrs.forEach((sa, n) => {
         const oa = o.attrs.get(n);
@@ -3722,7 +3740,10 @@ const mergeDuplicateImageNodes = (doc) => {
 // letting tryRefreshRenderView diff sources without a full rebuild.
 // Frees mxShader before returning, so nothing holds a live wasm handle.
 // ------------------------------------------------------------------
-const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label, materialName = null, isMounted = () => true, document: documentArg = null, sceneRgbt = false, lightTransport = false, sceneFeatureOptions = null, stageLightCount = null, allowConstInputs = true }) => {
+const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label, materialName = null, isMounted = () => true, document: documentArg = null, sceneRgbt = false, transmission = 'scalar', lightTransport = false, sceneFeatureOptions = null, stageLightCount = null, allowConstInputs = true }) => {
+    // The Scene's RGB-T transmission model (payload + thin-wall correction);
+    // previews opt in with transmission 'rgbt' (preview Quality).
+    const rgbtPayload = sceneRgbt || transmission === 'rgbt';
     // Sampler-budget drops, requested only by compileMtlxSceneMaterial's
     // recompile loop; every other caller keeps the full feature set.
     const skipSkyVis = !!(sceneFeatureOptions && sceneFeatureOptions.skipSkyVis);
@@ -3735,7 +3756,9 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // never generated. The kill switch forces both back to "generate".
     const featureGated = readFeatureGated();
     const skipShadowMap = featureGated && !!(sceneFeatureOptions && sceneFeatureOptions.skipShadowMap);
-    const skipOcclusion = featureGated && !!(sceneFeatureOptions && sceneFeatureOptions.skipOcclusion);
+    // skipSsao: the preview's budget drop of its only occlusion term (sky/volume are skipped there).
+    const skipOcclusion = (featureGated && !!(sceneFeatureOptions && sceneFeatureOptions.skipOcclusion))
+        || !!(sceneFeatureOptions && sceneFeatureOptions.skipSsao);
     // Screen-space reflections are parked (see SCENE_SSR_PARKED in the renderer): skip the patch.
     const skipSsr = true || !!(sceneFeatureOptions && sceneFeatureOptions.skipSsr);
     const skipLocalEnv = !!(sceneFeatureOptions && sceneFeatureOptions.skipLocalEnv);
@@ -3906,7 +3929,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     }
     fs = patchUnlitLightingRefs(fs);
     fs = patchScenePhysicalLightFalloff(fs, sceneRgbt);
-    fs = patchSceneThinWalledTransmission(fs, sceneRgbt, notices);
+    fs = patchSceneThinWalledTransmission(fs, rgbtPayload, notices);
     const outDeclMatch = fs.match(/\bout\s+vec4\s+(\w+)\s*;/);
     const outVar = outDeclMatch ? outDeclMatch[1] : null;
     const outAssignments = outVar
@@ -3933,7 +3956,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // Folds transmission into peel-pass alpha; must precede injectPeelDiscard (see its u_peelMode guard).
     fs = patchTransmissionAlpha(fs, { skipRefraction });
     let payloadSupported = false;
-    if (sceneRgbt) {
+    if (rgbtPayload) {
         fs = patchRgbtPayload(fs);
         payloadSupported = fs.indexOf('/* MX_RGBT_PAYLOAD_SUPPORTED */') !== -1;
     }
@@ -3943,7 +3966,8 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
         lightTransportSupported = fs.indexOf('MX_LIGHT_TRANSPORT_TERMINAL_RETURN') !== -1;
     }
     fs = patchShadowBounds(fs);
-    fs = patchShadowLightScope(fs, { skipTransmittance });
+    const shadowFaceSlots = (sceneFeatureOptions && sceneFeatureOptions.shadowFaceSlots) || SHADOW_FACE_SLOTS;
+    fs = patchShadowLightScope(fs, { skipTransmittance, faceSlots: shadowFaceSlots });
     fs = patchLightSourceKindStruct(fs);
     fs = patchAreaLightSourceCosine(fs);
     // skipOcclusion drops the whole block (screen-space AO included), which
@@ -4022,7 +4046,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
         localEnv: skipLocalEnv,
         bounce: skipBounce,
     };
-    return { vs, fs, introspected, transparent, vertexInputs, geomprops, notices, payloadSupported, lightTransportSupported, displacement, maxLights, constInputs, featureSkips };
+    return { vs, fs, introspected, transparent, vertexInputs, geomprops, notices, payloadSupported, lightTransportSupported, displacement, maxLights, constInputs, featureSkips, shadowFaceSlots };
 };
 
 // Follows one displacementshader-typed input to the element to generate
@@ -4234,6 +4258,8 @@ const DEFAULT_SAMPLER_BUDGET = 16;
 const joinWithAnd = (items) => (items.length <= 1 ? items.join('')
     : items.slice(0, -1).join(', ') + ' and ' + items[items.length - 1]);
 const SAMPLER_BUDGET_DROP_ORDER = [
+    // Preview Quality SSAO goes first; the Scene's loop skips previewOnly entries.
+    { key: 'skipSsao', label: 'screen-space AO (u_ssaoMap)', userLabel: 'ambient occlusion', previewOnly: true },
     // Parked with screen-space reflections (always skipped for now).
     // { key: 'skipSsr', label: 'screen-space reflection (u_opaqueColor)' },
     { key: 'skipLocalEnv', label: 'local reflection capture (u_localEnvRadiance)', userLabel: 'local reflections' },
@@ -4244,6 +4270,8 @@ const SAMPLER_BUDGET_DROP_ORDER = [
     { key: 'skipTransmittance', label: 'shadow transmittance (u_shadowTransmittance)', userLabel: 'colored shadows through transparent materials' },
     { key: 'skipRefraction', label: 'refraction colour (u_opaqueColor)', userLabel: 'refraction' },
 ];
+
+const SCENE_SAMPLER_DROPS = SAMPLER_BUDGET_DROP_ORDER.filter((d) => !d.previewOnly);
 
 // One accurate sentence for a material that ran out of texture units:
 // what it needed, where those samplers came from, and what was turned off.
@@ -4262,7 +4290,9 @@ const generatePreviewSourcesWithinBudget = async (args) => {
     // A key the caller already gated off (e.g. PREVIEW_FEATURE_OPTIONS'
     // skipLocalEnv/skipBounce) is a no-op drop here: trying it again wastes
     // a regeneration and would name a feature the preview never had.
-    const candidates = SAMPLER_BUDGET_DROP_ORDER.filter((d) => !(baseFeatureOptions && baseFeatureOptions[d.key]));
+    const candidates = SAMPLER_BUDGET_DROP_ORDER.filter((d) => !(baseFeatureOptions && baseFeatureOptions[d.key])
+        // skipSsao only means something while the occlusion block is generated.
+        && !(d.key === 'skipSsao' && (!baseFeatureOptions || baseFeatureOptions.skipOcclusion)));
     const appliedOptions = Object.assign({}, baseFeatureOptions);
     let srcs = await generatePreviewSources(Object.assign({}, args, { sceneFeatureOptions: appliedOptions }));
     if (!srcs) return null;
@@ -4494,6 +4524,7 @@ const MtlxGenCoreApi = {
     isExportAttribution,
     splitXmlEnvelope,
     withXmlEnvelope,
+    escapeXmlAttrSpecials,
     XML_ENTITIES,
     xmlDecode,
     xmlTagParts,
@@ -4538,6 +4569,7 @@ const MtlxGenCoreApi = {
     DEFAULT_SAMPLER_BUDGET,
     joinWithAnd,
     SAMPLER_BUDGET_DROP_ORDER,
+    SCENE_SAMPLER_DROPS,
     samplerBudgetNotice,
     generatePreviewSourcesWithinBudget,
     SHADERBALL_GROUPS,

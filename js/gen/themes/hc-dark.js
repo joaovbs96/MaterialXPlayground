@@ -8,6 +8,7 @@
         "surface-base": "#000000",
         "surface-raised": "#020202",
         "surface-sunken": "#000000",
+        "surface-card": "#000000",
         "chrome": "#000000",
         "control": "#020202",
         "chip": "#191919",
@@ -100,6 +101,21 @@
         "code-inline-bg": "#191919",
         "code-inline-fg": "#fcd34d",
         "code-block-bg": "#000000",
+        "code-syntax-text": "#d4d4d4",
+        "code-syntax-comment": "#72a25d",
+        "code-syntax-string": "#ce9178",
+        "code-syntax-number": "#b5cea8",
+        "code-syntax-keyword": "#569cd6",
+        "code-syntax-type": "#4ec9b0",
+        "code-syntax-directive": "#c586c0",
+        "code-syntax-function": "#dcdcaa",
+        "code-syntax-param": "#9cdcfe",
+        "code-syntax-link": "#559bd5",
+        "code-syntax-error": "#ff5e5b",
+        "code-syntax-caret": "#a4a4a4",
+        "code-syntax-selection": "#264f78",
+        "code-syntax-highlight": "#90cdff",
+        "code-syntax-assist-selected": "#04395e",
         "graph-canvas": "#000000",
         "graph-grid": "#191919",
         "builder-stage": "#000000",
@@ -115,18 +131,18 @@
         "graph-minimap-mask": "#000000",
         "graph-minimap-stroke": "#000000",
         "type-boolean": "#d2372b",
-        "type-bsdf": "#2e7d32",
+        "type-bsdf": "#338237",
         "type-color3": "#fdd835",
         "type-color4": "#f4511e",
         "type-displacementshader": "#8d6e63",
         "type-edf": "#cddc39",
         "type-filename": "#90a4ae",
-        "type-float": "#3f51b4",
-        "type-integer": "#9026ac",
+        "type-float": "#566bd0",
+        "type-integer": "#ab45c8",
         "type-lightshader": "#ff934f",
         "type-material": "#ff404f",
         "type-matrix33": "#cfd8dc",
-        "type-matrix44": "#546e7a",
+        "type-matrix44": "#5c7682",
         "type-string": "#d7c4a3",
         "type-surfaceshader": "#00897b",
         "type-vector2": "#5c6bc0",
@@ -135,28 +151,11 @@
         "type-vdf": "#9ccc65",
         "type-volumeshader": "#00bcd4",
         "type-node": "#a1887f",
-        "type-nodegraph": "#854d0e",
+        "type-nodegraph": "#9f652c",
         "type-untyped": "#94a3b8",
         "native-window-bg": "#000000",
         "native-titlebar": "#000000",
-        "native-titlebar-symbol": "#eeeeee",
-        "surface-deep": "#000000",
-        "scrim-alt": "#000000",
-        "on-accent-soft": "#ffffff",
-        "success-border-muted": "#166534",
-        "warning-bg-strong": "#92400e",
-        "warning-border-alt": "#d97706",
-        "error-text-strong": "#fecaca",
-        "error-bg-strong": "#7f1d1d",
-        "error-border-strong": "#b91c1c",
-        "info-border-alt": "#1d4ed8",
-        "notice-bg": "#020202",
-        "notice-line": "#a3a3a3",
-        "notice-text": "#eeeeee",
-        "notice-text-strong": "#ffffff",
-        "experimental-fill": "#d97706",
-        "code-inline-fg-alt": "#fca5a5",
-        "code-block-bg-alt": "#000000"
+        "native-titlebar-symbol": "#eeeeee"
     };
     var params = {
         "typeFallback": {
@@ -171,12 +170,18 @@
             "accentFillTranslucent": 1
         }
     };
-    if (typeof module === 'object' && module.exports) { module.exports = { id: id, base: base, tokens: tokens, params: params }; return; }
+    var seeds = {
+        "background": "#000000",
+        "foreground": "#ffffff",
+        "accent": "#3b82f6"
+    };
+    if (typeof module === 'object' && module.exports) { module.exports = { id: id, base: base, tokens: tokens, params: params, seeds: seeds }; return; }
     var d = root.MTLX_THEME_TOKENS;
     var doc = root.document;
     if (!d || !doc) return;
     d.themes[id] = tokens;
     d.params[id] = params;
+    (d.seeds = d.seeds || {})[id] = seeds;
     var me = doc.currentScript;
     var href = me && me.src ? me.src.replace(/\.js([?#].*)?$/, '.css') : 'js/gen/themes/' + id + '.css';
     var done = function () { if (typeof d.loaded === 'function') d.loaded(id); };

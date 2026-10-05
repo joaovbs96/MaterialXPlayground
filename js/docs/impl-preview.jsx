@@ -148,7 +148,7 @@
                                     onClick={openInEditor}
                                     disabled={state.status !== 'ready'}
                                     title="Open this implementation graph in the Node Graph Editor"
-                                    className="inline-flex items-center gap-1 h-6 px-2 rounded-md border border-hud-line/50 bg-hud/70 text-[11px] font-medium text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                    className="inline-flex items-center gap-1 h-6 px-2 rounded-md border border-line-strong/50 bg-chrome/70 text-[11px] font-medium text-fg-secondary hover:bg-hover hover:border-line-strong hover:text-fg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                 >
                                     <MtlxIcon name="external-link" className="w-3.5 h-3.5" />
                                     View in Graph Editor
@@ -159,7 +159,7 @@
                                 onClick={toggleFsPanel}
                                 title={isFullscreen ? 'Exit full screen (Esc)' : 'View full screen'}
                                 aria-label={isFullscreen ? 'Exit full screen' : 'View full screen'}
-                                className="inline-flex items-center justify-center w-6 h-6 rounded-md border border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong transition-colors"
+                                className="inline-flex items-center justify-center w-6 h-6 rounded-md border border-line-strong/50 bg-chrome/70 text-fg-secondary hover:bg-hover hover:border-line-strong hover:text-fg transition-colors"
                             >
                                 <MtlxIcon name="maximize" className="w-3.5 h-3.5" />
                             </button>
@@ -168,7 +168,7 @@
                                 onClick={closePanel}
                                 aria-label="Close implementation preview"
                                 title="Close"
-                                className="inline-flex items-center justify-center w-6 h-6 rounded-md border border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong transition-colors"
+                                className="inline-flex items-center justify-center w-6 h-6 rounded-md border border-line-strong/50 bg-chrome/70 text-fg-secondary hover:bg-hover hover:border-line-strong hover:text-fg transition-colors"
                             >
                                 <MtlxIcon name="x" className="w-3.5 h-3.5" />
                             </button>

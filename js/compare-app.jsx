@@ -15,11 +15,6 @@ const COMPARE_SIDEBAR_INSET = 320;
 // markers on document labels/pills across the stage and sidebar cards.
 const SLOT_COLORS = { A: '#60a5fa', B: '#fbbf24' };
 
-// Mirrors mtlx-ui.jsx's private SectionCard-only CARD_SURFACE (not
-// exported to window) so the pinned Statistics panel matches the same
-// card background family without editing that shared file.
-const STATS_PANEL_SURFACE = 'color-mix(in srgb, rgb(var(--mtlx-surface-raised)) 35%, rgb(var(--mtlx-surface-base)))';
-
 // Example pair: the Standard Surface carpaint preset vs a repo-local doc
 // that feeds the same values through the stdlib translation graph into
 // open_pbr_surface (see materials/standard_surface_carpaint_to_openpbr.mtlx).
@@ -267,7 +262,7 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
                     mx: loaded.mx, gen: loaded.gen, genContext: loaded.genContext,
                     renderable: target.node,
                     lightData: loaded.lightData,
-                    label: 'compare-' + label,
+                    label: 'compare-' + label, surface: 'compare',
                     materialName: target.name,
                     needsLighting: true,
                     geomName: geom,
@@ -1267,7 +1262,7 @@ function MaterialCompareApp({ active = true } = {}) {
                 barWidthClass="w-40"
             />
             {slot.error && (
-                <div className="absolute top-2 left-2 right-2 z-20 bg-error-bg/90 border border-error-border/60 text-error-text-strong text-xs rounded-lg px-3 py-2 break-words shadow-lg">
+                <div className="absolute top-2 left-2 right-2 z-20 bg-error-bg/90 border border-error-border/60 text-error-text text-xs rounded-lg px-3 py-2 break-words shadow-lg">
                     {slot.error}
                 </div>
             )}
@@ -1345,7 +1340,7 @@ function MaterialCompareApp({ active = true } = {}) {
                     </div>
                     <label
                         title="Choose a folder"
-                        className="h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-line-control rounded-md bg-control hover:bg-hover text-fg-secondary cursor-pointer"
+                        className="h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-line-control rounded-md bg-control/80 hover:bg-hover text-fg-secondary cursor-pointer"
                     >
                         <MtlxIcon name="folder" className="w-3.5 h-3.5" />
                         <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={(e) => { setPresetPick((s) => ({ ...s, [slotKey]: '' })); slot.onPickFiles(e); }} />
@@ -1571,12 +1566,12 @@ function MaterialCompareApp({ active = true } = {}) {
 
                 <canvas
                     ref={gpuDiffCanvasRef}
-                    className="pointer-events-none bg-surface-deep"
+                    className="pointer-events-none bg-surface-sunken"
                     style={diffCanvasStyle()}
                 />
                 <canvas
                     ref={heatmapCanvasRef}
-                    className="absolute inset-0 w-full h-full object-contain bg-surface-deep pointer-events-none"
+                    className="absolute inset-0 w-full h-full object-contain bg-surface-sunken pointer-events-none"
                     style={{ display: displayMode === 'diff' && gpuDiffOk === false ? 'block' : 'none' }}
                 />
                 {displayMode === 'diff' && !bothLive && (
@@ -1610,7 +1605,7 @@ function MaterialCompareApp({ active = true } = {}) {
             {sidebarOpen ? (
                 <div className="absolute inset-y-0 left-0 z-30 w-80 max-w-[90%] flex flex-col bg-surface-base border-r border-line overflow-hidden">
                     <div className="flex-none flex items-center px-3 py-2 border-b border-line">
-                        <span className="text-[13px] font-semibold text-fg-soft">Compare</span>
+                        <span className="text-[13px] font-semibold text-fg">Compare</span>
                         <button
                             onClick={() => setSidebarOpen(false)}
                             title="Collapse the panel"
@@ -1628,7 +1623,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                         key={id}
                                         onClick={() => setDisplayMode(id)}
                                         className={'flex-1 px-2 py-1.5 transition-colors ' + (displayMode === id
-                                            ? 'bg-accent-wash/[0.12] text-accent-fg-strong'
+                                            ? 'bg-selection/20 text-accent-fg-strong'
                                             : 'bg-control/80 text-fg-secondary hover:bg-hover/80')}
                                     >
                                         {label}
@@ -1637,7 +1632,7 @@ function MaterialCompareApp({ active = true } = {}) {
                             </div>
                             <div className="flex items-center gap-2">
                                 <label
-                                    className={'flex items-center gap-2 text-[11px] ' + (displayMode === 'diff' || gpuDiffOk === false ? 'text-fg-subtle' : 'text-fg-secondary cursor-pointer')}
+                                    className={'flex items-center gap-2 text-[11px] ' + (displayMode === 'diff' || gpuDiffOk === false ? 'text-fg-disabled' : 'text-fg-secondary cursor-pointer')}
                                     title={gpuDiffOk === false ? 'Difference rendering unavailable (WebGL)' : undefined}
                                 >
                                     <Toggle
@@ -1655,7 +1650,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                     disabled={switchViewsDisabled}
                                     title={switchViewsDisabled ? undefined : switchViewsTitle}
                                     className={'flex-none inline-flex items-center gap-1 ' + (switchViewsDisabled
-                                        ? 'h-7 px-2.5 rounded-md border text-[11px] transition-colors bg-control/50 border-line text-fg-disabled cursor-not-allowed pointer-events-none'
+                                        ? 'h-7 px-2.5 rounded-md border text-[11px] transition-colors bg-control/80 border-line text-fg-disabled cursor-not-allowed pointer-events-none'
                                         : BTN_SECONDARY + ' cursor-pointer')}
                                 >
                                     <MtlxIcon name="switch-horizontal" className="w-3.5 h-3.5" />
@@ -1771,10 +1766,10 @@ function MaterialCompareApp({ active = true } = {}) {
                     {/* Pinned Statistics panel: always expanded and non-scrolling,
                         a sibling BELOW the scrollable cards column above (not one
                         more card inside it). */}
-                    <div className="shrink-0 border-t border-line px-3.5 py-3.5 space-y-2.5" style={{ background: STATS_PANEL_SURFACE }}>
+                    <div className="shrink-0 border-t border-line px-3.5 py-3.5 space-y-2.5 bg-surface-card">
                         <div className="flex items-center gap-2">
                             <MtlxIcon name="compare" className="w-4 h-4 text-fg-muted shrink-0" />
-                            <span className="text-[13px] font-semibold text-fg-soft shrink-0">Statistics</span>
+                            <span className="text-[13px] font-semibold text-fg shrink-0">Statistics</span>
                             {bothLive && <span className="shrink-0 text-[10px] text-fg-faint">·</span>}
                             {bothLive && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">live</span>}
                             {bothLive && stats && <span className="shrink-0 text-[10px] text-fg-faint">·</span>}
@@ -1794,7 +1789,7 @@ function MaterialCompareApp({ active = true } = {}) {
                                     <div
                                         ref={statsHelpPopRef}
                                         onPointerDown={(e) => e.stopPropagation()}
-                                        className="absolute bottom-full right-0 mb-2 w-64 bg-surface-base border border-line rounded-lg shadow-lg p-3 space-y-1.5 text-[11px] text-fg-secondary z-10"
+                                        className="absolute bottom-full right-0 mb-2 w-64 bg-surface-raised border border-line rounded-lg shadow-lg p-3 space-y-1.5 text-[11px] text-fg-secondary z-10"
                                     >
                                         <div>
                                             The difference heatmap shows the per-pixel absolute color difference of the
@@ -1841,7 +1836,7 @@ function MaterialCompareApp({ active = true } = {}) {
                 onClose={() => setPresetPickerSlot(null)}
                 onSelect={loadPickedIntoSlot}
                 title={presetPickerSlot === 'B' ? 'Load into Document B' : 'Load into Document A'}
-                overlayClassName="fixed left-0 right-0 bottom-0 top-[var(--mtlx-header-h,0px)] z-50 flex items-center justify-center bg-scrim/70"
+                overlayClassName="fixed left-0 right-0 bottom-0 top-[var(--mtlx-header-h,0px)] z-50 flex items-center justify-center bg-scrim/85"
             />
         </div>
     );

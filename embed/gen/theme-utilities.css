@@ -7,11 +7,11 @@
 .bg-hud\/70 { background-color: rgb(var(--mtlx-hud) / 0.7); }
 .bg-stage { background-color: rgb(var(--mtlx-stage) / 1); }
 .bg-surface-base { background-color: rgb(var(--mtlx-surface-base) / 1); }
+.bg-surface-card { background-color: rgb(var(--mtlx-surface-card) / 1); }
 .bg-surface-sunken { background-color: rgb(var(--mtlx-surface-sunken) / 1); }
 .bg-veil\/70 { background-color: rgb(var(--mtlx-veil) / 0.7); }
 .border-error-border\/60 { border-color: rgb(var(--mtlx-error-border) / 0.6); }
 .border-hud-line { border-color: rgb(var(--mtlx-hud-line) / 1); }
 .border-line-strong { border-color: rgb(var(--mtlx-line-strong) / 1); }
-.text-error-text-strong { color: rgb(var(--mtlx-error-text-strong) / 1); }
 .text-fg-secondary { color: rgb(var(--mtlx-fg-secondary) / 1); }
 .text-hud-fg { color: rgb(var(--mtlx-hud-fg) / 1); }

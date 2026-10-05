@@ -1,11 +1,15 @@
-// Renderer-core pieces shared out of createMtlxRenderView: WebGL2
-// acquisition/display setup, scene creation, sizing, and the
-// snapshot/renderNow/capture trio. One IIFE; engine internals arrive via bindEngine, never read from window at load time.
+// The render session (createRenderSession) every view runs on, plus the
+// renderer-core pieces it composes: WebGL2 acquisition, sizing, sleep, capture, camera.
+// One IIFE; engine internals arrive via bindEngine, never read from window at load time.
 (() => {
     // Every dependency createMtlxRenderView's engine-side callers must
     // hand to bindEngine below; a missing one throws immediately instead
     // of failing later with a confusing "x is not a function".
-    const ENGINE_DEPS = ['getDisplayTransform', 'displayExposureScale', 'clockTick'];
+    const ENGINE_DEPS = ['getDisplayTransform', 'applyThreeToneMappingChunk', 'displayExposureScale', 'clockTick',
+        'createPeelPipeline', 'getForceTransparency', 'getEnvironment', 'getEnvOverride', 'resolveShadingEnv',
+        'makeEnvTexture', 'makeBackgroundTexture', 'parseEnvBuffer', 'buildEnvFromParsedTexture',
+        'displayTransformId', 'fullscreenElement', 'registerLiveView', 'unregisterLiveView', 'compileFilteringDriverNoise',
+        'enforceGlContextCap'];
     let ENGINE = null;
 
     const bindEngine = (deps) => {
@@ -14,16 +18,8 @@
         ENGINE = deps;
     };
 
-    // Scaffold for the full boot-order session (design doc section 2):
-    // createMtlxRenderView adopts this in a later P3 slice, once the
-    // preview/content split lands. Not called yet.
-    const createRenderSession = () => ({
-        start: () => { throw new Error('createRenderSession.start is not wired until a later P3 slice'); },
-        dispose: () => {},
-    });
-
     // Names every handle must expose as a function (P3-DESIGN.md section 2).
-    // Shared by Preview (this slice) and, later, the Scene handle.
+    // Shared by the preview and, from P6 S3, the Scene handle.
     const HANDLE_CONTRACT = Object.freeze([
         'dispose', 'setActive', 'getSleepState', 'getCamera', 'setCamera', 'resetCamera',
         'setAutoRotate', 'frameAll', 'renderNow', 'snapshot', 'snapshotPixels', 'beginCapture',
@@ -39,8 +35,8 @@
     const HANDLE_ALIASES = Object.freeze(['setEnvBackground']);
 
     // Generic fallbacks for the handful of core names a content is allowed
-    // to skip. Preview (this slice) uses every one of these; Scene (P6)
-    // will supply its own real implementations instead.
+    // to skip. The preview uses every one of these; the Scene (P6 S3)
+    // supplies its own real implementations instead.
     const buildHandleDefaults = (handle) => ({
         frameAll: () => handle.resetCamera(),
         getSamplerReport: () => [],
@@ -56,9 +52,11 @@
     const buildHandle = (session, content) => {
         const handle = {};
         const reserved = HANDLE_CONTRACT.concat(HANDLE_ALIASES);
+        // Session first: content lifecycle names (dispose) never reach the
+        // handle; a content supplies only core names the session leaves open.
         const pick = (name) => {
-            if (content && typeof content[name] === 'function') return content[name];
             if (session && typeof session[name] === 'function') return session[name];
+            if (content && typeof content[name] === 'function') return content[name];
             return null;
         };
         const defaults = buildHandleDefaults(handle);
@@ -74,13 +72,19 @@
             const fn = pick(name);
             if (fn) handle[name] = fn;
         });
-        // Writable data fields: tryRefreshRenderView mutates these
-        // directly on the handle afterward, so they must be own, plain
-        // assignable properties, not getters.
-        const fields = Object.assign({}, session && session.fields, content && content.fields);
-        Object.keys(fields).forEach((k) => {
-            if (reserved.indexOf(k) !== -1) throw new Error('buildHandle: field "' + k + '" shadows a core handle name');
-            handle[k] = fields[k];
+        // Data fields: plain values become own writable properties
+        // (tryRefreshRenderView mutates them); a getter stays a live getter
+        // (the Scene's missingFiles), so descriptors are copied, not values.
+        const contentFields = content && (typeof content.fields === 'function' ? content.fields() : content.fields);
+        [session && session.fields, contentFields].forEach((source) => {
+            if (!source) return;
+            Object.keys(source).forEach((k) => {
+                if (reserved.indexOf(k) !== -1) throw new Error('buildHandle: field "' + k + '" shadows a core handle name');
+                const desc = Object.getOwnPropertyDescriptor(source, k);
+                Object.defineProperty(handle, k, desc.get || desc.set
+                    ? { get: desc.get, set: desc.set, enumerable: true, configurable: true }
+                    : { value: desc.value, writable: true, enumerable: true, configurable: true });
+            });
         });
         if (content && content.extras) {
             Object.keys(content.extras).forEach((k) => {
@@ -98,7 +102,9 @@
     // Acquires the WebGL2 context and sets up display transform, in
     // the same order createMtlxRenderView ran inline, so program state
     // and the PMREM bake downstream stay byte-identical.
-    const acquireRenderer = ({ canvas, wantsStudio, maxPixelRatio, width, height, isSuspended = () => false }) => {
+    // The Scene passes no size (its resize() sizes the buffer) and its own
+    // display mode/exposure; the preview uses the engine-global display.
+    const acquireRenderer = ({ canvas, wantsStudio, maxPixelRatio, width, height, display = null, isSuspended = () => false }) => {
         const THREE = window.THREE;
         // Acquire WebGL2 ourselves and pass it via `context`, so three
         // skips its own getContext('webgl2')-then-'webgl' fallback: a
@@ -130,15 +136,14 @@
             renderer.shadowMap.enabled = true;
             renderer.shadowMap.type = THREE.VSMShadowMap;
         }
-        renderer.setSize(width, height, false);
+        if (width != null && height != null) renderer.setSize(width, height, false);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, maxPixelRatio));
         renderer.debug.checkShaderErrors = true;
         // No-ops for the RawShaderMaterial surface (encodeDisplay bakes
         // its transform in); set here for the ordinary three materials
         // (skybox, backplanes, neutral glTF parts) so both agree.
-        const displayMode = ENGINE.getDisplayTransform();
-        // Resolved at call time: mtlx-scene-assembly.js loads before any view is built.
-        window.MtlxSceneAssembly.applyRendererDisplay(renderer, { mode: displayMode, exposureScale: ENGINE.displayExposureScale() });
+        if (display) applyRendererDisplay(renderer, display.mode, display.exposure);
+        else applyRendererDisplay(renderer, ENGINE.getDisplayTransform(), ENGINE.displayExposureScale());
         // Hoisted once the renderer exists: gates u_peelLinear binding,
         // peel-layer/accum half-float storage, and finalMat's shader
         // choice, all from this one extension check (see allocPeel).
@@ -146,7 +151,224 @@
         return { renderer, gl, onGlLost, onGlRestored, peelLinearOk };
     };
 
+    // Renderer output for the built-in three materials. CustomToneMapping
+    // carries our own chunk (applyThreeToneMappingChunk), so they run the SAME
+    // curve and exposure as the MaterialX surfaces, not only in 'aces'.
+    // The one implementation lives in mtlx-scene-assembly.js (shared with the
+    // thumbnail worker), resolved at call time: it loads before any view is built.
+    const applyRendererDisplay = (renderer, mode, exposure) => {
+        window.MtlxSceneAssembly.applyRendererDisplay(renderer, { mode, exposureScale: exposure });
+    };
+
     const createRenderScene = () => new window.THREE.Scene();
+
+    // Frame-scoped linear output (the Scene's HDR frame and nested peel
+    // passes): begin(switchMaterialX) returns a release, the outermost one
+    // restores materials and renderer output; begin.isActive() for diagnostics.
+    const createLinearLease = ({ renderer, scene }) => {
+        let state = null;
+        const begin = (switchMaterialX = true) => {
+            const THREE = window.THREE;
+            if (state) {
+                state.depth++;
+            } else {
+                state = {
+                    depth: 1, toneMapping: renderer.toneMapping,
+                    outputEncoding: renderer.outputEncoding, materials: new Map(),
+                };
+                scene.traverse((object) => {
+                    const list = object && object.material
+                        ? (Array.isArray(object.material) ? object.material : [object.material]) : [];
+                    list.forEach((material) => {
+                        if (!material || state.materials.has(material)) return;
+                        const u = material.uniforms || {};
+                        state.materials.set(material, {
+                            toneMapped: material.toneMapped,
+                            linearOut: u.uLinearOut ? u.uLinearOut.value : undefined,
+                            peelLinear: switchMaterialX && u.u_peelLinear ? u.u_peelLinear.value : undefined,
+                        });
+                        // Raw MaterialX includes opaque/emissive materials,
+                        // not just the transparent set processed by peeling.
+                        if (switchMaterialX && u.u_peelLinear) u.u_peelLinear.value = 1;
+                        if (u.uLinearOut) u.uLinearOut.value = 1;
+                        if (!material.isRawShaderMaterial && material.toneMapped) {
+                            material.toneMapped = false;
+                            material.needsUpdate = true;
+                        }
+                    });
+                });
+                renderer.toneMapping = THREE.NoToneMapping;
+                renderer.outputEncoding = THREE.LinearEncoding;
+            }
+            let released = false;
+            return () => {
+                if (released) return;
+                released = true;
+                if (!state || --state.depth > 0) return;
+                const done = state;
+                state = null;
+                done.materials.forEach((value, material) => {
+                    if (material.toneMapped !== value.toneMapped) {
+                        material.toneMapped = value.toneMapped;
+                        material.needsUpdate = true;
+                    }
+                    const u = material.uniforms || {};
+                    if (u.uLinearOut && value.linearOut !== undefined) u.uLinearOut.value = value.linearOut;
+                    if (u.u_peelLinear && value.peelLinear !== undefined) u.u_peelLinear.value = value.peelLinear;
+                });
+                renderer.toneMapping = done.toneMapping;
+                renderer.outputEncoding = done.outputEncoding;
+            };
+        };
+        begin.isActive = () => !!state;
+        return begin;
+    };
+
+    // One frame for either content kind, in a fixed order: content pre-frame, depth
+    // prepass and SSAO, thickness, content pre-colour, then the colour draw wrapped
+    // by the HDR presentation when present (linear inside, through `lease`).
+    const createFrameRunner = (steps) => ({
+        render: () => {
+            if (steps.prepare) steps.prepare();
+            const ssao = steps.ssao ? steps.ssao() : null;
+            if (ssao) {
+                const renderer = steps.renderer(), THREE = window.THREE;
+                const target = renderer.getRenderTarget();
+                const outputSize = target ? new THREE.Vector2(target.width, target.height) : renderer.getDrawingBufferSize(new THREE.Vector2());
+                // Both read the prepass, so it is valid for THIS camera before any material draws.
+                if (steps.prepassNeeded()) ssao.prepass(outputSize, steps.root());
+                if (steps.aoEnabled()) ssao.apply(ssao.occlusion(outputSize, steps.root()), outputSize.x, outputSize.y);
+            }
+            if (steps.thickness) {
+                const state = steps.thickness.update(steps.root());
+                steps.thickness.apply(state, state.width, state.height);
+            }
+            if (steps.beforeColor) steps.beforeColor();
+            const presentation = steps.presentation ? steps.presentation() : null;
+            if (!presentation) { steps.drawColor(false); return; }
+            presentation.render((linear) => {
+                const release = linear ? steps.lease() : null;
+                try { steps.drawColor(linear); } finally { if (release) release(); }
+            });
+            if (steps.afterPresent) steps.afterPresent();
+        },
+    });
+
+    // A view's rAF loop: tick(ts) runs one frame while canRun(); scheduleFirst
+    // books the next frame before the tick (the preview), else after (the Scene).
+    const createFrameLoop = ({ canRun, tick, scheduleFirst = false }) => {
+        let id = 0;
+        const step = (ts) => {
+            if (!canRun()) { id = 0; return; }
+            if (scheduleFirst) id = requestAnimationFrame(step);
+            tick(ts);
+            if (!scheduleFirst) id = requestAnimationFrame(step);
+        };
+        return {
+            start: () => { if (!id) step(); },
+            stop: () => { if (id) cancelAnimationFrame(id); id = 0; },
+            running: () => !!id,
+        };
+    };
+
+    // On-demand effect files (js/shared/fx-<name>.js) against the document base
+    // (site root, the embed's base, the webview's base); one load per effect,
+    // resolved at once when the factory is already registered (VIEW_DEPS).
+    const EFFECT_FACTORIES = { post: 'createPostEffect', ssao: 'createSsaoEffect', thickness: 'createThicknessEffect' };
+    const effectLoads = {};
+    const loadEffect = (name) => {
+        const factory = EFFECT_FACTORIES[name];
+        if (!factory) return Promise.reject(new Error('MtlxRender.loadEffect: unknown effect ' + name));
+        if (window.MtlxRender[factory]) return Promise.resolve(window.MtlxRender[factory]);
+        if (!effectLoads[name]) {
+            effectLoads[name] = new Promise((resolve, reject) => {
+                const tag = document.createElement('script');
+                tag.src = new URL('js/shared/fx-' + name + '.js', document.baseURI).href;
+                tag.onload = () => {
+                    tag.remove();
+                    if (window.MtlxRender[factory]) resolve(window.MtlxRender[factory]);
+                    else reject(new Error(tag.src + ' did not register MtlxRender.' + factory));
+                };
+                tag.onerror = () => { tag.remove(); reject(new Error('could not load ' + tag.src)); };
+                document.head.appendChild(tag);
+            });
+            effectLoads[name].catch(() => { delete effectLoads[name]; });
+        }
+        return effectLoads[name];
+    };
+
+    // One peel orchestrator per view: owns its depth-peel pipeline and draws a
+    // frame over the content's transparent meshes (plain render when none).
+    // rgbt 'always' = the RGB-T wrapper; 'auto' = scalar unless the list carries the RGB-T payload.
+    const createPeelOrchestrator = ({ renderer, rgbt = 'auto', pipelineOptions = {} }) => {
+        const make = (sceneRgbt) => ENGINE.createPeelPipeline(renderer,
+            sceneRgbt ? Object.assign({}, pipelineOptions, { sceneRgbt: true }) : pipelineOptions);
+        const always = rgbt === 'always';
+        const scalar = always ? null : make(false);
+        let rgbtPipeline = always ? make(true) : null;
+        let current = always ? rgbtPipeline : scalar;
+        const state = { mode: 'inactive', reason: null, payloadMaterials: 0, unsupportedLabels: [] };
+        const carriesPayload = (list) => list.some((object) => {
+            const mats = Array.isArray(object.material) ? object.material : [object.material];
+            return mats.some((m) => !!(m && m.uniforms && m.uniforms.u_peelRgbt && m.uniforms.u_peelRgbtPass));
+        });
+        // Picks this frame's pipeline; a switch frees the other one's targets.
+        const choose = (list) => {
+            if (always) return rgbtPipeline;
+            const next = carriesPayload(list) ? (rgbtPipeline || (rgbtPipeline = make(true))) : scalar;
+            if (next !== current) {
+                try { current.dispose(); } catch (e) { /* already disposed/invalid */ }
+                current = next;
+            }
+            return current;
+        };
+        const render = (scene, camera, list, opts = {}) => {
+            if (!list || !list.length) {
+                Object.assign(state, { mode: opts.enabled ? 'opaque' : 'inactive', reason: null, payloadMaterials: 0, unsupportedLabels: [] });
+                renderer.render(scene, camera);
+                return;
+            }
+            const pipeline = choose(list);
+            if (pipeline === scalar) {
+                Object.assign(state, { mode: 'scalar', reason: null });
+                pipeline.render(scene, camera, list, { setSceneLinear: opts.setSceneLinear, outputLinear: opts.outputLinear });
+                return;
+            }
+            const payloadMaterials = [];
+            const unsupportedLabels = [];
+            const seenPayload = new Set();
+            list.forEach((object) => {
+                const mats = Array.isArray(object.material) ? object.material : [object.material];
+                mats.forEach((material) => {
+                    if (!material || seenPayload.has(material) || !(material.uniforms && material.uniforms.u_peelMode)) return;
+                    seenPayload.add(material);
+                    payloadMaterials.push(material);
+                    if (!material.uniforms.u_peelRgbtPass || !material.uniforms.u_peelRgbt) {
+                        unsupportedLabels.push(String((material.userData && material.userData.mtlxSceneMaterialPath) || material.name || 'material'));
+                    }
+                });
+            });
+            Object.assign(state, { mode: 'rgbt', reason: null, payloadMaterials: payloadMaterials.length, unsupportedLabels: unsupportedLabels.slice(0, 32) });
+            pipeline.render(scene, camera, list, {
+                setSceneLinear: opts.setSceneLinear, outputLinear: opts.outputLinear,
+                onUnsupported: (reason) => {
+                    Object.assign(state, { mode: 'legacy', reason: String(reason || 'RGBT unsupported'), unsupportedLabels: unsupportedLabels.slice(0, 32) });
+                    if (opts.onUnsupported) opts.onUnsupported(reason);
+                },
+            });
+        };
+        return {
+            render,
+            // Frees the targets; the next peeling frame reallocates them lazily.
+            dispose: () => {
+                if (scalar) scalar.dispose();
+                if (rgbtPipeline) rgbtPipeline.dispose();
+            },
+            resident: () => !!(current && current.debug && current.debug().opaque),
+            debug: () => (current && typeof current.debug === 'function' ? current.debug() : null),
+            state: () => Object.assign({}, state),
+        };
+    };
 
     // Filters ONE benign Windows ANGLE warning (X4008 division by zero,
     // harmless), matched by exact signature. debugShaders sends filtered
@@ -180,6 +402,51 @@
     // (js/mtlx-engine.js's applyMaterialInternal).
     const findBadProgram = (renderer) =>
         (renderer.info.programs || []).find((p) => p.diagnostics && p.diagnostics.runnable === false);
+
+    // Exact per-material attribution for multi-material content: r128 sets
+    // properties.get(material).currentProgram for every material compile()
+    // touched, so only a material whose OWN program is unrunnable is listed.
+    const findUnrunnableMaterials = (renderer, materials, accept) => {
+        const out = [];
+        for (const material of materials) {
+            if (!material || (accept && !accept(material))) continue;
+            const props = renderer.properties.get(material);
+            const program = props && props.currentProgram;
+            if (!program || !program.diagnostics || program.diagnostics.runnable !== false) continue;
+            const d = program.diagnostics;
+            out.push({ material, log: d.programLog || (d.fragmentShader && d.fragmentShader.log) || (d.vertexShader && d.vertexShader.log) });
+        }
+        return out;
+    };
+
+    // Fetches and builds an .hdr/.exr environment by URL (decoder chosen by
+    // extension); rejects with the same messages setEnvMap always used.
+    const loadEnvMapUrl = (url) => {
+        const THREE = window.THREE;
+        const clean = String(url).split('?')[0].split('#')[0];
+        const ext = clean.slice(clean.lastIndexOf('.')).toLowerCase();
+        if (ext !== '.hdr' && ext !== '.exr') {
+            return Promise.reject(new Error('Unsupported environment URL "' + url + '". Expected .hdr or .exr.'));
+        }
+        if (ext === '.hdr' && typeof THREE.RGBELoader === 'undefined') {
+            return Promise.reject(new Error('RGBELoader unavailable (script blocked/offline). Cannot load .hdr environments.'));
+        }
+        if (ext === '.exr' && typeof THREE.EXRLoader === 'undefined') {
+            return Promise.reject(new Error('EXRLoader unavailable (script blocked/offline). Cannot load .exr environments.'));
+        }
+        return fetch(url)
+            .then((r) => {
+                if (!r.ok) throw new Error('Failed to fetch environment "' + url + '" (HTTP ' + r.status + ').');
+                return r.arrayBuffer();
+            })
+            .then((buf) => {
+                const raw = ENGINE.parseEnvBuffer(buf, ext);
+                if (!raw || !raw.image || !raw.image.data) {
+                    throw new Error('Failed to parse the environment image "' + url + '".');
+                }
+                return ENGINE.buildEnvFromParsedTexture(raw);
+            });
+    };
 
     // Sticky linear-pass toggler: flips toneMapped state only on
     // transitions, never every frame. `apply(on)` is the caller's side
@@ -479,6 +746,7 @@
                 captureState = null;
                 sizer.setResizeSuspended(false);
             },
+            isCapturing: () => !!captureState,
         };
     };
 
@@ -545,13 +813,500 @@
         return () => window.removeEventListener('mtlx-settings-changed', handler);
     };
 
+    // One render session over a content adapter (P6-CONTRACT.md): renderer,
+    // camera, sizing, sleep, environment, backdrop, linear pass, loop, capture
+    // and the handle. start() keeps the old createMtlxRenderView boot order.
+    const createRenderSession = ({
+        canvas, content, maxPixelRatio = 2, wheelMode = 'zoom', autoRotate = true,
+        backdrop, envBackground = false, cameraDistance = 3.6, label = '',
+        isMounted = () => true, isActive = () => true, isAlive = null, liveViews = true,
+        // True keeps this view's context while inactive (Compare's diff mode reads its pixels).
+        holdContext = () => false,
+    }) => {
+        const aliveFn = isAlive || isMounted;
+        // Unknown values fall back to 'studio'; envBackground only applies
+        // when `backdrop` was never passed.
+        const normalizeBackdropMode = (v) => (v === 'environment' || v === 'none' || v === 'studio-dark') ? v : 'studio';
+        let backdropMode = normalizeBackdropMode(
+            backdrop !== undefined ? backdrop : (envBackground ? 'environment' : 'studio')
+        );
+        let loop = null, renderer = null, scene = null, camera = null, controls = null, handle = null;
+        // Preview Quality effects (null below Quality): SSAO, HDR presentation and its linear lease.
+        let fxSsao = null, fxPost = null, fxLease = null;
+        let onGlLost = null, onGlRestored = null, onContextLostSleep = null, onContextRestoredWake = null;
+        let sizer = null, captureController = null, sleepGate = null, unsubDiffuseEnv = null, wheelGate = null;
+        let peel = null, peelLinearOk = false, backdropParts = null, pmremRT = null, linearToggle = null;
+        let caps = null, renderPathReady = false, stopped = false;
+        let explicitActive = true, drawingBufferParked = false;
+        // Context budget (ENGINE.enforceGlContextCap): suspendedByUs marks a loss WE caused,
+        // so real GPU resets keep their own path.
+        let viewGl = null, loseExt = null, suspendedByUs = false, lastRenderAt = 0, applyBusy = 0;
+        // No-OrbitControls fallback spin (script blocked) mirrors autoRotate.
+        let fallbackSpin = !!autoRotate;
+        // Environment state, fetched once per session; the content reads it
+        // through host.env() when it binds material uniforms.
+        let envRadiance = null, envIrradiance = null, envMips = 0, envExposure = 1.0;
+        let envBgTexture = null, envRotationRad = 0, envKeyLight = null, envSoftKeyDir = null;
+        let envHasFile = false, envPrefilteredIrr = false, currentEnvRef = null;
+        // Owner tag from setEnvironment(env, {user}); recorded only (S2 reads it).
+        let envOwner = null;
+        const envMapGate = window.MtlxRender.createEnvMapGate();
+        const wheelHint = createWheelHint(canvas);
+
+        const host = {
+            canvas, label, width: 0, height: 0,
+            get renderer() { return renderer; },
+            get scene() { return scene; },
+            get camera() { return camera; },
+            get controls() { return controls; },
+            env: () => ({
+                radiance: envRadiance, irradiance: envIrradiance, mips: envMips, keyLight: envKeyLight,
+                softKeyDir: envSoftKeyDir, rotation: envRotationRad, exposure: envExposure,
+                hasFile: envHasFile, prefilteredIrr: envPrefilteredIrr, background: envBgTexture,
+            }),
+            // Driver-noise filtered compile; the first unrunnable program or null.
+            compile: () => {
+                ENGINE.compileFilteringDriverNoise(renderer, scene, camera);
+                return findBadProgram(renderer);
+            },
+            syncLinear: (peelOn) => linearToggle.sync(peelOn && peelLinearOk),
+            boundsChanged: () => backdropParts.updateStudioFloor(content.root()),
+            handle: () => handle,
+        };
+        // Lifecycle hooks are awaited only when they return a thenable, so a
+        // synchronous step keeps the old microtask order.
+        const isThenable = (v) => !!v && typeof v.then === 'function';
+
+        const suspendGl = () => {
+            // Kept: a lost context answers getExtension with null, so resume needs the object from now.
+            loseExt = viewGl && !viewGl.isContextLost() && viewGl.getExtension('WEBGL_lose_context');
+            if (!loseExt) return false;
+            suspendedByUs = true;
+            loseExt.loseContext();
+            return true;
+        };
+        const resumeGl = () => {
+            suspendedByUs = false;
+            if (window.MTLX_PERF_LOG) console.log('[mtlx-gl] resumed ' + label);
+            try { if (loseExt) loseExt.restoreContext(); } catch (e) { /* context already gone */ }
+        };
+
+        const disposeAll = () => {
+            stopped = true;
+            content.dispose();
+            if (loop) loop.stop();
+            if (sizer) sizer.dispose();
+            if (controls) controls.dispose();
+            if (wheelGate) wheelGate.dispose();
+            wheelHint.dispose();
+            if (backdropParts) backdropParts.dispose();
+            // pmremRT is this view's own target; the PMREMGenerator is never
+            // disposed (r128 shares its LOD planes module-wide).
+            try { if (pmremRT) pmremRT.dispose(); } catch (e) { /* already disposed/invalid */ }
+            try { envMapGate.disposeAll(); } catch (e) { /* already disposed/invalid */ }
+            try { if (peel) peel.dispose(); } catch (e) { /* already disposed/invalid */ }
+            // No forceContextLoss(): callers rebuild on the SAME canvas right away
+            // (handle.destroy() does it for discarded canvases).
+            try {
+                if (onContextLostSleep) canvas.removeEventListener('webglcontextlost', onContextLostSleep);
+                if (onContextRestoredWake) canvas.removeEventListener('webglcontextrestored', onContextRestoredWake);
+            } catch (e) { /* already disposed/invalid */ }
+            try { if (fxSsao) fxSsao.dispose(); if (fxPost) fxPost.dispose(); } catch (e) { /* already disposed/invalid */ }
+            disposeRendererCore({ canvas, onGlLost, onGlRestored, renderer });
+        };
+
+        // The one render entry point: plain render unless this frame peels.
+        const frame = createFrameRunner({
+            renderer: () => renderer, root: () => content.root(),
+            ssao: () => fxSsao, prepassNeeded: () => true, aoEnabled: () => true,
+            presentation: () => fxPost, lease: () => fxLease(),
+            drawColor: (linear) => {
+                const list = ENGINE.getForceTransparency() ? content.transparentMeshes() : [];
+                // Inside the HDR frame the lease keeps every material linear.
+                if (linear) { peel.render(scene, camera, list, { outputLinear: true }); return; }
+                linearToggle.sync(list.length > 0 && peelLinearOk);
+                peel.render(scene, camera, list);
+            },
+        });
+        const renderFrame = () => { lastRenderAt = performance.now(); frame.render(); };
+        const animateTick = (ts) => {
+            // Idempotent per rAF timestamp, so every view reads one clock value.
+            ENGINE.clockTick(ts);
+            if (controls) {
+                // Before update(): OrbitControls clamps phi in there.
+                backdropParts.applyStudioPolarClamp(controls, camera, backdropMode);
+                updateControls({ controls, camera, clampBox: content.clampBox() });
+            }
+            // Paused views still track camera input (drag/damping).
+            // Suspended by the context cap: restore once wanted again, never render meanwhile.
+            if (suspendedByUs) { if (isActive() || holdContext()) resumeGl(); return; }
+            if (!isActive()) return;
+            if (!controls && fallbackSpin) content.root().rotation.y += 0.005;
+            content.beforeRender();
+            renderFrame();
+        };
+        loop = createFrameLoop({ canRun: () => !stopped && aliveFn(), tick: animateTick, scheduleFirst: true });
+        const animate = () => loop.start();
+        const applyBackdrop = (mode) => {
+            backdropMode = normalizeBackdropMode(mode);
+            backdropParts.applyBackdrop(backdropMode, controls, camera);
+        };
+
+        const setEnvironment = (env, opts) => {
+            if (!env) return;
+            if (opts && opts.user !== undefined) envOwner = opts.user;
+            currentEnvRef = env;
+            const shaded = ENGINE.resolveShadingEnv(renderer, env);
+            envRadiance = shaded.radiance;
+            envIrradiance = shaded.irradiance;
+            envMips = env.mips;
+            envBgTexture = env.background;
+            envKeyLight = env.keyLight || null;
+            envSoftKeyDir = env.softKeyDir || null;
+            content.envChanged('environment', env);
+            backdropParts.setEnvironmentBackdrop(envBgTexture, envKeyLight, envSoftKeyDir, envRotationRad);
+            // A PMREM target is baked from its source, so regenerate it.
+            if (caps.sceneEnvironment) {
+                try {
+                    const oldPmremRT = pmremRT;
+                    pmremRT = window.MtlxRender.buildScenePmrem(renderer, env.radiance, window.THREE);
+                    scene.environment = pmremRT.texture;
+                    if (oldPmremRT) oldPmremRT.dispose();
+                } catch (e) {
+                    console.warn('environment PMREM regeneration failed:', e);
+                }
+            }
+        };
+        // Fetches an .hdr/.exr by URL; a falsy url restores the default and
+        // the latest call always wins.
+        const setEnvMap = (url) => {
+            const callId = envMapGate.begin();
+            const swapIn = (env, owned) => {
+                if (!envMapGate.isLatest(callId)) return;
+                handle.setEnvironment(env);
+                envMapGate.swap(env, owned);
+            };
+            if (!url) {
+                if (!envMapGate.hasFetched()) return Promise.resolve(true);
+                return ENGINE.getEnvironment().then((def) => {
+                    if (def) swapIn(def, false);
+                    return true;
+                });
+            }
+            return loadEnvMapUrl(url).then((env) => {
+                swapIn(env, true);
+                return true;
+            });
+        };
+
+        const buildSessionApi = (cameraHandle) => ({
+            fields: { renderer, controls },
+            // Explicit long-term activity, independent of the per-frame isActive().
+            setActive: (v) => {
+                explicitActive = !!v;
+                sleepGate.notify({ explicitActive });
+            },
+            getSleepState: () => ({
+                asleep: sleepGate.isAsleep(),
+                reason: sleepGate.getReason(),
+                resident: {
+                    peel: !!(peel && peel.resident()),
+                    studioShadow: backdropParts.hasShadowMap(),
+                    drawingBuffer: !drawingBufferParked,
+                },
+            }),
+            setAutoRotate: cameraHandle.setAutoRotate,
+            resetCamera: cameraHandle.resetCamera,
+            getCamera: cameraHandle.getCamera,
+            setCamera: cameraHandle.setCamera,
+            setResizeSuspended: (on) => sizer.setResizeSuspended(on),
+            snapshot: () => captureController.snapshot(),
+            snapshotPixels: (w, h) => captureController.snapshotPixels(w, h),
+            renderNow: (ts) => captureController.renderNow(ts),
+            beginCapture: (opts) => stopped ? false : captureController.beginCapture(opts),
+            captureFrame: () => captureController.captureFrame(),
+            endCapture: () => captureController.endCapture(),
+            dispose: () => {
+                if (liveViews) ENGINE.unregisterLiveView(handle);
+                if (unsubDiffuseEnv) unsubDiffuseEnv();
+                disposeAll();
+            },
+            setBackdrop: (mode) => applyBackdrop(mode),
+            getBackdrop: () => backdropMode,
+            setEnvBackground: (on) => applyBackdrop(on ? 'environment' : 'none'),
+            // Capability, not the current mode: is there an env texture at all.
+            hasEnvBackground: () => !!envBgTexture,
+            setEnvRotation: (rad) => {
+                envRotationRad = rad;
+                content.envChanged('rotation');
+                backdropParts.setEnvRotationBackdrop(rad, envKeyLight, envSoftKeyDir);
+            },
+            setEnvExposure: (x) => {
+                envExposure = x;
+                content.envChanged('exposure');
+            },
+            // Frees the peel targets the moment peeling stops; renderFrame
+            // reallocates them lazily.
+            refreshRenderMode: () => {
+                const peelOn = content.renderModeChanged();
+                if (!peelOn && peel) peel.dispose();
+            },
+            refreshDisplaySettings: () => {
+                const scale = ENGINE.displayExposureScale();
+                const mode = ENGINE.getDisplayTransform();
+                content.displayChanged({ scale, id: ENGINE.displayTransformId(mode), mode });
+                if ('toneMappingExposure' in renderer) renderer.toneMappingExposure = scale;
+                ENGINE.applyThreeToneMappingChunk(mode);
+                // The studio inverse transform is baked into its shader.
+                backdropParts.refreshStudioShader(mode);
+                scene.traverse((obj) => {
+                    if (obj.material && obj.material.toneMapped) obj.material.needsUpdate = true;
+                });
+                renderFrame();
+            },
+            setEnvironment,
+            setEnvMap,
+            __debug: () => ({ renderer, scene, camera, peel: peel ? peel.state() : null,
+                effects: { ssao: !!fxSsao, post: fxPost ? fxPost.getSettings().mode : null } }),
+        });
+
+        const start = async () => {
+            const THREE = window.THREE;
+            const perfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
+            const bail = () => { disposeAll(); return null; };
+            try {
+                let prepareResult = content.prepare(host);
+                if (isThenable(prepareResult)) prepareResult = await prepareResult;
+                if (prepareResult === false) return bail();
+                // clientWidth can be 0 before layout; a 0x0 viewport renders black.
+                const cw = canvas.clientWidth || (canvas.parentElement && canvas.parentElement.clientWidth) || 400;
+                const ch = canvas.clientHeight || 256;
+                host.width = cw;
+                host.height = ch;
+                if (!isMounted()) return bail();
+                const rendererPerfStart = window.MTLX_PERF_LOG ? performance.now() : 0;
+                if (liveViews) ENGINE.enforceGlContextCap(canvas);
+                const acquired = acquireRenderer({ canvas, wantsStudio: !!content.capabilities().studio, maxPixelRatio, width: cw, height: ch, isSuspended: () => suspendedByUs });
+                renderer = acquired.renderer;
+                viewGl = acquired.gl;
+                onGlLost = acquired.onGlLost;
+                onGlRestored = acquired.onGlRestored;
+                content.attach(host);
+                peelLinearOk = acquired.peelLinearOk;
+                if (window.MTLX_PERF_LOG) {
+                    console.log('[mtlx-perf] WebGLRenderer init: '
+                        + (performance.now() - rendererPerfStart).toFixed(1) + 'ms');
+                }
+                peel = createPeelOrchestrator({ renderer, rgbt: 'auto', pipelineOptions: { getDisplayTransform: ENGINE.getDisplayTransform } });
+                scene = createRenderScene();
+                backdropParts = window.MtlxRender.createPreviewBackdrop({ scene, getDisplayTransform: ENGINE.getDisplayTransform });
+                let instantiateResult = content.instantiate(host);
+                if (isThenable(instantiateResult)) instantiateResult = await instantiateResult;
+                if (instantiateResult === false) return bail();
+                caps = content.capabilities();
+                camera = createDefaultCamera({ flat2d: !caps.threeD, width: cw, height: ch, cameraDistance });
+                content.adoptCamera(camera, { width: cw, height: ch });
+                // Registered BEFORE OrbitControls so it can starve its wheel handler.
+                wheelGate = createWheelGate({
+                    canvas, wheelMode, getControls: () => controls,
+                    fullscreenElement: ENGINE.fullscreenElement, onGated: () => wheelHint.show(),
+                });
+                controls = null;
+                if (THREE.OrbitControls && caps.camera === 'orbit') {
+                    controls = createOrbitControls({
+                        camera, canvas, wheelMode, autoRotate,
+                        maxDistance: window.MtlxStudio.studioMaxOrbitDistance,
+                    });
+                }
+                if (!caps.autoRotate) fallbackSpin = false;
+                // Peel targets follow the drawing buffer, so a resize frees them.
+                sizer = createSizer({
+                    canvas, renderer, fallbackWidth: cw, fallbackHeight: ch,
+                    layout: (w, h) => {
+                        if (peel) peel.dispose();
+                        content.layout(w, h);
+                    },
+                    onVisibility: (hidden) => { if (sleepGate) sleepGate.notify({ hidden }); },
+                    // setSize() cleared the buffer; render now or a blank frame shows.
+                    onResized: () => {
+                        if (stopped || !renderPathReady || (sleepGate && sleepGate.isAsleep())) return;
+                        content.beforeRender();
+                        renderFrame();
+                    },
+                });
+                // Sleep frees the peel targets and the studio shadow map, then
+                // parks the drawing buffer; wake restores the layout size.
+                sleepGate = createSleepGate({
+                    onSleep: () => {
+                        if (fxSsao) fxSsao.dispose();
+                        if (fxPost) fxPost.setSettings({ enabled: false, persist: false });
+                        loop.stop();
+                        if (peel) peel.dispose();
+                        backdropParts.disposeShadowMap();
+                        renderer.setSize(1, 1, false);
+                        drawingBufferParked = true;
+                    },
+                    onWake: () => {
+                        if (fxPost) fxPost.setSettings({ enabled: true, persist: false });
+                        drawingBufferParked = false;
+                        sizer.forceSync();
+                        if (!stopped && aliveFn()) animate();
+                    },
+                });
+                // Our own cap suspension must not sleep the loop: animateTick is what resumes the context.
+                onContextLostSleep = () => { if (!suspendedByUs) sleepGate.notify({ contextLost: true }); };
+                onContextRestoredWake = () => sleepGate.notify({ contextLost: false });
+                canvas.addEventListener('webglcontextlost', onContextLostSleep);
+                canvas.addEventListener('webglcontextrestored', onContextRestoredWake);
+
+                // IBL for lit materials and/or the scene-mode PMREM, fetched once.
+                if (caps.lit || caps.sceneEnvironment) {
+                    const env = ENGINE.getEnvOverride() || await ENGINE.getEnvironment();
+                    currentEnvRef = env || null;
+                    if (!isMounted()) return bail();
+                    const radianceSrc = env ? env.radiance : ENGINE.makeEnvTexture(256, 128, false);
+                    if (caps.lit) {
+                        if (env) {
+                            const shaded = ENGINE.resolveShadingEnv(renderer, env);
+                            envRadiance = shaded.radiance; envIrradiance = shaded.irradiance; envMips = env.mips;
+                            envBgTexture = env.background;
+                            envHasFile = true;
+                            envPrefilteredIrr = !!env.prefilteredIrr;
+                            envKeyLight = env.keyLight || null;
+                            envSoftKeyDir = env.softKeyDir || null;
+                        } else {
+                            envRadiance = ENGINE.makeEnvTexture(256, 128, false);
+                            envIrradiance = ENGINE.makeEnvTexture(64, 32, true);
+                            envMips = Math.floor(Math.log2(256)) + 1;
+                            // Synthesized data is top-first too: own flipY=true copy.
+                            envBgTexture = ENGINE.makeBackgroundTexture(envRadiance);
+                            envHasFile = false;
+                        }
+                        // 2D content never gets a backdrop mesh.
+                        if (caps.threeD) backdropParts.buildBgMesh(envBgTexture, envRotationRad);
+                    }
+                    if (caps.sceneEnvironment) {
+                        pmremRT = window.MtlxRender.buildScenePmrem(renderer, radianceSrc, THREE);
+                        scene.environment = pmremRT.texture;
+                    }
+                }
+                if (caps.studio) backdropParts.buildStudio(backdropMode, envKeyLight, envSoftKeyDir, envRotationRad);
+                applyBackdrop(backdropMode);
+                // Built-in (non-MaterialX) materials, detoned for the linear
+                // peel pass; the toggle flips only on real transitions.
+                const builtinMaterials = backdropParts.builtinMaterials().concat(content.builtinMaterials());
+                linearToggle = createLinearToggle((on) => {
+                    builtinMaterials.forEach((m) => {
+                        if (m.toneMapped === !on) return;
+                        m.toneMapped = !on;
+                        m.needsUpdate = true;
+                    });
+                    backdropParts.setStudioLinearOut(on);
+                });
+                // Preview Quality effects, loaded on demand; nothing happens below Quality.
+                const fxSetting = (key) => { try { return window.MtlxRenderSettings.get(key, { surface: caps.surface }); } catch (e) { return undefined; } };
+                const wantSsao = !!caps.surface && caps.threeD && caps.lit && !!fxSetting('ao');
+                const wantPost = !!caps.surface && caps.threeD && !!fxSetting('hdrPresentation');
+                if (wantSsao || wantPost) {
+                    try {
+                        if (wantSsao) {
+                            fxSsao = (await loadEffect('ssao'))({
+                                renderer: () => renderer, scene: () => scene, camera: () => camera,
+                                materials: () => {
+                                    const list = [];
+                                    scene.traverse((o) => { if (o.isMesh && o.material && o.material.uniforms && o.material.uniforms.u_ssaoMap) list.push(o.material); });
+                                    return list;
+                                },
+                                enabled: () => true, ssr: () => false, strength: () => Number(fxSetting('aoStrength')) || 0,
+                                // The backdrop (sky, studio, catcher) never occludes the subject.
+                                coverage: (object) => (backdropParts.builtinMaterials().indexOf(object.material) !== -1 ? 0 : 1),
+                            });
+                        }
+                        if (wantPost) {
+                            fxPost = (await loadEffect('post'))(renderer, {
+                                surface: caps.surface, getDisplayTransform: ENGINE.getDisplayTransform, getExposure: ENGINE.displayExposureScale,
+                            });
+                            fxLease = createLinearLease({ renderer, scene });
+                        }
+                    } catch (e) {
+                        console.warn('preview effects unavailable:', e);
+                    }
+                    if (!isMounted()) return bail();
+                }
+                let buildResult = content.build(host);
+                if (isThenable(buildResult)) buildResult = await buildResult;
+                if (buildResult === false) return bail();
+                // Contact-shadow casters, only when a studio catcher exists.
+                if (backdropParts.hasStudio()) {
+                    content.casters().forEach((obj) => { obj.castShadow = true; });
+                    backdropParts.updateStudioFloor(content.root());
+                }
+                renderPathReady = true;
+                animate();
+                if (window.MTLX_PERF_LOG) {
+                    console.log('[mtlx-perf] createMtlxRenderView total: '
+                        + (performance.now() - perfStart).toFixed(1) + 'ms (target: ' + label + ')');
+                }
+                captureController = createCaptureController({
+                    renderer, canvas, sizer, renderFrame, setUniforms: () => content.beforeRender(),
+                    ensureAwake: () => { if (sleepGate.isAsleep()) sleepGate.notify({ explicitActive: true, hidden: false, contextLost: false }); },
+                });
+                const cameraHandle = createCameraHandleMethods({
+                    camera, controls, fullScene: !caps.autoRotate, flat2d: !caps.threeD, cameraDistance,
+                    setFallbackSpin: (v) => { fallbackSpin = v; },
+                });
+                handle = buildHandle(buildSessionApi(cameraHandle), content);
+                // Context budget: applyMaterial in flight keeps the view from being suspended.
+                if (typeof handle.applyMaterial === 'function') {
+                    const applyInner = handle.applyMaterial;
+                    handle.applyMaterial = async (...args) => { applyBusy++; try { return await applyInner(...args); } finally { applyBusy--; } };
+                }
+                // dispose() while the canvas is still in the page (rebuild on it), destroy() once React detached it.
+                handle.release = () => { if (canvas && canvas.isConnected) handle.dispose(); else handle.destroy(); };
+                // One-way teardown for a canvas discarded for good: dispose, then free the GL context now.
+                handle.destroy = () => {
+                    handle.dispose();
+                    suspendedByUs = false;
+                    try { const ext = viewGl && !viewGl.isContextLost() && viewGl.getExtension('WEBGL_lose_context'); if (ext) ext.loseContext(); } catch (e) { /* already lost */ }
+                    viewGl = null; loseExt = null;
+                };
+                // Context budget hooks read by ENGINE.enforceGlContextCap.
+                handle.glCtx = {
+                    canvas, label,
+                    lost: () => !viewGl || viewGl.isContextLost(),
+                    lastRender: () => lastRenderAt,
+                    suspendable: () => !stopped && !suspendedByUs && !applyBusy && !isActive() && !holdContext(),
+                    suspend: suspendGl,
+                };
+                if (liveViews) ENGINE.registerLiveView(handle);
+                // Diffuse-env method broadcast: rebind through setEnvironment.
+                if (caps.lit) {
+                    unsubDiffuseEnv = onDiffuseEnvMethodChange(() => {
+                        if (currentEnvRef) handle.setEnvironment(currentEnvRef);
+                    });
+                }
+                return handle;
+            } catch (err) {
+                disposeAll();
+                throw err;
+            }
+        };
+        return { start, dispose: () => (handle ? handle.dispose() : disposeAll()) };
+    };
+
     window.MtlxRender = Object.assign(window.MtlxRender || {}, {
         bindEngine,
         createRenderSession,
         HANDLE_CONTRACT,
         buildHandle,
         acquireRenderer,
+        applyRendererDisplay,
         createRenderScene,
+        createLinearLease,
+        createPeelOrchestrator,
+        createFrameRunner,
+        createFrameLoop,
+        loadEffect,
         createDefaultCamera,
         createOrbitControls,
         shouldGateWheel,
@@ -564,6 +1319,8 @@
         disposeRendererCore,
         compileFilteringDriverNoise,
         findBadProgram,
+        findUnrunnableMaterials,
+        loadEnvMapUrl,
         createLinearToggle,
         computeAwake,
         sleepReason,

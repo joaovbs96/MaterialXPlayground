@@ -232,6 +232,9 @@ const loadBoundedBitmapTexture = async (blob, maxSize, samplerModes) => {
                 addTexturePerf(needsResize ? 'resizeMs' : 'decodeMs', performance.now() - t0);
                 const texture = new THREE.Texture(image);
                 configureLoadedTexture(texture);
+                // This path ignores samplerModes; the Scene's legacy binds kept that.
+                // (r128 textures carry no userData of their own.)
+                texture.userData = Object.assign(texture.userData || {}, { mtlxBoundedFastPath: true });
                 return texture;
             }
             // Header parsed but the sized decode failed; fall through to the
@@ -805,9 +808,9 @@ const envRadianceForShading = (env) => {
 // map) always exists and is the fallback; env.irradianceConvolved only
 // exists once ensureConvolvedIrradiance has succeeded on a WebGL2 renderer
 // with the 'convolve' switch active.
-const envIrradianceForShading = (env) => {
+const envIrradianceForShading = (env, method) => {
     if (!env) return null;
-    if (getDiffuseEnvMethod() === 'convolve' && env.irradianceConvolved) return env.irradianceConvolved;
+    if ((method || getDiffuseEnvMethod()) === 'convolve' && env.irradianceConvolved) return env.irradianceConvolved;
     return env.irradiance;
 };
 
@@ -817,10 +820,10 @@ const envIrradianceForShading = (env) => {
 // Binds env radiance/irradiance to every declared sampler matching env
 // naming; skips u_localEnv* (bound separately, gated by strength). Shared
 // by createMtlxSceneUniforms and the Material Viewer's setEnvironment.
-const bindEnvironmentSamplers = (uniforms, declared, env) => {
+const bindEnvironmentSamplers = (uniforms, declared, env, diffuseMethod) => {
     const has = (name) => declared.some((u) => u.name === name);
     const radiance = envRadianceForShading(env) || getDummyTex();
-    const irradiance = envIrradianceForShading(env) || radiance;
+    const irradiance = envIrradianceForShading(env, diffuseMethod) || radiance;
     if (has('u_envRadiance')) uniforms.u_envRadiance = { value: radiance };
     if (has('u_envIrradiance')) uniforms.u_envIrradiance = { value: irradiance };
     for (const u of declared) {
@@ -836,8 +839,10 @@ const bindEnvironmentSamplers = (uniforms, declared, env) => {
 const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLights = null, shadowMap = null, shadowMatrix = null, ssaoMap = null, ssaoTexel = null, ssaoStrength = 1, thicknessMap = null, thicknessTexel = null, thicknessScale = 1, refractionTwoSided = false, sceneRadius = 1, envTilt = null, envRotationRad = 0, envExposure = 1, environmentIndirectScale = 1, environmentKeyScale = 1, lightScales = null, shadowDiagnosticVisibilityScale = 1, displayTransform = null, shadowAtlas = null, shadowMatrices = null, shadowTiles = null, shadowDepthPlanes = null, shadowDepthRanges = null, shadowSourceRadii = null, shadowTexelSizes = null, shadowFaceOrigins = null, shadowFaceValid = null, shadowFaceBasisX = null, shadowFaceBasisY = null, shadowFaceBasisZ = null, shadowSlotFace = null, shadowSlotFaceCount = null, shadowTransmittance = null, shadowRecordCells = null, skyVisMap = null, skyVisMin = null, skyVisSize = null, skyVisStrength = 1, skyVisCell = 0,
     aoVolumeMap = null, aoVolumeMin = null, aoVolumeSize = null, aoVolumeStrength = 1, aoVolumeCell = 0,
     skyBounceMap = null, skyBounceMin = null, skyBounceSize = null, skyBounceStrength = 0, skyBounceCell = 0, bounceScale = 0, bounceTint = null,
-    localEnvMap = null, localEnvMips = 1, localEnvStrength = 0, localEnvProbe = null, localEnvBoxMin = null, localEnvBoxMax = null, localEnvParallax = 0 }) => {
+    localEnvMap = null, localEnvMips = 1, localEnvStrength = 0, localEnvProbe = null, localEnvBoxMin = null, localEnvBoxMax = null, localEnvParallax = 0, diffuseEnvMethod = null, displayExposureScaleOverride = null }) => {
     if (!compiled) throw new Error('Cannot create scene uniforms without compiled MaterialX source.');
+    // Face arrays follow the generated size (sceneFeatureOptions.shadowFaceSlots).
+    const faceSlots = compiled.shadowFaceSlots || SHADOW_FACE_SLOTS;
     const uniforms = {
         u_worldMatrix: { value: new THREE.Matrix4() },
         u_viewProjectionMatrix: { value: new THREE.Matrix4() },
@@ -852,7 +857,7 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
         // introspection and cannot be gated on has() like the rest. The
         // transform defaults to the caller's, letting the Scene run a filmic
         // curve while the Material Viewer stays on plain sRGB for parity.
-        u_displayExposure: { value: displayExposureScale() },
+        u_displayExposure: { value: displayExposureScaleOverride != null ? displayExposureScaleOverride : displayExposureScale() },
         u_displayTransform: { value: displayTransformId(displayTransform || getDisplayTransform()) },
     };
     // A feature this source never generated declares no uniform for it, so
@@ -864,31 +869,31 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
         // for the same sampler-unit reason as the sky volume below, and
         // defaulted to "no caster on any slot": an exact no-op.
         u_shadowAtlas: { value: shadowAtlas || getDummyTexWhite() },
-        u_shadowMatrices: { value: shadowMatrices && shadowMatrices.length === SHADOW_FACE_SLOTS
-            ? shadowMatrices : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Matrix4()) },
-        u_shadowTiles: { value: shadowTiles && shadowTiles.length === SHADOW_FACE_SLOTS
-            ? shadowTiles : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector4(0, 0, 1, 1)) },
-        u_shadowDepthPlanes: { value: shadowDepthPlanes && shadowDepthPlanes.length === SHADOW_FACE_SLOTS
-            ? shadowDepthPlanes : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector4(0, 0, 0, 1)) },
-        u_shadowDepthRanges: { value: shadowDepthRanges && shadowDepthRanges.length === SHADOW_FACE_SLOTS
-            ? shadowDepthRanges : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector2(0, 1)) },
-        u_shadowSourceRadii: { value: shadowSourceRadii && shadowSourceRadii.length === SHADOW_FACE_SLOTS
-            ? shadowSourceRadii : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector4()) },
-        u_shadowTexelWorldSize: { value: shadowTexelSizes && shadowTexelSizes.length === SHADOW_FACE_SLOTS
-            ? shadowTexelSizes : new Array(SHADOW_FACE_SLOTS).fill(0) },
+        u_shadowMatrices: { value: shadowMatrices && shadowMatrices.length === faceSlots
+            ? shadowMatrices : Array.from({ length: faceSlots }, () => new THREE.Matrix4()) },
+        u_shadowTiles: { value: shadowTiles && shadowTiles.length === faceSlots
+            ? shadowTiles : Array.from({ length: faceSlots }, () => new THREE.Vector4(0, 0, 1, 1)) },
+        u_shadowDepthPlanes: { value: shadowDepthPlanes && shadowDepthPlanes.length === faceSlots
+            ? shadowDepthPlanes : Array.from({ length: faceSlots }, () => new THREE.Vector4(0, 0, 0, 1)) },
+        u_shadowDepthRanges: { value: shadowDepthRanges && shadowDepthRanges.length === faceSlots
+            ? shadowDepthRanges : Array.from({ length: faceSlots }, () => new THREE.Vector2(0, 1)) },
+        u_shadowSourceRadii: { value: shadowSourceRadii && shadowSourceRadii.length === faceSlots
+            ? shadowSourceRadii : Array.from({ length: faceSlots }, () => new THREE.Vector4()) },
+        u_shadowTexelWorldSize: { value: shadowTexelSizes && shadowTexelSizes.length === faceSlots
+            ? shadowTexelSizes : new Array(faceSlots).fill(0) },
         // Light position for a cube-group face, and whether a face actually
         // holds rendered data (the renderer always reserves six per group,
         // but only allocates a cell where geometry actually falls in it).
-        u_shadowFaceOrigin: { value: shadowFaceOrigins && shadowFaceOrigins.length === SHADOW_FACE_SLOTS
-            ? shadowFaceOrigins : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector3()) },
-        u_shadowFaceValid: { value: shadowFaceValid && shadowFaceValid.length === SHADOW_FACE_SLOTS
-            ? shadowFaceValid : new Array(SHADOW_FACE_SLOTS).fill(0) },
-        u_shadowFaceBasisX: { value: shadowFaceBasisX && shadowFaceBasisX.length === SHADOW_FACE_SLOTS
-            ? shadowFaceBasisX : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector3(1, 0, 0)) },
-        u_shadowFaceBasisY: { value: shadowFaceBasisY && shadowFaceBasisY.length === SHADOW_FACE_SLOTS
-            ? shadowFaceBasisY : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector3(0, 1, 0)) },
-        u_shadowFaceBasisZ: { value: shadowFaceBasisZ && shadowFaceBasisZ.length === SHADOW_FACE_SLOTS
-            ? shadowFaceBasisZ : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector3(0, 0, 1)) },
+        u_shadowFaceOrigin: { value: shadowFaceOrigins && shadowFaceOrigins.length === faceSlots
+            ? shadowFaceOrigins : Array.from({ length: faceSlots }, () => new THREE.Vector3()) },
+        u_shadowFaceValid: { value: shadowFaceValid && shadowFaceValid.length === faceSlots
+            ? shadowFaceValid : new Array(faceSlots).fill(0) },
+        u_shadowFaceBasisX: { value: shadowFaceBasisX && shadowFaceBasisX.length === faceSlots
+            ? shadowFaceBasisX : Array.from({ length: faceSlots }, () => new THREE.Vector3(1, 0, 0)) },
+        u_shadowFaceBasisY: { value: shadowFaceBasisY && shadowFaceBasisY.length === faceSlots
+            ? shadowFaceBasisY : Array.from({ length: faceSlots }, () => new THREE.Vector3(0, 1, 0)) },
+        u_shadowFaceBasisZ: { value: shadowFaceBasisZ && shadowFaceBasisZ.length === faceSlots
+            ? shadowFaceBasisZ : Array.from({ length: faceSlots }, () => new THREE.Vector3(0, 0, 1)) },
         // Cloned, not aliased: applyShadowMatrix() writes into this uniform's
         // own array in place, and a diagnostic swap must never corrupt the
         // renderer's live shadowSlotFace/shadowSlotFaceCount state.
@@ -959,7 +964,7 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
     const mips = env && env.mips != null ? env.mips : 1;
     if (has('u_time')) uniforms.u_time = { value: host.clock().time };
     if (has('u_frame')) uniforms.u_frame = { value: host.clock().frame };
-    bindEnvironmentSamplers(uniforms, declaredList, env);
+    bindEnvironmentSamplers(uniforms, declaredList, env, diffuseEnvMethod);
     // envTilt carries a dome light's non-vertical orientation. The rotation
     // slider stays a pure yaw, so the dome's yaw is decomposed out of the tilt
     // and re-applied here: with the slider at the dome's own yaw this
@@ -978,8 +983,8 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
     // color, see mx_shadow_transmittance) are exact no-ops the same way.
     if (has('u_shadowTransmittance')) uniforms.u_shadowTransmittance = { value: shadowTransmittance || getDummyTexWhite() };
     if (has('u_shadowRecordCells')) {
-        uniforms.u_shadowRecordCells = { value: shadowRecordCells && shadowRecordCells.length === SHADOW_FACE_SLOTS
-            ? shadowRecordCells : Array.from({ length: SHADOW_FACE_SLOTS }, () => new THREE.Vector4(0, 0, 0, 0)) };
+        uniforms.u_shadowRecordCells = { value: shadowRecordCells && shadowRecordCells.length === faceSlots
+            ? shadowRecordCells : Array.from({ length: faceSlots }, () => new THREE.Vector4(0, 0, 0, 0)) };
     }
     // Local environment reflections: a plain sampler2D, visible to has()
     // unlike the sampler3D volumes above, so this stays gated exactly like

@@ -11,7 +11,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const ENGINE_SOURCE = fs.readFileSync(path.join(ROOT, 'js', 'mtlx-engine.js'), 'utf8');
-const SCENE_SOURCE = fs.readFileSync(path.join(ROOT, 'js', 'usd-scene-renderer.js'), 'utf8');
+// The Scene's own copies were deleted in P6 S4; their frozen pre-P6 text is the oracle.
+const SCENE_SOURCE = fs.readFileSync(path.join(ROOT, 'tests', 'unit', 'fixtures', 'scene-legacy-p5.js'), 'utf8');
 
 function extractStatement(source, name, filename) {
     const marker = 'const ' + name + ' = ';
@@ -280,4 +281,49 @@ test('LRU eviction closes the idle prototype bitmap once the 256 MiB idle budget
     sessionA.dispose(); // refs -> 0, entry goes idle, way over budget, evicted immediately
 
     assert.equal(cache.has(key), false, 'the idle prototype is evicted once far over the 256 MiB budget');
+});
+
+test('release drops one wrapper and its source reference (P6 S4)', async () => {
+    const engine = loadEngineTextureSession();
+    const cache = new Map();
+    const session = engine.createTextureSession({ cache });
+    const fileMap = { 'wood.png': { name: 'wood.png', size: 10, lastModified: 1 } };
+    const hit = session.resolve(fileMap, 'wood.png');
+    const result = await session.acquire(hit, { samplerModes: null });
+
+    assert.equal(session.release(result.texture), true);
+    assert.equal(result.texture.disposed, true);
+    assert.equal(session.stats().wrapperCount, 0);
+    assert.equal(Array.from(cache.values())[0].refs, 0);
+    assert.equal(session.release(result.texture), false, 'a second release is a no-op');
+});
+
+test('a bounded fast-path prototype gets the requested clamp and mirror modes per acquire', async () => {
+    const engine = loadEngineTextureSession();
+    const cache = new Map();
+    const session = engine.createTextureSession({ cache });
+    const fileMap = { 'wood.png': { name: 'wood.png', size: 10, lastModified: 1 } };
+    const hit = session.resolve(fileMap, 'wood.png');
+    await session.acquire(hit, { samplerModes: null });
+    Array.from(cache.values())[0].proto.userData = { mtlxBoundedFastPath: true };
+
+    const clamp = session.acquire(hit, { samplerModes: { u: 'clamp', v: 'clamp' } });
+    const mirror = session.acquire(hit, { samplerModes: { u: 'mirror', v: 'mirror' } });
+    assert.equal(clamp.texture.wrapS, 1001, 'clamp to edge');
+    assert.equal(clamp.texture.wrapT, 1001);
+    assert.equal(mirror.texture.wrapS, 1002, 'mirrored repeat');
+    assert.equal(mirror.texture.wrapT, 1002);
+});
+
+test('a displacement-style session (boundBitmapsOnly) honours authored modes on a fast-path prototype', async () => {
+    const engine = loadEngineTextureSession();
+    const cache = new Map();
+    const session = engine.createTextureSession({ cache, boundBitmapsOnly: true });
+    const fileMap = { 'height.png': { name: 'height.png', size: 10, lastModified: 1 } };
+    const hit = session.resolve(fileMap, 'height.png');
+    await session.acquire(hit, { samplerModes: null });
+    Array.from(cache.values())[0].proto.userData = { mtlxBoundedFastPath: true };
+    const result = session.acquire(hit, { samplerModes: { u: 'clamp', v: 'mirror' } });
+    assert.equal(result.texture.wrapS, 1001);
+    assert.equal(result.texture.wrapT, 1002);
 });

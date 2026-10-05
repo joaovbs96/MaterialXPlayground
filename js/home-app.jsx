@@ -70,7 +70,7 @@ function ComingSoonMedia() {
     return (
         <div
             className="w-full aspect-video border-b border-line flex items-center justify-center"
-            style={{ backgroundImage: 'repeating-linear-gradient(135deg, rgb(var(--mtlx-line-strong) / calc(46 / 255)) 0 10px, transparent 10px 20px)' }}
+            style={{ backgroundImage: 'repeating-linear-gradient(135deg, rgb(var(--mtlx-line-heavy) / calc(41 / 255)) 0 10px, transparent 10px 20px)' }}
         >
             <span className="text-xs text-fg-subtle">Coming soon</span>
         </div>
@@ -116,7 +116,7 @@ function HomeCard({ card }) {
             )}
         </div>
     );
-    const linkClass = 'group flex flex-col bg-surface-raised border border-line-subtle rounded-xl overflow-hidden transition-colors hover:border-accent-base/50 hover:bg-surface-raised/80';
+    const linkClass = 'group flex flex-col bg-surface-raised border border-line-subtle rounded-xl overflow-hidden transition-colors hover:border-accent-base/50 hover:bg-hover-subtle';
 
     if (isLink && card.external) {
         return (
@@ -433,15 +433,15 @@ function HomeApp({ active } = {}) {
                         build node graphs visually.
                     </p>
                     <div className="flex flex-wrap gap-3 pt-1">
-                        <a href="#!viewer" className="inline-flex items-center gap-2 h-10 px-4 rounded-lg border border-line-strong bg-control hover:bg-hover text-sm font-medium text-fg transition-colors">
+                        <a href="#!viewer" className="inline-flex items-center gap-2 h-10 px-4 rounded-lg border border-line-strong bg-control/80 hover:bg-hover text-sm font-medium text-fg transition-colors">
                             <MtlxIcon name="camera" className="w-[18px] h-[18px] text-accent-fg" />
                             Open Material Viewer
                         </a>
-                        <a href="#!graph" className="inline-flex items-center gap-2 h-10 px-4 rounded-lg border border-line-strong bg-control hover:bg-hover text-sm font-medium text-fg transition-colors">
+                        <a href="#!graph" className="inline-flex items-center gap-2 h-10 px-4 rounded-lg border border-line-strong bg-control/80 hover:bg-hover text-sm font-medium text-fg transition-colors">
                             <MtlxIcon name="share" className="w-[18px] h-[18px] text-accent-fg" />
                             Open Graph Editor
                         </a>
-                        <a href="#!docs" className="inline-flex items-center gap-2 h-10 px-4 rounded-lg border border-line-strong bg-control hover:bg-hover text-sm font-medium text-fg transition-colors">
+                        <a href="#!docs" className="inline-flex items-center gap-2 h-10 px-4 rounded-lg border border-line-strong bg-control/80 hover:bg-hover text-sm font-medium text-fg transition-colors">
                             <MtlxIcon name="file-code" className="w-[18px] h-[18px] text-accent-fg" />
                             Browse Node Specs
                         </a>
@@ -475,8 +475,8 @@ function HomeApp({ active } = {}) {
                             onClick={() => setFilter(g.id)}
                             className={'h-8 px-3.5 rounded-full border text-[13px] font-medium transition-colors '
                                 + (isActive
-                                    ? 'border-accent-base bg-accent-wash/[0.12] text-accent-fg-strong'
-                                    : 'border-line-strong bg-control text-fg-secondary hover:bg-hover hover:text-fg')}
+                                    ? 'border-accent-base bg-selection/20 text-accent-fg-strong'
+                                    : 'border-line-strong bg-control/80 text-fg-secondary hover:bg-hover hover:text-fg')}
                         >
                             {g.label}
                         </button>

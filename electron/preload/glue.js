@@ -7,12 +7,17 @@
     window.__mtlxGlueInstalled = true;
     if (!window.mtlxDesktop) return;
 
-    // Reports the resolved base of a custom theme so main can set nativeTheme and the titlebar.
+    // Reports the applied theme's base and frame colors so main can paint nativeTheme, window background and titlebar.
     window.addEventListener('mtlx-theme-change', function (e) {
         var d = e && e.detail;
-        if (d && typeof d.preference === 'string' && d.preference.indexOf('custom:') === 0 && window.__mtlxThemeReport) {
-            window.__mtlxThemeReport(d.preference, d.base);
-        }
+        if (!d || typeof d.preference !== 'string' || !window.__mtlxThemeReport) return;
+        var T = window.MtlxTheme;
+        var native = T && T.get ? {
+            windowBg: T.get('native-window-bg'),
+            titlebar: T.get('native-titlebar'),
+            titlebarSymbol: T.get('native-titlebar-symbol'),
+        } : null;
+        window.__mtlxThemeReport(d.preference, d.base, native);
     });
 
     // Mirrors bootstrap.js's handleOpen('both') exactly, but skips base64:

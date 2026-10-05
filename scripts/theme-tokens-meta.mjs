@@ -19,6 +19,12 @@ export const tokens = {
         "derive": "equals background in dark; light themes go 3-4% toward foreground from surface-raised",
         "role": "Inputs, search fields, wells, table heads, inline-code wells, cards nested inside a raised panel."
     },
+    "surface-card": {
+        "group": "surface",
+        "kind": "derivable",
+        "derive": "surface-raised mixed 35% into surface-base (sRGB), as a solid color",
+        "role": "Opaque card surface: collapsible settings cards, the pinned stats panels in Compare and the USD Scene Viewer."
+    },
     "chrome": {
         "group": "surface",
         "kind": "derivable",
@@ -29,7 +35,7 @@ export const tokens = {
         "group": "surface",
         "kind": "derivable",
         "derive": "equals surface-raised in dark",
-        "role": "Buttons, segmented controls, chips and select triggers at rest (/80, /50 when disabled)."
+        "role": "Buttons, segmented controls, chips and select triggers at rest (/80)."
     },
     "chip": {
         "group": "surface",
@@ -59,13 +65,13 @@ export const tokens = {
         "group": "surface",
         "kind": "derivable",
         "derive": "equals background",
-        "role": "Translucent covers over one region (/60 to /85): loading, error and empty-state covers, busy overlays."
+        "role": "Translucent covers over one region (/70, /85): loading, error and empty-state covers, busy overlays."
     },
     "scrim": {
         "group": "surface",
         "kind": "derivable",
         "derive": "background darkened (OKLCH L -8); stays dark in light themes",
-        "role": "Modal backdrops (/70, /85)."
+        "role": "Modal backdrops (/85)."
     },
     "hover": {
         "group": "surface",
@@ -251,13 +257,13 @@ export const tokens = {
         "group": "accent",
         "kind": "derivable",
         "derive": "equals on-accent-muted in dark; light themes need a dark accent on the pale tint",
-        "role": "Text and icons on faint accent tints (selected tile cards at /5, docs sidebar clear-filter hover). Solid accent fills keep on-accent-muted."
+        "role": "Unused since the accent merge (selected cards and docs sidebar hover use accent-fg-bright); kept for now."
     },
     "selection": {
         "group": "accent",
         "kind": "derivable",
         "derive": "equals accent-fill",
-        "role": "Highlighted/selected list rows as a wash (/20, /30), MtlxSelect highlighted row (30%)."
+        "role": "The one selected wash (/20): list rows, selected chips and cards, MtlxSelect highlighted row (20%)."
     },
     "focus": {
         "group": "accent",
@@ -571,6 +577,96 @@ export const tokens = {
         "derive": "background OKLCH L -3",
         "role": "Code block ground (VS Code page)."
     },
+    "code-syntax-text": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "Syntax base text (equals Dark+ text); light is follows the foreground seed (near black)",
+        "role": "Code editor base text (the highlighted layer) and the stdlib underline at 50%."
+    },
+    "code-syntax-comment": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "green (Dark+ / Light+ comment)",
+        "role": "Syntax comments."
+    },
+    "code-syntax-string": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "orange-brown (Dark+) / dark red (Light+)",
+        "role": "Syntax strings."
+    },
+    "code-syntax-number": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "pale green (Dark+) / teal green (Light+)",
+        "role": "Syntax numbers and the true, false and null constants."
+    },
+    "code-syntax-keyword": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "blue (Dark+ / Light+)",
+        "role": "Syntax keywords and keyword completion badges."
+    },
+    "code-syntax-type": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "teal (Dark+ / Light+)",
+        "role": "Syntax types, type names in signatures and type badges."
+    },
+    "code-syntax-directive": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "purple (Dark+ / Light+)",
+        "role": "Syntax directives (#include style)."
+    },
+    "code-syntax-function": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "pale yellow (Dark+) / brown (Light+)",
+        "role": "Syntax attributes, function names in signatures and function badges."
+    },
+    "code-syntax-param": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "light blue (Dark+) / navy (Light+)",
+        "role": "Parameter names in assist popups and variable badges."
+    },
+    "code-syntax-link": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "blue (Dark+ / Light+ link)",
+        "role": "Standard library call under Ctrl/Cmd (documentation link)."
+    },
+    "code-syntax-error": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "red (Dark+ / Light+ error)",
+        "role": "Compile error squiggles in the code editor."
+    },
+    "code-syntax-caret": {
+        "group": "code",
+        "kind": "derivable",
+        "derive": "mix toward foreground (Dark+ caret)",
+        "role": "Code editor text caret."
+    },
+    "code-syntax-selection": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "deep blue (Dark+) / pale blue (Light+) selection ground",
+        "role": "Code editor selection ground."
+    },
+    "code-syntax-highlight": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "bright blue (Dark+) / strong blue (Light+)",
+        "role": "Active parameter and matched characters in assist popups (bold)."
+    },
+    "code-syntax-assist-selected": {
+        "group": "code",
+        "kind": "independent",
+        "derive": "deep blue (Dark+) / pale blue (Light+) row ground",
+        "role": "Selected row ground in the assist completion list."
+    },
     "graph-canvas": {
         "group": "graph",
         "kind": "derivable",
@@ -811,147 +907,21 @@ export const tokens = {
         "kind": "independent",
         "derive": "matches the header icon color",
         "role": "Electron title bar overlay window-control symbol color."
-    },
-    "surface-deep": {
-        "group": "drift",
-        "kind": "derivable",
-        "derive": "equals scrim",
-        "role": "Deepest wells (/50): error stack pre, kbd-like chips; diff canvas ground.",
-        "drift": true,
-        "mergeInto": "surface-sunken"
-    },
-    "scrim-alt": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "black",
-        "role": "Docs sidebar dialog backdrop (/60).",
-        "drift": true,
-        "mergeInto": "scrim"
-    },
-    "on-accent-soft": {
-        "group": "drift",
-        "kind": "derivable",
-        "derive": "equals fg",
-        "role": "gray-100 text on accent fills.",
-        "drift": true,
-        "mergeInto": "on-accent"
-    },
-    "success-border-muted": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "green",
-        "role": "Inherited (dashed) success badge border (/40).",
-        "drift": true,
-        "mergeInto": "success-border"
-    },
-    "warning-bg-strong": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "amber",
-        "role": "Action button on a warning banner (/60, hover solid).",
-        "drift": true,
-        "mergeInto": "warning-bg"
-    },
-    "warning-border-alt": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "amber",
-        "role": "Warning toast/banner border (/50) in shell and site header.",
-        "drift": true,
-        "mergeInto": "warning-border"
-    },
-    "error-text-strong": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "red",
-        "role": "Text in error toasts and boxes (red-200 recipe).",
-        "drift": true,
-        "mergeInto": "error-text"
-    },
-    "error-bg-strong": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "red",
-        "role": "Error box ground (/40) in mtlx-ui recipe A.",
-        "drift": true,
-        "mergeInto": "error-bg"
-    },
-    "error-border-strong": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "red",
-        "role": "Error box border (solid) in mtlx-ui recipe A.",
-        "drift": true,
-        "mergeInto": "error-border"
-    },
-    "info-border-alt": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "blue",
-        "role": "Info badge border (/60) in the implementation matrix.",
-        "drift": true,
-        "mergeInto": "info-border"
-    },
-    "notice-bg": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "slate",
-        "role": "Non-warning shell toast ground (/30).",
-        "drift": true,
-        "mergeInto": "surface-raised"
-    },
-    "notice-line": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "slate",
-        "role": "Non-warning shell toast border (/50).",
-        "drift": true,
-        "mergeInto": "line-strong"
-    },
-    "notice-text": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "slate",
-        "role": "Non-warning shell toast text (and /80 dismiss).",
-        "drift": true,
-        "mergeInto": "fg-soft"
-    },
-    "notice-text-strong": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "slate",
-        "role": "Non-warning shell toast dismiss hover.",
-        "drift": true,
-        "mergeInto": "fg"
-    },
-    "experimental-fill": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "amber",
-        "role": "Small Experimental badge fill (/30, hover /40).",
-        "drift": true,
-        "mergeInto": "experimental-hue"
-    },
-    "code-inline-fg-alt": {
-        "group": "drift",
-        "kind": "independent",
-        "derive": "red",
-        "role": "Inline code text in the Embed Builder help doc.",
-        "drift": true,
-        "mergeInto": "code-inline-fg"
-    },
-    "code-block-bg-alt": {
-        "group": "drift",
-        "kind": "derivable",
-        "derive": "background, slate tint",
-        "role": "Code block ground in the Embed Builder help doc.",
-        "drift": true,
-        "mergeInto": "code-block-bg"
     }
 };
 
 // kind: text (4.5), large (3), ui (3), decorative (reported only). alpha+under: bg is composited at alpha over token `under`.
 export const contrast = [
+    {
+        "fg": "fg",
+        "bg": "surface-card",
+        "kind": "text"
+    },
+    {
+        "fg": "fg-secondary",
+        "bg": "surface-card",
+        "kind": "text"
+    },
     {
         "fg": "fg",
         "bg": "surface-base",
@@ -1134,6 +1104,81 @@ export const contrast = [
     },
     {
         "fg": "code-string",
+        "bg": "surface-raised",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-text",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-comment",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-string",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-number",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-keyword",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-type",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-directive",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-function",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-param",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-link",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-error",
+        "bg": "surface-sunken",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-highlight",
+        "bg": "code-syntax-assist-selected",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-highlight",
+        "bg": "surface-raised",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-function",
+        "bg": "surface-raised",
+        "kind": "text"
+    },
+    {
+        "fg": "code-syntax-param",
         "bg": "surface-raised",
         "kind": "text"
     },
@@ -1504,32 +1549,8 @@ export const contrast = [
     }
 ];
 
-// Pre-existing dark-theme failures ("fg|bg"), frozen: dark values must not change. check-theme-contrast fails on any dark failure not listed here.
-export const knownDarkFailures = [
-    "fg-subtle|surface-raised",
-    "fg-subtle|surface-sunken",
-    "fg-faint|surface-base",
-    "stage-fg-subtle|stage",
-    "on-accent-muted|accent-fill",
-    "on-accent|success-fill",
-    "code-muted|surface-raised",
-    "line-strong|surface-raised",
-    "line-strong|surface-sunken",
-    "hud-line|hud",
-    "scrollbar-thumb|scrollbar-track",
-    "graph-node-line|graph-canvas",
-    "type-bsdf|graph-node",
-    "type-float|graph-node",
-    "type-float|graph-canvas",
-    "type-integer|graph-node",
-    "type-integer|graph-canvas",
-    "type-matrix44|graph-node",
-    "type-nodegraph|graph-node",
-    "type-nodegraph|graph-canvas",
-    "line-control|surface-sunken",
-    "line-control|surface-raised",
-    "line-control|surface-base",
-];
+// Dark-theme failures allowed to remain ("fg|bg"). Empty: dark enforces AA. check-theme-contrast fails on any dark failure not listed.
+export const knownDarkFailures = [];
 
 // Presets resolved by scripts/build-theme.mjs through js/shared/theme-engine.js (deriveTheme, then enforceContrast
 // at the registry's contrast level) into js/gen/themes/<id>.css and .js. Every non-dark, non-light registry id needs
@@ -1546,7 +1567,6 @@ export const presets = {
             "line-strong": "#a3a3a3",
             "line-heavy": "#d4d4d4",
             "hud-line": "#a3a3a3",
-            "notice-line": "#a3a3a3",
             "graph-node-line": "#a3a3a3",
             "graph-node-line-iface": "#d4d4d4",
             "scrollbar-thumb": "#a3a3a3",
@@ -1574,7 +1594,6 @@ export const presets = {
             "line-strong": "#404040",
             "line-heavy": "#262626",
             "hud-line": "#404040",
-            "notice-line": "#404040",
             "graph-node-line": "#525252",
             "graph-node-line-iface": "#262626",
             "scrollbar-thumb": "#525252",
@@ -1633,13 +1652,13 @@ export const groupLabels = {
     graph: "Graph editor",
     type: "Value types",
     native: "Desktop window",
-    drift: "Legacy variants",
 };
 
 export const labels = {
     "surface-base": "Page background",
     "surface-raised": "Panels and cards",
     "surface-sunken": "Inputs and wells",
+    "surface-card": "Opaque cards",
     "chrome": "Toolbars and header",
     "control": "Buttons at rest",
     "chip": "Tags and badges",
@@ -1732,6 +1751,21 @@ export const labels = {
     "code-inline-bg": "Inline code background",
     "code-inline-fg": "Inline code values",
     "code-block-bg": "Code block background",
+    "code-syntax-text": "Syntax text",
+    "code-syntax-comment": "Syntax comments",
+    "code-syntax-string": "Syntax strings",
+    "code-syntax-number": "Syntax numbers",
+    "code-syntax-keyword": "Syntax keywords",
+    "code-syntax-type": "Syntax types",
+    "code-syntax-directive": "Syntax directives",
+    "code-syntax-function": "Syntax functions",
+    "code-syntax-param": "Syntax parameters",
+    "code-syntax-link": "Syntax link",
+    "code-syntax-error": "Syntax errors",
+    "code-syntax-caret": "Code caret",
+    "code-syntax-selection": "Code selection",
+    "code-syntax-highlight": "Assist highlight",
+    "code-syntax-assist-selected": "Assist selected row",
     "graph-canvas": "Canvas",
     "graph-grid": "Grid",
     "builder-stage": "Embed Builder stage",
@@ -1750,21 +1784,4 @@ export const labels = {
     "native-window-bg": "Window background",
     "native-titlebar": "Title bar",
     "native-titlebar-symbol": "Title bar buttons",
-    "surface-deep": "Deep wells",
-    "scrim-alt": "Sidebar dialog backdrop",
-    "on-accent-soft": "Soft text on accent fills",
-    "success-border-muted": "Inherited success border",
-    "warning-bg-strong": "Warning action button",
-    "warning-border-alt": "Warning toast border",
-    "error-text-strong": "Error toast text",
-    "error-bg-strong": "Error box background",
-    "error-border-strong": "Error box border",
-    "info-border-alt": "Info badge border",
-    "notice-bg": "Notice background",
-    "notice-line": "Notice border",
-    "notice-text": "Notice text",
-    "notice-text-strong": "Notice text, strong",
-    "experimental-fill": "Experimental badge fill",
-    "code-inline-fg-alt": "Help inline code",
-    "code-block-bg-alt": "Help code block background",
 };

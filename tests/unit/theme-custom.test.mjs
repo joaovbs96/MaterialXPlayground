@@ -22,7 +22,8 @@ function makeStorage(init = {}) {
 }
 
 // Fake page: theme-tokens.js and theme.js as head scripts (`parsing`: parser-inserted, document.write allowed).
-// serve() runs written and appended scripts by path (theme-custom.js, theme-pairs.js, the engine, theme-groups.js).
+// serve() runs written and appended scripts by path (theme-custom.js, theme-pairs.js, the engine, theme-groups.js, preset
+// files) and fires the load of appended stylesheets.
 // `custom` (default) then loads theme-custom.js the way a first listCustom() does, so the sync API is the real one.
 function page({ storage = makeStorage(), dark = true, globals = {}, parsing = false, custom = true } = {}) {
   const listeners = {};
@@ -80,9 +81,9 @@ function page({ storage = makeStorage(), dark = true, globals = {}, parsing = fa
           for (const m of document.written.shift().matchAll(/<script src="([^"]+)"/g)) { run(m[1], false); progressed = true; }
         }
         for (const el of head.children.slice()) {
-          if (el.served || el.tagName !== 'script') continue;
+          if (el.served || (el.tagName !== 'script' && el.tagName !== 'link')) continue;
           el.served = progressed = true;
-          run(el.src, el.async);
+          if (el.tagName === 'script') run(el.src, el.async);
           if (el.onload) el.onload();
         }
         if (!progressed) return;
@@ -108,13 +109,16 @@ const SPEC = {
 };
 const LIGHT = { id: 'custom:sand', label: 'Sand', base: 'light', seeds: { background: '#f6f1e7', foreground: '#2b2620', accent: '#2659c9' } };
 
-// Forged codes: the documented byte layout, built independently of theme.js.
-function forge({ base = 0x0c, seeds = [0x11, 0x18, 0x27, 0xf3, 0xf4, 0xf6, 0x3b, 0x82, 0xf6], slug = 'x', label = 'X', overrides = [], tail = [] } = {}) {
-  const b = [base, ...seeds, slug.length, ...Buffer.from(slug, 'latin1'), Buffer.byteLength(label), ...Buffer.from(label), overrides.length];
+// Forged codes: the documented byte layout, built independently of theme.js. `from` is a base theme id (no seeds
+// are written unless given); `tail` are the modifier bytes or anything trailing.
+const SEEDS9 = [0x11, 0x18, 0x27, 0xf3, 0xf4, 0xf6, 0x3b, 0x82, 0xf6];
+function forge({ base = 0x0c, from = '', seeds = from ? [] : SEEDS9, slug = 'x', label = 'X', overrides = [], tail = [] } = {}) {
+  const b = [base, from.length, ...Buffer.from(from, 'latin1'), ...seeds, slug.length, ...Buffer.from(slug, 'latin1'), Buffer.byteLength(label), ...Buffer.from(label), overrides.length];
   for (const [name, rgb] of overrides) b.push(name.length, ...Buffer.from(name, 'latin1'), ...rgb);
   b.push(...tail);
-  return 'mtlx1.' + Buffer.from(b).toString('base64url');
+  return 'mtlx2.' + Buffer.from(b).toString('base64url');
 }
+const PAPER = { id: 'custom:warm', label: 'Warm paper', base: 'light', from: 'paper', overrides: { 'fg-muted': '#4a4540' } };
 
 const plain = (x) => JSON.parse(JSON.stringify(x));
 
@@ -125,8 +129,8 @@ function rejects(T, fn, re) {
 test('encode and decode round trip, base at a fixed position, modifiers default to 0', () => {
   const { T } = page();
   const code = T.encodeTheme(SPEC);
-  assert.match(code, /^mtlx1\.D[A-Za-z0-9_-]+$/);
-  assert.match(T.encodeTheme(LIGHT), /^mtlx1\.L/);
+  assert.match(code, /^mtlx2\.D[A-Za-z0-9_-]+$/);
+  assert.match(T.encodeTheme(LIGHT), /^mtlx2\.L/);
   const back = plain(T.decodeTheme(code));
   assert.deepEqual(back, { v: 1, id: 'custom:ocean', label: 'Ocean é 🌊', base: 'dark', seeds: SPEC.seeds, overrides: { 'fg-muted': '#9fb3c2', 'focus': '#5ab8ff' }, modifiers: { contrast: 0, tint: 0 } });
   assert.equal(T.encodeTheme(back), code);
@@ -147,9 +151,10 @@ test('encode and decode round trip, base at a fixed position, modifiers default 
 test('malformed, oversized and damaged codes are rejected with short messages', () => {
   const { T } = page();
   const good = T.encodeTheme(SPEC);
-  for (const c of ['', 'hello', 'mtlx1.', 'mtlx1.A', 'mtlx1.' + good.slice(6) + '=', 'mtlx1.ab cd', 'MTLX1.' + good.slice(6), null, 42, {}]) rejects(T, () => T.decodeTheme(c), /not a theme code|damaged/i);
-  rejects(T, () => T.decodeTheme('mtlx2.' + good.slice(6)), /newer version/);
-  rejects(T, () => T.decodeTheme('mtlx1.' + 'A'.repeat(8200)), /too long/);
+  for (const c of ['', 'hello', 'mtlx2.', 'mtlx2.A', 'mtlx2.' + good.slice(6) + '=', 'mtlx2.ab cd', 'MTLX1.' + good.slice(6), null, 42, {}]) rejects(T, () => T.decodeTheme(c), /not a theme code|damaged/i);
+  rejects(T, () => T.decodeTheme('mtlx3.' + good.slice(6)), /newer version/);
+  rejects(T, () => T.decodeTheme('mtlx1.' + good.slice(6)), /older version and can no longer be read/);
+  rejects(T, () => T.decodeTheme('mtlx2.' + 'A'.repeat(8200)), /too long/);
   rejects(T, () => T.decodeTheme(good.slice(0, -5)), /damaged/i);
   rejects(T, () => T.decodeTheme(forge({ tail: [20, 0, 7] })), /damaged/i);
   rejects(T, () => T.decodeTheme(forge({ base: 0x0d })), /damaged/i);
@@ -173,7 +178,7 @@ test('unknown tokens, non-hex colors and script-like payloads are rejected', () 
   rejects(T, () => T.decodeTheme(forge({ label: 'a\u0000b' })), /not allowed/);
   rejects(T, () => T.decodeTheme(forge({ label: '' })), /Name must be/);
   rejects(T, () => T.decodeTheme(forge({ label: 'x'.repeat(41) })), /Name must be/);
-  const bin = 'mtlx1.' + Buffer.from([0x0c, 1, 2, 3, 4, 5, 6, 7, 8, 9, 1, 0x78, 2, 0xc3, 0x28, 0]).toString('base64url');
+  const bin = 'mtlx2.' + Buffer.from([0x0c, 1, 2, 3, 4, 5, 6, 7, 8, 9, 1, 0x78, 2, 0xc3, 0x28, 0]).toString('base64url');
   rejects(T, () => T.decodeTheme(bin), /damaged/i);
   const spec = (patch) => ({ ...SPEC, ...patch });
   for (const bad of ['red', '#12345g', '#fff', 'url(x)', 'expression(alert(1))', '#123456;}', 'rgb(1,2,3)', '</style>', 123, null]) {
@@ -402,7 +407,7 @@ test('embeds apply a code from the theme attribute and never persist', async () 
   p.T.deleteCustom('custom:ocean');
   assert.equal(storage.m.size, 0, 'nothing written to localStorage');
   assert.equal(hook.length, 0, 'no host hook called');
-  for (const bad of ['mtlx1.garbage', 'mtlx1.' + 'A'.repeat(9000), 'mtlx9.AAAA']) {
+  for (const bad of ['mtlx2.garbage', 'mtlx2.' + 'A'.repeat(9000), 'mtlx9.AAAA']) {
     const b = page({ parsing: true, dark: false, globals: { __MTLX_THEME_NO_PERSIST__: true, __MTLX_THEME_PREF__: bad } });
     assert.equal(b.T.current(), 'dark', 'an invalid code is dark');
     assert.equal(b.ctx.MtlxThemeEngine, undefined);
@@ -412,7 +417,7 @@ test('embeds apply a code from the theme attribute and never persist', async () 
   live.T.setPreference(code, { persist: false });
   live.serve();
   assert.equal(live.T.current(), 'custom:sand');
-  live.T.setPreference('mtlx1.nope', { persist: false });
+  live.T.setPreference('mtlx2.nope', { persist: false });
   assert.equal(live.T.current(), 'dark');
 });
 
@@ -500,4 +505,126 @@ test('theme-custom.js loads only when needed: list() uses cached labels, hosts g
   const n = page({ parsing: true, custom: false, storage: makeStorage({ mtlxTheme: 'custom:ocean' }) });
   assert.equal(ext(n), false);
   assert.equal(n.T.current(), 'dark');
+});
+
+// ---- Themes based on a built-in theme (from) ----
+const BUILTIN = {
+  dark: { base: 'dark', level: 'AA' }, light: { base: 'light', level: 'AA' }, 'hc-dark': { base: 'dark', level: 'AAA' },
+  'hc-light': { base: 'light', level: 'AAA' }, dim: { base: 'dark', level: 'AA' }, paper: { base: 'light', level: 'AA' },
+};
+const builtinMap = (id) => (id === 'dark' ? data.themes.dark : id === 'light' ? { ...data.themes.dark, ...data.themes.light } : require('../../js/gen/themes/' + id + '.js').tokens);
+const fromSpec = (id, extra = {}) => ({ id: 'custom:from-' + id, label: 'From ' + id, base: BUILTIN[id].base, from: id, ...extra });
+
+test('from-based codes round trip, start with the base character and carry no seeds or modifier bytes', () => {
+  const { T } = page();
+  const code = T.encodeTheme(PAPER);
+  assert.match(code, /^mtlx2\.L/);
+  assert.match(T.encodeTheme(fromSpec('hc-dark')), /^mtlx2\.D/);
+  const back = plain(T.decodeTheme(code));
+  assert.deepEqual(back, { v: 1, id: 'custom:warm', label: 'Warm paper', base: 'light', from: 'paper', overrides: { 'fg-muted': '#4a4540' } });
+  assert.equal(T.encodeTheme(back), code);
+  const bare = T.encodeTheme(fromSpec('dim'));
+  assert.deepEqual(plain(T.decodeTheme(bare)), { v: 1, id: 'custom:from-dim', label: 'From dim', base: 'dark', from: 'dim', overrides: {} });
+  assert.ok(bare.length < T.encodeTheme(SPEC).length, 'no seed bytes');
+  for (const id of Object.keys(BUILTIN)) assert.equal(T.decodeTheme(T.encodeTheme(fromSpec(id))).from, id);
+  // The seeds mode still round trips beside it, with and without overrides and modifiers.
+  for (const spec of [SPEC, LIGHT, { ...LIGHT, modifiers: { contrast: 0.5, tint: 0.25 } }, { ...SPEC, overrides: {} }]) {
+    assert.equal(T.encodeTheme(T.decodeTheme(T.encodeTheme(spec))), T.encodeTheme(spec));
+    assert.equal(T.decodeTheme(T.encodeTheme(spec)).from, undefined);
+  }
+});
+
+test('either from or seeds: forged and API-built mixes are rejected', () => {
+  const { T } = page();
+  rejects(T, () => T.encodeTheme({ ...PAPER, seeds: LIGHT.seeds }), /no seeds/);
+  rejects(T, () => T.encodeTheme({ ...PAPER, modifiers: { tint: 0.5 } }), /no modifiers/);
+  rejects(T, () => T.encodeTheme({ ...PAPER, modifiers: {} }), /no modifiers/);
+  rejects(T, () => T.encodeTheme({ ...PAPER, from: 'vscode' }), /built-in/);
+  rejects(T, () => T.encodeTheme({ ...PAPER, from: 'custom:ocean' }), /built-in/);
+  rejects(T, () => T.encodeTheme({ ...PAPER, from: 'nope' }), /Unknown base theme "nope"/);
+  rejects(T, () => T.encodeTheme({ ...PAPER, from: 5 }), /built-in/);
+  rejects(T, () => T.encodeTheme({ ...PAPER, base: 'dark' }), /Base does not match/);
+  // Forged bytes: seeds after a from id, modifier bytes after a from-based theme, from naming a bad theme, a bad base.
+  rejects(T, () => T.decodeTheme(forge({ base: 0x2c, from: 'paper', seeds: SEEDS9 })), /damaged|Theme id|Name/i);
+  rejects(T, () => T.decodeTheme(forge({ base: 0x2c, from: 'paper', tail: [20, 0] })), /damaged/i);
+  rejects(T, () => T.decodeTheme(forge({ base: 0x2c, from: 'paper', tail: [1] })), /damaged/i);
+  rejects(T, () => T.decodeTheme(forge({ from: 'vscode' })), /built-in/);
+  rejects(T, () => T.decodeTheme(forge({ from: 'custom:x' })), /built-in/);
+  rejects(T, () => T.decodeTheme(forge({ from: 'nope' })), /Unknown base theme "nope"/);
+  rejects(T, () => T.decodeTheme(forge({ from: '<script>alert(1)</script>-padding-padding' })), /Unknown base theme "\?script\?alert\?1\?\?\?script"/);
+  rejects(T, () => T.decodeTheme(forge({ base: 0x0c, from: 'paper' })), /Base does not match/);
+  rejects(T, () => T.decodeTheme(forge({ base: 0x2c, from: 'dark' })), /Base does not match/);
+  rejects(T, () => T.decodeTheme('mtlx2.' + 'A'.repeat(8200)), /too long/);
+  assert.equal(T.decodeTheme(forge({ base: 0x2c, from: 'paper' })).from, 'paper');
+});
+
+test('a from-based code resolves to the exact map of its built-in theme', async () => {
+  for (const id of Object.keys(BUILTIN)) {
+    const p = page();
+    const code = p.T.encodeTheme(fromSpec(id));
+    const r = await p.call(() => p.T.resolveCustomTheme(code));
+    assert.equal(r.ok, true, id + ': ' + r.error);
+    assert.deepEqual(plain(r.tokens), plain(builtinMap(id)), id);
+    assert.deepEqual(plain(r.adjusted), [], id);
+    assert.ok(r.report.length > 50 && r.report.every((x) => x.pass), id);
+    if (id !== 'dark' && id !== 'light') assert.deepEqual(plain(r.params), plain(require('../../js/gen/themes/' + id + '.js').params), id + ' params');
+    const o = await p.call(() => p.T.resolveCustomTheme(fromSpec(id, { overrides: { focus: builtinMap(id).focus } })));
+    assert.deepEqual(plain(o.tokens), plain(builtinMap(id)), id + ' with an override at its current value');
+  }
+  const p = page();
+  await assert.rejects(p.T.resolveCustomTheme('mtlx2.nope'), /Damaged|Not a theme/);
+  const seeded = await p.call(() => p.T.resolveCustomTheme(SPEC));
+  assert.equal(seeded.ok, true);
+  assert.equal(seeded.tokens['surface-base'], '#0b1d2a');
+  const draft = await p.call(() => p.T.resolveCustomTheme({ base: 'dark', from: 'dim', overrides: { focus: '#ff00aa' } }));
+  assert.equal(draft.tokens.focus, '#ff00aa');
+  assert.equal(draft.tokens['surface-base'], builtinMap('dim')['surface-base']);
+});
+
+test('saving and applying a from-based theme: level follows the base theme, nothing is re-derived', async () => {
+  const p = page();
+  const r = await p.call(() => p.T.saveCustom(PAPER));
+  assert.equal(r.ok, true, r.error);
+  await p.call(() => p.T.saveCustom(fromSpec('hc-dark')));
+  const lv = Object.fromEntries(p.T.list().filter((e) => e.group === 'custom').map((e) => [e.id, e.contrast]));
+  assert.deepEqual(lv, { 'custom:warm': 'AA', 'custom:from-hc-dark': 'AAA' });
+  p.T.setPreference('custom:from-hc-dark');
+  assert.equal(p.T.current(), 'custom:from-hc-dark');
+  assert.deepEqual(plain(p.ctx.MTLX_THEME_TOKENS.themes['custom:from-hc-dark']), plain(builtinMap('hc-dark')));
+  assert.equal(JSON.parse(p.storage.getItem('mtlxCustomThemes'))[0].base, 'light');
+});
+
+test('an embed applies a Paper-based code before first paint', () => {
+  const p0 = page();
+  const code = p0.T.encodeTheme(PAPER);
+  const p = page({ parsing: true, dark: true, globals: { __MTLX_THEME_NO_PERSIST__: true, __MTLX_THEME_PREF__: code } });
+  const written = p.document.log.filter((h) => h.startsWith('<script')).map((h) => /src="([^"]+)"/.exec(h)[1].replace(PAGE, ''));
+  assert.deepEqual(written, ['js/shared/theme-custom.js', 'js/gen/theme-pairs.js', 'js/shared/theme-engine.js', 'js/gen/themes/paper.js']);
+  assert.equal(p.document.head.children.filter((el) => el.tagName === 'script').length, 0, 'nothing loaded after parsing');
+  assert.equal(p.T.current(), 'custom:warm');
+  assert.equal(p.document.documentElement.dataset.theme, 'custom:warm');
+  assert.equal(p.document.documentElement.dataset.themeBase, 'light');
+  const expected = { ...builtinMap('paper'), 'fg-muted': '#4a4540' };
+  assert.equal(p.T.get('surface-base'), expected['surface-base']);
+  assert.equal(p.T.get('fg-muted'), '#4a4540');
+  assert.ok(p.style('custom:warm'));
+  assert.deepEqual(plain(p.ctx.MTLX_THEME_TOKENS.themes['custom:warm']), plain(expected));
+  assert.deepEqual(plain(p.ctx.MTLX_THEME_TOKENS.params['custom:warm']), plain(require('../../js/gen/themes/paper.js').params));
+  assert.equal(p.storage.m.size, 0);
+});
+
+test('stored version 1 codes are skipped with one warning', () => {
+  const warns = [];
+  const console = { warn: (m) => warns.push(String(m)), log() {}, error() {} };
+  const p0 = page();
+  const v2 = p0.T.encodeTheme(SPEC);
+  const v1 = 'mtlx1.' + v2.slice(6);
+  const web = page({ globals: { console }, storage: makeStorage({ mtlxCustomThemes: JSON.stringify([{ code: v1, id: 'custom:old', label: 'Old', base: 'dark' }, { code: v1, id: 'custom:old2', label: 'Old 2', base: 'dark' }, { code: v2, id: 'custom:ocean', label: 'Ocean', base: 'dark' }]) }) });
+  assert.deepEqual(plain(web.T.listCustom()).map((x) => x.id), ['custom:ocean']);
+  assert.equal(warns.length, 1);
+  assert.match(warns[0], /older version/);
+  warns.length = 0;
+  const host = page({ globals: { console, __MTLX_CUSTOM_THEMES__: [v1, v2], __mtlxCustomThemesPersist() {} } });
+  assert.deepEqual(plain(host.T.listCustom()).map((x) => x.id), ['custom:ocean']);
+  assert.equal(warns.length, 1);
 });

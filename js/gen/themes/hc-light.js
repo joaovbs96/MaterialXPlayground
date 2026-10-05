@@ -8,6 +8,7 @@
         "surface-base": "#ffffff",
         "surface-raised": "#ffffff",
         "surface-sunken": "#ffffff",
+        "surface-card": "#ffffff",
         "chrome": "#ffffff",
         "control": "#ffffff",
         "chip": "#eeeeee",
@@ -100,6 +101,21 @@
         "code-inline-bg": "#eeeeee",
         "code-inline-fg": "#934100",
         "code-block-bg": "#ffffff",
+        "code-syntax-text": "#000000",
+        "code-syntax-comment": "#006800",
+        "code-syntax-string": "#a31515",
+        "code-syntax-number": "#006642",
+        "code-syntax-keyword": "#0000ff",
+        "code-syntax-type": "#006178",
+        "code-syntax-directive": "#9500bb",
+        "code-syntax-function": "#6f541b",
+        "code-syntax-param": "#001080",
+        "code-syntax-link": "#005c9a",
+        "code-syntax-error": "#b40d00",
+        "code-syntax-caret": "#000000",
+        "code-syntax-selection": "#add6ff",
+        "code-syntax-highlight": "#004c91",
+        "code-syntax-assist-selected": "#d6ebff",
         "graph-canvas": "#ffffff",
         "graph-grid": "#9a9a9a",
         "builder-stage": "#ffffff",
@@ -139,24 +155,7 @@
         "type-untyped": "#7d8ca0",
         "native-window-bg": "#ffffff",
         "native-titlebar": "#ffffff",
-        "native-titlebar-symbol": "#191919",
-        "surface-deep": "#ffffff",
-        "scrim-alt": "#334155",
-        "on-accent-soft": "#ffffff",
-        "success-border-muted": "#16a34a",
-        "warning-bg-strong": "#fcd34d",
-        "warning-border-alt": "#d97706",
-        "error-text-strong": "#991b1b",
-        "error-bg-strong": "#fca5a5",
-        "error-border-strong": "#f87171",
-        "info-border-alt": "#60a5fa",
-        "notice-bg": "#ffffff",
-        "notice-line": "#404040",
-        "notice-text": "#020202",
-        "notice-text-strong": "#000000",
-        "experimental-fill": "#fde68a",
-        "code-inline-fg-alt": "#b45309",
-        "code-block-bg-alt": "#ffffff"
+        "native-titlebar-symbol": "#191919"
     };
     var params = {
         "typeFallback": {
@@ -171,12 +170,18 @@
             "accentFillTranslucent": 1
         }
     };
-    if (typeof module === 'object' && module.exports) { module.exports = { id: id, base: base, tokens: tokens, params: params }; return; }
+    var seeds = {
+        "background": "#ffffff",
+        "foreground": "#000000",
+        "accent": "#1d4ed8"
+    };
+    if (typeof module === 'object' && module.exports) { module.exports = { id: id, base: base, tokens: tokens, params: params, seeds: seeds }; return; }
     var d = root.MTLX_THEME_TOKENS;
     var doc = root.document;
     if (!d || !doc) return;
     d.themes[id] = tokens;
     d.params[id] = params;
+    (d.seeds = d.seeds || {})[id] = seeds;
     var me = doc.currentScript;
     var href = me && me.src ? me.src.replace(/\.js([?#].*)?$/, '.css') : 'js/gen/themes/' + id + '.css';
     var done = function () { if (typeof d.loaded === 'function') d.loaded(id); };

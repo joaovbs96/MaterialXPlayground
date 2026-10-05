@@ -9,7 +9,7 @@
 const ROADMAP_STATUSES = [
     { id: 'in progress', label: 'In progress', dot: 'bg-warning-marker', text: 'text-warning', border: 'border-warning-hue/40', bg: 'bg-warning-hue/10' },
     { id: 'planned', label: 'Planned', dot: 'bg-accent-fg', text: 'text-accent-fg-strong', border: 'border-accent-wash/40', bg: 'bg-accent-wash/10' },
-    { id: 'idea', label: 'Idea', dot: 'bg-fg-muted', text: 'text-fg-secondary', border: 'border-line-heavy/40', bg: 'bg-line-heavy/10' },
+    { id: 'idea', label: 'Idea', dot: 'bg-fg-muted', text: 'text-fg-secondary', border: 'border-line-heavy/50', bg: 'bg-line-heavy/10' },
     { id: 'parked', label: 'Parked', dot: 'bg-fg-faint', text: 'text-fg-subtle', border: 'border-line', bg: 'bg-surface-raised/60' },
     { id: 'done', label: 'Done', dot: 'bg-success', text: 'text-success-text', border: 'border-success-hue/40', bg: 'bg-success-hue/10' },
 ];
@@ -39,7 +39,7 @@ function roadmapInline(text, keyPrefix) {
             return <strong key={key} className="font-semibold text-fg">{part.slice(2, -2)}</strong>;
         }
         if (/^`[^`]+`$/.test(part)) {
-            return <code key={key} className="font-mono text-[0.9em] text-fg-soft bg-code-inline-bg/50 border border-line rounded px-1 py-px">{part.slice(1, -1)}</code>;
+            return <code key={key} className="font-mono text-[0.9em] text-code-inline-fg bg-code-inline-bg/50 border border-line rounded px-1 py-px">{part.slice(1, -1)}</code>;
         }
         const linkMatch = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(part);
         if (linkMatch) {
@@ -109,7 +109,7 @@ function RoadmapStatusPill({ status, active, count, onClick }) {
             aria-pressed={active}
             onClick={onClick}
             className={'h-8 px-3.5 rounded-full border text-[13px] font-medium transition-colors inline-flex items-center gap-1.5 '
-                + (active ? 'border-accent-base bg-accent-wash/[0.12] text-accent-fg-strong' : 'border-line-strong bg-control text-fg-secondary hover:bg-hover hover:text-fg')}
+                + (active ? 'border-accent-base bg-selection/20 text-accent-fg-strong' : 'border-line-strong bg-control/80 text-fg-secondary hover:bg-hover hover:text-fg')}
         >
             <span className={'w-1.5 h-1.5 rounded-full ' + meta.dot} aria-hidden="true" />
             {meta.label}
@@ -126,7 +126,7 @@ function RoadmapItemRow({ item }) {
     }
     const meta = ROADMAP_STATUS_BY_ID[item.status];
     return (
-        <div id={item.id} className="flex flex-col sm:flex-row sm:items-baseline gap-1.5 sm:gap-3 py-2 border-b border-line/40 last:border-b-0">
+        <div id={item.id} className="flex flex-col sm:flex-row sm:items-baseline gap-1.5 sm:gap-3 py-2 border-b border-line/50 last:border-b-0">
             <span className={'shrink-0 self-start text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full border ' + meta.border + ' ' + meta.bg + ' ' + meta.text}>
                 {meta.label}
             </span>
@@ -219,7 +219,7 @@ function MtlxRoadmapApp({ active } = {}) {
                             aria-pressed={statusFilter === 'all'}
                             onClick={() => setStatusFilter('all')}
                             className={'h-8 px-3.5 rounded-full border text-[13px] font-medium transition-colors '
-                                + (statusFilter === 'all' ? 'border-accent-base bg-accent-wash/[0.12] text-accent-fg-strong' : 'border-line-strong bg-control text-fg-secondary hover:bg-hover hover:text-fg')}
+                                + (statusFilter === 'all' ? 'border-accent-base bg-selection/20 text-accent-fg-strong' : 'border-line-strong bg-control/80 text-fg-secondary hover:bg-hover hover:text-fg')}
                         >
                             All <span className="text-fg-subtle">{totalItems}</span>
                         </button>
@@ -250,7 +250,7 @@ function MtlxRoadmapApp({ active } = {}) {
                         })}
                     </div>
 
-                    <p className="text-xs text-fg-subtle pt-2 border-t border-line/40">
+                    <p className="text-xs text-fg-subtle pt-2 border-t border-line/50">
                         Edit ROADMAP.md in the repository to change this page.
                     </p>
                 </>

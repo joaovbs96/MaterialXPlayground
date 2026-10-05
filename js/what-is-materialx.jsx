@@ -3,7 +3,7 @@
 // static, scrollable page like vscode-app.jsx; no imports, self-registers.
 
 const STRONG_CLASS = 'text-fg-soft font-medium';
-const CODE_CLASS = 'font-mono text-[0.9em] text-fg-soft bg-code-inline-bg/50 border border-line rounded px-1 py-px';
+const CODE_CLASS = 'font-mono text-[0.9em] text-code-inline-fg bg-code-inline-bg/50 border border-line rounded px-1 py-px';
 
 // 1x1 transparent PNG data URI, copied from home-app.jsx's HeroStage so a
 // <materialx-viewer> never flashes its placeholder before the first frame.
@@ -282,7 +282,7 @@ function ViewerPane({ src, label, glow, className, geometry, transparent, autoro
                                     onClick={() => elRef.current && elRef.current.resetCamera()}
                                     title="Reset camera"
                                     aria-label="Reset camera"
-                                    className={'absolute right-2 inline-flex items-center justify-center w-7 h-7 rounded-md border border-hud-line/50 bg-hud/70 text-hud-fg-muted opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong [@media(hover:none)]:opacity-100 '
+                                    className={'absolute right-2 inline-flex items-center justify-center w-7 h-7 rounded-md border border-hud-line/50 bg-hud/70 text-hud-fg opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong [@media(hover:none)]:opacity-100 '
                                         // Bumped above the pill row (bottom-2, h-6) when one is
                                         // present, so the two never overlap on a narrow pane.
                                         + (actions && actions.length > 0 ? 'bottom-9' : 'bottom-2')}
@@ -476,7 +476,7 @@ function WhatIsMaterialXApp({ active } = {}) {
                                 <MtlxIcon name="share" className="w-[18px] h-[18px]" />
                                 Open the Graph Editor
                             </a>
-                            <a href={links.spec} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 h-11 px-4 rounded-[10px] border border-line-strong bg-control hover:bg-hover text-sm font-medium text-fg transition-colors">
+                            <a href={links.spec} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 h-11 px-4 rounded-[10px] border border-line-strong bg-control/80 hover:bg-hover text-sm font-medium text-fg transition-colors">
                                 <MtlxIcon name="external-link" className="w-[18px] h-[18px] text-accent-fg" />
                                 Read the specification
                             </a>

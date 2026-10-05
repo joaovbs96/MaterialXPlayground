@@ -934,7 +934,7 @@
                         </div>
                     )}
                     {autoLoad === 'failed' && (
-                        <div className="bg-surface-raised p-4 rounded-xl border border-warning-border/60 text-sm text-fg-secondary">
+                        <div className="bg-surface-raised p-4 rounded-xl border border-warning-hue/40 text-sm text-fg-secondary">
                             Could not load the pregenerated node library data
                             (js/gen/nodelib.json, js/gen/nodelib-index.json). Reload the
                             page, or if you're building from source, run
@@ -1041,7 +1041,7 @@
                                             <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-accent-fg-strong mb-1">
                                                 {selectedNode.lib}<span className="text-fg-faint">/</span><span className="text-fg-muted">{selectedNode.group}</span>
                                             </div>
-                                            <h2 className="flex items-center gap-2 sm:gap-2.5 text-xl sm:text-3xl font-bold text-fg-strong font-mono tracking-[-0.01em] min-w-0">
+                                            <h2 className="flex items-center gap-2 sm:gap-2.5 text-xl sm:text-3xl font-bold text-fg font-mono tracking-[-0.01em] min-w-0">
                                                 <span
                                                     className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5 rounded-full shrink-0"
                                                     style={{ backgroundColor: typeColor(previewType) }}
@@ -1074,7 +1074,7 @@
                                                         href={specUrlForNode(selectedNode)}
                                                         target="_blank" rel="noopener noreferrer"
                                                         title="Open this node in the official MaterialX specification on GitHub"
-                                                        className="inline-flex items-center gap-1 h-6 px-2 rounded-md border border-hud-line/50 bg-hud/70 text-[11px] font-medium text-accent-fg-strong hover:text-accent-fg-bright hover:border-accent-base/60 transition-colors"
+                                                        className="inline-flex items-center gap-1 h-6 px-2 rounded-md border border-line-strong/50 bg-chrome/70 text-[11px] font-medium text-accent-fg-strong hover:text-accent-fg-bright hover:border-accent-base/60 transition-colors"
                                                     >
                                                         Official spec <MtlxIcon name="external-link" className="w-3.5 h-3.5" />
                                                     </a>
@@ -1088,8 +1088,8 @@
                                                     title="Copy a direct link to this node"
                                                     className={'inline-flex items-center gap-1 h-6 px-2 rounded-md border text-[11px] font-medium transition-colors ' + (
                                                         copied
-                                                            ? 'bg-success-border/30 border-success-fill/60 text-success-text'
-                                                            : 'border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong'
+                                                            ? 'bg-success-bg/30 border-success-border/60 text-success-text'
+                                                            : 'border-line-strong/50 bg-chrome/70 text-fg-muted hover:bg-hover hover:border-line-strong hover:text-fg'
                                                     )}
                                                 >
                                                     {copied ? (
@@ -1113,7 +1113,7 @@
                                                     className={'inline-flex items-center gap-1 h-6 px-2 rounded-md border text-[11px] font-medium transition-colors ' + (
                                                         implPanelOpen
                                                             ? 'bg-accent-fill-pressed/30 border-accent-fill/60 text-accent-fg-strong'
-                                                            : 'border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong'
+                                                            : 'border-line-strong/50 bg-chrome/70 text-fg-muted hover:bg-hover hover:border-line-strong hover:text-fg'
                                                     )}
                                                 >
                                                     <MtlxIcon name="transfer" className="w-3.5 h-3.5" />

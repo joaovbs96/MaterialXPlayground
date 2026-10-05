@@ -8,11 +8,12 @@
 // only, writes nothing.
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { Marked } from "marked";
+import vm from "node:vm";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,6 +50,16 @@ function fail(message) {
   process.exit(1);
 }
 
+// Highlights fenced code at build time with the vendored highlight.js core
+// (no runtime load). Unknown languages fall back to plain escaped text.
+const HLJS_PATH = path.join(REPO_ROOT, "vendor", "highlightjs", "highlight.min.js");
+function loadHljs() {
+  if (!existsSync(HLJS_PATH)) fail("error: vendor/highlightjs/highlight.min.js is missing - run `npm run vendor`");
+  const ctx = vm.createContext({});
+  vm.runInContext(`${readFileSync(HLJS_PATH, "utf8")};this.hljs = hljs;`, ctx);
+  return ctx.hljs;
+}
+
 function escapeAttr(s) {
   return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 }
@@ -68,7 +79,7 @@ function slugify(text) {
 /** Builds a marked Renderer override that assigns slug ids to h2/h3
  * headings only (matching the doc's own anchor targets), disambiguating
  * repeats, and reports every id it minted via onId. */
-function makeRenderer(marked, onId) {
+function makeRenderer(marked, onId, hljs) {
   const usedSlugs = new Map();
 
   function uniqueSlug(base) {
@@ -78,6 +89,18 @@ function makeRenderer(marked, onId) {
   }
 
   return {
+    code(token) {
+      const lang = (token.lang || "").trim().split(/\s+/)[0];
+      if (lang && hljs.getLanguage(lang)) {
+        const out = hljs.highlight(token.text, { language: lang, ignoreIllegals: true }).value;
+        return `<pre><code class="hljs language-${escapeAttr(lang)}">${out}</code></pre>
+`;
+      }
+      const esc = token.text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      return `<pre><code class="hljs">${esc}
+</code></pre>
+`;
+    },
     heading(token) {
       const html = this.parser.parseInline(token.tokens);
       if (token.depth !== 2 && token.depth !== 3) {
@@ -124,7 +147,7 @@ async function render() {
 
   const headingIds = new Set();
   const marked = new Marked({ gfm: true });
-  marked.use({ renderer: makeRenderer(marked, (id) => headingIds.add(id)) });
+  marked.use({ renderer: makeRenderer(marked, (id) => headingIds.add(id), loadHljs()) });
 
   const body = marked.parse(source, { async: false });
 

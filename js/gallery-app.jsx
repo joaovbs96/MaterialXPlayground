@@ -22,11 +22,11 @@ const GALLERY_TAG_CLASS = 'text-[10px] font-medium uppercase tracking-wide px-[7
 // Same idiom, but clickable: the overlay's family/Textured/Procedural
 // pills, which apply a filter and need an obvious hover affordance.
 const GALLERY_TAG_CLASS_LINK = GALLERY_TAG_CLASS + ' cursor-pointer transition-colors hover:border-accent-base/60 hover:text-fg';
-const GALLERY_CODE_CLASS = 'font-mono text-[0.9em] text-fg-soft bg-code-inline-bg/50 border border-line rounded px-1 py-px';
+const GALLERY_CODE_CLASS = 'font-mono text-[0.9em] text-code-inline-fg bg-code-inline-bg/50 border border-line rounded px-1 py-px';
 // Filter-chip idiom, shared by the family chips, the tag chips and the
 // numbered page pills.
-const GALLERY_CHIP_ACTIVE = 'border-accent-base bg-accent-wash/[0.12] text-accent-fg-strong';
-const GALLERY_CHIP_IDLE = 'border-line-strong bg-control text-fg-secondary hover:bg-hover hover:text-fg';
+const GALLERY_CHIP_ACTIVE = 'border-accent-base bg-selection/20 text-accent-fg-strong';
+const GALLERY_CHIP_IDLE = 'border-line-strong bg-control/80 text-fg-secondary hover:bg-hover hover:text-fg';
 // Multi-select AND tag chips shown next to the single-select family chips;
 // the manifest's other tags (familyLabel, shader) aren't chip-worthy.
 const GALLERY_TAG_FILTERS = [
@@ -229,7 +229,7 @@ function GalleryCard({ m, onOpen }) {
             type="button"
             onClick={() => onOpen(m.id)}
             title={m.name}
-            className="group flex flex-col text-left bg-surface-raised border border-line-subtle rounded-xl overflow-hidden transition-colors hover:border-accent-base/50 hover:bg-surface-raised/80"
+            className="group flex flex-col text-left bg-surface-raised border border-line-subtle rounded-xl overflow-hidden transition-colors hover:border-accent-base/50 hover:bg-hover-subtle"
         >
             {showPlaceholder ? (
                 <div
@@ -323,13 +323,13 @@ function GalleryLicenseDialog({ material, onClose }) {
     const label = (material.license && material.license.label) || 'License';
     return (
         <div
-            className="fixed left-0 right-0 bottom-0 z-[55] flex items-center justify-center bg-scrim/70 p-4"
+            className="fixed left-0 right-0 bottom-0 z-[55] flex items-center justify-center bg-scrim/85 p-4"
             style={{ top: 'var(--mtlx-header-h, 0px)' }}
             onMouseDown={onClose}
         >
             <div
                 onMouseDown={(e) => e.stopPropagation()}
-                className="w-full max-w-[48rem] max-h-[calc(100vh-var(--mtlx-header-h,0px)-2rem)] bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden flex flex-col"
+                className="w-full max-w-[48rem] max-h-[calc(100vh-var(--mtlx-header-h,0px)-2rem)] bg-surface-raised border border-line-strong rounded-lg shadow-2xl overflow-hidden flex flex-col"
             >
                 <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-2.5 border-b border-line bg-chrome/70">
                     <div className="min-w-0">
@@ -395,14 +395,14 @@ function GalleryDetailOverlay({
         // instead of covering it; .mtlx-header's raised z-index (60) keeps
         // it and its dropdowns usable/visible while this popup is open.
         <div
-            className={'fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-scrim/70 p-4' + (isOpen ? '' : ' hidden')}
+            className={'fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-scrim/85 p-4' + (isOpen ? '' : ' hidden')}
             style={{ top: 'var(--mtlx-header-h, 0px)' }}
             onMouseDown={isOpen ? onClose : undefined}
             aria-hidden={!isOpen}
         >
             <div
                 onMouseDown={(e) => e.stopPropagation()}
-                className="w-full max-w-[64rem] max-h-[calc(100vh-var(--mtlx-header-h,0px)-2rem)] bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden flex flex-col"
+                className="w-full max-w-[64rem] max-h-[calc(100vh-var(--mtlx-header-h,0px)-2rem)] bg-surface-raised border border-line-strong rounded-lg shadow-2xl overflow-hidden flex flex-col"
             >
                 <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-2.5 border-b border-line bg-chrome/70">
                     <div className="min-w-0">

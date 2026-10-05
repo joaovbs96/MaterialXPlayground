@@ -1125,7 +1125,7 @@
 
                         const buildView = () => createMtlxRenderView({
                             canvas, mx, gen, genContext, renderable, lightData,
-                            label: nodeName,
+                            label: nodeName, surface: 'docs',
                             // Many small previews mount at once; a tighter
                             // budget keeps displaced subdivision cheap here.
                             triangleBudget: 250000,
@@ -1233,7 +1233,7 @@
                                 try {
                                     const sourceView = await createMtlxRenderView({
                                         canvas: srcCanvas, mx, gen, genContext, renderable: sourceRenderable, lightData,
-                                        label: nodeName + ' (source)',
+                                        label: nodeName + ' (source)', surface: 'docs',
                                         triangleBudget: 250000,
                                         needsLighting,
                                         geomName: geom,
@@ -1591,7 +1591,7 @@
                 // No fixed width: numberFieldStyle below sizes this from
                 // its own min/max/step so a longer float never clips under
                 // the native spinner (px-1 = 0.25rem/side, border = 1px/side).
-                const numCls = 'flex-none bg-control border border-line-strong rounded px-1 py-0.5 text-[11px] font-mono text-fg-soft';
+                const numCls = 'flex-none bg-control/80 border border-line-strong rounded px-1 py-0.5 text-[11px] font-mono text-fg-soft';
                 // Read-only input (e.g. a geometric default like Vworld) —
                 // shown so the input isn't "missing", but not editable.
                 if (p.readonly) {
@@ -1622,7 +1622,7 @@
                     return (
                         <input
                             type="text"
-                            className="w-full bg-control border border-line-strong rounded px-2 py-1 text-[11px] font-mono text-fg-soft"
+                            className="w-full bg-control/80 border border-line-strong rounded px-2 py-1 text-[11px] font-mono text-fg-soft"
                             value={String(cur)}
                             onChange={(e) => onParamChange(p, e.target.value)}
                         />
@@ -1771,7 +1771,7 @@
                                     <input
                                         key={i} type="number" min="0" max="1" step="0.01"
                                         title={chan[i] + ' (linear, 0-1)'}
-                                        className="w-full min-w-0 bg-control border border-line-strong rounded px-1 py-0.5 text-[11px] font-mono text-fg-soft"
+                                        className="w-full min-w-0 bg-control/80 border border-line-strong rounded px-1 py-0.5 text-[11px] font-mono text-fg-soft"
                                         value={fmt(c)}
                                         onChange={(e) => setComp(i, e.target.value)}
                                         onBlur={(e) => { e.target.value = String(fmt(cur[i])); }}
@@ -1809,7 +1809,7 @@
                         {cur.map((c, i) => (
                             <input
                                 key={i} type="number" step="0.01"
-                                className="w-full min-w-0 bg-control border border-line-strong rounded px-1 py-0.5 text-[11px] font-mono text-fg-soft"
+                                className="w-full min-w-0 bg-control/80 border border-line-strong rounded px-1 py-0.5 text-[11px] font-mono text-fg-soft"
                                 value={c}
                                 onChange={(e) => {
                                     const n = parseFloat(e.target.value);
@@ -1904,7 +1904,7 @@
             // toggle is harmless since all values live in state here.
             const renderParamsHeader = (extraButtons) => (
                 <div className="flex items-center justify-between px-3 py-2 border-b border-line flex-none">
-                    <span className="text-sm font-semibold text-fg-soft">Parameters</span>
+                    <span className="text-sm font-semibold text-fg">Parameters</span>
                     <div className="flex items-center gap-1.5">
                         <button
                             onClick={onExportMtlx}
@@ -1941,7 +1941,7 @@
                             disabled={loading}
                             title={compareOn ? 'Show only the translated shader' : 'Compare against the source shader (swipe)'}
                             className={(compareOn
-                                ? 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border bg-accent-fill/80 border-accent-base text-on-accent transition-colors whitespace-nowrap shrink-0'
+                                ? 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded border mtlx-fill-accent-translucent border-accent-base text-on-accent transition-colors whitespace-nowrap shrink-0'
                                 : BTN_TOOLBAR) + ' font-sans disabled:opacity-40 disabled:cursor-not-allowed'}
                         >
                             <MtlxIcon name="compare" className="w-3.5 h-3.5" />
@@ -2007,7 +2007,7 @@
                     </div>
                 )}
                 {!notice && error && (
-                    <div className="text-sm text-warning-hue/90 bg-surface-sunken border border-warning-border/40 rounded-lg px-4 py-3">
+                    <div className="text-sm text-warning bg-surface-sunken border border-warning-hue/40 rounded-lg px-4 py-3">
                         {error}
                     </div>
                 )}

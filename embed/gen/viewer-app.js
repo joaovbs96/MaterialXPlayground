@@ -581,7 +581,7 @@ function MaterialViewerApp({
         // value and a connection before handing off. Self-heals
         // documents loaded before this fix existed.
         mxSafe(() => stripValuesFromConnectedInputs(loaded.doc), 0);
-        xml = preserveSourceFormatting(loaded.sourceXml, withXmlEnvelope(loaded.mx.writeToXmlString(loaded.doc), splitXmlEnvelope(loaded.sourceXml)));
+        xml = preserveSourceFormatting(loaded.sourceXml, withXmlEnvelope(escapeXmlAttrSpecials(loaded.mx.writeToXmlString(loaded.doc)), splitXmlEnvelope(loaded.sourceXml)));
       } catch (e) {
         console.warn('Send to Editor: failed to serialize the document', e);
         return;
@@ -1409,7 +1409,7 @@ function MaterialViewerApp({
   // slots (via buttonClassName) and the custom sendToGraph/
   // presets/shaderCode buttons below. VS Code stays icon-only and
   // square; the browser HUD grows labels via HUD_PILL/HUD_PILL_ACTIVE.
-  const hudChipClass = active => IN_VSCODE ? `h-7 w-7 justify-center inline-flex items-center rounded-lg border transition-colors ${active ? 'bg-accent-fill/80 border-accent-base text-on-accent' : 'border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong'}` : active ? HUD_PILL_ACTIVE : HUD_PILL;
+  const hudChipClass = active => IN_VSCODE ? `h-7 w-7 justify-center inline-flex items-center rounded-lg border transition-colors ${active ? 'mtlx-fill-accent-translucent border-accent-base text-on-accent' : 'border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong'}` : active ? HUD_PILL_ACTIVE : HUD_PILL;
 
   // Files sidebar body: Document/Materials/Textures cards, split
   // out so the docked panel's own JSX (below) stays flat.
@@ -1433,7 +1433,7 @@ function MaterialViewerApp({
     onFiles: onPickFileList
   })), /*#__PURE__*/React.createElement("label", {
     title: "Choose a folder",
-    className: "h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-line-control rounded-md bg-control hover:bg-hover text-fg-secondary cursor-pointer"
+    className: "h-[26px] w-[26px] shrink-0 inline-flex items-center justify-center border border-line-control rounded-md bg-control/80 hover:bg-hover text-fg-secondary cursor-pointer"
   }, /*#__PURE__*/React.createElement(MtlxIcon, {
     name: "folder",
     className: "w-3.5 h-3.5"
@@ -1650,7 +1650,7 @@ function MaterialViewerApp({
   }, IN_VSCODE && status && !busy && /*#__PURE__*/React.createElement("div", {
     className: "text-sm text-fg-muted mb-3"
   }, status), IN_VSCODE && error && /*#__PURE__*/React.createElement("div", {
-    className: "bg-error-bg/40 border border-error-border/60 text-error-text-strong text-sm rounded-lg px-4 py-3 mb-3 break-words"
+    className: "bg-error-bg/60 border border-error-border/60 text-error-text text-sm rounded-lg px-4 py-3 mb-3 break-words"
   }, error), /*#__PURE__*/React.createElement("div", {
     ref: viewportRef,
     className: `overflow-hidden ${bgClass} ${IN_VSCODE ? 'relative flex-1 min-h-0' : 'absolute inset-0'}`
@@ -1860,7 +1860,7 @@ function MaterialViewerApp({
   })()))), !IN_VSCODE && status && !busy && /*#__PURE__*/React.createElement("div", {
     className: "absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-hud-raised/90 backdrop-blur border border-hud-line text-hud-fg text-sm rounded-lg px-4 py-2 break-words shadow-lg"
   }, status), !IN_VSCODE && error && /*#__PURE__*/React.createElement("div", {
-    className: "absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-error-bg/90 border border-error-border/60 text-error-text-strong text-sm rounded-lg px-4 py-2.5 break-words shadow-lg"
+    className: "absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-error-bg/90 border border-error-border/60 text-error-text text-sm rounded-lg px-4 py-2.5 break-words shadow-lg"
   }, error), !IN_VSCODE && !chromeless && !sidebarOpen && /*#__PURE__*/React.createElement("button", {
     onClick: () => setSidebarOpen(true),
     title: "Expand the viewer panel",
@@ -1892,7 +1892,7 @@ function MaterialViewerApp({
     }, /*#__PURE__*/React.createElement("div", {
       className: "flex-none flex items-center gap-1.5 px-3 py-2 border-b border-line"
     }, /*#__PURE__*/React.createElement("span", {
-      className: "text-[13px] font-semibold text-fg-soft"
+      className: "text-[13px] font-semibold text-fg"
     }, "Material Viewer"), /*#__PURE__*/React.createElement("button", {
       onClick: () => setSidebarOpen(false),
       title: "Collapse the viewer panel",
@@ -1908,13 +1908,13 @@ function MaterialViewerApp({
       open: presetPickerOpen,
       onClose: () => setPresetPickerOpen(false),
       onSelect: handlePresetPickerSelect,
-      overlayClassName: "fixed left-0 right-0 bottom-0 top-[var(--mtlx-header-h,0px)] z-50 flex items-center justify-center bg-scrim/70"
+      overlayClassName: "fixed left-0 right-0 bottom-0 top-[var(--mtlx-header-h,0px)] z-50 flex items-center justify-center bg-scrim/85"
     }), !chromeless && shaderExportOpen && loadedRef.current && /*#__PURE__*/React.createElement(ShaderExportDialog, {
       open: true,
       onClose: () => setShaderExportOpen(false),
       renderables: renderables,
       initialIndex: chosenMat,
-      overlayClassName: "fixed inset-0 z-50 flex items-center justify-center bg-scrim/70",
+      overlayClassName: "fixed inset-0 z-50 flex items-center justify-center bg-scrim/85",
       generate: ({
         renderable,
         label,

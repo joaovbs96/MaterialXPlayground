@@ -1,7 +1,9 @@
 // js/graph/node-component.jsx — renders each graph node as a React Flow
-// card (data nodes, nodegraphs, interface input/output pseudo-nodes).
-// Split out of js/graph-app.jsx. Loaded after js/graph/style.jsx (needs
-// its getNodeColor/typeColor/handleStyle/NODE_W globals) per js/shell.jsx's
+// card (data nodes, nodegraphs, ShadingLanguageX code nodes, interface
+// input/output pseudo-nodes). Split out of js/graph-app.jsx. Loaded after
+// js/graph/style.jsx (needs its getNodeColor/typeColor/handleStyle/
+// nodeWidth/slxEditorHeight globals; ShadingLanguageX nodes also use
+// js/graph/code-view.jsx's SlxCodeEditor when it's loaded) per js/shell.jsx's
 // VIEW_DEPS.graph. No top-level import/export — self-exports via
 // Object.assign(window, {}) at the bottom, like other lazy-loaded files.
 
@@ -88,13 +90,161 @@
             );
         }
 
+        // A ShadingLanguageX node's code, under its ports: the code view's
+        // editor (SlxCodeEditor, js/graph/code-view.jsx: highlighting,
+        // completion, parameter hints, error squiggles, Ctrl/Cmd+click
+        // docs), or plain read-only text where that isn't loaded (graph
+        // previews outside the Graph Editor). Edits stay a local draft
+        // (mirrored to the app through onSlxDraft so it survives the card
+        // remounting) until compiled: Ctrl/Cmd+Enter, the Compile button,
+        // or leaving the code. While a draft has errors the node keeps its
+        // last good compile. Without onSlxCompile (read-only scope, VS
+        // Code) the code is read-only. `nodrag nowheel` keep pointer and
+        // wheel input in the editor away from React Flow; the dblclick stop
+        // keeps a word-select double-click from opening the nodegraph.
+        function SlxNodeCode({ data }) {
+            const slx = data.slx;
+            const Editor = window.SlxCodeEditor;
+            const editable = !!data.onSlxCompile && !!Editor;
+            const [draft, setDraft] = React.useState(() => (slx.draft ? slx.draft.draft : slx.source));
+            // The last compile that failed, { code, text }: the message, and
+            // the code its line numbers point into, which gets squiggled.
+            const [failed, setFailed] = React.useState(() => (slx.draft ? slx.draft.failed : null));
+            const [busy, setBusy] = React.useState(false);
+            // A ref, not `busy`: a blur and a click can both ask within one render.
+            const busyRef = React.useRef(false);
+            const boxRef = React.useRef(null);
+            const mountedRef = React.useRef(true);
+            React.useEffect(() => () => { mountedRef.current = false; }, []);
+            // The function library behind underlines, completion and hints,
+            // shared with the code view and loaded once for the page.
+            const [library, setLibrary] = React.useState(null);
+            React.useEffect(() => {
+                if (!Editor || typeof window.loadSlxLibrary !== 'function') return;
+                window.loadSlxLibrary().then((lib) => { if (mountedRef.current) setLibrary(lib); }).catch(() => {});
+            }, []);
+            // A freshly added node puts the caret straight in its code. React
+            // Flow keeps a new card hidden until it has measured it, and a
+            // hidden field can't take focus, so retry for a few frames.
+            React.useEffect(() => {
+                if (!slx.focus || !editable) return undefined;
+                let raf = 0, tries = 0;
+                const tryFocus = () => {
+                    const ta = boxRef.current && boxRef.current.querySelector('textarea');
+                    if (!ta) return;
+                    ta.focus({ preventScroll: true });
+                    if (document.activeElement !== ta && ++tries < 30) raf = requestAnimationFrame(tryFocus);
+                };
+                tryFocus();
+                return () => cancelAnimationFrame(raf);
+            }, []);
+            // The source this draft started from: when the node's code
+            // changes underneath it (a compile, or the graph was edited from
+            // the inside and decompiled) an untouched draft follows along.
+            const baseRef = React.useRef(slx.source);
+            React.useEffect(() => {
+                if (slx.source === baseRef.current) return;
+                const untouched = draft === baseRef.current;
+                baseRef.current = slx.source;
+                if (untouched || draft === slx.source) { setDraft(slx.source); setFailed(null); }
+            }, [slx.source]);
+            const dirty = draft !== slx.source;
+
+            const remember = (code, fail) => {
+                if (data.onSlxDraft) data.onSlxDraft(code === slx.source ? null : { base: slx.source, draft: code, failed: fail || null });
+            };
+            // Undoing a failed edit puts back the node's own code, so its
+            // error no longer applies (and Compile has nothing to do).
+            const update = (code) => {
+                const fail = code === slx.source ? null : failed;
+                setDraft(code);
+                setFailed(fail);
+                remember(code, fail);
+            };
+            const compile = async () => {
+                if (!editable || busyRef.current || !dirty) return;
+                const code = draft;
+                busyRef.current = true;
+                setBusy(true);
+                let res;
+                try { res = await data.onSlxCompile(code); } catch (e) { res = { ok: false, error: String((e && e.message) || e) }; }
+                busyRef.current = false;
+                if (!mountedRef.current) return; // renamed by the compile: a new card took over
+                setBusy(false);
+                if (res && res.ok) {
+                    setFailed(null);
+                } else {
+                    const fail = { code, text: (res && res.error) || 'The code did not compile.' };
+                    setFailed(fail);
+                    remember(code, fail);
+                }
+            };
+            // A new object only when the failure changes: the editor keeps
+            // carrying the squiggle through edits until then.
+            const diagnostics = React.useMemo(() => {
+                const line = (failed && typeof window.slxErrorLine === 'function') ? window.slxErrorLine(failed.text) : null;
+                return line != null ? { source: failed.code, items: [{ line, message: failed.text }] } : null;
+            }, [failed]);
+
+            // Nothing once compiled.
+            const status = busy ? { text: 'Compiling\u2026', cls: 'text-fg-muted' }
+                : dirty ? { text: 'modified', cls: 'text-warning' }
+                : !editable ? { text: slx.unavailable ? 'Read only: editing needs the browser or desktop app' : 'Read only', cls: 'text-fg-subtle' }
+                : null;
+            return (
+                // The empty title keeps the card's own tooltip off its code.
+                <div className="mtlx-slx-editor nodrag nowheel border-t border-line px-1.5 pt-1.5 pb-1 cursor-default"
+                    title=""
+                    onDoubleClick={(e) => e.stopPropagation()}>
+                    <div
+                        ref={boxRef}
+                        className={'flex rounded border overflow-hidden ' + (failed ? 'border-error-border/70' : 'border-line')}
+                        style={{ height: slxEditorHeight(draft) }}
+                    >
+                        {Editor ? (
+                            <Editor
+                                value={draft}
+                                onChange={update}
+                                onSubmit={compile}
+                                onBlur={() => { if (dirty && !(failed && failed.code === draft)) compile(); }}
+                                readOnly={!editable}
+                                library={library}
+                                onOpenNodeDocs={data.onOpenNodeDocs}
+                                diagnostics={diagnostics}
+                            />
+                        ) : (
+                            <pre className="flex-1 m-0 px-2 py-2 overflow-auto custom-scrollbar font-mono text-[12px] leading-[18px] text-fg-secondary whitespace-pre select-text bg-surface-sunken/60"
+                                style={{ tabSize: 4 }}>{slx.source}</pre>
+                        )}
+                    </div>
+                    <div className="flex items-center gap-1.5 h-6 text-[10px] min-w-0">
+                        {status && <span className={'truncate ' + status.cls} title={status.text}>{status.text}</span>}
+                        {editable && (
+                            <button
+                                type="button"
+                                // Keeps the code focused, so its blur doesn't compile too.
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={compile}
+                                disabled={busy || !dirty}
+                                title="Compile the code (Ctrl+Enter)"
+                                className="ml-auto flex-none text-[10px] px-1.5 py-px rounded border border-accent-base/50 text-accent-fg-bright hover:bg-accent-wash/20 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
+                            >Compile</button>
+                        )}
+                    </div>
+                    {failed && (
+                        <pre className="mtlx-slx-error mb-0.5 max-h-28 overflow-auto custom-scrollbar rounded border border-error-border/60 bg-error-bg/60 px-1.5 py-1 text-[10px] leading-snug text-error-text whitespace-pre-wrap select-text">{failed.text}</pre>
+                    )}
+                </div>
+            );
+        }
+
         // Full-width square preview on top of the card. State comes from the stable store passed
         // in node data, so a bitmap arriving redraws this canvas only and never rebuilds the flow.
         const SHADER_PENDING_TITLE = {
             queued: 'Queued: shader thumbnails render after pattern thumbnails',
             generate: 'Compiling shader', compile: 'Compiling shader', render: 'Rendering',
         };
-        function NodeThumb({ thumbKey, store, isIface, small }) {
+        function NodeThumb({ thumbKey, store, isIface, small, rowH }) {
             const sub = React.useCallback((fn) => store.subscribe(thumbKey, fn), [store, thumbKey]);
             const snap = React.useSyncExternalStore(sub, () => store.get(thumbKey));
             const canvasRef = React.useRef(null);
@@ -128,14 +278,14 @@
             }, [bmp, showImage, small]);
             // Same separator the header draws, so the image and header read as one stack.
             // Small: the left end of the header, 64px plus a 1px vertical separator; the header clips its corner.
-            const sep = isIface ? 'border-line/70 border-dashed ' : 'border-line ';
+            const sep = isIface ? 'border-line/60 border-dashed ' : 'border-line ';
             const wrap = small ? 'relative flex-none self-stretch overflow-hidden border-r ' + sep
                 : 'relative overflow-hidden rounded-t-lg border-b ' + sep;
             const shader = snap.kind === 'shader';
             const pendingShader = shader && !showImage && snap.state === 'pending';
             const state = showImage ? '' : pendingShader ? 'flex items-center justify-center bg-surface-sunken text-fg-subtle' : failed ? 'flex items-center justify-center bg-surface-sunken text-fg-subtle' : 'bg-surface-sunken animate-pulse';
             return (
-                <div className={wrap + state} style={small ? { width: THUMB_SMALL + 1 } : { height: THUMB_ROW_H }} data-mtlx-thumb={snap.state} data-mtlx-thumb-size={small ? 'small' : 'large'}
+                <div className={wrap + state} style={small ? { width: THUMB_SMALL + 1 } : { height: rowH }} data-mtlx-thumb={snap.state} data-mtlx-thumb-size={small ? 'small' : 'large'}
                     title={failed ? (snap.title || 'No thumbnail for this node') : pendingShader ? SHADER_PENDING_TITLE[snap.phase || 'queued'] : undefined}>
                     {showImage && <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />}
                     {showImage && snap.state === 'approx' && (
@@ -221,12 +371,15 @@
                 <div
                     title={isDef
                         ? 'Definition ' + data.nodedef + (data.onOpen ? '. Double-click to open its implementation graph' : '')
-                        : (data.kind === 'nodegraph' && data.onOpen ? 'Double-click to open this nodegraph' : undefined)}
+                        : (data.kind === 'nodegraph' && data.onOpen
+                            ? (data.slx ? 'ShadingLanguageX node. Double-click to open its nodegraph'
+                                : 'Double-click to open this nodegraph')
+                            : undefined)}
                     className={'relative rounded-lg border font-mono text-[11px] '
                         + (isIface ? 'border-dashed bg-graph-node-header/70 ' : (isDef ? 'border-dashed bg-graph-node shadow-md ' : 'bg-graph-node shadow-md '))
                         + (selected ? 'border-graph-node-selected ring-1 ring-graph-node-selected/50'
                                     : ((isIface || isDef) ? 'border-graph-node-line-iface' : 'border-graph-node-line'))}
-                    style={{ width: NODE_W }}>
+                    style={{ width: nodeWidth(data) }}>
                     {(showToggle || showEdit || showImpl) && (
                         // Round chips on the right edge, stacked; each grows to the right into a labelled pill
                         // on hover or keyboard focus (CSS in graph-preview.css). The open chips keep
@@ -240,7 +393,7 @@
                                     aria-label={toggleLabel}
                                     className={'mtlx-node-act border text-[10px] leading-none '
                                         + (expanded
-                                            ? 'bg-accent-fill border-accent-fg text-on-accent hover:bg-accent-fill-hover'
+                                            ? 'bg-accent-fill border-accent-base text-on-accent hover:bg-accent-fill-hover'
                                             : 'bg-chip border-graph-node-line-iface text-fg-secondary hover:bg-hover-strong hover:text-fg')}
                                 >
                                     <span className="mtlx-node-act-icon">{expanded ? '−' : '+'}</span>
@@ -273,16 +426,16 @@
                             )}
                         </div>
                     )}
-                    {hasThumb && !smallThumb && <NodeThumb thumbKey={data.thumbKey} store={data.thumbStore} isIface={isIface} />}
+                    {hasThumb && !smallThumb && <NodeThumb thumbKey={data.thumbKey} store={data.thumbStore} isIface={isIface} rowH={thumbRowH(data)} />}
                     {smallThumb ? (
                         // Small preview: it fills the header's full height at the left end, three fixed rows to its right.
                         <div className={'flex border-b leading-tight rounded-t-lg overflow-hidden '
-                                + (isIface ? 'border-line/70 border-dashed bg-transparent' : 'border-line bg-graph-node-header/70')}
+                                + (isIface ? 'border-line/60 border-dashed bg-transparent' : 'border-line bg-graph-node-header/70')}
                             style={{ height: THUMB_SMALL + 1 }}>
                             <NodeThumb thumbKey={data.thumbKey} store={data.thumbStore} isIface={isIface} small />
                             <div className="flex-1 min-w-0 px-2 flex flex-col justify-center gap-0.5 overflow-hidden">
                                 {nameRow}
-                                <div className={'text-[10px] truncate pl-3.5 ' + subtle} style={{ height: 13 }}>{data.category}</div>
+                                <div className={'text-[10px] truncate pl-3.5 ' + subtle} style={{ height: 13 }}>{data.slx ? 'ShadingLanguageX' : data.category}</div>
                                 <div className="flex items-center gap-1.5 min-w-0 pl-3.5" style={{ height: 13 }}>
                                     <span className="min-w-0 truncate text-[10px]" style={{ color: data.type ? typeColor(data.type) : undefined }}>{data.type}</span>
                                     {badgeEl}
@@ -291,12 +444,12 @@
                         </div>
                     ) : (
                     <div className={'px-2 py-1 border-b leading-tight ' + (hasThumb ? '' : 'rounded-t-lg ')
-                            + (isIface ? 'border-line/70 border-dashed bg-transparent'
+                            + (isIface ? 'border-line/60 border-dashed bg-transparent'
                                        : 'border-line bg-graph-node-header/70')}>
                         {nameRow}
                         <div className="flex items-center gap-1.5 min-w-0 pl-3.5" style={{ height: 13 }}>
                             <span className={'min-w-0 truncate text-[10px] ' + subtle}>
-                                {data.category}{data.type ? ' : ' + data.type : ''}
+                                {data.slx ? 'ShadingLanguageX' : data.category}{data.type ? ' : ' + data.type : ''}
                             </span>
                             {badgeEl}
                         </div>
@@ -339,6 +492,7 @@
                             </div>
                         ))}
                     </div>
+                    {data.slx && <SlxNodeCode data={data} />}
                 </div>
             );
         }

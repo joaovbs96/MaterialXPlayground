@@ -36,7 +36,7 @@
             { keys: 'F', desc: 'Fit the whole graph in view', group: 'keyboard' },
             { keys: 'A', desc: 'Re-run the automatic layout once', group: 'keyboard' },
             { keys: 'L', desc: 'Toggle the node list sidebar', group: 'keyboard' },
-            { keys: 'Tab', desc: 'Open the add-node search (inside a nodegraph: also add interface inputs/outputs; at the root: also a new node definition)', group: 'keyboard' },
+            { keys: 'Tab', desc: 'Open the add-node search (inside a nodegraph: also add interface inputs/outputs; at the root: also a new node definition or ShadingLanguageX node)', group: 'keyboard' },
             { keys: '↑ ↓ / Enter', desc: 'Navigate / choose inside the add-node search and port pickers', group: 'keyboard' },
             { keys: 'Ctrl/Cmd + C', desc: 'Copy the selected node(s)', group: 'keyboard' },
             { keys: 'Ctrl/Cmd + V', desc: 'Paste the copied node(s)', group: 'keyboard' },
@@ -45,6 +45,12 @@
             { keys: 'Ctrl/Cmd + Z', desc: 'Undo the last document edit', group: 'keyboard' },
             { keys: 'Ctrl/Cmd + Shift + Z (or Ctrl/Cmd + Y)', desc: 'Redo', group: 'keyboard' },
             { keys: 'Ctrl/Cmd + S', desc: 'Save the document back to the open .mtlx file', group: 'keyboard', vscodeOnly: true },
+            // ShadingLanguageX code (the code panel and ShadingLanguageX nodes)
+            { keys: 'Ctrl/Cmd + Click a function', desc: 'Open the documentation for an underlined standard library function', group: 'slx', browserOnly: true },
+            { keys: 'Ctrl/Cmd + Enter', desc: "Compile the code (the code panel's into the whole node graph, a ShadingLanguageX node's into its nodegraph; leaving a node's code compiles it too)", group: 'slx', browserOnly: true },
+            { keys: 'Ctrl/Cmd + Space', desc: 'Show suggestions (they also appear as you type; Enter or Tab inserts one)', group: 'slx', browserOnly: true },
+            { keys: 'Ctrl/Cmd + Shift + Space', desc: 'Show parameter hints for the call around the cursor (Up/Down steps through its signatures)', group: 'slx', browserOnly: true },
+            { keys: 'Tab / Shift + Tab', desc: 'Indent / outdent (every selected line when several are selected)', group: 'slx', browserOnly: true },
         ];
 
         function KeybindsHelp({ onClose, active = true }) {
@@ -53,6 +59,7 @@
             // VS Code, vscodeOnly rows everywhere else.
             const IN_VSCODE = !!window.__MTLX_VSCODE__;
             const keybinds = KEYBINDS.filter((k) => (!k.vscodeOnly || IN_VSCODE) && (!k.browserOnly || !IN_VSCODE));
+            const slxKeybinds = keybinds.filter((k) => k.group === 'slx');
             const mouseKeybinds = keybinds.filter((k) => k.group === 'mouse');
             const keyboardKeybinds = keybinds.filter((k) => k.group === 'keyboard');
             useEscapeToClose(onClose, active);
@@ -62,7 +69,7 @@
                     title="Help & Keybinds"
                     titleClassName="text-sm font-bold text-fg"
                     onClose={onClose}
-                    panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[34rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+                    panelClassName="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[34rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
                 >
                     <div className="overflow-y-auto custom-scrollbar px-4 py-3">
                         <div className="text-[11px] text-fg-secondary leading-relaxed space-y-2">
@@ -112,6 +119,17 @@
                                         <td className="py-1 text-fg-secondary">{k.desc}</td>
                                     </tr>
                                 ))}
+                                {slxKeybinds.length > 0 && (
+                                    <tr>
+                                        <td colSpan={2} className="pt-3 pb-1.5 text-xs font-semibold text-fg-muted uppercase tracking-wider">Shading Language X</td>
+                                    </tr>
+                                )}
+                                {slxKeybinds.map((k) => (
+                                    <tr key={'slx:' + k.keys} className="align-top">
+                                        <td className="py-1 pr-3 whitespace-nowrap text-accent-fg-strong">{k.keys}</td>
+                                        <td className="py-1 text-fg-secondary">{k.desc}</td>
+                                    </tr>
+                                ))}
                             </tbody>
                         </table>
                     </div>
@@ -147,7 +165,7 @@
                     keepMounted
                     title={label}
                     onClose={onClose}
-                    panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[min(64rem,94%)] h-[90%] overflow-hidden flex flex-col"
+                    panelClassName="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[min(64rem,94%)] h-[90%] overflow-hidden flex flex-col"
                     headerRight={!IN_VSCODE && (
                         <a href={fullUrl} target="_blank" rel="noopener noreferrer" title="Open in a new tab"
                             className="text-fg-muted hover:text-fg-soft leading-none px-1"><MtlxIcon name="external-link" className="w-4 h-4" /></a>
@@ -230,7 +248,7 @@
                     open={open}
                     title="Document"
                     onClose={onClose}
-                    panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[38rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col"
+                    panelClassName="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[38rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col"
                     headerRight={
                         <button
                             onClick={copyXml}
@@ -265,7 +283,7 @@
                     open={open}
                     title="Validate"
                     onClose={onClose}
-                    panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+                    panelClassName="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
                 >
                     <div className="overflow-y-auto custom-scrollbar px-4 py-3 text-[12px]">
                         {!status && <div className="text-fg-muted animate-pulse">Validating{'…'}</div>}
@@ -354,7 +372,7 @@
                     closeDisabled={busy}
                     backdropCloseDisabled={busy}
                     overlayClassName={overlayClassName}
-                    panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+                    panelClassName="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[26rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
                 >
                     <div className="overflow-y-auto custom-scrollbar px-4 py-3 space-y-3 text-[12px]">
                         <label className="block space-y-1">
@@ -387,7 +405,7 @@
                             {format === 'zip' && (
                                 <div className="flex items-center gap-1.5 pl-6">
                                     <span className="text-[10px] text-fg-subtle flex-none font-mono">Texture format</span>
-                                    <span className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded border border-warning-border/60 bg-warning-bg/20 text-warning-marker">Experimental</span>
+                                    <span className="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded border border-warning-hue/40 bg-warning-hue/10 text-warning">Experimental</span>
                                     <MtlxSelect
                                         value={convertTo}
                                         options={['keep', 'png', 'jpeg', 'exr']}
@@ -413,11 +431,11 @@
                             </div>
                         )}
                         {unresolved.length > 0 && (
-                            <div className="rounded border border-warning-border/60 bg-warning-bg/20 px-2.5 py-2 space-y-1">
+                            <div className="rounded border border-warning-hue/40 bg-warning-hue/10 px-2.5 py-2 space-y-1">
                                 <div className="text-warning-marker font-bold text-[11px]">
                                     Not found in this session, will not be packaged:
                                 </div>
-                                <ul className="list-disc list-inside space-y-0.5 text-warning-text/90 font-mono text-[11px]">
+                                <ul className="list-disc list-inside space-y-0.5 text-warning-text font-mono text-[11px]">
                                     {unresolved.map((ref, i) => <li key={i}>{ref}</li>)}
                                 </ul>
                             </div>

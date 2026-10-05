@@ -242,12 +242,12 @@ const EMBED_MIRRORED_TOKEN_CLASSES = [
   "bg-hud/70", // was bg-gray-900/70
   "bg-stage", // was bg-gray-900
   "bg-surface-base", // was bg-gray-900
+  "bg-surface-card", // was a color-mix style on SectionCard
   "bg-surface-sunken", // was bg-gray-900
   "bg-veil/70", // was bg-gray-900/70
   "border-error-border/60", // was border-red-800/60
   "border-hud-line", // was border-gray-600
   "border-line-strong", // was border-gray-600
-  "text-error-text-strong", // was text-red-200
   "text-fg-secondary", // was text-gray-300
   "text-hud-fg", // was text-gray-300
 ];

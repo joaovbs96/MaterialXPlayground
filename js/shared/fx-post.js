@@ -1,7 +1,8 @@
-/* Scene-linear HDR presentation for the existing USD renderer.
+/* Scene-linear HDR presentation (js/usd-scene-post.js until render parity P8):
+ * the Scene, and preview views at preview Quality (options.surface).
  * All scene paths, including both peel compositors, must honor the caller's
  * render target and outputLinear contract. This module never shades materials
- * or recognizes asset names. The Material Viewer is not opted into this path.
+ * or recognizes asset names.
  *
  * Transparent export: the final view premultiplies its output, and where the
  * source alpha is below 1 it raises alpha to at least the glow's luminance
@@ -140,18 +141,20 @@
     function create(renderer, options = {}) {
         const THREE = root.THREE;
         let persisted = null;
+        // Settings surface: 'scene' (framed Scenes run on defaults) or a preview surface.
+        const surface = options.surface || 'scene';
         try {
-            if (root.top === root && root.MtlxRenderSettings) {
+            if ((root.top === root || surface !== 'scene') && root.MtlxRenderSettings) {
                 const S = root.MtlxRenderSettings;
                 persisted = {
-                    enabled: S.get('hdrPresentation', { surface: 'scene' }),
-                    bloom: S.get('bloom', { surface: 'scene' }),
-                    strength: S.get('bloomStrength', { surface: 'scene' }),
-                    threshold: S.get('bloomThreshold', { surface: 'scene' }),
-                    knee: S.get('bloomKnee', { surface: 'scene' }),
-                    radius: S.get('bloomRadius', { surface: 'scene' }),
-                    antialias: S.get('postAntialias', { surface: 'scene' }),
-                    samples: S.get('msaaSamples', { surface: 'scene' }),
+                    enabled: S.get('hdrPresentation', { surface }),
+                    bloom: S.get('bloom', { surface }),
+                    strength: S.get('bloomStrength', { surface }),
+                    threshold: S.get('bloomThreshold', { surface }),
+                    knee: S.get('bloomKnee', { surface }),
+                    radius: S.get('bloomRadius', { surface }),
+                    antialias: S.get('postAntialias', { surface }),
+                    samples: S.get('msaaSamples', { surface }),
                 };
             }
         } catch (_) {}
@@ -269,6 +272,9 @@
         const validateProgram=mat=>{
             if(validatedPrograms.has(mat))return;
             const program=renderer.properties.get(mat).currentProgram;
+            // A handle deleted by a swap/dispose is skipped silently (isProgram
+            // raises no GL error, getProgramParameter would) and checked next pass.
+            if(program && program.program && !gl.isProgram(program.program))return;
             if(!program || !gl.getProgramParameter(program.program,gl.LINK_STATUS))
                 throw new Error('HDR presentation shader did not link: '+(program?.diagnostics?.programLog||'unknown program'));
             validatedPrograms.add(mat);
@@ -365,7 +371,7 @@
                 if(oldSamples!==settings.samples||!settings.enabled)free();
                 // Persist only supported artistic/presentation controls. An
                 // active diagnostic must never survive a reload unnoticed.
-                if(next.persist!==false){try{if(root.top===root&&root.MtlxRenderSettings){const S=root.MtlxRenderSettings;const o={surface:'scene'};
+                if(next.persist!==false){try{if(root.top===root&&root.MtlxRenderSettings){const S=root.MtlxRenderSettings;const o={surface};
                     S.set('hdrPresentation',settings.enabled,o);S.set('bloom',settings.bloom,o);S.set('bloomStrength',settings.strength,o);
                     S.set('bloomThreshold',settings.threshold,o);S.set('bloomKnee',settings.knee,o);S.set('bloomRadius',settings.radius,o);
                     S.set('postAntialias',settings.antialias,o);S.set('msaaSamples',settings.samples,o);}}catch(_) {}}
@@ -381,4 +387,5 @@
         };
     }
     root.UsdScenePost={VERSION,DEFAULTS,create};
+    root.MtlxRender=Object.assign(root.MtlxRender||{},{createPostEffect:create});
 })(window);

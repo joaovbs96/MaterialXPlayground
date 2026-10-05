@@ -16,13 +16,12 @@ Tailwind, no in-browser Babel, no hash router, just the 3D viewport and (optiona
 <p>The hosted viewer URL below is a convenience, not a requirement: the embed is a static page
 and its assets can be deployed on any static host or your own site. See
 <a href="#self-hosting">Self-hosting</a> for what to copy.</p>
-<pre><code class="language-html">&lt;iframe
-  src=&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?src=https://raw.githubusercontent.com/AcademySoftwareFoundation/MaterialX/v1.39.5/resources/Materials/Examples/StandardSurface/standard_surface_greysphere_calibration.mtlx&amp;geometry=sphere&amp;controls=geometry,env,fullscreen&quot;
-  width=&quot;640&quot; height=&quot;480&quot; style=&quot;border:0&quot;
-  loading=&quot;lazy&quot; allow=&quot;fullscreen&quot; allowfullscreen
-  title=&quot;MaterialX material preview&quot;&gt;
-&lt;/iframe&gt;
-</code></pre>
+<pre><code class="hljs language-html"><span class="hljs-tag">&lt;<span class="hljs-name">iframe</span>
+  <span class="hljs-attr">src</span>=<span class="hljs-string">&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?src=https://raw.githubusercontent.com/AcademySoftwareFoundation/MaterialX/v1.39.5/resources/Materials/Examples/StandardSurface/standard_surface_greysphere_calibration.mtlx&amp;geometry=sphere&amp;controls=geometry,env,fullscreen&quot;</span>
+  <span class="hljs-attr">width</span>=<span class="hljs-string">&quot;640&quot;</span> <span class="hljs-attr">height</span>=<span class="hljs-string">&quot;480&quot;</span> <span class="hljs-attr">style</span>=<span class="hljs-string">&quot;border:0&quot;</span>
+  <span class="hljs-attr">loading</span>=<span class="hljs-string">&quot;lazy&quot;</span> <span class="hljs-attr">allow</span>=<span class="hljs-string">&quot;fullscreen&quot;</span> <span class="hljs-attr">allowfullscreen</span>
+  <span class="hljs-attr">title</span>=<span class="hljs-string">&quot;MaterialX material preview&quot;</span>&gt;</span>
+<span class="hljs-tag">&lt;/<span class="hljs-name">iframe</span>&gt;</span></code></pre>
 <p>That&#39;s it, no <code>src=</code> on <code>.mtlx</code> at all also works: with no <code>src</code> param the viewer loads a
 default OpenPBR material, which is a fine sanity check while you wire things up.</p>
 <p>Every <code>&lt;iframe&gt;</code> example in this doc sets <code>style=&quot;border:0&quot;</code>, since browsers draw a default
@@ -309,12 +308,11 @@ always reported through the <code>mtlx-error</code> event so the mistake isn&#39
 </tbody></table>
 <h3 id="transparent-background">Transparent background</h3>
 <p><code>transparent=1</code> makes the iframe itself see-through, so the host page shows behind the rendered geometry instead of whatever <code>backdrop</code> would otherwise show:</p>
-<pre><code class="language-html">&lt;iframe
-  src=&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?geometry=sphere&amp;transparent=1&quot;
-  width=&quot;480&quot; height=&quot;360&quot; loading=&quot;lazy&quot; style=&quot;border:0&quot;
-  title=&quot;MaterialX material preview&quot;&gt;
-&lt;/iframe&gt;
-</code></pre>
+<pre><code class="hljs language-html"><span class="hljs-tag">&lt;<span class="hljs-name">iframe</span>
+  <span class="hljs-attr">src</span>=<span class="hljs-string">&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?geometry=sphere&amp;transparent=1&quot;</span>
+  <span class="hljs-attr">width</span>=<span class="hljs-string">&quot;480&quot;</span> <span class="hljs-attr">height</span>=<span class="hljs-string">&quot;360&quot;</span> <span class="hljs-attr">loading</span>=<span class="hljs-string">&quot;lazy&quot;</span> <span class="hljs-attr">style</span>=<span class="hljs-string">&quot;border:0&quot;</span>
+  <span class="hljs-attr">title</span>=<span class="hljs-string">&quot;MaterialX material preview&quot;</span>&gt;</span>
+<span class="hljs-tag">&lt;/<span class="hljs-name">iframe</span>&gt;</span></code></pre>
 <p><strong>Geometry constraint.</strong> <code>shaderball-scene</code>, the default geometry, is an authored room (walls, floor, backdrop) that fills the whole frame, so it can never look transparent. Requesting <code>transparent=1</code> against it (including by simply omitting <code>geometry</code> altogether) falls back to <code>shaderball</code> instead, and reports the substitution through <code>mtlx-error</code>. The geometries that do work with <code>transparent</code> are <code>shaderball</code>, <code>sphere</code>, <code>cube</code>, <code>cloth</code>, and <code>shaderball-mtlx</code>.</p>
 <p><strong>Backdrop suppression.</strong> Separately from the geometry constraint above, <code>transparent=1</code> also forces <code>backdrop</code> off for whichever geometry it renders against: a <code>studio</code> room or an <code>environment</code> sky would otherwise fill the frame with something opaque, defeating the point of <code>transparent</code> entirely. This is a narrower rule than the geometry one above: it never changes what geometry loads, it only turns the backdrop off behind it, so <code>transparent=1&amp;geometry=sphere&amp;backdrop=studio</code> still renders the sphere, just with the studio room switched off rather than falling back to a different geometry.</p>
 <h3 id="force-transparency">Force transparency</h3>
@@ -323,12 +321,11 @@ how <em>materials</em> render, not the page background. A material with opacity 
 normally renders opaque, matching the official MaterialX viewer; <code>forcetransparency=1</code> instead
 renders it with real alpha blending (front-to-back depth-peeled order-independent transparency).
 This is experimental.</p>
-<pre><code class="language-html">&lt;iframe
-  src=&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?geometry=shaderball-scene&amp;forcetransparency=1&quot;
-  width=&quot;480&quot; height=&quot;360&quot; loading=&quot;lazy&quot; style=&quot;border:0&quot;
-  title=&quot;MaterialX material preview&quot;&gt;
-&lt;/iframe&gt;
-</code></pre>
+<pre><code class="hljs language-html"><span class="hljs-tag">&lt;<span class="hljs-name">iframe</span>
+  <span class="hljs-attr">src</span>=<span class="hljs-string">&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?geometry=shaderball-scene&amp;forcetransparency=1&quot;</span>
+  <span class="hljs-attr">width</span>=<span class="hljs-string">&quot;480&quot;</span> <span class="hljs-attr">height</span>=<span class="hljs-string">&quot;360&quot;</span> <span class="hljs-attr">loading</span>=<span class="hljs-string">&quot;lazy&quot;</span> <span class="hljs-attr">style</span>=<span class="hljs-string">&quot;border:0&quot;</span>
+  <span class="hljs-attr">title</span>=<span class="hljs-string">&quot;MaterialX material preview&quot;</span>&gt;</span>
+<span class="hljs-tag">&lt;/<span class="hljs-name">iframe</span>&gt;</span></code></pre>
 <p>Unlike <code>transparent</code>, there is no geometry constraint: it works with every <code>geometry</code> value,
 including the default <code>shaderball-scene</code>. It is also gated per material, not per geometry, so an
 opaque material in the same document renders exactly the same either way.</p>
@@ -345,15 +342,14 @@ maps attributes to the same query string above, exposes methods over <code>postM
 (critically) lazily instantiates its iframe only when scrolled near the viewport, with a
 page-wide cap on how many can be live at once. See <a href="#performance">Performance</a> for why that
 matters.</p>
-<pre><code class="language-html">&lt;script src=&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/mtlx-viewer.js&quot;&gt;&lt;/script&gt;
+<pre><code class="hljs language-html"><span class="hljs-tag">&lt;<span class="hljs-name">script</span> <span class="hljs-attr">src</span>=<span class="hljs-string">&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/mtlx-viewer.js&quot;</span>&gt;</span><span class="hljs-tag">&lt;/<span class="hljs-name">script</span>&gt;</span>
 
-&lt;materialx-viewer
-  src=&quot;https://raw.githubusercontent.com/AcademySoftwareFoundation/MaterialX/v1.39.5/resources/Materials/Examples/StandardSurface/standard_surface_greysphere_calibration.mtlx&quot;
-  geometry=&quot;sphere&quot;
-  controls=&quot;geometry,env,fullscreen&quot;
-  style=&quot;width: 640px; height: 480px;&quot;&gt;
-&lt;/materialx-viewer&gt;
-</code></pre>
+<span class="hljs-tag">&lt;<span class="hljs-name">materialx-viewer</span>
+  <span class="hljs-attr">src</span>=<span class="hljs-string">&quot;https://raw.githubusercontent.com/AcademySoftwareFoundation/MaterialX/v1.39.5/resources/Materials/Examples/StandardSurface/standard_surface_greysphere_calibration.mtlx&quot;</span>
+  <span class="hljs-attr">geometry</span>=<span class="hljs-string">&quot;sphere&quot;</span>
+  <span class="hljs-attr">controls</span>=<span class="hljs-string">&quot;geometry,env,fullscreen&quot;</span>
+  <span class="hljs-attr">style</span>=<span class="hljs-string">&quot;width: 640px; height: 480px;&quot;</span>&gt;</span>
+<span class="hljs-tag">&lt;/<span class="hljs-name">materialx-viewer</span>&gt;</span></code></pre>
 <p>One <code>&lt;script&gt;</code> tag covers every <code>&lt;materialx-viewer&gt;</code> on the page, the element self-registers
 once and no-ops on a second load. By default it sizes itself <code>width:100%</code> with a 16:9
 <code>aspect-ratio</code>; override with ordinary CSS (as above) or a host rule targeting the tag.</p>
@@ -643,11 +639,10 @@ calling these.</p>
 <td>A load/parse/compile failure, a <code>postMessage</code> error, a client-side error (e.g. <code>base</code> couldn&#39;t be determined), or a configuration mistake the viewer recovered from on its own: an unrecognized <code>geometry</code>, an unknown <code>controls</code> name, <code>transparent</code> requested against a geometry that can&#39;t support it, an <code>accent</code>/<code>surface</code>/<code>text</code>/<code>radius</code> value that failed validation, an unresolved <code>material</code>, a malformed <code>camera</code> pose, a failed or unsupported <code>envmap</code>, a failed or unsupported <code>geometryUrl</code>, or an unrecognized <code>wheel</code>/<code>version</code>/<code>backdrop</code>/<code>forcetransparency</code> value.</td>
 </tr>
 </tbody></table>
-<pre><code class="language-js">const el = document.querySelector(&#39;materialx-viewer&#39;);
-el.addEventListener(&#39;mtlx-ready&#39;, (e) =&gt; console.log(&#39;engine version&#39;, e.detail.version));
-el.addEventListener(&#39;mtlx-renderables&#39;, (e) =&gt; console.log(&#39;materials:&#39;, e.detail));
-el.addEventListener(&#39;mtlx-error&#39;, (e) =&gt; console.error(&#39;viewer error:&#39;, e.detail.message));
-</code></pre>
+<pre><code class="hljs language-js"><span class="hljs-keyword">const</span> el = <span class="hljs-variable language_">document</span>.<span class="hljs-title function_">querySelector</span>(<span class="hljs-string">&#x27;materialx-viewer&#x27;</span>);
+el.<span class="hljs-title function_">addEventListener</span>(<span class="hljs-string">&#x27;mtlx-ready&#x27;</span>, <span class="hljs-function">(<span class="hljs-params">e</span>) =&gt;</span> <span class="hljs-variable language_">console</span>.<span class="hljs-title function_">log</span>(<span class="hljs-string">&#x27;engine version&#x27;</span>, e.<span class="hljs-property">detail</span>.<span class="hljs-property">version</span>));
+el.<span class="hljs-title function_">addEventListener</span>(<span class="hljs-string">&#x27;mtlx-renderables&#x27;</span>, <span class="hljs-function">(<span class="hljs-params">e</span>) =&gt;</span> <span class="hljs-variable language_">console</span>.<span class="hljs-title function_">log</span>(<span class="hljs-string">&#x27;materials:&#x27;</span>, e.<span class="hljs-property">detail</span>));
+el.<span class="hljs-title function_">addEventListener</span>(<span class="hljs-string">&#x27;mtlx-error&#x27;</span>, <span class="hljs-function">(<span class="hljs-params">e</span>) =&gt;</span> <span class="hljs-variable language_">console</span>.<span class="hljs-title function_">error</span>(<span class="hljs-string">&#x27;viewer error:&#x27;</span>, e.<span class="hljs-property">detail</span>.<span class="hljs-property">message</span>));</code></pre>
 <h2 id="theming">Theming</h2>
 <p>The <code>theme</code> param (<code>&lt;materialx-viewer theme=&quot;...&quot;&gt;</code>) picks <code>dark</code>, <code>light</code>, <code>auto</code> or any theme id from
 the list below. The default, <code>dark</code>, applies when the attribute is missing or unknown. <code>light</code> switches the viewer to its light
@@ -691,16 +686,23 @@ the viewer itself loads.</p>
 </tr>
 </tbody></table>
 <p><strong>Custom themes.</strong> <code>theme</code> also accepts a custom theme code, the string the Playground&#39;s theme editor
-copies when you share a theme. It starts with <code>mtlx1.</code>, for example:</p>
-<pre><code class="language-html">&lt;materialx-viewer src=&quot;...&quot; theme=&quot;mtlx1.LPbx5ysmICZZyQRzYW5kBFNhbmQA&quot;&gt;&lt;/materialx-viewer&gt;
-</code></pre>
-<p>The viewer decodes the code, derives the full palette and applies it, keeping every text and control at WCAG AA
-contrast. A code is case-sensitive (keep its letters exactly as copied) and is at most 8192 characters. The
-placeholder reads the theme&#39;s base from the code itself (<code>mtlx1.L...</code> is light-based, <code>mtlx1.D...</code> dark-based),
-so it matches before the viewer loads. A code that cannot be decoded behaves as <code>dark</code>; a valid code whose colors
-cannot reach AA contrast shows its base theme (<code>light</code> or <code>dark</code>). Codes are strictly validated: they carry only
-<code>#rrggbb</code> colors for known color roles, a short name and two numeric modifiers, so a code cannot inject CSS,
-markup or URLs into the viewer.</p>
+copies when you share a theme. It starts with <code>mtlx2.</code>. A code is either based on one of the built-in themes
+(<code>dark</code>, <code>light</code>, <code>hc-dark</code>, <code>hc-light</code>, <code>dim</code>, <code>paper</code>) plus a few color changes, or built from three
+colors (background, text, accent) with optional contrast and tint adjustments:</p>
+<pre><code class="hljs language-html"><span class="hljs-comment">&lt;!-- three colors --&gt;</span>
+<span class="hljs-tag">&lt;<span class="hljs-name">materialx-viewer</span> <span class="hljs-attr">src</span>=<span class="hljs-string">&quot;...&quot;</span> <span class="hljs-attr">theme</span>=<span class="hljs-string">&quot;mtlx2.DAALHSrm8fglY-sFb2NlYW4FT2NlYW4A&quot;</span>&gt;</span><span class="hljs-tag">&lt;/<span class="hljs-name">materialx-viewer</span>&gt;</span>
+<span class="hljs-comment">&lt;!-- based on Paper, with one color changed --&gt;</span>
+<span class="hljs-tag">&lt;<span class="hljs-name">materialx-viewer</span> <span class="hljs-attr">src</span>=<span class="hljs-string">&quot;...&quot;</span> <span class="hljs-attr">theme</span>=<span class="hljs-string">&quot;mtlx2.LAVwYXBlcgR3YXJtCldhcm0gcGFwZXIBC2FjY2VudC1maWxstFMJ&quot;</span>&gt;</span><span class="hljs-tag">&lt;/<span class="hljs-name">materialx-viewer</span>&gt;</span></code></pre>
+<p>A theme based on a built-in theme starts from that theme&#39;s exact colors, so it follows that theme if the
+Playground updates it. The viewer decodes the code, applies it, and keeps every text and control at WCAG
+contrast (AA, or AAA when it is based on a high contrast theme). A code is case-sensitive (keep its letters
+exactly as copied) and is at most 8192 characters. The placeholder reads the theme&#39;s base from the first
+character of the code itself (<code>mtlx2.L...</code> is light-based, <code>mtlx2.D...</code> dark-based), so it matches before the
+viewer loads. A code that cannot be decoded behaves as <code>dark</code>, and so do codes from older versions of the
+Playground (<code>mtlx1.</code>), which are no longer accepted; re-copy the code from the theme editor. A valid code whose
+colors cannot reach the required contrast shows its base theme (<code>light</code> or <code>dark</code>). Codes are strictly validated:
+they carry only <code>#rrggbb</code> colors for known color roles, a short name and, for three-color themes, two numeric
+modifiers, so a code cannot inject CSS, markup or URLs into the viewer.</p>
 <p>Four params (<code>accent</code>, <code>surface</code>, <code>text</code>, <code>radius</code>) map to CSS custom properties consumed by
 <code>embed/embed-controls.css</code> (the HUD strip&#39;s own stylesheet), which defines them on <code>:root</code>
 with the defaults below as fallbacks:</p>
@@ -750,30 +752,27 @@ it, since a value landing in a stylesheet is worth extra caution (a <code>url()<
 make the embed phone home). A rejected value is dropped, reported through <code>mtlx-error</code>, and
 leaves whatever was already applied (the default, or a prior valid value) untouched, the
 other, valid params in the same request still apply normally.</p>
-<pre><code class="language-html">&lt;iframe
-  src=&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?geometry=sphere&amp;controls=geometry,env&amp;accent=%232563eb&amp;surface=%23ffffff&amp;text=%23111111&amp;radius=2px&quot;
-  width=&quot;480&quot; height=&quot;360&quot; loading=&quot;lazy&quot; style=&quot;border:0&quot;
-  title=&quot;MaterialX material preview&quot;&gt;
-&lt;/iframe&gt;
-</code></pre>
+<pre><code class="hljs language-html"><span class="hljs-tag">&lt;<span class="hljs-name">iframe</span>
+  <span class="hljs-attr">src</span>=<span class="hljs-string">&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html?geometry=sphere&amp;controls=geometry,env&amp;accent=%232563eb&amp;surface=%23ffffff&amp;text=%23111111&amp;radius=2px&quot;</span>
+  <span class="hljs-attr">width</span>=<span class="hljs-string">&quot;480&quot;</span> <span class="hljs-attr">height</span>=<span class="hljs-string">&quot;360&quot;</span> <span class="hljs-attr">loading</span>=<span class="hljs-string">&quot;lazy&quot;</span> <span class="hljs-attr">style</span>=<span class="hljs-string">&quot;border:0&quot;</span>
+  <span class="hljs-attr">title</span>=<span class="hljs-string">&quot;MaterialX material preview&quot;</span>&gt;</span>
+<span class="hljs-tag">&lt;/<span class="hljs-name">iframe</span>&gt;</span></code></pre>
 <p>That example themes the HUD to a light, blue-accented look, e.g. to match a host page&#39;s own
 light theme (note the colors are URL-encoded: <code>#</code> becomes <code>%23</code>). The Embed Builder page has
 color pickers for all four and URL-encodes them for you, if you&#39;d rather not hand-encode
 hex values. The same four values work as <code>&lt;materialx-viewer&gt;</code> attributes:</p>
-<pre><code class="language-html">&lt;materialx-viewer
-  src=&quot;…&quot; geometry=&quot;sphere&quot; controls=&quot;geometry,env&quot;
-  accent=&quot;#2563eb&quot; surface=&quot;#ffffff&quot; text=&quot;#111111&quot; radius=&quot;2px&quot;
-  style=&quot;width: 480px; height: 360px;&quot;&gt;
-&lt;/materialx-viewer&gt;
-</code></pre>
+<pre><code class="hljs language-html"><span class="hljs-tag">&lt;<span class="hljs-name">materialx-viewer</span>
+  <span class="hljs-attr">src</span>=<span class="hljs-string">&quot;…&quot;</span> <span class="hljs-attr">geometry</span>=<span class="hljs-string">&quot;sphere&quot;</span> <span class="hljs-attr">controls</span>=<span class="hljs-string">&quot;geometry,env&quot;</span>
+  <span class="hljs-attr">accent</span>=<span class="hljs-string">&quot;#2563eb&quot;</span> <span class="hljs-attr">surface</span>=<span class="hljs-string">&quot;#ffffff&quot;</span> <span class="hljs-attr">text</span>=<span class="hljs-string">&quot;#111111&quot;</span> <span class="hljs-attr">radius</span>=<span class="hljs-string">&quot;2px&quot;</span>
+  <span class="hljs-attr">style</span>=<span class="hljs-string">&quot;width: 480px; height: 360px;&quot;</span>&gt;</span>
+<span class="hljs-tag">&lt;/<span class="hljs-name">materialx-viewer</span>&gt;</span></code></pre>
 <p>Self-hosting is still an option too, if you&#39;d rather set a permanent site-wide default instead
 of passing params on every embed: edit <code>embed/embed-controls.css</code> directly, or serve your own
 stylesheet after it that redeclares the variables:</p>
-<pre><code class="language-css">:root {
-  --mtlx-accent: #f97316;
-  --mtlx-radius: 8px;
-}
-</code></pre>
+<pre><code class="hljs language-css"><span class="hljs-selector-pseudo">:root</span> {
+  <span class="hljs-attr">--mtlx-accent</span>: <span class="hljs-number">#f97316</span>;
+  <span class="hljs-attr">--mtlx-radius</span>: <span class="hljs-number">8px</span>;
+}</code></pre>
 <h2 id="loading-a-document-without-cors">Loading a document without CORS</h2>
 <p><code>src=</code>/<code>.src</code> makes the <strong>iframe</strong> fetch the document, which only works if it&#39;s same-origin
 with the embed or served with CORS headers that allow it (GitHub&#39;s <code>raw.githubusercontent.com</code>
@@ -791,24 +790,23 @@ remains the path for handing them across.</p>
 your own page, no cross-origin restriction applies there, since you&#39;re not making a
 cross-origin request <em>into</em> the iframe, and hand the resulting string across over
 <code>postMessage</code> instead.</p>
-<pre><code class="language-html">&lt;script src=&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/mtlx-viewer.js&quot;&gt;&lt;/script&gt;
-&lt;materialx-viewer id=&quot;v&quot; geometry=&quot;sphere&quot; style=&quot;width: 640px; height: 480px;&quot;&gt;&lt;/materialx-viewer&gt;
+<pre><code class="hljs language-html"><span class="hljs-tag">&lt;<span class="hljs-name">script</span> <span class="hljs-attr">src</span>=<span class="hljs-string">&quot;https://joaovbs96.github.io/MaterialXPlayground/embed/mtlx-viewer.js&quot;</span>&gt;</span><span class="hljs-tag">&lt;/<span class="hljs-name">script</span>&gt;</span>
+<span class="hljs-tag">&lt;<span class="hljs-name">materialx-viewer</span> <span class="hljs-attr">id</span>=<span class="hljs-string">&quot;v&quot;</span> <span class="hljs-attr">geometry</span>=<span class="hljs-string">&quot;sphere&quot;</span> <span class="hljs-attr">style</span>=<span class="hljs-string">&quot;width: 640px; height: 480px;&quot;</span>&gt;</span><span class="hljs-tag">&lt;/<span class="hljs-name">materialx-viewer</span>&gt;</span>
 
-&lt;script&gt;
-  const el = document.getElementById(&#39;v&#39;);
-  fetch(&#39;/private/my-material.mtlx&#39;) // same-origin with YOUR page, not the embed
-    .then((r) =&gt; r.text())
-    .then((xml) =&gt; el.load(xml))
-    .then((renderables) =&gt; console.log(&#39;loaded, renderables:&#39;, renderables))
-    .catch((err) =&gt; console.error(&#39;load failed:&#39;, err));
+<span class="hljs-tag">&lt;<span class="hljs-name">script</span>&gt;</span><span class="language-javascript">
+  <span class="hljs-keyword">const</span> el = <span class="hljs-variable language_">document</span>.<span class="hljs-title function_">getElementById</span>(<span class="hljs-string">&#x27;v&#x27;</span>);
+  <span class="hljs-title function_">fetch</span>(<span class="hljs-string">&#x27;/private/my-material.mtlx&#x27;</span>) <span class="hljs-comment">// same-origin with YOUR page, not the embed</span>
+    .<span class="hljs-title function_">then</span>(<span class="hljs-function">(<span class="hljs-params">r</span>) =&gt;</span> r.<span class="hljs-title function_">text</span>())
+    .<span class="hljs-title function_">then</span>(<span class="hljs-function">(<span class="hljs-params">xml</span>) =&gt;</span> el.<span class="hljs-title function_">load</span>(xml))
+    .<span class="hljs-title function_">then</span>(<span class="hljs-function">(<span class="hljs-params">renderables</span>) =&gt;</span> <span class="hljs-variable language_">console</span>.<span class="hljs-title function_">log</span>(<span class="hljs-string">&#x27;loaded, renderables:&#x27;</span>, renderables))
+    .<span class="hljs-title function_">catch</span>(<span class="hljs-function">(<span class="hljs-params">err</span>) =&gt;</span> <span class="hljs-variable language_">console</span>.<span class="hljs-title function_">error</span>(<span class="hljs-string">&#x27;load failed:&#x27;</span>, err));
 
-  // With textures:
-  // el.load(xml, { textures: { &#39;textures/brick_albedo.png&#39;: someBlob } });
+  <span class="hljs-comment">// With textures:</span>
+  <span class="hljs-comment">// el.load(xml, { textures: { &#x27;textures/brick_albedo.png&#x27;: someBlob } });</span>
 
-  // Or with await, inside an async function:
-  // const renderables = await el.load(xml);
-&lt;/script&gt;
-</code></pre>
+  <span class="hljs-comment">// Or with await, inside an async function:</span>
+  <span class="hljs-comment">// const renderables = await el.load(xml);</span>
+</span><span class="hljs-tag">&lt;/<span class="hljs-name">script</span>&gt;</span></code></pre>
 <p><strong>When to use which:</strong></p>
 <ul>
 <li><strong><code>src=</code></strong>, simplest option. Use it when the document is same-origin with wherever you
@@ -830,8 +828,7 @@ viewport (<code>rootMargin: &#39;200px&#39;</code>, activates slightly before it
 of instantiating every viewer on the page up front.</li>
 <li>A page-wide LRU cap, <code>MaterialXViewerElement.maxLiveIframes</code>, default <strong>6</strong>, tears down
 the least-recently-visible <em>off-screen</em> instance before creating a new one past the limit,
-so a long page of materials never exceeds the browser&#39;s context ceiling. Adjust it globally:<pre><code class="language-js">MaterialXViewerElement.maxLiveIframes = 4; // set before or after elements exist
-</code></pre>
+so a long page of materials never exceeds the browser&#39;s context ceiling. Adjust it globally:<pre><code class="hljs language-js"><span class="hljs-title class_">MaterialXViewerElement</span>.<span class="hljs-property">maxLiveIframes</span> = <span class="hljs-number">4</span>; <span class="hljs-comment">// set before or after elements exist</span></code></pre>
 </li>
 </ul>
 <p>A hand-written <code>&lt;iframe&gt;</code> gets none of this, fine for one or two static embeds (use
@@ -860,6 +857,8 @@ shows in place of the plain placeholder until that instance actually activates.<
 against the ~10.8 MB the same material costs inside the full playground app (Babel, Tailwind,
 site header, and the default heavier geometry all add up); the embed exists specifically to
 avoid that.</p>
+<h2 id="render-quality">Render quality</h2>
+<p>Embeds always render at the Performance level; there is no <code>quality</code> attribute, and the host page&#39;s stored viewer level never applies to an embed. The Quality level (ambient occlusion, specular anti-aliasing, HDR presentation, RGB transmission) is a feature of the full Playground viewer and is not switched on in embeds. Effect code is not part of the embed&#39;s initial download: it is loaded on demand (<code>MtlxRender.loadEffect</code>) only when a level asks for it, so a default embed pays nothing for effects it never runs.</p>
 <h2 id="self-hosting">Self-hosting</h2>
 <p>The hosted default is <code>https://joaovbs96.github.io/MaterialXPlayground/embed/viewer.html</code>,
 nothing to set up. To self-host instead (e.g. from the offline release zip), serve at least
@@ -907,8 +906,7 @@ chromeless, and so on, with nothing visibly erroring.</p>
 default since v14, and Vercel has its own <code>cleanUrls</code> setting; both 301-redirect
 <code>/embed/viewer.html?...</code> to <code>/embed/viewer</code>, discarding everything after the <code>?</code>. Turn it off.
 For <code>serve</code>, add a <code>serve.json</code> next to the directory you serve:</p>
-<pre><code class="language-json">{ &quot;cleanUrls&quot;: false }
-</code></pre>
+<pre><code class="hljs language-json"><span class="hljs-punctuation">{</span> <span class="hljs-attr">&quot;cleanUrls&quot;</span><span class="hljs-punctuation">:</span> <span class="hljs-literal"><span class="hljs-keyword">false</span></span> <span class="hljs-punctuation">}</span></code></pre>
 <p>This repo ships its own root-level <code>serve.json</code> with that setting, so <code>npx serve .</code> works
 correctly for local development out of the box. For Vercel, set <code>&quot;cleanUrls&quot;: false</code> in
 <code>vercel.json</code> instead.</p>

@@ -55,12 +55,47 @@ function teUniqueId(label, taken) {
     return id;
 }
 
-// Canonical key of the color part of a draft (base, seeds, sorted overrides).
+// True seeds (#rrggbb) of a built-in theme from its generated data, or null while a preset is not loaded.
+function teTrueSeeds(id) {
+    const D = window.MTLX_THEME_TOKENS || {};
+    const src = D.seeds && D.seeds[id];
+    if (!src) return null;
+    const out = {};
+    for (const s of TE_SEEDS) { const h = teHex(src[s.key]); if (!h) return null; out[s.key] = h; }
+    return out;
+}
+const teBuiltin = (id) => ((window.MTLX_THEME_TOKENS || {}).registry || []).filter((e) => e.id === id && (e.base === 'dark' || e.base === 'light'))[0] || null;
+const teFromLabel = (id) => (teBuiltin(id) ? teBuiltin(id).label : id);
+
+// The built-in theme a draft is effectively based on: only while its seeds still equal that theme's true seeds,
+// its modifiers are zero and its base matches. Otherwise null (a seeds spec).
+function teEffectiveFrom(d) {
+    const e = d && d.from ? teBuiltin(d.from) : null;
+    const t = e ? teTrueSeeds(d.from) : null;
+    const m = teMods(d && d.modifiers);
+    if (!e || !t || e.base !== d.base || m.contrast || m.tint) return null;
+    return TE_SEEDS.every((s) => d.seeds[s.key] === t[s.key]) ? d.from : null;
+}
+
+// Draft from a spec (which may carry from instead of seeds); the preset of a from spec must be loaded.
+function teDraftFromSpec(s, label) {
+    const t = s.from ? teTrueSeeds(s.from) : null;
+    return {
+        label: label == null ? s.label : label,
+        base: s.base,
+        from: t ? s.from : null,
+        seeds: Object.assign({}, t || s.seeds || teTrueSeeds(s.base)),
+        overrides: Object.assign({}, s.overrides || {}),
+        modifiers: teMods(s.modifiers),
+    };
+}
+
+// Canonical key of the color part of a draft (base, effective from, seeds, sorted overrides).
 function teColorKey(d) {
     const o = d.overrides || {};
     const ov = Object.keys(o).sort().map((k) => k + '=' + o[k]).join(',');
     const m = teMods(d.modifiers);
-    return [d.base, d.seeds.background, d.seeds.foreground, d.seeds.accent, m.contrast, m.tint, ov].join('|');
+    return [d.base, teEffectiveFrom(d) || '', d.seeds.background, d.seeds.foreground, d.seeds.accent, m.contrast, m.tint, ov].join('|');
 }
 const teKey = (d) => JSON.stringify([teColorKey(d), d.label]);
 
@@ -112,28 +147,24 @@ function teCustomSpec(id) {
     return list.filter((s) => s && s.id === id)[0] || null;
 }
 
-// Draft (label, base, seeds, overrides) for a theme list entry.
+// Draft (label, base, from, seeds, overrides) for a theme list entry. A built-in theme is based on itself with its
+// true seeds; seeds are never read back from applied tokens.
 async function teDraftFor(entry) {
     const T = window.MtlxTheme;
-    const D = window.MTLX_THEME_TOKENS || {};
     if (entry.group === 'custom' || String(entry.id).indexOf('custom:') === 0) {
         const s = teCustomSpec(entry.id);
-        if (s) return { label: s.label, base: s.base, seeds: Object.assign({}, s.seeds), overrides: Object.assign({}, s.overrides || {}), modifiers: teMods(s.modifiers) };
+        if (s) {
+            if (s.from) await teEnsurePreset(s.from);
+            return teDraftFromSpec(s);
+        }
     }
     const base = entry.base === 'light' || entry.base === 'dark' ? entry.base : T.currentBase();
-    const S = D.seeds || {};
-    const fromTokens = (get) => {
-        const out = {};
-        for (const s of TE_SEEDS) { const h = teHex(get(s.token)); if (!h) return null; out[s.key] = h; }
-        return out;
-    };
-    const fromSeeds = (src) => (src ? fromTokens((t) => src[TE_SEEDS.filter((s) => s.token === t)[0].key]) : null);
-    let seeds = entry.id === T.current() ? fromTokens((t) => T.get(t)) : null;
-    if (!seeds) seeds = fromSeeds(S[entry.id]);
-    if (!seeds && await teEnsurePreset(entry.id)) seeds = fromTokens((t) => D.themes[entry.id][t]);
-    if (!seeds) seeds = fromSeeds(S[base]) || fromTokens((t) => T.get(t));
     const label = ('My ' + (entry.label || 'theme')).slice(0, TE_MAX_LABEL);
-    return { label, base, seeds, overrides: {}, modifiers: teMods(null) };
+    const id = teBuiltin(entry.id) ? entry.id : null;
+    if (id) await teEnsurePreset(id);
+    const t = id ? teTrueSeeds(id) : null;
+    if (t) return { label, base, from: id, seeds: t, overrides: {}, modifiers: teMods(null) };
+    return { label, base, from: null, seeds: teTrueSeeds(base), overrides: {}, modifiers: teMods(null) };
 }
 
 // Editable list entries: every theme in MtlxTheme.list() except the host-following VS Code entry.
@@ -223,7 +254,7 @@ function TeSegmented({ value, options, onChange, label }) {
                         onClick={() => onChange(o.value)}
                         className={'h-7 inline-flex items-center gap-1.5 px-3 text-[11px] transition-colors ' + TE_FOCUS
                             + (i ? ' border-l border-line-strong' : '')
-                            + (on ? ' bg-accent-wash/[0.12] text-accent-fg-strong' : ' text-fg-secondary hover:bg-hover/60')}
+                            + (on ? ' bg-selection/20 text-accent-fg-strong' : ' text-fg-secondary hover:bg-hover/60')}
                     >
                         {o.icon && <MtlxIcon name={o.icon} className="w-3.5 h-3.5" />}
                         {o.label}
@@ -334,8 +365,8 @@ function TeContrastPill({ report, labelOf, showSeq }) {
         if (e.key === 'Escape' && open) { e.stopPropagation(); e.preventDefault(); setPinned(false); setHover(false); }
     };
     const tone = bad
-        ? 'bg-warning-bg/30 border-warning-border/60 text-warning-text hover:bg-warning-bg/40'
-        : n ? 'bg-hover/40 border-line text-fg-soft hover:bg-hover/60' : 'border-line-subtle text-fg-muted hover:text-fg-soft';
+        ? 'bg-warning-bg/30 border-warning-border/50 text-warning-text hover:bg-warning-bg/40'
+        : n ? 'bg-hover/60 border-line text-fg-soft hover:bg-hover/60' : 'border-line-subtle text-fg-muted hover:text-fg-soft';
     return (
         <div ref={wrapRef} className="relative flex-none" onMouseEnter={enter} onMouseLeave={leave} onKeyDown={onKeyDown}>
             <button type="button" aria-expanded={open} aria-controls={popId} aria-haspopup="dialog"
@@ -462,9 +493,12 @@ function MtlxThemeEditor({ open, openSeq, onClose }) {
             id: id || editingId || 'custom:' + teSlug(draft.label),
             label: (label || draft.label || '').trim().slice(0, TE_MAX_LABEL) || 'My theme',
             base: draft.base,
-            seeds: Object.assign({}, draft.seeds),
-            overrides: Object.assign({}, draft.overrides),
         };
+        // Still on its built-in theme's true seeds with zero modifiers: a from spec (no seeds, no modifiers).
+        const from = teEffectiveFrom(draft);
+        if (from) { spec.from = from; spec.overrides = Object.assign({}, draft.overrides); return spec; }
+        spec.seeds = Object.assign({}, draft.seeds);
+        spec.overrides = Object.assign({}, draft.overrides);
         // Optional in the spec: omitted at the defaults so plain themes keep the short code.
         const m = teMods(draft.modifiers);
         if (m.contrast || m.tint) spec.modifiers = m;
@@ -555,6 +589,9 @@ function MtlxThemeEditor({ open, openSeq, onClose }) {
     const clearOverride = (id) => setDraft((d) => { const o = Object.assign({}, d.overrides); delete o[id]; return Object.assign({}, d, { overrides: o }); });
     const setBase = (base) => setDraft((d) => {
         const D = window.MTLX_THEME_TOKENS || {};
+        // Based on a theme: the draft moves to the plain Light or Dark theme (overrides kept).
+        if (teEffectiveFrom(d)) return Object.assign({}, d, { base, from: base, seeds: teTrueSeeds(base) });
+        if (d.from) d = Object.assign({}, d, { from: null });
         const old = D.seeds && D.seeds[d.base], next = D.seeds && D.seeds[base];
         const untouched = old && next && TE_SEEDS.every((s) => teHex(old[s.key]) === d.seeds[s.key]);
         const seeds = untouched ? { background: teHex(next.background), foreground: teHex(next.foreground), accent: teHex(next.accent) } : d.seeds;
@@ -591,7 +628,7 @@ function MtlxThemeEditor({ open, openSeq, onClose }) {
         previewSeq.current++;
         if (previewActive.current) { T.clearDraft(); previewActive.current = false; }
         T.setPreference(saved.id);
-        const d = { label: saved.label, base: saved.base, seeds: Object.assign({}, saved.seeds), overrides: Object.assign({}, saved.overrides || {}), modifiers: teMods(saved.modifiers) };
+        const d = teDraftFromSpec(saved);
         setDraft(d);
         setEditingId(saved.id);
         setBaseline(teKey(d));
@@ -659,13 +696,13 @@ function MtlxThemeEditor({ open, openSeq, onClose }) {
     };
 
     // Codes and files are untrusted: everything goes through decodeTheme's strict validation.
-    const importFromText = (raw) => {
+    const importFromText = async (raw) => {
         const t = String(raw || '').trim();
         if (!t) { setImportError('Paste a theme code or choose a JSON file.'); return; }
         const notTheme = 'That is not a theme code or a theme JSON file.';
         try {
             let spec;
-            if (/^mtlx1\./.test(t)) spec = T.decodeTheme(t);
+            if (/^mtlx\d+\./.test(t)) spec = T.decodeTheme(t);
             else {
                 let parsed;
                 try { parsed = JSON.parse(t); } catch (e) { throw new Error(notTheme); }
@@ -673,7 +710,8 @@ function MtlxThemeEditor({ open, openSeq, onClose }) {
                 else if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) spec = T.decodeTheme(T.encodeTheme(parsed));
                 else throw new Error(notTheme);
             }
-            setDraft({ label: spec.label, base: spec.base, seeds: Object.assign({}, spec.seeds), overrides: Object.assign({}, spec.overrides || {}), modifiers: teMods(spec.modifiers) });
+            if (spec.from) await teEnsurePreset(spec.from);
+            setDraft(teDraftFromSpec(spec));
             nameEdited.current = true;
             setEditingId(null);
             setStartFrom(null);
@@ -814,6 +852,19 @@ function MtlxThemeEditor({ open, openSeq, onClose }) {
                             <TeSlider key={m.key} mod={m} value={teMods(draft.modifiers)[m.key]} onChange={(v) => setMod(m.key, v)} />
                         ))}
                     </div>
+                    {draft.from && (
+                        <div className="mt-3 text-[11px] text-fg-subtle">
+                            {teEffectiveFrom(draft) ? 'Based on ' + teFromLabel(draft.from) : (
+                                <span>
+                                    {'Started from ' + teFromLabel(draft.from) + ' '}
+                                    <button type="button" className={'underline hover:text-fg-soft ' + TE_FOCUS}
+                                        onClick={() => setDraft((d) => Object.assign({}, d, { seeds: teTrueSeeds(d.from), modifiers: teMods(null) }))}>
+                                        {'Use ' + teFromLabel(draft.from) + "'s colors"}
+                                    </button>
+                                </span>
+                            )}
+                        </div>
+                    )}
                     {!report && <div className="mt-3 min-h-[18px] text-[11px] text-fg-subtle">{dirty ? 'Previewing…' : 'Changes preview live on this page.'}</div>}
                 </section>
 
@@ -911,7 +962,7 @@ function MtlxThemeEditor({ open, openSeq, onClose }) {
                                 maxLength={TE_MAX_CODE_CHARS}
                                 rows={2}
                                 spellCheck={false}
-                                placeholder="mtlx1..."
+                                placeholder="mtlx2..."
                                 onChange={(e) => { setImportText(e.target.value); setImportError(''); }}
                                 className="w-full bg-surface-sunken border border-line-control rounded px-2 py-1.5 text-[11px] font-mono text-fg-soft placeholder-fg-subtle focus:outline-none focus:border-focus resize-none"
                             />

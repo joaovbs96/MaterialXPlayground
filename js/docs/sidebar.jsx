@@ -118,8 +118,8 @@
                                         style={{ flex: '1 1 auto', whiteSpace: 'nowrap', paddingLeft: '6px', paddingRight: '6px' }}
                                         className={`min-w-0 flex items-center justify-center gap-1 text-xs transition-colors ${i > 0 ? 'border-l border-line' : ''} ${
                                             active
-                                                ? 'bg-accent-wash/[0.12] text-accent-fg-strong'
-                                                : 'bg-control text-fg-muted hover:bg-hover hover:text-fg-soft'
+                                                ? 'bg-selection/20 text-accent-fg-strong'
+                                                : 'bg-control/80 text-fg-muted hover:bg-hover hover:text-fg-soft'
                                         }`}
                                     >
                                         <span className="truncate">{label}</span>
@@ -230,20 +230,20 @@
                                         <button
                                             onClick={() => fileInputRef.current && fileInputRef.current.click()}
                                             title="Filter the node tree to categories used in one or more .mtlx files"
-                                            className="text-xs px-2 py-1 rounded border border-line-control text-fg-muted hover:text-fg-soft hover:bg-hover"
+                                            className="text-xs px-2 py-1 rounded border border-line-control text-fg-secondary hover:text-fg hover:bg-hover"
                                         >
                                             Filter by file
                                         </button>
                                     </React.Fragment>
                                 )}
                                 {fileFilter && (
-                                    <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-accent-wash/[0.12] text-accent-fg-strong max-w-full">
+                                    <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-selection/20 text-accent-fg-strong max-w-full">
                                         <span className="truncate">In {fileFilter.file}</span>
                                         <button
                                             onClick={onClearFileFilter}
                                             title="Clear the file filter"
                                             aria-label="Clear the file filter"
-                                            className="flex-none text-accent-fg-strong/80 hover:text-accent-text-on-tint"
+                                            className="flex-none text-accent-fg-strong/80 hover:text-accent-fg-bright"
                                         >
                                             <MtlxIcon name="x" className="w-3 h-3" />
                                         </button>
@@ -308,7 +308,7 @@
                                                                         className={`cursor-pointer py-1 px-2 rounded font-mono text-xs break-all ${rowCls}`}
                                                                     >
                                                                         {nodeName}
-                                                                        {undoc && <span className="inline-block w-1.5 h-1.5 rounded-full bg-warning-marker/80 ml-1.5 align-middle" />}
+                                                                        {undoc && <span className="inline-block w-1.5 h-1.5 rounded-full bg-warning-marker ml-1.5 align-middle" />}
                                                                     </div>
                                                                 )
                                                             })}
@@ -337,7 +337,7 @@
             // hijack position:fixed's containing block and break the overlay.
             return ReactDOM.createPortal(
                 <div
-                    className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-scrim-alt/60"
+                    className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-scrim/85"
                     onClick={onClose}
                     role="dialog"
                     aria-modal="true"
@@ -348,7 +348,7 @@
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="flex items-start justify-between gap-4 mb-3">
-                            <h2 className="text-lg font-semibold text-fg-strong">How to use the Node Library</h2>
+                            <h2 className="text-lg font-semibold text-fg">How to use the Node Library</h2>
                             <button
                                 onClick={onClose}
                                 title="Close (Esc)"

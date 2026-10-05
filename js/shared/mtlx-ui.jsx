@@ -13,7 +13,7 @@
 // disabled:* added so a disabled secondary button (e.g. the Scene Render
 // settings popover's Reset/Cancel) actually looks non-interactive instead
 // of reading as clickable while silently doing nothing.
-const BTN_SECONDARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors disabled:opacity-50 disabled:text-fg-subtle disabled:cursor-not-allowed disabled:pointer-events-none';
+const BTN_SECONDARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80 transition-colors disabled:opacity-50 disabled:text-fg-disabled disabled:cursor-not-allowed disabled:pointer-events-none';
 const BTN_PRIMARY = 'h-7 inline-flex items-center justify-center text-[11px] px-2.5 rounded-md border mtlx-fill-accent-translucent border-accent-base text-on-accent mtlx-fill-accent-translucent-hover transition-colors';
 // Graph editor toolbar button style. `whitespace-nowrap shrink-0` matters:
 // js/graph-app.jsx's label-collapse measurement needs buttons that don't
@@ -28,7 +28,7 @@ const BTN_MENUBAR = 'h-7 inline-flex items-center gap-1 text-[11px] px-2 rounded
 // collapsed-sidebar pills: deliberately 11px normal weight, not the
 // bolder PILL_ACTION, to match the sidebar's own labeled pills.
 const HUD_PILL = 'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-hud-line/50 bg-hud/70 backdrop-blur text-hud-fg hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong transition-colors whitespace-nowrap';
-const HUD_PILL_ACTIVE = 'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-accent-base bg-accent-fill/80 backdrop-blur text-on-accent transition-colors whitespace-nowrap';
+const HUD_PILL_ACTIVE = 'h-7 inline-flex items-center gap-1.5 text-[11px] px-2 rounded-lg border border-accent-base mtlx-fill-accent-translucent backdrop-blur text-on-accent transition-colors whitespace-nowrap';
 
 // Collapsible parameter-group header (graph editor sidebar + definition
 // panel). Negative margins matching the panel's own px-2.5 pull the
@@ -38,8 +38,8 @@ const GROUP_HEADER_CLASS = 'w-[calc(100%+1.25rem)] flex items-center gap-1.5 -mx
     + 'hover:bg-chrome/70 hover:text-fg-soft transition-colors';
 
 // Small square icon buttons for list rows (reorder controls, etc).
-const ICON_BTN_SM = 'flex-none w-6 h-6 inline-flex items-center justify-center rounded border border-line-strong bg-control/80 text-fg-muted hover:bg-hover/80 hover:text-fg-soft transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-control/80 disabled:hover:text-fg-muted';
-const ICON_BTN_SM_PRIMARY = 'flex-none w-6 h-6 inline-flex items-center justify-center rounded border bg-accent-fill/80 border-accent-base text-on-accent-soft hover:bg-accent-fill transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-accent-fill/80 disabled:hover:text-on-accent-soft';
+const ICON_BTN_SM = 'flex-none w-6 h-6 inline-flex items-center justify-center rounded border border-line-strong bg-control/80 text-fg-secondary hover:bg-hover/80 hover:text-fg transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-control/80 disabled:hover:text-fg-muted';
+const ICON_BTN_SM_PRIMARY = 'flex-none w-6 h-6 inline-flex items-center justify-center rounded border mtlx-fill-accent-translucent border-accent-base text-on-accent mtlx-fill-accent-translucent-hover transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-on-accent';
 const ICON_BTN_SM_DANGER = ICON_BTN_SM + ' hover:text-error hover:border-error-border/60';
 
 // Formats a caught value for display: an Error's .message, or the value
@@ -83,7 +83,7 @@ const DialogFrame = ({
     open, title, titleClassName, panelClassName, onClose, children,
     headerRight, closeDisabled, backdropCloseDisabled = false,
     keepMounted = false,
-    overlayClassName = 'absolute inset-0 z-50 flex items-center justify-center bg-scrim/70',
+    overlayClassName = 'absolute inset-0 z-50 flex items-center justify-center bg-scrim/85',
 }) => {
     if (!open && !keepMounted) return null;
     return (
@@ -118,8 +118,8 @@ const DialogFrame = ({
     const st = document.createElement('style');
     st.id = 'mtlx-rec-css';
     st.textContent = [
-        '.mtlx-rec-overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgb(var(--mtlx-veil) / calc(179 / 255));font-family:inherit;}',
-        '.mtlx-rec-panel{width:360px;max-width:calc(100vw - 24px);background:rgb(var(--mtlx-surface-base));border:1px solid rgb(var(--mtlx-line));border-radius:10px;box-shadow:0 10px 40px rgb(var(--mtlx-shadow) / calc(128 / 255));color:rgb(var(--mtlx-fg));}',
+        '.mtlx-rec-overlay{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgb(var(--mtlx-scrim) / calc(217 / 255));font-family:inherit;}',
+        '.mtlx-rec-panel{width:360px;max-width:calc(100vw - 24px);background:rgb(var(--mtlx-surface-raised));border:1px solid rgb(var(--mtlx-line));border-radius:10px;box-shadow:0 10px 40px rgb(var(--mtlx-shadow) / calc(128 / 255));color:rgb(var(--mtlx-fg));}',
         '.mtlx-rec-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid rgb(var(--mtlx-line));background:rgb(var(--mtlx-surface-raised));border-radius:10px 10px 0 0;}',
         '.mtlx-rec-title{font-size:13px;font-weight:700;color:rgb(var(--mtlx-fg));}',
         '.mtlx-rec-close{background:none;border:none;padding:4px;color:rgb(var(--mtlx-fg-muted));cursor:pointer;line-height:0;}',
@@ -135,7 +135,7 @@ const DialogFrame = ({
         '.mtlx-rec-seg-btn.is-active{background:rgb(var(--mtlx-accent-fill));color:rgb(var(--mtlx-on-accent));}',
         '.mtlx-rec-seg-btn:disabled{opacity:.5;cursor:not-allowed;}',
         '.mtlx-rec-hint{font-size:11px;color:rgb(var(--mtlx-fg-muted));}',
-        '.mtlx-rec-error{font-size:11px;color:rgb(var(--mtlx-error-fill));}',
+        '.mtlx-rec-error{font-size:11px;color:rgb(var(--mtlx-error));}',
         '.mtlx-rec-success{font-size:11px;color:rgb(var(--mtlx-fg-muted));}',
         '.mtlx-rec-progress{height:6px;border-radius:4px;background:rgb(var(--mtlx-chip));overflow:hidden;}',
         '.mtlx-rec-progress-fill{height:100%;background:rgb(var(--mtlx-accent-fill));transition:width .15s ease;}',
@@ -146,7 +146,7 @@ const DialogFrame = ({
         '.mtlx-rec-btn:hover:not(:disabled){background:rgb(var(--mtlx-hover));}',
         '.mtlx-rec-btn:disabled{opacity:.5;cursor:not-allowed;}',
         '.mtlx-rec-btn--primary{background:rgb(var(--mtlx-accent-fill));border-color:rgb(var(--mtlx-accent-fill));color:rgb(var(--mtlx-on-accent));}',
-        '.mtlx-rec-btn--primary:hover:not(:disabled){background:rgb(var(--mtlx-accent-fill-pressed));}',
+        '.mtlx-rec-btn--primary:hover:not(:disabled){background:rgb(var(--mtlx-accent-fill-hover));}',
         '.mtlx-rec-btn--danger{background:rgb(var(--mtlx-error-fill));border-color:rgb(var(--mtlx-error-fill));color:rgb(var(--mtlx-on-accent));}',
         '.mtlx-rec-btn--danger:hover:not(:disabled){background:rgb(var(--mtlx-error-fill-hover));}',
     ].join('');
@@ -564,7 +564,7 @@ function PresetsDialog({ open, onClose, onPick, busy, busyPath, overlayClassName
             closeDisabled={busy}
             backdropCloseDisabled={busy}
             overlayClassName={overlayClassName}
-            panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[28rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
+            panelClassName="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[28rem] max-w-[90%] max-h-[80%] overflow-hidden flex flex-col"
         >
             <div className="overflow-y-auto custom-scrollbar px-2 py-2 text-[12px]">
                 {MTLX_PRESETS.map((preset) => {
@@ -576,7 +576,7 @@ function PresetsDialog({ open, onClose, onPick, busy, busyPath, overlayClassName
                             disabled={busy}
                             title={presetKey(preset)}
                             className={'w-full text-left px-2.5 py-2 rounded flex items-center justify-between gap-2 transition-colors '
-                                + (busy ? 'cursor-not-allowed opacity-60' : 'hover:bg-hover/70 cursor-pointer')}
+                                + (busy ? 'cursor-not-allowed opacity-60' : 'hover:bg-hover/60 cursor-pointer')}
                         >
                             <span className="min-w-0">
                                 <span className="block text-fg font-medium truncate">{preset.label}</span>
@@ -620,10 +620,28 @@ const rowMeta = (key, surface) => {
     } catch (e) { return null; }
 };
 
+// Scene settings rows carry a quality-level dirty dot and a cost badge.
+const SETTINGS_EXP_BADGE = <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-experimental-hue/10 border border-experimental-hue/40 text-experimental">Experimental</span>;
+const SettingsDirtyDot = ({ show }) => (show ? <span title="Differs from the selected quality level" className="w-1.5 h-1.5 rounded-full bg-warning-marker shrink-0" /> : null);
+const SETTINGS_COST_ICON = { reload: 'refresh', rebuild: 'code', geometry: 'cube' };
+const SETTINGS_COST_TITLE = {
+    reload: 'Changing this reloads the stage', rebuild: 'Changing this recompiles materials', geometry: 'Changing this rebuilds geometry',
+};
+const SettingsCostBadge = ({ kind, pending }) => (kind ? (
+    <span title={SETTINGS_COST_TITLE[kind]} className={'inline-flex ' + (pending ? 'text-warning-marker' : 'text-fg-subtle')}>
+        <MtlxIcon name={SETTINGS_COST_ICON[kind]} className="w-3 h-3" />
+    </span>
+) : null);
+
 // Manifest rows for a surface in manifest order (bool Toggle, enum MtlxSelect,
 // number SliderField); writes go through MtlxRenderSettings.apply. `keys`
 // renders a subset for cards that own only some of a group's rows.
-function RenderSettingsSection({ surface, groups, keys, variant = 'sidebar', exclude, labelClassName = 'text-fg-soft' }) {
+// `draft` hands the Scene's staged-value model to the same rows:
+// { value(row), onChange(row, next), visible?, disabled?, dirty?, cost?,
+// pending?, title?, hint?, defaultValue?, testId? }. Variants: sidebar and
+// dialog (preview surfaces), panel (Scene popover tabs), popover (Scene
+// Environment popover), flat (one label and select per line).
+function RenderSettingsSection({ surface, groups, keys, variant = 'sidebar', exclude, labelClassName = 'text-fg-soft', draft }) {
     const RS = window.MtlxRenderSettings;
     const [, forceTick] = React.useState(0);
     React.useEffect(() => {
@@ -640,18 +658,129 @@ function RenderSettingsSection({ surface, groups, keys, variant = 'sidebar', exc
         const keySet = new Set(keys);
         rows = rows.filter((row) => keySet.has(row.key));
     }
+    if (draft && draft.visible) rows = rows.filter((row) => draft.visible(row));
     if (!rows.length) return null;
     const showHint = variant === 'sidebar';
     return (
         <React.Fragment>
-            {rows.map((row) => {
-                const value = RS.get(row.key, { surface });
-                const onChange = (next) => RS.apply(row.key, next, { surface });
+            {rows.map((baseRow) => {
+                const row = RS.rowUi(baseRow, surface);
+                const P = row.profiles[RS.PROFILE_OF[surface]];
+                const value = draft ? draft.value(row) : RS.get(row.key, { surface });
+                const onChange = draft ? (next) => draft.onChange(row, next) : (next) => RS.apply(row.key, next, { surface });
+                const hint = (draft && draft.hint && draft.hint(row)) || row.hint;
+                const title = draft && draft.title ? draft.title(row) : row.hint;
+                const disabled = !!(draft && draft.disabled && draft.disabled(row));
+                const options = row.options;
+                const asBool = row.asBool;
+                const isToggle = row.type === 'bool' || !!asBool;
+                const isSelect = !isToggle && (row.type === 'enum' || row.control === 'select');
+                const defValue = row.type === 'enum' ? (P && P.levels ? P.levels.default : options[0]) : (options ? options[0] : undefined);
+                const sliderDefault = draft && draft.defaultValue ? draft.defaultValue(row) : undefined;
+                const decimals = row.decimals !== undefined ? row.decimals : (row.type === 'int' ? 0 : undefined);
+                const step = row.step || (row.type === 'int' ? 1 : 0.1);
+                const experimental = row.experimental ? SETTINGS_EXP_BADGE : null;
+                const toggleChecked = asBool ? value === asBool.on : !!value;
+                const toggleChange = asBool ? (next) => onChange(next ? asBool.on : asBool.off) : onChange;
+                const selectNode = (extra) => (
+                    <MtlxSelect
+                        value={value}
+                        options={options}
+                        labels={row.optionLabels || {}}
+                        onChange={onChange}
+                        defValue={defValue}
+                        title={variant === 'panel' ? undefined : row.hint}
+                        size="sm"
+                        disabled={disabled}
+                        {...extra}
+                    />
+                );
+                const sliderNode = (
+                    <SliderField
+                        label={row.label} unit={row.unit} value={value}
+                        min={row.min} max={row.max} step={step}
+                        decimals={decimals}
+                        defaultValue={sliderDefault}
+                        disabled={disabled}
+                        onSlider={onChange} onNumber={onChange}
+                    />
+                );
+
+                if (variant === 'panel') {
+                    const kind = draft && draft.cost ? draft.cost(row) : null;
+                    const dirty = !!(draft && draft.dirty && draft.dirty(row));
+                    const labelNode = (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-fg-secondary">
+                            <SettingsDirtyDot show={dirty} /><span>{row.label}</span>{experimental}
+                            <SettingsCostBadge kind={kind} pending={!!(draft && draft.pending && draft.pending(row))} />
+                        </span>
+                    );
+                    const shell = 'py-2 border-b border-line/60 last:border-b-0';
+                    const hintNode = hint ? <div className="mt-1 text-[11px] text-fg-muted">{hint}</div> : null;
+                    if (isToggle) {
+                        return (
+                            <div key={row.key} className={shell}>
+                                <label className="flex items-center justify-between gap-2 cursor-pointer" title={title}>
+                                    {labelNode}
+                                    <Toggle checked={toggleChecked} onChange={toggleChange} disabled={disabled} />
+                                </label>
+                                {hintNode}
+                            </div>
+                        );
+                    }
+                    if (isSelect) {
+                        return (
+                            <div key={row.key} className={shell} title={title}>
+                                <div className="flex items-center justify-between gap-2">
+                                    {labelNode}
+                                    {selectNode()}
+                                </div>
+                                {hintNode}
+                            </div>
+                        );
+                    }
+                    return (
+                        <div key={row.key} className={shell}>
+                            {dirty ? <div className="flex items-center gap-1.5 mb-1"><SettingsDirtyDot show /><span className="text-[10px] text-warning/80">Differs from the selected quality level</span></div> : null}
+                            {sliderNode}
+                            {hintNode}
+                        </div>
+                    );
+                }
+                if (variant === 'popover') {
+                    if (isToggle) {
+                        return (
+                            <div key={row.key} className="flex items-center justify-between" title={title}>
+                                <span className={labelClassName}>{row.label}</span>
+                                <Toggle checked={toggleChecked} onChange={toggleChange} disabled={disabled} />
+                            </div>
+                        );
+                    }
+                    if (isSelect) {
+                        return (
+                            <div key={row.key} className="flex items-center justify-between gap-2" title={title}>
+                                <span className={labelClassName}>{row.label}</span>
+                                {selectNode()}
+                            </div>
+                        );
+                    }
+                    return <div key={row.key}>{sliderNode}</div>;
+                }
+                if (variant === 'flat') {
+                    const testId = draft && draft.testId ? draft.testId(row) : undefined;
+                    return (
+                        <div key={row.key} className="flex items-center justify-between gap-3" title={title}>
+                            <span className={labelClassName}>{row.label}</span>
+                            <div data-testid={testId}>{selectNode({ ariaLabel: row.label, title: undefined })}</div>
+                        </div>
+                    );
+                }
+
                 const labelNode = (
                     <span className={labelClassName + ' inline-flex items-center gap-1.5'}>
                         {row.label}
                         {row.experimental && (
-                            <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-experimental-fill/30 border border-experimental-hue/50 text-experimental">Experimental</span>
+                            <span className="text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-experimental-hue/10 border border-experimental-hue/40 text-experimental">Experimental</span>
                         )}
                     </span>
                 );
@@ -667,7 +796,6 @@ function RenderSettingsSection({ surface, groups, keys, variant = 'sidebar', exc
                     );
                 }
                 if (row.type === 'enum') {
-                    const P = row.profiles[RS.PROFILE_OF[surface]];
                     return (
                         <div key={row.key}>
                             <div className="flex items-center justify-between gap-2">
@@ -863,7 +991,7 @@ function renderStageBody(stage, loadState, startStageLoad) {
     if (status === 'error') {
         return (
             <div className="px-4 py-3 flex flex-col gap-2">
-                <div className="bg-error-bg-strong/40 border border-error-border-strong text-error-text-strong rounded px-3 py-2 text-[12px]">
+                <div className="bg-error-bg/60 border border-error-border/60 text-error-text rounded px-3 py-2 text-[12px]">
                     {loadState.error}
                 </div>
                 <div>{retryBtn}</div>
@@ -1081,7 +1209,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
             title="Export Shader Code"
             onClose={onClose}
             overlayClassName={overlayClassName}
-            panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-[44rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col"
+            panelClassName="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[44rem] max-w-[90%] max-h-[80vh] overflow-hidden flex flex-col"
             headerRight={
                 <React.Fragment>
                     <button
@@ -1174,7 +1302,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                                     onClick={() => setStageIdx(i)}
                                     className={'h-6 text-[11px] px-2 rounded border transition-colors '
                                         + (i === stageIdx
-                                            ? 'bg-accent-fill/80 border-accent-base text-on-accent'
+                                            ? 'mtlx-fill-accent-translucent border-accent-base text-on-accent'
                                             : 'bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80')}
                                 >
                                     {st.label}
@@ -1184,7 +1312,7 @@ function ShaderExportDialog({ open, onClose, renderables, initialIndex = 0, gene
                     )}
                     {error ? (
                         <div className="px-4 py-3">
-                            <div className="bg-error-bg-strong/40 border border-error-border-strong text-error-text-strong rounded px-3 py-2 text-[12px]">
+                            <div className="bg-error-bg/60 border border-error-border/60 text-error-text rounded px-3 py-2 text-[12px]">
                                 {error}
                             </div>
                         </div>
@@ -1613,7 +1741,7 @@ const useRenderContextRecovery = ({ groups, isHidden, onLost }) => {
 // in-overlay Cancel pill).
 const LoadingOverlay = ({ show, label, className, labelClassName, barWidthClass, fraction, testId, children }) => {
     if (!show) return null;
-    const wrapCls = className || 'mtlx-loading-overlay absolute inset-0 flex flex-col items-center justify-center gap-3 text-fg-muted z-10 bg-veil/80';
+    const wrapCls = className || 'mtlx-loading-overlay absolute inset-0 flex flex-col items-center justify-center gap-3 text-fg-muted z-10 bg-veil/70';
     const labelCls = labelClassName || 'animate-pulse';
     const hasFraction = typeof fraction === 'number' && Number.isFinite(fraction);
     const barCls = 'mtlx-loading-bar ' + (barWidthClass || 'w-48');
@@ -1793,7 +1921,7 @@ const EnvDialog = ({
                     disabled={!keyLightAvail}
                     title="Automatically extract a strong sun into a directional light so sharp highlights stay crisp (rebuilds the environment)"
                     className={`h-5 px-2 rounded border transition-colors disabled:opacity-40 ${
-                        keyLightOn ? 'bg-accent-fill/80 border-accent-base text-on-accent' : 'bg-control/80 border-line-strong text-fg-secondary'
+                        keyLightOn ? 'mtlx-fill-accent-translucent border-accent-base text-on-accent' : 'bg-control/80 border-line-strong text-fg-secondary'
                     }`}
                 >
                     {keyLightOn ? 'On' : 'Off'}
@@ -2071,7 +2199,7 @@ function Chip({ active, disabled, dashed, onClick, icon, title, children }) {
     const cls = disabled
         ? base + ' opacity-40 cursor-not-allowed text-fg-subtle border-line' + (dashed ? ' border-dashed' : '')
         : active
-            ? base + ' border-accent-base/70 bg-accent-wash/10 text-accent-fg-bright'
+            ? base + ' border-accent-base/70 bg-selection/20 text-accent-fg-bright'
             : base + ' border-line-strong text-fg-secondary hover:border-line-heavy cursor-pointer';
     return (
         <button type="button" title={title} disabled={disabled} onClick={onClick} className={cls}>
@@ -2084,22 +2212,17 @@ function Chip({ active, disabled, dashed, onClick, icon, title, children }) {
 // Collapsible settings card shell shared by all seven fields cards. Open
 // state is local (per brief) so it survives re-renders but always starts
 // from `defaultOpen`, which the caller sets from the current column count.
-// Opaque twin of a 35% raised-surface fill: the same colour once composited
-// over the page ground, but solid. These cards sit over the hero grid on
-// builder and docs, and a translucent fill lets that grid show through.
-const CARD_SURFACE = 'color-mix(in srgb, rgb(var(--mtlx-surface-raised)) 35%, rgb(var(--mtlx-surface-base)))';
-
 function SectionCard({ icon, title, pill, summary, defaultOpen, dense, children }) {
     const [open, setOpen] = React.useState(defaultOpen);
     return (
-        <div className="rounded-lg border border-line" style={{ background: CARD_SURFACE }}>
+        <div className="rounded-lg border border-line bg-surface-card">
             <button
                 type="button"
                 onClick={() => setOpen((o) => !o)}
                 className="w-full h-[42px] flex items-center gap-2 px-3.5 text-left"
             >
                 <MtlxIcon name={icon} className="w-4 h-4 text-fg-muted shrink-0" />
-                <span className="text-[13px] font-semibold text-fg-soft shrink-0">{title}</span>
+                <span className="text-[13px] font-semibold text-fg shrink-0">{title}</span>
                 {pill}
                 <span className="flex-1 min-w-0 text-right text-xs text-fg-subtle truncate" title={typeof summary === 'string' ? summary : undefined}>{summary}</span>
                 <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="w-3.5 h-3.5 text-fg-subtle shrink-0" />
@@ -2125,8 +2248,8 @@ function GeometryTile({ label, icon, selected, disabled, title, onClick, badge }
             title={title}
             onClick={onClick}
             className={'relative h-[84px] rounded-lg border flex flex-col items-center pt-3 px-1.5 gap-1.5 transition-colors '
-                + (disabled ? 'opacity-50 cursor-not-allowed border-line text-fg-subtle'
-                    : selected ? 'border-accent-base text-accent-text-on-tint ring-1 ring-accent-wash/15 bg-accent-wash/5' : 'border-line-control text-fg-secondary hover:border-line-strong')}
+                + (disabled ? 'opacity-50 cursor-not-allowed border-line text-fg-disabled'
+                    : selected ? 'border-accent-base text-accent-fg-bright ring-1 ring-accent-wash/15 bg-selection/20' : 'border-line-control text-fg-secondary hover:border-line-strong')}
         >
             {badge && (
                 <span className="absolute top-1 right-1 flex-none text-[8px] uppercase tracking-wide px-1 py-0 rounded border bg-chip/60 border-line-heavy/50 text-fg-secondary">{badge}</span>
@@ -2151,7 +2274,7 @@ function CustomModelTile({ name, selected, expanded, accept, onSelect, onExpand,
     return (
         <div
             className={'relative rounded-lg border overflow-hidden w-full transition-colors '
-                + (selected ? 'border-accent-base text-accent-text-on-tint ring-1 ring-accent-wash/15 bg-accent-wash/5' : 'border-line-control text-fg-secondary hover:border-line-strong')
+                + (selected ? 'border-accent-base text-accent-fg-bright ring-1 ring-accent-wash/15 bg-selection/20' : 'border-line-control text-fg-secondary hover:border-line-strong')
                 + (className ? ' ' + className : '')}
         >
             <span
@@ -2222,7 +2345,7 @@ function FilePickerField({
     // onChoose branch has no such input, so this only applies below).
     inputTestId,
 }) {
-    const buttonCls = 'inline-flex items-center gap-1 border border-l-0 border-line-control rounded-r-md bg-control hover:bg-hover text-[11px] px-2 text-fg-secondary whitespace-nowrap'
+    const buttonCls = 'inline-flex items-center gap-1 border border-l-0 border-line-control rounded-r-md bg-control/80 hover:bg-hover text-[11px] px-2 text-fg-secondary whitespace-nowrap'
         + (mono ? ' font-mono' : '');
     const [draft, setDraft] = React.useState(value || '');
     // A ref (not state) so blurring alone never re-triggers the seed
@@ -2342,7 +2465,7 @@ const ViewportControls = ({
     selectSize = 'sm',
     buttonClassName = (active) => `h-6 inline-flex items-center text-[11px] px-2 rounded border transition-colors ${
         active
-            ? 'bg-accent-fill/80 border-accent-base text-on-accent'
+            ? 'mtlx-fill-accent-translucent border-accent-base text-on-accent'
             : 'bg-control/80 border-line-strong text-fg-secondary hover:bg-hover/80'
     }`,
     // Optional grouped layout. `clusters` is an array of arrays of slot ids;
@@ -2991,7 +3114,7 @@ const MXS_BADGE_WARN = 'var(--mx-select-badge-warn, rgb(var(--mtlx-experimental,
 // Translucent derivations so the highlight reads as a tint over the
 // popover ground, not a solid slab. color-mix is already a baseline here
 // (embed/embed-controls.css, js/builder-app.jsx).
-const MXS_ACCENT_SOFT = 'color-mix(in srgb, ' + MXS_ACCENT + ' 30%, transparent)';
+const MXS_ACCENT_SOFT = 'color-mix(in srgb, ' + MXS_ACCENT + ' 20%, transparent)';
 const MXS_SURFACE_SOFT = 'color-mix(in srgb, ' + MXS_SURFACE + ' 95%, transparent)';
 // Toolbar triggers sit alongside BTN_TOOLBAR buttons, which fill at
 // control/80 over backdrop-blur. Matching that 80% is what stops a
@@ -3040,7 +3163,7 @@ const SELECT_BADGE_TONES = { Experimental: 'warn' };
 // warn's text color is the MXS_BADGE_WARN var (applied inline per row);
 // the tint/border stay literal, there's no separate themed var for them.
 const SELECT_BADGE_TONE_CLS = {
-    warn: 'bg-experimental-fill/30 border-experimental-hue/50',
+    warn: 'bg-experimental-hue/10 border-experimental-hue/40',
     neutral: 'bg-chip/60 border-line-heavy/50 text-fg-secondary',
 };
 const resolveSelectBadge = (badge) => {
@@ -3976,7 +4099,7 @@ class PreviewErrorBoundary extends React.Component {
     render() {
         if (this.state.error) {
             return (
-                <div className="rounded-lg border border-error-bg-strong/60 bg-error-bg/30 text-error-text text-xs p-3">
+                <div className="rounded-lg border border-error-border/60 bg-error-bg/60 text-error-text text-xs p-3">
                     {'3D preview crashed: ' + String((this.state.error && this.state.error.message) || this.state.error)}
                 </div>
             );

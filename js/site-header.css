@@ -638,7 +638,7 @@
 .mtlx-tab-mobile.is-active {
     border-left-color: rgb(var(--mtlx-accent-base));
     color: rgb(var(--mtlx-accent-fg-strong));
-    background-color: rgb(var(--mtlx-hover-subtle) / calc(153 / 255)); /* gray-800/60 */
+    background-color: rgb(var(--mtlx-pressed));
 }
 
 /* Group label row (Learn/Integrate), mobile-panel-only: desktop groups
@@ -737,7 +737,7 @@
    hardcode rgba() here, following .mtlx-header's own rgba() precedent. */
 .mtlx-build-banner {
     display: none;
-    border-top: 1px solid rgb(var(--mtlx-warning-border-alt) / calc(128 / 255)); /* amber-600/50 */
+    border-top: 1px solid rgb(var(--mtlx-warning-border) / calc(128 / 255));
     background-color: rgb(var(--mtlx-warning-bg) / calc(77 / 255)); /* amber-900/30 */
 }
 .mtlx-build-banner.is-visible {

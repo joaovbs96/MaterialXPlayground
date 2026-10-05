@@ -26,8 +26,8 @@ const PRESET_PICKER_TAG_FILTERS = [
 
 // Small pill idioms, sized well below the Material Gallery's own chips so
 // two rows of them fit under the search bar in a narrow left column.
-const PRESET_PICKER_CHIP_ACTIVE = 'border-accent-base bg-accent-wash/[0.12] text-accent-fg-strong';
-const PRESET_PICKER_CHIP_IDLE = 'border-line-strong bg-control text-fg-secondary hover:bg-hover hover:text-fg';
+const PRESET_PICKER_CHIP_ACTIVE = 'border-accent-base bg-selection/20 text-accent-fg-strong';
+const PRESET_PICKER_CHIP_IDLE = 'border-line-strong bg-control/80 text-fg-secondary hover:bg-hover hover:text-fg';
 const PRESET_PICKER_CHIP_BASE = 'h-6 px-2 rounded-full border text-[11px] font-medium transition-colors whitespace-nowrap';
 const PRESET_PICKER_TAG_CLASS = 'text-[9px] font-medium uppercase tracking-wide px-[6px] py-px rounded-full border border-line-strong text-fg-muted';
 
@@ -124,7 +124,7 @@ function PresetPickerRow({ entry, highlighted, onClick, onDoubleClick, setRowEl 
             onDoubleClick={onDoubleClick}
             title={entry.name}
             className={'w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md text-left transition-colors border '
-                + (highlighted ? 'bg-selection/20 border-accent-base/60' : 'border-transparent hover:bg-hover/50')}
+                + (highlighted ? 'bg-selection/20 border-accent-base/60' : 'border-transparent hover:bg-hover/60')}
         >
             {showPlaceholder ? (
                 <div
@@ -340,7 +340,7 @@ function MtlxPresetPicker({ open, onClose, onSelect, title, overlayClassName }) 
             // Also subtracts --mtlx-header-h, matching the fixed-overlay
             // callers' own header carve-out, so this panel never grows as
             // tall as the header band when a caller passes that overlay.
-            panelClassName="bg-surface-raised/95 backdrop-blur border border-line-strong rounded-lg shadow-2xl w-full max-w-[70rem] max-h-[calc(100vh-var(--mtlx-header-h,0px)-4rem)] overflow-hidden flex flex-col"
+            panelClassName="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-full max-w-[70rem] max-h-[calc(100vh-var(--mtlx-header-h,0px)-4rem)] overflow-hidden flex flex-col"
         >
             <div className="flex h-[440px]">
                 <div

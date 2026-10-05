@@ -32,10 +32,12 @@
             return null;
         }
 
-        // ---- Codes (untrusted): mtlx1.<base64url>. Bytes: base (0x0c dark, 0x2c light: codes start mtlx1.D or mtlx1.L),
-        // seeds (3 x RGB), slug and UTF-8 label (length-prefixed), override count, per override the token name
-        // (length-prefixed) and RGB, then optionally contrast + 20 and tint in 0.05 steps. Nothing else may follow.
-        function bad(m) { throw new Error(m); }
+        // ---- Codes (untrusted): mtlx2.<base64url>. Bytes: base (0x0c dark, 0x2c light: codes start mtlx2.D or mtlx2.L),
+        // the id of the built-in theme it is based on (length-prefixed, length 0 = none), seeds (3 x RGB, only without
+        // a base theme), slug and UTF-8 label (length-prefixed), override count, per override the token name
+        // (length-prefixed) and RGB, then, without a base theme, optionally contrast + 20 and tint in 0.05 steps.
+        // Nothing else may follow.
+        function bad(m, old) { const e = new Error(m); if (old) e.old = true; throw e; }
         function clip(v) { return String(v).replace(/[^\w-]/g, '?').slice(0, 24); }
         function own(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
         function obj(o, what) { if (!o || typeof o !== 'object' || Array.isArray(o)) bad(what + ' must be an object'); return o; }
@@ -52,7 +54,7 @@
 
         // Normalized copy of a spec, or throws a short user-facing Error. A draft may omit id and label.
         function validate(spec, isDraft) {
-            keys(obj(spec, 'Theme'), ['v', 'id', 'label', 'base', 'seeds', 'overrides', 'modifiers'], 'theme field');
+            keys(obj(spec, 'Theme'), ['v', 'id', 'label', 'base', 'from', 'seeds', 'overrides', 'modifiers'], 'theme field');
             if (spec.v !== undefined && spec.v !== 1) bad('Unsupported theme version');
             const out = { v: 1 };
             if (!isDraft || spec.id !== undefined) {
@@ -67,14 +69,25 @@
             }
             if (spec.base !== 'dark' && spec.base !== 'light') bad('Base must be dark or light');
             out.base = spec.base;
-            const seeds = obj(spec.seeds, 'Seeds');
-            keys(seeds, SEEDS, 'seed');
-            out.seeds = {};
-            SEEDS.forEach(function (k) { out.seeds[k] = hex(seeds[k], 'Seed ' + k); });
+            const from = spec.from;
+            if (from !== undefined) {
+                const e = typeof from === 'string' ? core.entry(from) : null;
+                if (!e || (e.base !== 'dark' && e.base !== 'light')) bad(typeof from === 'string' && !e && !/^custom:/.test(from) ? 'Unknown base theme "' + clip(from) + '"' : 'A theme can only be based on a built-in theme');
+                if (spec.seeds !== undefined) bad('A theme based on another theme has no seeds');
+                if (spec.modifiers !== undefined) bad('A theme based on another theme has no modifiers');
+                if (e.base !== spec.base) bad('Base does not match the theme it is based on');
+                out.from = from;
+            } else {
+                const seeds = obj(spec.seeds, 'Seeds');
+                keys(seeds, SEEDS, 'seed');
+                out.seeds = {};
+                SEEDS.forEach(function (k) { out.seeds[k] = hex(seeds[k], 'Seed ' + k); });
+            }
             const ov = spec.overrides === undefined ? {} : obj(spec.overrides, 'Overrides');
             keys(ov, TOKENS, 'color role');
             out.overrides = {};
             TOKENS.forEach(function (t) { if (own(ov, t)) out.overrides[t] = hex(ov[t], 'Color for ' + t); });
+            if (from !== undefined) return out;
             const mo = spec.modifiers === undefined ? {} : obj(spec.modifiers, 'Modifiers');
             keys(mo, ['contrast', 'tint'], 'modifier');
             out.modifiers = { contrast: step(mo.contrast === undefined ? 0 : mo.contrast, -1, 1, 'Contrast'), tint: step(mo.tint === undefined ? 0 : mo.tint, 0, 1, 'Tint') };
@@ -95,14 +108,15 @@
             const b = [s.base === 'light' ? 0x2c : 0x0c];
             const rgb = function (h) { for (let i = 1; i < 7; i += 2) b.push(parseInt(h.substr(i, 2), 16)); };
             const str = function (t) { b.push(t.length); for (let i = 0; i < t.length; i++) b.push(t.charCodeAt(i)); };
-            SEEDS.forEach(function (k) { rgb(s.seeds[k]); });
+            str(s.from || '');
+            if (!s.from) SEEDS.forEach(function (k) { rgb(s.seeds[k]); });
             str(s.id.slice(7));
             str(unescape(encodeURIComponent(s.label)));
             const ks = Object.keys(s.overrides);
             b.push(ks.length);
             ks.forEach(function (t) { str(t); rgb(s.overrides[t]); });
-            if (s.modifiers.contrast || s.modifiers.tint) b.push(Math.round(s.modifiers.contrast * 20) + 20, Math.round(s.modifiers.tint * 20));
-            return 'mtlx1.' + b64(b);
+            if (!s.from && (s.modifiers.contrast || s.modifiers.tint)) b.push(Math.round(s.modifiers.contrast * 20) + 20, Math.round(s.modifiers.tint * 20));
+            return 'mtlx2.' + b64(b);
         }
 
         function decodeTheme(code) {
@@ -110,7 +124,8 @@
             if (c.length > 8192) bad('Theme code is too long');
             const m = /^mtlx(\d{1,3})\.([A-Za-z0-9_-]{2,})$/.exec(c);
             if (!m) bad('Not a theme code');
-            if (m[1] !== '1') bad('This theme code needs a newer version of the app');
+            if (m[1] === '1') bad('This theme code is from an older version and can no longer be read.', true);
+            if (m[1] !== '2') bad('This theme code needs a newer version of the app');
             const s = m[2], b = [];
             for (let i = 0; i < s.length; i += 4) {
                 let n = 0;
@@ -126,8 +141,13 @@
             const text = function () { return String.fromCharCode.apply(null, take(take(1)[0])); };
             const head = take(1)[0];
             if (head !== 0x0c && head !== 0x2c) bad('Damaged theme code');
-            const spec = { base: head === 0x2c ? 'light' : 'dark', seeds: {}, overrides: {} };
-            SEEDS.forEach(function (k) { spec.seeds[k] = color(); });
+            const spec = { base: head === 0x2c ? 'light' : 'dark', overrides: {} };
+            const from = text();
+            if (from) spec.from = from;
+            else {
+                spec.seeds = {};
+                SEEDS.forEach(function (k) { spec.seeds[k] = color(); });
+            }
             spec.id = 'custom:' + text();
             try { spec.label = decodeURIComponent(escape(text())); } catch (e) { bad('Damaged theme code'); }
             const n = take(1)[0];
@@ -137,7 +157,7 @@
                 if (own(spec.overrides, t)) bad('Damaged theme code');
                 spec.overrides[t] = color();
             }
-            if (p < b.length) {
+            if (!spec.from && p < b.length) {
                 const mo = take(2);
                 if (mo[0] > 40 || mo[1] > 20) bad('Damaged theme code');
                 spec.modifiers = { contrast: (mo[0] - 20) / 20, tint: mo[1] / 20 };
@@ -171,6 +191,7 @@
         function setCodes(codes) {
             const old = customs.filter(function (c) { return !c.temp; }).map(function (c) { return c.spec.id; });
             customs = customs.filter(function (c) { return c.temp; });
+            let older = 0;
             (Array.isArray(codes) ? codes : []).slice(0, MAX).forEach(function (code) {
                 try {
                     const s = decodeTheme(code && typeof code === 'object' ? code.code : code);
@@ -178,8 +199,9 @@
                     if (c && !c.temp) return;
                     if (c) customs.splice(customs.indexOf(c), 1);
                     addCustom(s, false);
-                } catch (e) { if (root.console) root.console.warn('[theme] skipped a custom theme: ' + e.message); }
+                } catch (e) { if (e.old) older++; else if (root.console) root.console.warn('[theme] skipped a custom theme: ' + e.message); }
             });
+            if (older && root.console) root.console.warn('[theme] skipped ' + older + ' custom theme(s) saved by an older version');
             old.forEach(function (id) { if (!custom(id)) drop(id); });
         }
 
@@ -202,44 +224,78 @@
 
         function listCustom() { return customs.map(function (c) { return JSON.parse(JSON.stringify(c.spec)); }); }
 
-        // ---- Application: the engine and js/gen/theme-pairs.js load parser-inserted while the head parses (applied
-        // before first paint), else as scripts. cb(err) runs synchronously once both are in.
-        function ping() {
-            if (!waiters || !root.MtlxThemeEngine || !DATA.customPairs) return;
-            const w = waiters;
-            waiters = null;
-            w.forEach(function (cb) { cb(null); });
+        // ---- Application: the engine, js/gen/theme-pairs.js and, for a theme based on a preset, that preset's file
+        // (js/gen/themes/<id>.js, loaded as theme.js loads presets) load parser-inserted while the head parses (applied
+        // before first paint), else as scripts. cb(err) runs synchronously once everything it needs is in.
+        const started = {};
+
+        function baseReady(from) {
+            return !from || from === 'dark' || from === 'light' || !!(DATA.themes[from] && DATA.params && DATA.params[from]);
         }
 
-        function prepare(cb) {
-            if (root.MtlxThemeEngine && DATA.customPairs) return cb(null);
-            if (waiters) return waiters.push(cb);
-            waiters = [cb];
+        function ready(from) { return !!(root.MtlxThemeEngine && DATA.customPairs && baseReady(from)); }
+
+        function ping() {
+            if (!waiters) return;
+            const now = waiters.filter(function (w) { return ready(w.from); });
+            if (!now.length) return;
+            waiters = waiters.filter(function (w) { return now.indexOf(w) < 0; });
+            if (!waiters.length) waiters = null;
+            now.forEach(function (w) { w.cb(null); });
+        }
+
+        function prepare(cb, from) {
+            if (ready(from)) return cb(null);
+            if (waiters) waiters.push({ cb: cb, from: from });
+            else waiters = [{ cb: cb, from: from }];
             DATA.ping = ping;
-            const prev = DATA.onEngine;
-            if (!root.MtlxThemeEngine) DATA.onEngine = function (E) { if (typeof prev === 'function') prev(E); ping(); };
+            if (!started.hook) {
+                started.hook = true;
+                const prev = DATA.onEngine;
+                if (!root.MtlxThemeEngine) DATA.onEngine = function (E) { if (typeof prev === 'function') prev(E); ping(); };
+                const loaded = DATA.loaded;
+                DATA.loaded = function () { const r = loaded.apply(this, arguments); ping(); return r; };
+            }
             const parse = core.parsing();
-            const fail = function () {
-                const w = waiters || [];
-                waiters = null;
-                w.forEach(function (f) { f(new Error('The theme engine could not be loaded')); });
+            const fail = function (f) {
+                const w = (waiters || []).filter(function (x) { return !f || x.from === f; });
+                waiters = (waiters || []).filter(function (x) { return w.indexOf(x) < 0; });
+                if (!waiters.length) waiters = null;
+                w.forEach(function (x) { x.cb(new Error('The theme engine could not be loaded')); });
             };
-            [!DATA.customPairs && 'js/gen/theme-pairs.js', !root.MtlxThemeEngine && 'js/shared/theme-engine.js'].forEach(function (f) {
-                if (!f) return;
+            const files = [!DATA.customPairs && 'js/gen/theme-pairs.js', !root.MtlxThemeEngine && 'js/shared/theme-engine.js'];
+            const preset = from && !baseReady(from) && !asked[from] ? from : null;
+            if (preset) { asked[preset] = true; files.push('js/gen/themes/' + preset + '.js'); }
+            files.forEach(function (f) {
+                if (!f || started[f]) return;
+                started[f] = true;
                 if (parse) return doc.write('<script src="' + core.BASE + f + '"><\/script>');
                 if (!doc || !doc.head) return fail();
-                const s = doc.createElement('script');
-                s.async = false;
-                s.onload = ping;
-                s.onerror = fail;
-                s.src = core.BASE + f;
-                doc.head.appendChild(s);
+                const e = doc.createElement('script');
+                e.async = false;
+                e.onload = ping;
+                e.onerror = function () { started[f] = false; if (f === 'js/gen/themes/' + preset + '.js') asked[preset] = false; fail(f === 'js/gen/themes/' + preset + '.js' ? preset : null); };
+                e.src = core.BASE + f;
+                doc.head.appendChild(e);
             });
+        }
+
+        // The built-in theme a spec is based on: its exact map and params at its own contrast level.
+        function baselineOf(id) {
+            const E = root.MtlxThemeEngine;
+            const e = core.entry(id);
+            if (!e || !baseReady(id)) return null;
+            const light = id === 'light';
+            return {
+                tokens: light ? Object.assign({}, DATA.themes.dark, DATA.themes.light) : DATA.themes[id],
+                params: id === 'dark' ? DATA.params.dark : light ? E.deriveTheme({ base: 'light', data: DATA }).params : DATA.params[id],
+                level: e.contrast,
+            };
         }
 
         function resolveSpec(spec) {
             try {
-                return root.MtlxThemeEngine.resolveCustom(spec, { data: DATA, pairs: DATA.customPairs.pairs, level: DATA.customPairs.contrast });
+                return root.MtlxThemeEngine.resolveCustom(spec, { data: DATA, pairs: DATA.customPairs.pairs, level: DATA.customPairs.contrast, baseline: spec.from ? baselineOf(spec.from) : undefined });
             } catch (e) { return { ok: false, error: 'This theme could not be built', adjusted: [], report: [] }; }
         }
 
@@ -290,7 +346,7 @@
                     persistCustoms();
                     changed();
                     res({ ok: true, spec: JSON.parse(JSON.stringify(s)), adjusted: r.adjusted, error: null });
-                });
+                }, s.from);
             });
         }
 
@@ -327,7 +383,21 @@
                         core.update(false, true);
                     }
                     res({ ok: r.ok, adjusted: r.adjusted, report: r.report, error: r.error || null });
-                });
+                }, s.from);
+            });
+        }
+
+        // The resolved { ok, tokens, params, report, adjusted, error } of a code or spec without applying it (a draft
+        // may omit id and label). Rejects on an invalid spec or when the engine cannot load; ok false keeps raw tokens.
+        function resolveCustomTheme(input) {
+            return new Promise(function (res, rej) {
+                let s;
+                try { s = validate(typeof input === 'string' ? decodeTheme(input) : input, true); } catch (e) { return rej(e); }
+                prepare(function (err) {
+                    if (err) return rej(err);
+                    const r = resolveSpec(s);
+                    res(JSON.parse(JSON.stringify({ ok: !!r.ok, tokens: r.tokens || {}, params: r.params || {}, report: r.report || [], adjusted: r.adjusted || [], error: r.error || null })));
+                }, s.from);
             });
         }
 
@@ -371,10 +441,10 @@
             },
             request: function (id) {
                 if (!custom(id)) return false;
-                prepare(function (err) { applyCustom(id, err); });
+                prepare(function (err) { applyCustom(id, err); }, custom(id).spec.from);
                 return true;
             },
-            entries: function () { return customs.map(function (c) { return { id: c.spec.id, label: c.spec.label, base: c.spec.base, group: 'custom', contrast: 'AA' }; }); },
+            entries: function () { return customs.map(function (c) { const b = c.spec.from && core.entry(c.spec.from); return { id: c.spec.id, label: c.spec.label, base: c.spec.base, group: 'custom', contrast: b ? b.contrast : 'AA' }; }); },
             code: function (id) { const c = custom(id); return c ? c.code : null; },
             storage: function (e) {
                 if (!e || e.key !== CKEY) return false;
@@ -391,6 +461,7 @@
                 encodeTheme: encodeTheme,
                 decodeTheme: decodeTheme,
                 previewDraft: previewDraft,
+                resolveCustomTheme: resolveCustomTheme,
                 clearDraft: clearDraft,
                 loadEngine: function () { return new Promise(function (res, rej) { prepare(function (err) { if (err) rej(err); else res(root.MtlxThemeEngine); }); }); },
                 getTokenGroups: getTokenGroups,

@@ -9,6 +9,22 @@
         // ---- Layout ----------------------------------------------------------
 
         const NODE_W = 240;
+        // A ShadingLanguageX node's card is wider, to fit its code
+        // (SlxNodeCode, node-component.jsx): the code view's editor,
+        // SLX_MIN_ROWS to SLX_MAX_ROWS lines tall at that editor's line
+        // height and padding (CODE_LINE_HEIGHT, CODE_PAD_Y in
+        // js/graph/code-view.jsx), plus room for its horizontal
+        // scrollbar; then the status line and padding around it all
+        // (SLX_EDITOR_CHROME_H).
+        const SLX_NODE_W = 420;
+        const SLX_LINE_H = 18;
+        const SLX_PAD_Y = 8;
+        const SLX_MIN_ROWS = 6;
+        const SLX_MAX_ROWS = 22;
+        const SLX_EDITOR_CHROME_H = 37;
+        const slxEditorHeight = (code) => Math.min(SLX_MAX_ROWS,
+            Math.max(SLX_MIN_ROWS, String(code == null ? '' : code).split('\n').length)) * SLX_LINE_H + 2 * SLX_PAD_Y + 10;
+        const nodeWidth = (d) => ((d && d.slx) ? SLX_NODE_W : NODE_W);
         // Must track MtlxGraphNode's real metrics (header ~34px, row 22px)
         // or dagre's ranks drift apart from what actually renders. Guarded:
         // a malformed descriptor (non-array inputs/outputs) used to throw
@@ -22,9 +38,10 @@
             }
             const inputCount = inputsOk ? d.inputs.length : 0;
             const outputCount = outputsOk ? d.outputs.length : 0;
+            const editor = (d && d.slx) ? slxEditorHeight(d.slx.source) + SLX_EDITOR_CHROME_H : 0;
             // The "= value" line under the ports (node-component.jsx) is a 22px row too.
             const valueRow = d && d.value !== undefined && d.value !== '' ? 1 : 0;
-            return HEADER_H + 6 + (inputCount + outputCount + valueRow) * 22 + (d && d.thumb ? (d.thumbSize === 'small' ? THUMB_SMALL_DELTA : THUMB_ROW_H) : 0);
+            return HEADER_H + 6 + (inputCount + outputCount + valueRow) * 22 + editor + (d && d.thumb ? (d.thumbSize === 'small' ? THUMB_SMALL_DELTA : thumbRowH(d)) : 0);
         };
 
         // Square preview on top of the card: the inner card width (NODE_W less the 1px border each
@@ -33,6 +50,8 @@
         // Header of a card without a preview: 8 padding, an 18 name row, a 13 type row, 1 separator.
         const HEADER_H = 40;
         const THUMB_ROW_H = THUMB_SIDE + 1;
+        // The large preview spans the card's own width, so a wider code-node card gets a taller square.
+        const thumbRowH = (d) => nodeWidth(d) - 2 + 1;
         // Small preview: the header becomes 64px of content plus its 1px separator (65).
         const THUMB_SMALL = 64;
         const THUMB_SMALL_DELTA = THUMB_SMALL + 1 - HEADER_H;
@@ -84,7 +103,7 @@
             const g = new dagre.graphlib.Graph();
             g.setGraph({ rankdir: 'LR', nodesep: 28, ranksep: 70, marginx: 24, marginy: 24 });
             g.setDefaultEdgeLabel(() => ({}));
-            for (const d of descs) g.setNode(d.id, { width: NODE_W, height: nodeHeight(d) });
+            for (const d of descs) g.setNode(d.id, { width: nodeWidth(d), height: nodeHeight(d) });
             for (const e of edges) g.setEdge(e.source, e.target);
             dagre.layout(g);
             const posOf = {};
@@ -100,7 +119,7 @@
                     console.warn('[mtlx] layoutScope: dagre produced no position for node "' + d.id + '" — leaving it for toFlow\'s default-position fallback.', d);
                     continue;
                 }
-                posOf[d.id] = { x: n.x - NODE_W / 2, y: n.y - nodeHeight(d) / 2 };
+                posOf[d.id] = { x: n.x - nodeWidth(d) / 2, y: n.y - nodeHeight(d) / 2 };
             }
             if (MTLX_PERF_LOG) {
                 console.log('[mtlx-perf] layoutScope (dagre): '
@@ -198,6 +217,17 @@
                     onRenameCommit: o.onRenameCommit ? (name) => o.onRenameCommit(d.id, name) : undefined,
                     onRenameCancel: o.onRenameCancel ? () => o.onRenameCancel(d.id) : undefined,
                     renameIssueFor: o.renameIssueFor ? (name) => o.renameIssueFor(d.id, name) : undefined,
+                    // ShadingLanguageX code node: its source, an unsaved
+                    // draft kept across remounts (slxDraftFor), and the
+                    // compile/draft callbacks. Without onSlxCompile (read-
+                    // only scope, graph previews) the code shows read-only.
+                    slx: d.slx ? Object.assign({}, d.slx, {
+                        draft: o.slxDraftFor ? o.slxDraftFor(d.name, d.slx.source) : null,
+                        unavailable: !!o.slxUnavailable,
+                    }) : undefined,
+                    onSlxCompile: (d.slx && o.onSlxCompile) ? (src) => o.onSlxCompile(d.name, src) : undefined,
+                    onSlxDraft: (d.slx && o.onSlxDraft) ? (st) => o.onSlxDraft(d.name, st) : undefined,
+                    onOpenNodeDocs: d.slx ? o.onOpenNodeDocs : undefined,
                 });
             });
             const posOf = layoutScope(shaped, edges);
@@ -239,6 +269,7 @@
         const CONN_ATTRS = ['interfacename', 'nodegraph', 'nodename', 'output'];
 
 Object.assign(window, {
-    getNodeColor, handleStyle, minimapMaskColor, NODE_W, THUMB_SIDE, THUMB_ROW_H, THUMB_SMALL, THUMB_SMALL_DELTA, thumbEligible, thumbKind, SHADER_THUMB_TYPES, nodeHeight, layoutScope,
+    getNodeColor, handleStyle, minimapMaskColor, NODE_W, nodeWidth, THUMB_SIDE, THUMB_ROW_H, thumbRowH, THUMB_SMALL, THUMB_SMALL_DELTA, thumbEligible, thumbKind, SHADER_THUMB_TYPES, nodeHeight, layoutScope,
+    SLX_NODE_W, slxEditorHeight,
     visiblePortsFor, toFlow, toRfEdge, CONN_ATTRS,
 });

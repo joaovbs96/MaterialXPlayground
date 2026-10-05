@@ -33,11 +33,18 @@ test('bindEngine rejects a deps object missing a required function', () => {
 
 test('bindEngine accepts a complete deps object', () => {
   const MtlxRender = loadRenderSession();
-  assert.doesNotThrow(() => MtlxRender.bindEngine({
+  const deps = {
     getDisplayTransform: () => 'srgb',
+    applyThreeToneMappingChunk: () => false,
     displayExposureScale: () => 1,
     clockTick: () => {},
-  }));
+  };
+  // createRenderSession's engine helpers (P6 S1), stubbed by name.
+  ['createPeelPipeline', 'getForceTransparency', 'getEnvironment', 'getEnvOverride', 'resolveShadingEnv',
+    'makeEnvTexture', 'makeBackgroundTexture', 'parseEnvBuffer', 'buildEnvFromParsedTexture',
+    'displayTransformId', 'fullscreenElement', 'registerLiveView', 'unregisterLiveView',
+    'compileFilteringDriverNoise', 'enforceGlContextCap'].forEach((k) => { deps[k] = () => {}; });
+  assert.doesNotThrow(() => MtlxRender.bindEngine(deps));
 });
 
 test('createSizer.setResizeSuspended(false) resyncs only on a true-to-false transition', () => {
@@ -340,4 +347,23 @@ test('createSleepGate: context loss and explicit inactivity both drive sleep ind
   gate.notify({ explicitActive: false });
   assert.equal(gate.isAsleep(), true);
   assert.equal(gate.getReason(), 'inactive');
+});
+
+test('findUnrunnableMaterials attributes only materials whose own program is unrunnable', () => {
+  const MtlxRender = loadRenderSession();
+  const good = { name: 'good', userData: { mtlxSceneCompiled: true } };
+  const bad = { name: 'bad', userData: { mtlxSceneCompiled: true } };
+  const untouched = { name: 'untouched', userData: { mtlxSceneCompiled: true } };
+  const builtin = { name: 'builtin', userData: {} };
+  const programs = new Map([
+    [good, { currentProgram: { diagnostics: { runnable: true } } }],
+    [bad, { currentProgram: { diagnostics: { runnable: false, programLog: 'link failed' } } }],
+    [builtin, { currentProgram: { diagnostics: { runnable: false } } }],
+  ]);
+  const renderer = { properties: { get: (m) => programs.get(m) } };
+  const out = MtlxRender.findUnrunnableMaterials(renderer, [good, bad, untouched, builtin],
+    (m) => !!m.userData.mtlxSceneCompiled);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].material, bad);
+  assert.equal(out[0].log, 'link failed');
 });
