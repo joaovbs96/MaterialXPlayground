@@ -50,8 +50,8 @@
         // Header of a card without a preview: 8 padding, an 18 name row, a 13 type row, 1 separator.
         const HEADER_H = 40;
         const THUMB_ROW_H = THUMB_SIDE + 1;
-        // The large preview spans the card's own width, so a wider code-node card gets a taller square.
-        const thumbRowH = (d) => nodeWidth(d) - 2 + 1;
+        // The large preview keeps the normal square size, centered on wider code-node cards.
+        const thumbRowH = (d) => THUMB_ROW_H;
         // Small preview: the header becomes 64px of content plus its 1px separator (65).
         const THUMB_SMALL = 64;
         const THUMB_SMALL_DELTA = THUMB_SMALL + 1 - HEADER_H;

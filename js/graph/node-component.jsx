@@ -244,7 +244,7 @@
             queued: 'Queued: shader thumbnails render after pattern thumbnails',
             generate: 'Compiling shader', compile: 'Compiling shader', render: 'Rendering',
         };
-        function NodeThumb({ thumbKey, store, isIface, small, rowH }) {
+        function NodeThumb({ thumbKey, store, isIface, small, rowH, center }) {
             const sub = React.useCallback((fn) => store.subscribe(thumbKey, fn), [store, thumbKey]);
             const snap = React.useSyncExternalStore(sub, () => store.get(thumbKey));
             const canvasRef = React.useRef(null);
@@ -284,8 +284,10 @@
             const shader = snap.kind === 'shader';
             const pendingShader = shader && !showImage && snap.state === 'pending';
             const state = showImage ? '' : pendingShader ? 'flex items-center justify-center bg-surface-sunken text-fg-subtle' : failed ? 'flex items-center justify-center bg-surface-sunken text-fg-subtle' : 'bg-surface-sunken animate-pulse';
-            return (
-                <div className={wrap + state} style={small ? { width: THUMB_SMALL + 1 } : { height: rowH }} data-mtlx-thumb={snap.state} data-mtlx-thumb-size={small ? 'small' : 'large'}
+            const centered = !small && center;
+            const box = (
+                <div className={centered ? wrap.replace('rounded-t-lg ', '').replace(/border-b /, '') + state : wrap + state}
+                    style={small ? { width: THUMB_SMALL + 1 } : centered ? { width: THUMB_SIDE, height: THUMB_SIDE, flex: 'none' } : { height: rowH }} data-mtlx-thumb={snap.state} data-mtlx-thumb-size={small ? 'small' : 'large'}
                     title={failed ? (snap.title || 'No thumbnail for this node') : pendingShader ? SHADER_PENDING_TITLE[snap.phase || 'queued'] : undefined}>
                     {showImage && <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />}
                     {showImage && snap.state === 'approx' && (
@@ -294,6 +296,14 @@
                     )}
                     {pendingShader && <MtlxIcon name={snap.phase && snap.phase !== 'queued' ? 'rotate' : 'sphere'} className={(small ? 'w-4 h-4' : 'w-6 h-6') + (snap.phase && snap.phase !== 'queued' ? ' animate-spin' : '')} />}
                     {failed && <MtlxIcon name="alert-triangle" className={small ? 'w-4 h-4' : 'w-6 h-6'} />}
+                </div>
+            );
+            if (!centered) return box;
+            // Code nodes: the normal-size square sits centered on a header-colored full-width row.
+            return (
+                <div className={'flex justify-center overflow-hidden rounded-t-lg border-b ' + sep + (isIface ? 'bg-transparent' : 'bg-graph-node-header/70')}
+                    style={{ height: rowH }}>
+                    {box}
                 </div>
             );
         }
@@ -426,7 +436,7 @@
                             )}
                         </div>
                     )}
-                    {hasThumb && !smallThumb && <NodeThumb thumbKey={data.thumbKey} store={data.thumbStore} isIface={isIface} rowH={thumbRowH(data)} />}
+                    {hasThumb && !smallThumb && <NodeThumb thumbKey={data.thumbKey} store={data.thumbStore} isIface={isIface} rowH={thumbRowH(data)} center={!!data.slx} />}
                     {smallThumb ? (
                         // Small preview: it fills the header's full height at the left end, three fixed rows to its right.
                         <div className={'flex border-b leading-tight rounded-t-lg overflow-hidden '

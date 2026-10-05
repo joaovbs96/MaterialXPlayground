@@ -465,3 +465,29 @@ test('copy and paste of a code node keeps its name and entry function in step', 
   expect(pasted.fn).not.toBe('brighten');
   expect(new Set(nodes.map((n) => n.fn)).size).toBe(nodes.length);
 });
+
+test('a code node\'s large thumbnail is the normal size and centered on its card', async ({ page, embedURL }) => {
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('mtlxGraphThumbnails', 'true');
+      localStorage.setItem('mtlxGraphThumbnailSize', 'large');
+    } catch (e) { /* storage blocked */ }
+  });
+  await openGraphWith(page, embedURL, WITH_NODE);
+  await card(page, 'n:c1').waitFor({ state: 'visible', timeout: WAIT_TIMEOUT });
+  const slxCard = card(page, 'g:NG_brighten');
+  await slxCard.waitFor({ state: 'visible', timeout: WAIT_TIMEOUT });
+  const slxThumb = slxCard.locator('[data-mtlx-thumb-size="large"]');
+  const normalThumb = card(page, 'n:c1').locator('[data-mtlx-thumb-size="large"]');
+  await slxThumb.waitFor({ state: 'visible', timeout: WAIT_TIMEOUT });
+  await normalThumb.waitFor({ state: 'visible', timeout: WAIT_TIMEOUT });
+  const cardBox = await slxCard.boundingBox();
+  const box = await slxThumb.boundingBox();
+  const normalBox = await normalThumb.boundingBox();
+  // The viewport is zoomed by fit view, so compare ratios, not pixels.
+  expect(Math.abs(box.width / cardBox.width - 238 / 420)).toBeLessThan(0.01 * 238 / 420);
+  expect(Math.abs(normalBox.width - box.width)).toBeLessThan(1);
+  const left = box.x - cardBox.x;
+  const right = cardBox.x + cardBox.width - (box.x + box.width);
+  expect(Math.abs(left - right)).toBeLessThan(1);
+});
