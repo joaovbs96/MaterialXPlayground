@@ -163,7 +163,7 @@ export const VENDOR_DEPS = [
   {
     id: "usd-webview-bindings",
     name: "OpenUSD WebView Bindings",
-    version: "2026.9.1",
+    version: "2026.10.1",
     fetchOnly: true,
     // Patched build published by the USDBindings release (joaovbs96/
     // USDBindings), not raw upstream usd-wg-webview. It also carries the
@@ -171,9 +171,9 @@ export const VENDOR_DEPS = [
     source: {
       files: [
         { url: "https://github.com/joaovbs96/USDBindings/releases/download/v{version}/usdWebViewBindings.js", sha256: "1bd9d2349526e1fbb21a5f31ca2736efeeee04617c825e4e8f2c7094f9bcb6fc", as: "usdWebViewBindings.js" },
-        { url: "https://github.com/joaovbs96/USDBindings/releases/download/v{version}/usdWebViewBindingsModule.js", sha256: "7fb66d2fe322135b34aa976229c8eaacc1a31cbd1e01ff98c1065e439ef62eaf", as: "usdWebViewBindingsModule.js" },
-        { url: "https://github.com/joaovbs96/USDBindings/releases/download/v{version}/usdWebViewBindingsModule.wasm", sha256: "f2662e51a687f1d4e2646731f60fdc6c59bcd605e34f2e5981e04488d02b80cd", as: "usdWebViewBindingsModule.wasm" },
-        { url: "https://github.com/joaovbs96/USDBindings/releases/download/v{version}/LICENSES.txt", sha256: "95352acbcfcbc9c30805e702802fb4c8b98c58060ca84c5afa20c5a04ed83633", as: "LICENSE" },
+        { url: "https://github.com/joaovbs96/USDBindings/releases/download/v{version}/usdWebViewBindingsModule.js", sha256: "d8795ca7427116a2a6508d5e3df7459c36bb6482369186ec44a9b533ee65130d", as: "usdWebViewBindingsModule.js" },
+        { url: "https://github.com/joaovbs96/USDBindings/releases/download/v{version}/usdWebViewBindingsModule.wasm", sha256: "f62a88652a9d23eee80072eab23bf18f5a08dc931099b36f9bd856f2ca82599c", as: "usdWebViewBindingsModule.wasm" },
+        { url: "https://github.com/joaovbs96/USDBindings/releases/download/v{version}/LICENSES.txt", sha256: "9b3423366cbda9b07e95910c263c91a0866fbe349826398978ca7f4c8217fb11", as: "LICENSE" },
       ],
     },
     license: { url: "https://github.com/joaovbs96/USDBindings/releases/tag/v{version}", file: "LICENSE" },

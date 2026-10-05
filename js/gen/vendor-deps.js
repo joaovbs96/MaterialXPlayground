@@ -99,8 +99,8 @@ window.MTLX_VENDOR_DEPS = {
   "usd-webview-bindings": {
     "dir": "usd-webview-bindings",
     "name": "OpenUSD WebView Bindings",
-    "version": "2026.9.1",
-    "licenseUrl": "https://github.com/joaovbs96/USDBindings/releases/tag/v2026.9.1"
+    "version": "2026.10.1",
+    "licenseUrl": "https://github.com/joaovbs96/USDBindings/releases/tag/v2026.10.1"
   },
   "utif": {
     "dir": "utif",

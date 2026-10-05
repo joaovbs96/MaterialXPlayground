@@ -81,7 +81,7 @@
     {
       "id": "usd-webview-bindings",
       "kind": "files",
-      "version": "2026.9.1"
+      "version": "2026.10.1"
     },
     {
       "id": "utif",
@@ -537,30 +537,30 @@
     {
       "path": "usd-webview-bindings/LICENSE",
       "dep": "usd-webview-bindings",
-      "source": "https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/LICENSES.txt",
-      "sha256": "95352acbcfcbc9c30805e702802fb4c8b98c58060ca84c5afa20c5a04ed83633",
-      "bytes": 73957
+      "source": "https://github.com/joaovbs96/USDBindings/releases/download/v2026.10.1/LICENSES.txt",
+      "sha256": "9b3423366cbda9b07e95910c263c91a0866fbe349826398978ca7f4c8217fb11",
+      "bytes": 73958
     },
     {
       "path": "usd-webview-bindings/usdWebViewBindings.js",
       "dep": "usd-webview-bindings",
-      "source": "https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/usdWebViewBindings.js",
+      "source": "https://github.com/joaovbs96/USDBindings/releases/download/v2026.10.1/usdWebViewBindings.js",
       "sha256": "1bd9d2349526e1fbb21a5f31ca2736efeeee04617c825e4e8f2c7094f9bcb6fc",
       "bytes": 9429
     },
     {
       "path": "usd-webview-bindings/usdWebViewBindingsModule.js",
       "dep": "usd-webview-bindings",
-      "source": "https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/usdWebViewBindingsModule.js",
-      "sha256": "7fb66d2fe322135b34aa976229c8eaacc1a31cbd1e01ff98c1065e439ef62eaf",
-      "bytes": 115376
+      "source": "https://github.com/joaovbs96/USDBindings/releases/download/v2026.10.1/usdWebViewBindingsModule.js",
+      "sha256": "d8795ca7427116a2a6508d5e3df7459c36bb6482369186ec44a9b533ee65130d",
+      "bytes": 118197
     },
     {
       "path": "usd-webview-bindings/usdWebViewBindingsModule.wasm",
       "dep": "usd-webview-bindings",
-      "source": "https://github.com/joaovbs96/USDBindings/releases/download/v2026.9.1/usdWebViewBindingsModule.wasm",
-      "sha256": "f2662e51a687f1d4e2646731f60fdc6c59bcd605e34f2e5981e04488d02b80cd",
-      "bytes": 19936729
+      "source": "https://github.com/joaovbs96/USDBindings/releases/download/v2026.10.1/usdWebViewBindingsModule.wasm",
+      "sha256": "f62a88652a9d23eee80072eab23bf18f5a08dc931099b36f9bd856f2ca82599c",
+      "bytes": 20278233
     },
     {
       "path": "utif/LICENSE.txt",
