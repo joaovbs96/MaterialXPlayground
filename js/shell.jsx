@@ -157,7 +157,7 @@ const VIEW_DEPS = {
     viewer: {
         css: [],
         scripts: [
-            'vendor/jszip/jszip.min.js',
+           
             // RecordGifDialog (mtlx-ui.jsx) calls window.recordTurntableGif;
             // embed/viewer.html loads these two itself.
             'js/shared/gif-encoder.js',
@@ -178,7 +178,7 @@ const VIEW_DEPS = {
             'js/graph/graph-preview.css',
         ],
         scripts: [
-            'vendor/jszip/jszip.min.js',
+           
             'vendor/reactflow/index.js',
             'vendor/dagre/dagre.min.js',
             // Only for XmlDialog's XML syntax highlighting. Core bundle

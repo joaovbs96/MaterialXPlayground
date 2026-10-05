@@ -423,6 +423,7 @@ export async function loadObjStage({ files, rootPath, signal, onProgress } = {})
       castsShadow: true,
       subdivisionScheme: "none",
       materialPath: materialPathForName(materialName),
+      doubleSided: true, // OBJ has no sidedness; exported as double sided
       groups: [],
     });
   };

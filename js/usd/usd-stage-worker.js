@@ -3376,8 +3376,114 @@ async function load(request) {
   }
 }
 
+// Unlinks every file under dir (MEMFS has no exported rmdir/readdir; the
+// emptied directories stay, which is harmless for a persistent worker).
+function unlinkTree(module, dir) {
+  let info;
+  try { info = module.FS_analyzePath(dir); } catch { return; }
+  if (!info?.exists) return;
+  const node = info.object;
+  const isDir = node && ((node.mode & 61440) === 16384);
+  if (!isDir) { try { module.FS_unlink(dir); } catch { /* best effort */ } return; }
+  for (const name of Object.keys(node.contents ?? {})) unlinkTree(module, `${dir}/${name}`);
+}
+
+const asList = value => {
+  if (value == null) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value.size === "function" && typeof value.get === "function") {
+    return Array.from({ length: value.size() }, (_, i) => value.get(i));
+  }
+  return Array.from(value);
+};
+
+// Runs module.ExportStage on the job files in /export/<id> and always
+// removes that directory again. Leaves any loaded stage untouched. Packages
+// the download here too; posts phase progress and per-phase timings (ms).
+async function exportStage(request) {
+  const timings = {};
+  let mark = performance.now();
+  const lap = (name) => { const now = performance.now(); timings[name] = Math.round(now - mark); mark = now; };
+  const progress = (phase) => postMessage({ id: request.id, type: "progress", value: { phase } });
+  progress("runtime");
+  await runtime();
+  lap("runtime");
+  const module = globalThis.__USD_WEBVIEW_MODULE__;
+  const reply = (result, transfer) => postMessage({ id: request.id, type: "result", result }, transfer ?? []);
+  if (!module || typeof module.ExportStage !== "function") {
+    reply({ ok: false, error: "This OpenUSD runtime has no export support (update the USD bindings)", warnings: [], files: [] });
+    return;
+  }
+  if (!directVfsHooksAvailable(module)) {
+    reply({ ok: false, error: "This OpenUSD runtime does not expose its virtual file system", warnings: [], files: [] });
+    return;
+  }
+  const spec = request.spec;
+  const workDir = spec.workDir;
+  try {
+    progress("write");
+    const inputs = await Promise.all((request.files ?? []).map(async file => ({
+      path: file.path,
+      bytes: file.bytes instanceof Uint8Array ? file.bytes : new Uint8Array(await file.bytes.arrayBuffer()),
+    })));
+    unlinkTree(module, workDir);
+    ensureVfsDirectory(module, workDir);
+    for (const file of inputs) {
+      const filePath = `${workDir}/${file.path}`;
+      ensureVfsDirectory(module, vfsDirname(filePath));
+      module.FS_createDataFile(vfsDirname(filePath), vfsBasename(filePath), file.bytes, true, true, true);
+    }
+    lap("write");
+    progress("stage");
+    const raw = module.ExportStage(spec);
+    lap("stage");
+    progress("readback");
+    const files = [];
+    const transfer = [];
+    for (const file of asList(raw?.files)) {
+      const source = file.bytes;
+      const bytes = source instanceof Uint8Array ? new Uint8Array(source) : new Uint8Array(arrayCopy(source, Uint8Array) ?? []);
+      files.push({ path: String(file.path), bytes });
+      transfer.push(bytes.buffer);
+    }
+    lap("readback");
+    const ok = !!raw?.ok;
+    let packaged = null;
+    if (ok && request.package) {
+      progress("package");
+      // Loaded on demand: the unit tests evaluate this file as a classic script.
+      const { packageExportBytes } = await import("./usd-stage-export.js");
+      packaged = await packageExportBytes(files, { ...request.package, files: inputs });
+      lap("package");
+    }
+    reply({
+      ok,
+      error: raw?.error ? String(raw.error) : undefined,
+      warnings: asList(raw?.warnings).map(String),
+      files: packaged ? [] : files,
+      package: packaged ?? undefined,
+      timings,
+    }, packaged ? [packaged.bytes.buffer] : transfer);
+  } finally {
+    unlinkTree(module, workDir);
+  }
+}
+
+// A rejection nobody handled (such as a native abort in an async callback)
+// leaves the runtime in an unknown state, so the loader discards this worker.
+self.onunhandledrejection = event => {
+  const reason = event.reason;
+  postMessage({ type: "fatal", error: reason instanceof Error ? reason.message : String(reason) });
+};
+
 self.onmessage = event => {
   const request = event.data;
+  if (request?.type === "exportStage") {
+    exportStage(request).catch(error => {
+      postMessage({ id: request.id, type: "error", error: error instanceof Error ? error.message : String(error) });
+    });
+    return;
+  }
   if (!request || request.type !== "load") return;
 load(request).catch(error => {
     if (error instanceof Error) console.error(error.stack || error.message);

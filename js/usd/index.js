@@ -1,1 +1,1 @@
-export { loadUsdStage, usdRuntimeUrl } from "./usd-stage-loader.js";
+export { loadUsdStage, exportUsdStage, usdRuntimeUrl } from "./usd-stage-loader.js";

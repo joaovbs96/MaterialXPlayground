@@ -103,6 +103,7 @@ function ensureWorker() {
   stats.created++;
   worker.onmessage = event => {
     const message = event.data;
+    if (message?.type === "fatal") { discardWorker(new Error(`OpenUSD runtime failed: ${message.error}`)); return; }
     const entry = message?.id != null ? pending.get(message.id) : undefined;
     if (!entry) return;
     if (message.type === "progress") entry.onProgress?.(message.value);
@@ -212,4 +213,63 @@ export function loadUsdStage({ files, rootPath, onProgress, signal, purposePolic
 
 export function usdRuntimeUrl() {
   return new URL("../../vendor/usd-webview-bindings/", import.meta.url).href;
+}
+
+function runExport(job, signal, onProgress) {
+  if (signal?.aborted) return Promise.reject(new DOMException("USD export aborted", "AbortError"));
+  clearIdleTimer();
+  const activeWorker = ensureWorker();
+  const id = nextRequestId++;
+  return new Promise((resolve, reject) => {
+    const entry = { signal, resolve, reject, onProgress };
+    const finish = (fn, value) => {
+      if (!pending.has(id)) return false;
+      pending.delete(id);
+      signal?.removeEventListener("abort", entry.abort);
+      if (!pending.size) armIdleTimer();
+      fn(value);
+      return true;
+    };
+    entry.abort = () => {
+      if (finish(reject, new DOMException("USD export aborted", "AbortError"))) discardWorker("export aborted");
+    };
+    // Exports do not count against the load budget and leave lastLoadedRootPath alone.
+    entry.onResult = value => { finish(resolve, value); };
+    entry.onError = message => {
+      if (finish(reject, new Error(message))) discardWorker("worker reported an error");
+    };
+    pending.set(id, entry);
+    signal?.addEventListener("abort", entry.abort, { once: true });
+    try {
+      activeWorker.postMessage({ id, type: "exportStage", spec: job.spec, files: job.files, package: job.package });
+    } catch (error) {
+      if (finish(reject, new Error(`OpenUSD export request could not cross Worker boundary: ${error?.message ?? error}`))) {
+        discardWorker("postMessage failed");
+      }
+    }
+  });
+}
+
+/**
+ * Runs ExportStage in the shared worker, queued FIFO behind any load.
+ * job = { spec, files: [{ path, bytes }], package? { stem, materialMode, format } };
+ * resolves { ok, error, warnings, files, package? { bytes, filename }, timings }.
+ * onProgress receives { phase } from the worker.
+ */
+export function exportUsdStage(job, { signal, onProgress } = {}) {
+  if (!job?.spec) return Promise.reject(new Error("USD export spec is required"));
+  const runThis = HOSTED_IN_VSCODE
+    ? () => prepareHostWorkerUrl().then(() => runExport(job, signal, onProgress))
+    : () => runExport(job, signal, onProgress);
+  const result = queueTail.then(runThis, runThis);
+  queueTail = result.then(() => {}, () => {});
+  if (!signal) return result;
+  // A cancel while queued behind a load settles now; the queued run then
+  // sees the aborted signal and never reaches the worker.
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(new DOMException("USD export aborted", "AbortError"));
+    if (signal.aborted) { onAbort(); return; }
+    signal.addEventListener("abort", onAbort, { once: true });
+    result.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
 }
