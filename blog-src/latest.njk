@@ -1,0 +1,5 @@
+---
+permalink: /posts.json
+eleventyExcludeFromCollections: true
+---
+{{ collections.posts | latestPosts | safe }}

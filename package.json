@@ -60,7 +60,10 @@
     "electron:dev": "node electron/scripts/dev.mjs",
     "electron:pack": "node electron/scripts/pack.mjs",
     "test:vscode-host": "node tests/vscode-host/run.mjs",
-    "test:vscode-smoke": "node tests/vscode-host/smoke.mjs"
+    "test:vscode-smoke": "node tests/vscode-host/smoke.mjs",
+    "blog:install": "npm ci --prefix blog-src",
+    "blog:build": "npm --prefix blog-src run build",
+    "blog:serve": "npm --prefix blog-src run serve"
   },
   "devDependencies": {
     "@babel/standalone": "7.26.10",

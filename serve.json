@@ -1,3 +1,8 @@
 {
-  "cleanUrls": false
+  "cleanUrls": false,
+  "rewrites": [
+    { "source": "blog", "destination": "/blog/index.html" },
+    { "source": "blog/tags/:tag([a-z0-9-]+)", "destination": "/blog/tags/:tag/index.html" },
+    { "source": "blog/:slug([a-z0-9-]+)", "destination": "/blog/:slug/index.html" }
+  ]
 }

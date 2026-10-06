@@ -1,0 +1,38 @@
+---
+title: Blog
+description: Updates, deep dives and tips from the MaterialX Playground.
+includeSearch: true
+layout: layouts/base.njk
+permalink: /
+eleventyExcludeFromCollections: true
+---
+<div class="blog-wrap">
+    <nav aria-label="Breadcrumb" class="blog-crumbs">
+        <a href="{{ appRoot }}#!home">Home</a>
+        <span aria-hidden="true">/</span>
+        <span aria-current="page">Blog</span>
+    </nav>
+
+    <header class="blog-page-head">
+        <h1 class="blog-title">Blog</h1>
+        <p class="blog-lede">Updates, deep dives and tips from the {{ site.appName }}. Subscribe with the <a href="{{ '/feed.xml' | url }}">Atom feed</a>.</p>
+    </header>
+
+    {%- if collections.tagList.length %}
+    <nav class="blog-tagbar" aria-label="Browse by tag">
+        <a class="blog-chip" href="{{ '/tags/' | url }}">All tags</a>
+        {%- for tag in collections.tagList %}
+        <a class="blog-chip" href="{{ ('/tags/' + (tag | slugify) + '/') | url }}">{{ tag }}</a>
+        {%- endfor %}
+    </nav>
+    {%- endif %}
+
+    <form class="blog-search" role="search" data-blog-search hidden onsubmit="return false">
+        <label for="blog-search-input" class="blog-sr-only">Search posts</label>
+        <input id="blog-search-input" type="search" placeholder="Search posts" autocomplete="off" spellcheck="false" data-search-url="{{ '/search.json' | url }}">
+        <p class="blog-search-status" aria-live="polite" data-blog-search-status></p>
+    </form>
+
+    {%- set postsToList = collections.posts | newestFirst %}
+    {%- include "partials/post-list.njk" %}
+</div>

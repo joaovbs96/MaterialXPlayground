@@ -17,6 +17,11 @@ scratchpad/**
 electron/dist/
 electron/dist-site/
 
+# Blog: Eleventy source lives in blog-src/ (own lockfile); its output blog/
+# is built only at deploy time (.github/workflows/pages-publish.yml).
+/blog/
+blog-src/node_modules/
+
 # Generated into the Pages artifact by deploy.yml at release time, never
 # committed: a committed copy would serve a stale version locally. Kept out
 # of js/** on purpose since the deterministic build id hashes js/** from disk.

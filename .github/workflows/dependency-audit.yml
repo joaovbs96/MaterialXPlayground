@@ -1,7 +1,7 @@
 # -----------------------------------------------------------------------------
 # Dependency audit
 # -----------------------------------------------------------------------------
-# Runs npm audit against both lockfiles (site and desktop shell) so a high
+# Runs npm audit against every lockfile (site, desktop shell, vsce, blog) so a high
 # or critical advisory fails a pull request or push instead of surfacing as
 # a Dependabot alert after the fact. Audits read the lockfile only; no
 # install is needed. The weekly run catches advisories published while no
@@ -22,6 +22,8 @@ on:
       - 'electron/package-lock.json'
       - '.github/vsce/package.json'
       - '.github/vsce/package-lock.json'
+      - 'blog-src/package.json'
+      - 'blog-src/package-lock.json'
       - '.github/workflows/dependency-audit.yml'
   pull_request:
     paths:
@@ -31,6 +33,8 @@ on:
       - 'electron/package-lock.json'
       - '.github/vsce/package.json'
       - '.github/vsce/package-lock.json'
+      - 'blog-src/package.json'
+      - 'blog-src/package-lock.json'
       - '.github/workflows/dependency-audit.yml'
   schedule:
     - cron: '17 6 * * 1'
@@ -69,3 +73,7 @@ jobs:
       - name: Audit vsce dependencies
         run: npm audit --package-lock-only --audit-level=high
         working-directory: .github/vsce
+
+      - name: Audit blog dependencies
+        run: npm audit --package-lock-only --audit-level=high
+        working-directory: blog-src

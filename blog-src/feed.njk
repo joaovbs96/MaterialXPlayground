@@ -1,0 +1,35 @@
+---
+permalink: /feed.xml
+eleventyExcludeFromCollections: true
+---
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en">
+    <title>{{ site.title }}</title>
+    <subtitle>{{ site.description }}</subtitle>
+    <link href="{{ '/feed.xml' | absUrl }}" rel="self" type="application/atom+xml"/>
+    <link href="{{ '/' | absUrl }}" rel="alternate" type="text/html"/>
+    <updated>{{ (collections.posts | getNewestCollectionItemDate | dateToRfc3339) if collections.posts.length else ('2026-10-05T00:00:00Z') }}</updated>
+    <id>{{ '/' | absUrl }}</id>
+    <author>
+        <name>{{ site.author }}</name>
+    </author>
+    <icon>{{ site.siteUrl }}apple-touch-icon.png</icon>
+    {%- for post in collections.posts | newestFirst %}
+    {%- set postUrl = post.url | absUrl %}
+    <entry>
+        <title>{{ post.data.title }}</title>
+        <link href="{{ postUrl }}" rel="alternate" type="text/html"/>
+        <id>{{ postUrl }}</id>
+        <published>{{ post.date | dateToRfc3339 }}</published>
+        <updated>{{ (post.data.updated or post.date) | dateToRfc3339 }}</updated>
+        <author><name>{{ post.data.author or site.author }}</name></author>
+        {%- if post.data.description %}
+        <summary>{{ post.data.description }}</summary>
+        {%- endif %}
+        {%- for tag in post.data.tags | userTags %}
+        <category term="{{ tag }}"/>
+        {%- endfor %}
+        <content type="html">{{ post.content | htmlToAbsoluteUrls(postUrl) }}</content>
+    </entry>
+    {%- endfor %}
+</feed>

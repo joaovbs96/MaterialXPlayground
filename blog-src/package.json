@@ -1,0 +1,25 @@
+{
+  "name": "materialx-playground-blog",
+  "version": "1.0.0",
+  "description": "Eleventy source for the MaterialX Playground blog, built into ../blog at deploy time.",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=24.8"
+  },
+  "scripts": {
+    "prebuild": "node -e \"require('fs').rmSync('../blog',{recursive:true,force:true})\"",
+    "build": "eleventy",
+    "serve": "node --watch-path=posts --watch-path=_includes --watch-path=_data --watch-path=assets --watch-path=eleventy.config.js node_modules/@11ty/eleventy/cmd.cjs --serve"
+  },
+  "devDependencies": {
+    "@11ty/eleventy": "3.1.6",
+    "@11ty/eleventy-plugin-rss": "3.1.0",
+    "@11ty/eleventy-plugin-syntaxhighlight": "5.0.2",
+    "markdown-it-anchor": "10.0.0"
+  },
+  "overrides": {
+    "chokidar": "4.0.3"
+  }
+}

@@ -1,0 +1,24 @@
+<ol class="blog-list" data-blog-list>
+    {%- for post in postsToList %}
+    <li class="blog-card" data-url="{{ post.url }}">
+        <p class="blog-meta">
+            <time datetime="{{ post.date | isoDate }}">{{ post.date | readableDate }}</time>
+            <span aria-hidden="true">&middot;</span>
+            <span>{{ post.content | readingTime }} min read</span>
+            {%- if post.data.draft %}<span class="blog-draft">Draft</span>{% endif %}
+        </p>
+        <h2 class="blog-card-title"><a href="{{ post.url | url }}">{{ post.data.title }}</a></h2>
+        {%- if post.data.description %}<p class="blog-card-desc">{{ post.data.description }}</p>{% endif %}
+        {%- set postTags = post.data.tags | userTags %}
+        {%- if postTags.length %}
+        <ul class="blog-tags" aria-label="Tags">
+            {%- for tag in postTags %}
+            <li><a class="blog-tag" href="{{ ('/tags/' + (tag | slugify) + '/') | url }}">{{ tag }}</a></li>
+            {%- endfor %}
+        </ul>
+        {%- endif %}
+    </li>
+    {%- else %}
+    <li class="blog-empty">No posts yet.</li>
+    {%- endfor %}
+</ol>

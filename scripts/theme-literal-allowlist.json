@@ -50,6 +50,11 @@
     "reason": "theme-color meta: static pre-paint hint; Phase 2 updates it at runtime."
   },
   {
+    "file": "blog-src/_includes/layouts/base.njk",
+    "match": "#111827",
+    "reason": "Blog theme-color meta: same static pre-paint hint as index.html; theme.js updates it at runtime."
+  },
+  {
     "file": "js/viewer-app.jsx",
     "match": "/^(bg-black[/]60|text-white[/](90|40))$/",
     "reason": "Render-overlay chip (black/60 with white text) must contrast with arbitrary render pixels."
