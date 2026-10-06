@@ -1503,7 +1503,9 @@ function resolveNodeCategoryAndType(id, declaredOutputUsdType) {
   const base = id.startsWith("ND_") ? id.slice(3) : id;
   for (const suffix of MTLX_TYPE_SUFFIXES) {
     if (base.endsWith(suffix) && base.length > suffix.length) {
-      return { category: base.slice(0, -suffix.length), type: suffix.slice(1) };
+      const category = base.slice(0, -suffix.length);
+      // ND_displacement_float names the input type, the node outputs displacementshader.
+      return { category, type: category === "displacement" ? "displacementshader" : suffix.slice(1) };
     }
   }
   return { category: base, type: USD_TO_MTLX_TYPE[declaredOutputUsdType] || "float" };
