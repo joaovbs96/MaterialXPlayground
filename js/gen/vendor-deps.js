@@ -35,7 +35,12 @@ window.MTLX_VENDOR_DEPS = {
     "dir": "jszip",
     "name": "JSZip",
     "version": "3.10.1",
-    "licenseUrl": "https://github.com/Stuk/jszip/blob/HEAD/LICENSE.markdown"
+    "licenseUrl": "https://github.com/Stuk/jszip/blob/HEAD/LICENSE.markdown",
+    "module": {
+      "entry": "jszip.min.js",
+      "kind": "script",
+      "global": "JSZip"
+    }
   },
   "katex": {
     "dir": "katex",

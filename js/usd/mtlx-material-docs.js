@@ -1247,7 +1247,7 @@ export function mitsubaMaterialDocument({ name, bsdf, emission, legacy = false }
     if (notWhite(spec)) setColor("specular_color", spec);
     setFloat("specular_ior", ior);
     setFloat("specular_roughness", roughness());
-    if (type === "thindielectric") setFloat("geometry_thin_walled", 1);
+    if (type === "thindielectric") setInput(shader, "geometry_thin_walled", "boolean", { value: "true", uniform: "true" });
   } else if (type === "conductor" || type === "roughconductor") {
     ["material", "eta", "k", "ext_eta"].forEach((k) => used.add(k));
     const ior = mitsubaConductorIor(props, notes, legacy);
