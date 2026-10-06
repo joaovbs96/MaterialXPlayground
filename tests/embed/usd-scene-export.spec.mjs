@@ -9,7 +9,9 @@ import { test, expect } from './lib/test-base.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const JSZip = createRequire(import.meta.url)(path.join(root, 'vendor', 'jszip', 'jszip.min.js'));
 const HAS_USD = fs.existsSync(path.join(root, 'vendor', 'usd-webview-bindings', 'usdWebViewBindingsModule.wasm'));
-const CUBE_GLB = fs.readFileSync(path.join(root, 'tests', 'fixtures', 'scene-gltf', 'cube.glb'));
+// One untextured triangle with an embedded buffer keeps the scene load short.
+const TRI_GLTF = '{"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],"materials":[{"pbrMetallicRoughness":{"baseColorFactor":[0.8,0.1,0.1,1]}}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}],"bufferViews":[{"buffer":0,"byteLength":36}],"buffers":[{"byteLength":36,"uri":"data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAA"}]}';
+
 
 const OBJ = [
   'mtllib tri.mtl', 'o Tri', 'usemtl Green',
@@ -59,9 +61,9 @@ const rootUsda = (entries) => Object.entries(entries).find(([n, t]) => /\.usda$/
 test.describe('Export USD', () => {
   test.skip(!HAS_USD, 'vendor/usd-webview-bindings is fetch-only and absent');
 
-  test('@smoke glTF exports as referenced MaterialX, UsdShade networks and USDZ', async ({ page, embedURL }) => {
-    test.setTimeout(420000);
-    await openScene(page, embedURL, [{ name: 'cube.glb', mimeType: 'model/gltf-binary', buffer: CUBE_GLB }]);
+  test('@smoke glTF exports as USDA with a referenced MaterialX material', async ({ page, embedURL }) => {
+    test.setTimeout(180000);
+    await openScene(page, embedURL, [{ name: 'tri.gltf', mimeType: 'model/gltf+json', buffer: Buffer.from(TRI_GLTF) }]);
 
     const ref = await exportAs(page, 'USD + referenced', 'USDA');
     const refEntries = await readEntries(ref.zip);
@@ -71,6 +73,11 @@ test.describe('Export USD', () => {
     const mtlxNames = Object.keys(refEntries).filter((n) => n.endsWith('.mtlx'));
     expect(mtlxNames.length).toBeGreaterThan(0);
     expect(refRoot[1]).toMatch(/@[^@]*\.mtlx@<\/[^>]+>/);
+  });
+
+  test('glTF exports as UsdShade networks and as USDZ', async ({ page, embedURL }) => {
+    test.setTimeout(180000);
+    await openScene(page, embedURL, [{ name: 'tri.gltf', mimeType: 'model/gltf+json', buffer: Buffer.from(TRI_GLTF) }]);
 
     const net = await exportAs(page, 'MaterialX as UsdShade', 'USDA');
     const netEntries = await readEntries(net.zip);
@@ -89,7 +96,7 @@ test.describe('Export USD', () => {
   });
 
   test('OBJ with an MTL exports as USDA with a referenced MaterialX material', async ({ page, embedURL }) => {
-    test.setTimeout(300000);
+    test.setTimeout(180000);
     await openScene(page, embedURL, [
       { name: 'tri.obj', mimeType: 'text/plain', buffer: Buffer.from(OBJ) },
       { name: 'tri.mtl', mimeType: 'text/plain', buffer: Buffer.from(MTL) },
