@@ -867,13 +867,13 @@ export function usdPreviewSurfaceDocument({ name, record, textureRefs } = {}) {
 
 // RGB complex IOR of pbrt-v4's named metal spectra ("metal-<X>-eta/-k"):
 // Tungsten's ComplexIorData.hpp (spectral data integrated to linear sRGB).
-// CuZn is absent there: Mitsuba's documented brass RGB is used instead.
 export const PBRT_NAMED_METALS = {
   Ag: { eta: [0.1552646489, 0.1167232965, 0.1383806959], k: [4.8283433224, 3.1222459278, 2.1469504455] },
   Al: { eta: [1.6574599595, 0.8803689579, 0.5212287346], k: [9.2238691996, 6.2695232477, 4.8370012281] },
   Au: { eta: [0.1431189557, 0.3749570432, 1.4424785571], k: [3.9831604247, 2.3857207478, 1.6032152899] },
   Cu: { eta: [0.2004376970, 0.9240334304, 1.1022119527], k: [3.9129485033, 2.4528477015, 2.1421879552] },
-  CuZn: { eta: [0.444, 0.527, 1.094], k: [3.695, 2.765, 1.829] },
+  // pbrt-v4 metal-CuZn-eta/-k (spectrum.cpp) integrated like Tungsten's rows: CIE 1931 / sum(y), XYZ to linear sRGB.
+  CuZn: { eta: [0.5197690597, 0.4885060235, 1.0420098075], k: [4.3305825766, 2.5481059654, 1.5918905964] },
   MgO: { eta: [2.0895885542, 1.6507224525, 1.5948759692], k: [0, 0, 0] },
   TiO2: { eta: [3.4566203131, 2.8017076558, 2.9051485020], k: [0.0001026662, 0, 0.0006356902] },
 };
