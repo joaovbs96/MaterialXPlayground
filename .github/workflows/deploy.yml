@@ -7,19 +7,24 @@
 #   - A broken or stale build never deploys. `npm run build` must reproduce
 #     the committed tree byte-for-byte (checked via `git diff` / `git status`
 #     against the freshly rebuilt tree), and `npm run check` (every
-#     deterministic drift check) must pass — both gates run *before* the
-#     Pages artifact is staged or uploaded.
+#     deterministic drift check) must pass. The `publish` job needs
+#     `build-verify`, so nothing is staged until both gates pass.
 #   - Pushes to `main`, pull requests, and manual dispatch only get
-#     verification. Deployment to GitHub Pages happens exclusively when a
-#     GitHub release is published — the `build-verify` job re-runs against
-#     the tagged commit, and only release events stage/upload the Pages
-#     artifact and run the `deploy` job.
+#     verification. On a published release, `publish` calls
+#     pages-publish.yml, which rebuilds the tag, stages it (app, gallery,
+#     source facts, plus the blog from main) and deploys it.
+#   - blog-deploy.yml calls the same workflow for blog-only changes. Both
+#     callers hold the `pages` concurrency group on the calling job, so a
+#     verify run never queues behind or replaces a deploy.
+#   - release.yml waits on this workflow's release run; the called
+#     workflow's jobs run inside that run, so the wait still covers the
+#     deploy.
 #
 # Tutorials subsite (mkdocs): the Python/mkdocs setup steps below are gated
 # on `tutorials-src/mkdocs.yml` existing. That file lives on another branch
 # today, so those steps are inert (skipped) on `main` right now. The moment
-# that branch merges and the file appears, the steps auto-activate — no
-# edits needed here.
+# that branch merges and the file appears, the steps auto-activate (here and
+# in pages-publish.yml) with no edits needed.
 # -----------------------------------------------------------------------------
 
 name: Build, verify & deploy
@@ -37,7 +42,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: pages
+  group: verify-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -58,30 +63,28 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Runs on release (the staging/upload steps below need the versions)
-      # and on manual dispatch, so this path can be smoke-tested WITHOUT
-      # cutting a release. Otherwise its first real execution would be a
-      # live release, and a failure there fails the deploy with it.
+      # Dispatch only: a dry run of the fetch pages-publish.yml does at
+      # release time, so that path can be smoke-tested WITHOUT cutting a
+      # release. Otherwise its first real execution would be a live
+      # release, and a failure there fails the deploy with it.
       #
-      # Still skipped on push/PR. Nothing before the staging steps consumes
-      # the fetched versions: `npm run build` skips them entirely and
-      # `npm run check` treats an absent version directory as valid, so
-      # fetching there buys nothing while putting an external download on
-      # the critical path for unrelated work. scripts/fetch-mtlx-versions.mjs
-      # has no retry (one `fetch`, and a non-2xx calls fail() -> exit 1), so
-      # a single transient 503 from the release-asset CDN would fail an
-      # unrelated PR.
+      # Skipped on push/PR/release. Nothing here consumes the fetched
+      # versions: `npm run build` skips them entirely and `npm run check`
+      # treats an absent version directory as valid, so fetching buys
+      # nothing while putting an external download on the critical path for
+      # unrelated work. scripts/fetch-mtlx-versions.mjs has no retry (one
+      # `fetch`, and a non-2xx calls fail() -> exit 1), so a single
+      # transient 503 from the release-asset CDN would fail an unrelated PR.
       #
       # Deliberately NOT continue-on-error: that turns a hard failure into
-      # a warning nobody reads, and the release staging below then fails
-      # anyway with the versions missing.
+      # a warning nobody reads.
       #
       # The fetched files land in js/materialx/<version>/ and are
       # gitignored, so they can't trip the staleness gates below either.
       # On dispatch they also make `npm run check` verify each version's
       # bytes, which turns a dispatch run into a real upstream-drift check.
       - name: Fetch non-default MaterialX versions
-        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch'
         run: npm run vendor:versions
 
       - name: Set up Python (tutorials subsite)
@@ -101,8 +104,8 @@ jobs:
 
       - name: Verify committed artifacts match a clean rebuild
         run: |
-          git diff --exit-code || { echo "::error::Committed artifacts are stale — run 'npm run build' locally and commit the result."; exit 1; }
-          [ -z "$(git status --porcelain)" ] || { echo "::error::Build produced files not in the commit — run 'npm run build' and commit."; git status --porcelain; exit 1; }
+          git diff --exit-code || { echo "::error::Committed artifacts are stale: run 'npm run build' locally and commit the result."; exit 1; }
+          [ -z "$(git status --porcelain)" ] || { echo "::error::Build produced files not in the commit: run 'npm run build' and commit."; git status --porcelain; exit 1; }
 
       - name: Check
         run: npm run check
@@ -110,103 +113,51 @@ jobs:
       - name: Unit tests
         run: npm run test:unit
 
-      # Populates vendor/materialx/ before staging below, so the rsync ships
-      # it and the deployed site serves MaterialX resources locally. Same
-      # release-or-dispatch gate as the version fetch above, smoke-tested.
+      # Dispatch only: a dry run of the snapshot fetch pages-publish.yml does
+      # before staging (the deployed site serves MaterialX resources locally).
       - name: Fetch the MaterialX offline snapshot
-        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch'
         run: |
           node --input-type=module -e '
             import { runMaterialx } from "./scripts/vendor.mjs";
             await runMaterialx();
           '
 
-      - name: Stage Pages artifact
-        if: github.event_name == 'release'
-        run: |
-          mkdir -p "$RUNNER_TEMP/site"
-          # electron/ is the desktop app's own source tree, released as its
-          # own artifact (see electron/package.json), so keep it out of the site.
-          rsync -a \
-            --exclude='.git' \
-            --exclude='.github' \
-            --exclude='electron' \
-            --exclude='node_modules' \
-            --exclude='tutorials-src' \
-            --exclude='scripts' \
-            ./ "$RUNNER_TEMP/site"/
-
       - name: Install Playwright chromium
-        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch'
         run: npx playwright install --with-deps chromium
 
-      # Generated straight into the staged site; gitignored locally (see
-      # docs/local/GALLERY.md). Same release-or-dispatch gate as above.
-      #
-      # On dispatch the staging step above did not run, so there is no
-      # $RUNNER_TEMP/site to generate into. Generation still runs (that is
-      # the point of the dry run) but targets its own directory, which also
-      # stops the dispatch path from looking like it exercised
-      # generate-after-stage when it did not.
+      # Gallery dry run: real rendering into a scratch directory, nothing
+      # reused or published. A dispatch deliberately does NOT reuse the live
+      # tiles: it is only worth anything if it exercises real rendering. The
+      # release path (reuse, generate into the staged site) is in
+      # pages-publish.yml.
       #
       # Captures run SEQUENTIALLY on purpose. Concurrency measured 1.33x
       # faster but silently produced 8 blank thumbnails out of 54 (the
       # screenshot races the first paint); see scripts/gallery-shots.mjs.
       # A blank tile that exits 0 is worse than a slow job.
-      #
-      # A release reuses the thumbnails already published on the live site
-      # for every material whose fingerprint is unchanged, so it renders
-      # only what actually changed (54 materials at ~13s each otherwise:
-      # the runner has no GPU, so WebGL falls back to SwiftShader and the
-      # cost is software rasterization we cannot optimise away).
-      #
-      # A dispatch deliberately does NOT reuse: it is the dry run, and it
-      # is only worth anything if it exercises real rendering.
-      - name: Generate gallery data
-        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+      - name: Generate gallery data (dry run)
+        if: github.event_name == 'workflow_dispatch'
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            DEST="$RUNNER_TEMP/site/gallery"
-            REUSE="--reuse-from https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
-          else
-            DEST="$RUNNER_TEMP/gallery-dryrun"
-            REUSE=""
-          fi
+          DEST="$RUNNER_TEMP/gallery-dryrun"
           node scripts/build-gallery.mjs --out "$DEST"
-          node scripts/gallery-shots.mjs --manifest "$DEST/manifest.json" --out "$DEST" $REUSE
+          node scripts/gallery-shots.mjs --manifest "$DEST/manifest.json" --out "$DEST"
 
-      # Not committed: the tag isn't knowable ahead of release, and the
-      # build-id gate byte-compares committed artifacts. vsix name/url are
-      # derived from the tag since release.yml's own upload races this job.
-      - name: Write source facts
-        if: github.event_name == 'release'
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          REPO: ${{ github.repository }}
-        run: |
-          VSIX_NAME="materialx-playground-vscode-${RELEASE_TAG}.vsix"
-          VSIX_URL="https://github.com/${REPO}/releases/download/${RELEASE_TAG}/${VSIX_NAME}"
-          jq -n --arg version "$RELEASE_TAG" --arg name "$VSIX_NAME" --arg url "$VSIX_URL" \
-            '{version: $version, vsix: {name: $name, url: $url}}' \
-            > "$RUNNER_TEMP/site/source-facts.json"
-
-      - name: Upload Pages artifact
-        if: github.event_name == 'release'
-        uses: actions/upload-pages-artifact@v5
-        with:
-          path: ${{ runner.temp }}/site
-
-  deploy:
+  # Release only: stage and deploy the tag through the shared Pages workflow.
+  # The pages group lives on this job, not at workflow level, so push and PR
+  # verify runs can never cancel or queue a deploy.
+  publish:
     needs: build-verify
     if: github.event_name == 'release'
-    runs-on: ubuntu-latest
     permissions:
+      contents: read
       pages: write
       id-token: write
-    environment:
-      name: github-pages
-      url: "${{ steps.deployment.outputs.page_url }}"
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v5
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    uses: ./.github/workflows/pages-publish.yml
+    with:
+      site_ref: ${{ github.event.release.tag_name }}
+      blog_ref: main

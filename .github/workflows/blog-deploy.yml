@@ -1,0 +1,56 @@
+# -----------------------------------------------------------------------------
+# Blog deploy
+# -----------------------------------------------------------------------------
+# Publishes a blog change without waiting for a release: the app is rebuilt
+# from the latest release tag (never from main) and the blog from the pushed
+# commit, through the same pages-publish.yml a release uses. blog_required
+# makes the run fail, instead of silently skipping the blog, when the
+# released header cannot host it yet.
+# -----------------------------------------------------------------------------
+
+name: Blog deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'blog-src/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.latest.outputs.tag }}
+    steps:
+      - name: Find the latest release tag
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          TAG="$(gh release view --repo "$REPO" --json tagName -q .tagName)"
+          [ -n "$TAG" ] || { echo "::error::No published release found."; exit 1; }
+          echo "latest release: $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: resolve
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    uses: ./.github/workflows/pages-publish.yml
+    with:
+      site_ref: ${{ needs.resolve.outputs.tag }}
+      blog_ref: ${{ github.sha }}
+      blog_required: true
