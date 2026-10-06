@@ -924,13 +924,218 @@ export function conductorF82Tint(eta, k) {
   });
 }
 
+// ------------------------------------------------- renderer texture graphs
+
+// Format-neutral textures from the pbrt and Mitsuba importers, { kind }: constant, image,
+// scale, mix, checker (even floor(u) + floor(v) picks tex1) or unsupported. uv is null or
+// [a, b, c, d, e, f]: u' = a u + c v + e, v' = b u + d v + f, MaterialX v (0 at the bottom).
+
+// Calls fn on every image texture inside a texture description.
+export function forEachImageTexture(spec, fn, depth = 0) {
+  if (!spec || typeof spec !== "object" || depth > 32) return;
+  if (spec.kind === "image") { fn(spec); return; }
+  for (const key of ["tex", "scale", "tex1", "tex2", "amount"]) {
+    if (spec[key] && typeof spec[key] === "object") forEachImageTexture(spec[key], fn, depth + 1);
+  }
+}
+
+// Graph values: { k } is a folded constant (number or rgb), { n, t } a node output
+// of type "float" or "color3". Constants fold in JS, so untextured documents stay plain.
+const isK = (x) => x && x.k !== undefined;
+const typeOf = (x) => (isK(x) ? (Array.isArray(x.k) ? "color3" : "float") : x.t);
+
+function setOperand(node, input, type, x) {
+  if (!isK(x)) return connect(node, input, type, x.n);
+  const k = x.k;
+  return setInput(node, input, type, {
+    value: type === "color3" ? formatVector(Array.isArray(k) ? k : [k, k, k], 3) : formatNumber(Array.isArray(k) ? k[0] : k),
+  });
+}
+
+function asColor(ctx, x) {
+  if (isK(x)) return Array.isArray(x.k) ? x : { k: [x.k, x.k, x.k] };
+  if (x.t === "color3") return x;
+  const n = ctx.doc.addNode("convert", "to_color", "color3");
+  connect(n, "in", "float", x.n);
+  return { n, t: "color3" };
+}
+
+function asFloat(ctx, x) {
+  if (isK(x)) return Array.isArray(x.k) ? { k: x.k[0] } : x;
+  if (x.t === "float") return x;
+  const n = ctx.doc.addNode("extract", "channel", "float");
+  connect(n, "in", "color3", x.n);
+  setInput(n, "index", "integer", { value: "0", uniform: "true" });
+  return { n, t: "float" };
+}
+
+const asType = (ctx, x, type) => (type === "color3" ? asColor(ctx, x) : asFloat(ctx, x));
+const foldK = (type, a, b, fn) => (type === "color3"
+  ? [0, 1, 2].map((i) => fn(Array.isArray(a) ? a[i] : a, Array.isArray(b) ? b[i] : b))
+  : fn(Array.isArray(a) ? a[0] : a, Array.isArray(b) ? b[0] : b));
+const BINARY = { multiply: (a, b) => a * b, add: (a, b) => a + b, subtract: (a, b) => a - b, divide: (a, b) => a / b, min: Math.min, max: Math.max };
+
+function binary(ctx, category, a, b, name) {
+  const type = typeOf(a) === "color3" || typeOf(b) === "color3" ? "color3" : "float";
+  if (isK(a) && isK(b)) return { k: foldK(type, a.k, b.k, BINARY[category]) };
+  const n = ctx.doc.addNode(category, name || category, type);
+  setOperand(n, "in1", type, asType(ctx, a, type));
+  setOperand(n, "in2", type, asType(ctx, b, type));
+  return { n, t: type };
+}
+
+function sqrtOp(ctx, x, name) {
+  const f = asFloat(ctx, x);
+  if (isK(f)) return { k: Math.sqrt(f.k) };
+  const n = ctx.doc.addNode("sqrt", name || "sqrt", "float");
+  setOperand(n, "in", "float", f);
+  return { n, t: "float" };
+}
+
+function clampOp(ctx, x, lo, hi, name) {
+  const type = typeOf(x);
+  if (isK(x)) return { k: foldK(type, x.k, 0, (v) => Math.min(hi, Math.max(lo, v))) };
+  const n = ctx.doc.addNode("clamp", name || "clamp", type);
+  setOperand(n, "in", type, x);
+  setOperand(n, "low", type, { k: lo });
+  setOperand(n, "high", type, { k: hi });
+  return { n, t: type };
+}
+
+function mixOp(ctx, bg, fg, amount, type, name) {
+  const b = asType(ctx, bg, type), f = asType(ctx, fg, type), m = asFloat(ctx, amount);
+  if (isK(b) && isK(f) && isK(m)) return { k: foldK(type, b.k, f.k, (x, y) => x * (1 - m.k) + y * m.k) };
+  const n = ctx.doc.addNode("mix", name || "mix", type);
+  setOperand(n, "fg", type, f);
+  setOperand(n, "bg", type, b);
+  setOperand(n, "mix", "float", m);
+  return { n, t: type };
+}
+
+const isIdentityUv = (m) => !Array.isArray(m) || (m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0);
+
+function texcoordNode(ctx) {
+  if (!ctx.texcoord) ctx.texcoord = ctx.doc.addNode("texcoord", "texcoord", "vector2");
+  return ctx.texcoord;
+}
+
+// vector2 node of an affine uv map, one per distinct map; null for the identity
+// unless force (then the plain texcoord node).
+function uvNode(ctx, m, force = false) {
+  if (isIdentityUv(m)) return force ? texcoordNode(ctx) : null;
+  const key = m.map(formatNumber).join(",");
+  ctx.uvNodes = ctx.uvNodes || new Map();
+  if (ctx.uvNodes.has(key)) return ctx.uvNodes.get(key);
+  const [a, b, c, d, e, f] = m;
+  const tc = texcoordNode(ctx);
+  let out = tc;
+  if (b === 0 && c === 0) {
+    if (a !== 1 || d !== 1) {
+      out = ctx.doc.addNode("multiply", "uv_scale", "vector2");
+      connect(out, "in1", "vector2", tc);
+      setInput(out, "in2", "vector2", { value: formatVector([a, d], 2) });
+    }
+  } else {
+    const row = (name, coeffs) => {
+      const dot = ctx.doc.addNode("dotproduct", name, "float");
+      connect(dot, "in1", "vector2", tc);
+      setInput(dot, "in2", "vector2", { value: formatVector(coeffs, 2) });
+      return dot;
+    };
+    const du = row("uv_u", [a, c]), dv = row("uv_v", [b, d]);
+    out = ctx.doc.addNode("combine2", "uv_affine", "vector2");
+    connect(out, "in1", "float", du);
+    connect(out, "in2", "float", dv);
+  }
+  if (e !== 0 || f !== 0) {
+    const add = ctx.doc.addNode("add", "uv_offset", "vector2");
+    connect(add, "in1", "vector2", out);
+    setInput(add, "in2", "vector2", { value: formatVector([e, f], 2) });
+    out = add;
+  }
+  ctx.uvNodes.set(key, out);
+  return out;
+}
+
+const ADDRESS_MODES = new Set(["clamp", "constant", "mirror"]);
+
+// One image read. Float reads take the first channel, or the luminance
+// (Mitsuba); a colour-managed or luminance read goes through a color3 image.
+function imageOp(ctx, spec, want, label) {
+  const file = ctx.textureFile ? ctx.textureFile(spec) : spec.file;
+  if (!file) {
+    ctx.notes.push(label + ': texture file "' + spec.file + '" could not be resolved, the default is used');
+    return null;
+  }
+  const direct = want === "float" && spec.floatChannel !== "luminance" && !spec.colorspace;
+  const type = direct ? "float" : "color3";
+  const node = ctx.doc.addNode("image", label + "_image", type);
+  setInput(node, "file", "filename", { value: file, colorspace: spec.colorspace || undefined, uniform: "true" });
+  if (ADDRESS_MODES.has(spec.uaddress)) setInput(node, "uaddressmode", "string", { value: spec.uaddress, uniform: "true" });
+  if (ADDRESS_MODES.has(spec.vaddress)) setInput(node, "vaddressmode", "string", { value: spec.vaddress, uniform: "true" });
+  const uv = uvNode(ctx, spec.uv);
+  if (uv) connect(node, "texcoord", "vector2", uv);
+  let x = { n: ctx.doc.share(node), t: type };
+  if (want === "float" && !direct) {
+    if (spec.floatChannel === "luminance") {
+      const lum = ctx.doc.addNode("luminance", label + "_luminance", "color3");
+      connect(lum, "in", "color3", x.n);
+      x = { n: lum, t: "color3" };
+    }
+    x = asFloat(ctx, x);
+  }
+  if (Number.isFinite(spec.scale) && spec.scale !== 1) x = binary(ctx, "multiply", x, { k: spec.scale }, label + "_scale");
+  if (spec.invert) x = binary(ctx, "max", binary(ctx, "subtract", { k: 1 }, x, label + "_invert"), { k: 0 }, label + "_positive");
+  return asType(ctx, x, want);
+}
+
+// Graph value of a texture description as want ("float" or "color3"), or
+// null (with a note) when it cannot be built; the caller then uses its default.
+function textureOp(ctx, spec, want, label, depth = 0) {
+  if (!spec || depth > 32) { ctx.notes.push(label + ": texture is missing, the default is used"); return null; }
+  switch (spec.kind) {
+    case "constant": return asType(ctx, { k: spec.value }, want);
+    case "image": return imageOp(ctx, spec, want, label);
+    case "scale": {
+      const t = textureOp(ctx, spec.tex, want, label, depth + 1);
+      const s = textureOp(ctx, spec.scale, "float", label + "_factor", depth + 1);
+      return t && s ? asType(ctx, binary(ctx, "multiply", t, s, label + "_scaled"), want) : null;
+    }
+    case "mix": {
+      const a = textureOp(ctx, spec.tex1, want, label + "_a", depth + 1);
+      const b = textureOp(ctx, spec.tex2, want, label + "_b", depth + 1);
+      const m = textureOp(ctx, spec.amount, "float", label + "_amount", depth + 1);
+      return a && b && m ? mixOp(ctx, a, b, m, want, label + "_mix") : null;
+    }
+    case "checker": {
+      const a = textureOp(ctx, spec.tex1, want, label + "_a", depth + 1);
+      const b = textureOp(ctx, spec.tex2, want, label + "_b", depth + 1);
+      if (!a || !b) return null;
+      const cell = ctx.doc.addNode("floor", label + "_cell", "vector2");
+      connect(cell, "in", "vector2", uvNode(ctx, spec.uv, true));
+      const sum = ctx.doc.addNode("dotproduct", label + "_cell_sum", "float");
+      connect(sum, "in1", "vector2", cell);
+      setInput(sum, "in2", "vector2", { value: "1, 1" });
+      const parity = ctx.doc.addNode("modulo", label + "_parity", "float");
+      connect(parity, "in1", "float", sum);
+      setInput(parity, "in2", "float", { value: "2" });
+      return mixOp(ctx, a, b, { n: parity, t: "float" }, want, label + "_checker");
+    }
+    default:
+      ctx.notes.push(label + ": " + (spec.reason || "texture type is not supported") + ", the default is used");
+      return null;
+  }
+}
+
+// ---------------------------------------------------------------- PBRT v4
+
 // Reads one parsed parameter ({ type, values }) as an RGB triple, or null.
 function pbrtRgb(param, notes, label) {
   if (!param) return null;
   const v = param.values || [];
   if (param.type === "rgb" || param.type === "color") return v.length >= 3 ? [Number(v[0]), Number(v[1]), Number(v[2])] : null;
   if (param.type === "float" && v.length) return [Number(v[0]), Number(v[0]), Number(v[0])];
-  if (param.type === "texture") { notes.push(label + " is a texture; textures are not imported, the default is used"); return null; }
+  if (param.type === "texture") { notes.push(label + " is a texture, which is not supported here; the default is used"); return null; }
   notes.push(label + " is a " + param.type + " value, which is not imported; the default is used");
   return null;
 }
@@ -965,6 +1170,49 @@ export function pbrtMaterialRoughness(params, notes = []) {
   return Math.min(1, Math.sqrt((au + av) / 2));
 }
 
+// A pbrt texture parameter ("texture name", resolved by the loader into
+// param.texture): its graph value, null (default) when unusable, undefined when not a texture.
+function pbrtTextureParam(ctx, param, want, label) {
+  if (!param || param.type !== "texture") return undefined;
+  if (!param.texture) {
+    ctx.notes.push(label + ': texture "' + (param.values || [])[0] + '" is not defined, the default is used');
+    return null;
+  }
+  return textureOp(ctx, param.texture, want, label);
+}
+
+// The roughness above as a graph value: textured roughness builds the same
+// remap, average and square root with MaterialX math nodes.
+function pbrtRoughnessOp(ctx, params) {
+  const p = params || {};
+  if (!["roughness", "uroughness", "vroughness"].some((k) => p[k] && p[k].type === "texture")) return { k: pbrtMaterialRoughness(p, ctx.notes) };
+  const textures = new Map();
+  const read = (param, fallback) => {
+    if (!param) return fallback;
+    if (param.type === "texture" && textures.has(param.values[0])) return textures.get(param.values[0]);
+    const tex = pbrtTextureParam(ctx, param, "float", "roughness");
+    if (tex) textures.set(param.values[0], tex);
+    if (tex !== undefined) return tex || fallback;
+    const v = Number((param.values || [])[0]);
+    return Number.isFinite(v) ? { k: v } : fallback;
+  };
+  const base = read(p.roughness, { k: 0 });
+  const u = p.uroughness ? read(p.uroughness, base) : base;
+  const v = p.vroughness ? read(p.vroughness, base) : base;
+  const remap = pbrtBool(p.remaproughness, true);
+  const alpha = (x, axis) => {
+    const positive = binary(ctx, "max", x, { k: 0 }, "roughness_" + axis);
+    return remap ? sqrtOp(ctx, positive, "alpha_" + axis) : positive;
+  };
+  let mean;
+  if (u === v) mean = alpha(u, "u");
+  else {
+    ctx.notes.push("anisotropic roughness is averaged");
+    mean = binary(ctx, "multiply", binary(ctx, "add", alpha(u, "u"), alpha(v, "v"), "alpha_sum"), { k: 0.5 }, "alpha_mean");
+  }
+  return binary(ctx, "min", sqrtOp(ctx, mean, "openpbr_roughness"), { k: 1 }, "roughness_clamped");
+}
+
 // A conductor's eta or k: rgb, a named "metal-X-eta/k" spectrum, or the
 // pbrt default (copper).
 function pbrtConductorChannel(param, which, notes) {
@@ -983,6 +1231,7 @@ const PBRT_ROUGHNESS_KEYS = ["roughness", "uroughness", "vroughness", "remaproug
 
 function pbrtEta(param, notes) {
   if (param && param.type === "spectrum") { notes.push("spectral eta is not imported, 1.5 is used"); return 1.5; }
+  if (param && param.type === "texture") { notes.push("eta is a texture, which pbrt-v4 does not accept here; 1.5 is used"); return 1.5; }
   return pbrtFloat(param, 1.5);
 }
 
@@ -995,62 +1244,70 @@ function setRadianceEmission(shader, emission) {
   }
 }
 
-// One MaterialX open_pbr_surface document for a pbrt-v4 material
-// ({ type, params }); emission is the rgb radiance of an AreaLightSource.
-export function pbrtMaterialDocument({ name, material, emission } = {}) {
+// One open_pbr_surface document for a pbrt-v4 material ({ type, params }); emission is
+// an AreaLightSource's rgb radiance. "texture" params carry the loader's description in
+// param.texture; textureFile(spec) maps an image texture to its file value.
+export function pbrtMaterialDocument({ name, material, emission, textureFile } = {}) {
   const doc = createDocument();
   const notes = [];
+  const ctx = { doc, notes, textureFile };
   const shader = doc.addNode("open_pbr_surface", "SR_" + (name || "material"), "surfaceshader");
   const type = (material && material.type) || "diffuse";
   const params = (material && material.params) || {};
   const used = new Set(["type"]);
   const take = (key) => { used.add(key); return params[key]; };
-  const roughness = () => { PBRT_ROUGHNESS_KEYS.forEach((key) => used.add(key)); return pbrtMaterialRoughness(params, notes); };
+  const roughness = () => { PBRT_ROUGHNESS_KEYS.forEach((key) => used.add(key)); return pbrtRoughnessOp(ctx, params); };
+  const color = (key, fallback) => {
+    const param = take(key);
+    const tex = pbrtTextureParam(ctx, param, "color3", key);
+    if (tex) return tex;
+    if (tex === null) return { k: fallback };
+    return { k: pbrtRgb(param, notes, key) || fallback };
+  };
+  const set = (input, type, x) => setOperand(shader, input, type, x);
 
   if (type === "diffuse") {
-    const rgb = pbrtRgb(take("reflectance"), notes, "reflectance") || [0.5, 0.5, 0.5];
-    setInput(shader, "base_color", "color3", { value: formatVector(rgb, 3) });
-    setInput(shader, "specular_weight", "float", { value: "0" });
+    set("base_color", "color3", color("reflectance", [0.5, 0.5, 0.5]));
+    set("specular_weight", "float", { k: 0 });
   } else if (type === "coateddiffuse") {
-    const rgb = pbrtRgb(take("reflectance"), notes, "reflectance") || [0.5, 0.5, 0.5];
+    const base = color("reflectance", [0.5, 0.5, 0.5]);
     const rough = roughness();
     const eta = pbrtEta(take("eta"), notes);
     for (const key of ["thickness", "albedo", "g", "maxdepth", "nsamples"]) {
       if (params[key]) { used.add(key); notes.push(key + " (coating layer) is not imported"); }
     }
-    setInput(shader, "base_color", "color3", { value: formatVector(rgb, 3) });
-    setInput(shader, "specular_weight", "float", { value: "0" });
-    setInput(shader, "coat_weight", "float", { value: "1" });
-    setInput(shader, "coat_ior", "float", { value: formatNumber(eta) });
-    setInput(shader, "coat_roughness", "float", { value: formatNumber(rough) });
+    set("base_color", "color3", base);
+    set("specular_weight", "float", { k: 0 });
+    set("coat_weight", "float", { k: 1 });
+    set("coat_ior", "float", { k: eta });
+    set("coat_roughness", "float", rough);
   } else if (type === "dielectric") {
     const rough = roughness();
     const eta = pbrtEta(take("eta"), notes);
-    setInput(shader, "base_color", "color3", { value: "1, 1, 1" });
-    setInput(shader, "transmission_weight", "float", { value: "1" });
-    setInput(shader, "specular_ior", "float", { value: formatNumber(eta) });
-    setInput(shader, "specular_roughness", "float", { value: formatNumber(rough) });
+    set("base_color", "color3", { k: [1, 1, 1] });
+    set("transmission_weight", "float", { k: 1 });
+    set("specular_ior", "float", { k: eta });
+    set("specular_roughness", "float", rough);
   } else if (type === "conductor") {
     const rough = roughness();
-    const reflectance = take("reflectance");
+    const reflectance = params.reflectance;
     const etaParam = take("eta");
     const kParam = take("k");
-    setInput(shader, "base_metalness", "float", { value: "1" });
+    set("base_metalness", "float", { k: 1 });
     if (reflectance) {
-      const rgb = pbrtRgb(reflectance, notes, "reflectance") || [1, 1, 1];
-      setInput(shader, "base_color", "color3", { value: formatVector(rgb, 3) });
+      set("base_color", "color3", color("reflectance", [1, 1, 1]));
     } else {
       const eta = pbrtConductorChannel(etaParam, "eta", notes);
       const k = pbrtConductorChannel(kParam, "k", notes);
-      setInput(shader, "base_color", "color3", { value: formatVector(conductorF0(eta, k), 3) });
-      setInput(shader, "specular_color", "color3", { value: formatVector(conductorF82Tint(eta, k), 3) });
+      set("base_color", "color3", { k: conductorF0(eta, k) });
+      set("specular_color", "color3", { k: conductorF82Tint(eta, k) });
     }
-    setInput(shader, "specular_roughness", "float", { value: formatNumber(rough) });
+    set("specular_roughness", "float", rough);
   } else {
     notes.push("material type \"" + type + "\" is not supported, a grey diffuse is used");
     for (const key of Object.keys(params)) used.add(key);
-    setInput(shader, "base_color", "color3", { value: "0.5, 0.5, 0.5" });
-    setInput(shader, "specular_weight", "float", { value: "0" });
+    set("base_color", "color3", { k: [0.5, 0.5, 0.5] });
+    set("specular_weight", "float", { k: 0 });
   }
   for (const key of Object.keys(params)) {
     if (!used.has(key)) notes.push("parameter \"" + key + "\" is not imported");
@@ -1088,6 +1345,7 @@ export function mitsubaIor(prop, fallback, notes = [], label = "ior") {
     notes.push(label + ': unknown IOR name "' + prop.value + '", 1.5 is used');
     return 1.5;
   }
+  if (prop.type === "texture") { notes.push(label + " is a texture, which Mitsuba does not accept here; the default is used"); return fallback; }
   const v = Number(prop.value);
   return Number.isFinite(v) ? v : fallback;
 }
@@ -1096,9 +1354,16 @@ function mitsubaRgb(prop, fallback, notes, label) {
   if (!prop) return fallback;
   if (prop.type === "rgb") return prop.value.slice(0, 3).map(Number);
   if (prop.type === "float") return [prop.value, prop.value, prop.value].map(Number);
-  if (prop.type === "texture") { notes.push(label + " is a " + (prop.plugin || "texture") + " texture; textures are not imported, the default is used"); return fallback; }
+  if (prop.type === "texture") { notes.push(label + " is a " + (prop.plugin || "texture") + " texture, which is not imported; the default is used"); return fallback; }
   notes.push(label + " is a " + prop.type + " value, which is not imported; the default is used");
   return fallback;
+}
+
+// A Mitsuba colour property as a graph value: a texture (prop.spec, built by
+// the loader) or a constant.
+function mitsubaColorOp(ctx, prop, fallback, label) {
+  if (prop && prop.type === "texture" && prop.spec) return textureOp(ctx, prop.spec, "color3", label) || { k: fallback };
+  return { k: mitsubaRgb(prop, fallback, ctx.notes, label) };
 }
 
 // OpenPBR roughness from alpha or alpha_u/alpha_v (averaged, with a note).
@@ -1114,6 +1379,31 @@ export function mitsubaMaterialRoughness(props, fallbackAlpha, notes = []) {
   const av = read("alpha_v") ?? base ?? fallbackAlpha;
   if (Math.abs(au - av) > 1e-9) notes.push("anisotropic alpha (u " + au + ", v " + av + ") is averaged");
   return mitsubaAlphaToOpenPbr((au + av) / 2);
+}
+
+// The roughness above as a graph value; textured alphas build the average and
+// square root with MaterialX math nodes.
+function mitsubaRoughnessOp(ctx, props, fallbackAlpha) {
+  const p = props || {};
+  const keys = ["alpha", "alpha_u", "alpha_v"];
+  if (!keys.some((k) => p[k] && p[k].type === "texture" && p[k].spec)) return { k: mitsubaMaterialRoughness(p, fallbackAlpha, ctx.notes) };
+  const read = (key) => {
+    const v = p[key];
+    if (!v) return null;
+    if (v.type === "texture") return v.spec ? textureOp(ctx, v.spec, "float", key) : (ctx.notes.push(key + " is a texture, which is not imported"), null);
+    const n = Number(v.value);
+    return { k: Number.isFinite(n) ? n : 0 };
+  };
+  const base = read("alpha");
+  const au = read("alpha_u") ?? base ?? { k: fallbackAlpha };
+  const av = read("alpha_v") ?? base ?? { k: fallbackAlpha };
+  let mean = au;
+  if (au !== av) {
+    ctx.notes.push("anisotropic alpha is averaged");
+    mean = binary(ctx, "multiply", binary(ctx, "add", au, av, "alpha_sum"), { k: 0.5 }, "alpha_mean");
+  }
+  const positive = binary(ctx, "max", mean, { k: 0 }, "alpha_positive");
+  return binary(ctx, "min", sqrtOp(ctx, positive, "openpbr_roughness"), { k: 1 }, "roughness_clamped");
 }
 
 // A conductor's complex IOR from eta/k or a named material (relative to
@@ -1177,13 +1467,19 @@ export function openPbrDielectricAlbedo(eta, alpha) {
   });
 }
 
+// The constants of the plastic match below: base_color = R / (1 - k Fdr_int) * scale.
+export function mitsubaPlasticTerms(eta, alpha = 0) {
+  const fdrInt = mitsubaFdrFit(1 / eta);
+  const tExt = 1 - cosineAverage((mu) => dielectricFresnel(mu, eta));
+  const scale = (tExt * tExt) / (eta * eta) / (1 - openPbrDielectricAlbedo(eta, alpha));
+  return { fdrInt, scale };
+}
+
 // base_color whose OpenPBR diffuse albedo b (1 - E_spec) matches Mitsuba 3 plastic's
 // R / (1 - k Fdr_int) (1 - Fdr_ext)^2 / eta^2 (k = R if nonlinear, else 1); per channel,
 // clamped to [0, 1]. roughplastic is approximated with the smooth interface terms.
 export function mitsubaPlasticBaseColor(rgb, eta, alpha = 0, nonlinear = false) {
-  const fdrInt = mitsubaFdrFit(1 / eta);
-  const tExt = 1 - cosineAverage((mu) => dielectricFresnel(mu, eta));
-  const scale = (tExt * tExt) / (eta * eta) / (1 - openPbrDielectricAlbedo(eta, alpha));
+  const { fdrInt, scale } = mitsubaPlasticTerms(eta, alpha);
   let clamped = 0;
   const color = rgb.map((r) => {
     const b = (r / (1 - (nonlinear ? r : 1) * fdrInt)) * scale;
@@ -1193,14 +1489,28 @@ export function mitsubaPlasticBaseColor(rgb, eta, alpha = 0, nonlinear = false) 
   return { color, clamped };
 }
 
+// The same match for a textured R, exact in the graph: linear in R (one multiply)
+// unless nonlinear, whose R / (1 - R Fdr_int) term is built from multiply, subtract and divide nodes.
+function mitsubaPlasticBaseColorOp(ctx, base, eta, alpha, nonlinear) {
+  const { fdrInt, scale } = mitsubaPlasticTerms(eta, alpha);
+  let b;
+  if (!nonlinear) b = binary(ctx, "multiply", base, { k: scale / (1 - fdrInt) }, "plastic_albedo");
+  else {
+    const denom = binary(ctx, "subtract", { k: 1 }, binary(ctx, "multiply", base, { k: fdrInt }, "plastic_fdr"), "plastic_denominator");
+    b = binary(ctx, "divide", binary(ctx, "multiply", base, { k: scale }, "plastic_scaled"), denom, "plastic_albedo");
+  }
+  return clampOp(ctx, b, 0, 1, "plastic_base_color");
+}
+
 const MITSUBA_SILENT_KEYS = ["distribution", "sample_visible"];
 
-// One open_pbr_surface document for a Mitsuba bsdf ({ type, props }, already
-// unwrapped from twosided); emission is an area emitter's rgb radiance.
-// legacy marks pre-2.0 files, whose conductor default material is Cu.
-export function mitsubaMaterialDocument({ name, bsdf, emission, legacy = false } = {}) {
+// One open_pbr_surface document for a Mitsuba bsdf ({ type, props }, unwrapped from
+// twosided; texture props carry their description in prop.spec); emission is an area
+// emitter's rgb radiance. legacy marks pre-2.0 files, whose conductor default is Cu.
+export function mitsubaMaterialDocument({ name, bsdf, emission, legacy = false, textureFile } = {}) {
   const doc = createDocument();
   const notes = [];
+  const ctx = { doc, notes, textureFile };
   const shader = doc.addNode("open_pbr_surface", "SR_" + (name || "material"), "surfaceshader");
   const type = (bsdf && bsdf.type) || "diffuse";
   const props = (bsdf && bsdf.props) || {};
@@ -1209,39 +1519,47 @@ export function mitsubaMaterialDocument({ name, bsdf, emission, legacy = false }
   const rough = type.startsWith("rough");
   const roughness = () => {
     ["alpha", "alpha_u", "alpha_v"].forEach((k) => used.add(k));
-    return rough ? mitsubaMaterialRoughness(props, 0.1, notes) : 0;
+    return rough ? mitsubaRoughnessOp(ctx, props, 0.1) : { k: 0 };
   };
   const checkDistribution = () => {
     const d = props.distribution ? String(props.distribution.value) : "beckmann";
     if (rough && d === "beckmann") notes.push("the Beckmann distribution is rendered with the GGX of OpenPBR");
   };
-  const setColor = (input, rgb) => setInput(shader, input, "color3", { value: formatVector(rgb, 3) });
-  const setFloat = (input, v) => setInput(shader, input, "float", { value: formatNumber(v) });
-  const notWhite = (rgb) => rgb.some((c) => c !== 1);
+  const color = (key, fallback) => mitsubaColorOp(ctx, take(key), fallback, key);
+  const setColor = (input, x) => setOperand(shader, input, "color3", x);
+  const setFloat = (input, x) => setOperand(shader, input, "float", isK(x) || (x && x.n) ? x : { k: x });
+  const notWhite = (x) => !isK(x) || x.k.some((c) => c !== 1);
 
   if (type === "diffuse") {
-    setColor("base_color", mitsubaRgb(take("reflectance"), [0.5, 0.5, 0.5], notes, "reflectance"));
+    setColor("base_color", color("reflectance", [0.5, 0.5, 0.5]));
     setFloat("specular_weight", 0);
   } else if (type === "plastic" || type === "roughplastic") {
-    const base = mitsubaRgb(take("diffuse_reflectance"), [0.5, 0.5, 0.5], notes, "diffuse_reflectance");
-    const spec = mitsubaRgb(take("specular_reflectance"), [1, 1, 1], notes, "specular_reflectance");
+    const base = color("diffuse_reflectance", [0.5, 0.5, 0.5]);
+    const spec = color("specular_reflectance", [1, 1, 1]);
     const ior = mitsubaIor(take("int_ior"), 1.49, notes, "int_ior") / mitsubaIor(take("ext_ior"), 1.000277, notes, "ext_ior");
     const nonlinear = take("nonlinear");
+    const isNonlinear = !!(nonlinear && nonlinear.value === true);
     checkDistribution();
     const specRoughness = roughness();
-    const matched = mitsubaPlasticBaseColor(base, ior, specRoughness * specRoughness, !!(nonlinear && nonlinear.value === true));
-    if (matched.clamped) notes.push("diffuse_reflectance needs an albedo outside OpenPBR's base_color range in " + matched.clamped + " channel(s), clamped");
-    setColor("base_color", matched.color);
+    const alpha = isK(specRoughness) ? specRoughness.k * specRoughness.k : 0.1;
+    if (!isK(specRoughness)) notes.push("plastic alpha is a float in Mitsuba; the texture drives the specular roughness, the albedo match uses alpha 0.1");
+    if (isK(base)) {
+      const matched = mitsubaPlasticBaseColor(base.k, ior, alpha, isNonlinear);
+      if (matched.clamped) notes.push("diffuse_reflectance needs an albedo outside OpenPBR's base_color range in " + matched.clamped + " channel(s), clamped");
+      setColor("base_color", { k: matched.color });
+    } else {
+      setColor("base_color", mitsubaPlasticBaseColorOp(ctx, base, ior, alpha, isNonlinear));
+    }
     setFloat("specular_weight", 1);
     if (notWhite(spec)) setColor("specular_color", spec);
     setFloat("specular_ior", ior);
     setFloat("specular_roughness", specRoughness);
   } else if (type === "dielectric" || type === "roughdielectric" || type === "thindielectric") {
     const ior = mitsubaIor(take("int_ior"), 1.5046, notes, "int_ior") / mitsubaIor(take("ext_ior"), 1.000277, notes, "ext_ior");
-    const spec = mitsubaRgb(take("specular_reflectance"), [1, 1, 1], notes, "specular_reflectance");
-    const trans = mitsubaRgb(take("specular_transmittance"), [1, 1, 1], notes, "specular_transmittance");
+    const spec = color("specular_reflectance", [1, 1, 1]);
+    const trans = color("specular_transmittance", [1, 1, 1]);
     checkDistribution();
-    setColor("base_color", [1, 1, 1]);
+    setColor("base_color", { k: [1, 1, 1] });
     setFloat("transmission_weight", 1);
     if (notWhite(trans)) setColor("transmission_color", trans);
     if (notWhite(spec)) setColor("specular_color", spec);
@@ -1251,20 +1569,20 @@ export function mitsubaMaterialDocument({ name, bsdf, emission, legacy = false }
   } else if (type === "conductor" || type === "roughconductor") {
     ["material", "eta", "k", "ext_eta"].forEach((k) => used.add(k));
     const ior = mitsubaConductorIor(props, notes, legacy);
-    const spec = mitsubaRgb(take("specular_reflectance"), [1, 1, 1], notes, "specular_reflectance");
+    const spec = color("specular_reflectance", [1, 1, 1]);
     checkDistribution();
     setFloat("base_metalness", 1);
     if (!ior) {
       setColor("base_color", spec);
     } else {
-      setColor("base_color", conductorF0(ior.eta, ior.k).map((c, i) => c * spec[i]));
-      setColor("specular_color", conductorF82Tint(ior.eta, ior.k));
+      setColor("base_color", binary(ctx, "multiply", { k: conductorF0(ior.eta, ior.k) }, spec, "conductor_base_color"));
+      setColor("specular_color", { k: conductorF82Tint(ior.eta, ior.k) });
     }
     setFloat("specular_roughness", roughness());
   } else {
     notes.push('bsdf "' + type + '" is not supported, a grey diffuse is used');
     for (const key of Object.keys(props)) used.add(key);
-    setColor("base_color", [0.5, 0.5, 0.5]);
+    setColor("base_color", { k: [0.5, 0.5, 0.5] });
     setFloat("specular_weight", 0);
   }
   for (const key of Object.keys(props)) {

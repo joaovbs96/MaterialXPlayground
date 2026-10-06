@@ -2,6 +2,8 @@
 // paths, the XML reader and Mitsuba scene detection, 4x4 matrices, transform
 // baking, camera lens, payload records. No DOM, no THREE, so node tests can import it.
 
+import { readPfm, toRgb, encodeRadianceHdr, decodeRadianceHdr } from "./pfm-image.js";
+
 export function checkAborted(signal) {
   if (signal && signal.aborted) {
     const err = new Error("Aborted");
@@ -388,6 +390,91 @@ export function texturedDomeLight({ textureFile, matrix, intensity = 1 }) {
   return { ...uniformDomeLight([1, 1, 1]), matrix: matrix.slice(), textureFile, textureFormat: "latlong", intensity };
 }
 
+// A UsdLux-shaped distant light whose local +z points toward the light (it shines
+// along -z); intensity * color is the irradiance on a surface facing it.
+export function distantLightRecord({ name = "distant", toLight, color, intensity = 1 }) {
+  const len = Math.hypot(toLight[0], toLight[1], toLight[2]) || 1;
+  const z = toLight.map((c) => c / len);
+  const helper = Math.abs(z[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0];
+  let x = cross3(helper, z);
+  x = x.map((c) => c / (len3(x) || 1));
+  const y = cross3(z, x);
+  return {
+    primPath: "/Lights/" + name, name, type: "distantlight",
+    matrix: [x[0], x[1], x[2], 0, y[0], y[1], y[2], 0, z[0], z[1], z[2], 0, 0, 0, 0, 1],
+    textureFile: null, textureFormat: "automatic",
+    intensity, exposure: 0, diffuse: 1, specular: 1,
+    color: color.slice(0, 3),
+    enableColorTemperature: false, colorTemperature: 6500,
+    radius: null, width: null, height: null, length: null, angle: null,
+    normalize: false, treatAsPoint: false, coneAngle: null, coneSoftness: null,
+  };
+}
+
+// --------------------------------------------------------- texture files
+
+// A file name safe for a generated payload asset.
+export const sanitizeAssetName = (name) => String(name ?? "").replace(/\.[^./]*$/, "").replace(/[^A-Za-z0-9_-]/g, "_") || "image";
+
+// Float rgb pixels (top row first) of a .pfm, .hdr or .exr file. EXR needs
+// options.decodeExr(bytes) or THREE.EXRLoader (whose rows come bottom first).
+export async function decodeFloatImage(bytes, path, options = {}) {
+  const ext = String(path).split(".").pop().toLowerCase();
+  if (ext === "pfm") return toRgb(readPfm(bytes));
+  if (ext === "hdr") return decodeRadianceHdr(bytes);
+  if (ext === "exr") {
+    if (typeof options.decodeExr === "function") return options.decodeExr(bytes);
+    const THREE_ = globalThis.THREE;
+    if (!THREE_ || !THREE_.EXRLoader) throw new Error("EXRLoader unavailable");
+    const d = new THREE_.EXRLoader().setDataType(THREE_.FloatType).parse(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+    const ch = d.data.length / (d.width * d.height);
+    const data = new Float32Array(d.width * d.height * 3);
+    for (let y = 0; y < d.height; y++) {
+      for (let x = 0; x < d.width; x++) {
+        const s = ((d.height - 1 - y) * d.width + x) * ch, o = (y * d.width + x) * 3;
+        data[o] = d.data[s]; data[o + 1] = d.data[s + (ch > 1 ? 1 : 0)]; data[o + 2] = d.data[s + (ch > 2 ? 2 : 0)];
+      }
+    }
+    return { width: d.width, height: d.height, data };
+  }
+  throw new Error("." + ext + " is not a float image format");
+}
+
+// Resolves every image texture of the materials against the drop. PFM files,
+// which the renderer cannot decode, become Radiance .hdr payload assets.
+// Returns { textureFile(spec) -> file value or null, assets }.
+export async function prepareSceneTextures({ images, rootDir, fileByPath, prefix, warn = () => {}, readBytes }) {
+  const byKey = new Map();
+  const assets = [];
+  const usedNames = new Set();
+  const keyOf = (spec) => (spec.dir ?? rootDir) + "|" + spec.file;
+  for (const spec of images || []) {
+    const key = keyOf(spec);
+    if (byKey.has(key)) continue;
+    const path = resolveScenePath(spec.file, spec.dir ?? rootDir, rootDir, fileByPath);
+    if (!path) {
+      warn('Texture file not found: "' + spec.file + '" (drop the textures folder together with the scene)');
+      byKey.set(key, null);
+      continue;
+    }
+    if (!/\.pfm$/i.test(path)) { byKey.set(key, path); continue; }
+    try {
+      const image = toRgb(readPfm(await readBytes(path)));
+      const base = "__" + prefix + "_" + sanitizeAssetName(basenameOf(path));
+      let name = base;
+      for (let i = 2; usedNames.has(name); i++) name = base + "_" + i;
+      usedNames.add(name);
+      assets.push({ path: name + ".hdr", data: encodeRadianceHdr(image).buffer });
+      byKey.set(key, name + ".hdr");
+      warn("[info] PFM texture " + basenameOf(path) + " is converted to a Radiance .hdr for the renderer");
+    } catch (e) {
+      warn('PFM texture "' + path + '" could not be read: ' + ((e && e.message) || e));
+      byKey.set(key, null);
+    }
+  }
+  return { textureFile: (spec) => byKey.get(keyOf(spec)) ?? null, assets };
+}
+
 // --------------------------------------------------- emitter stand-in lights
 
 const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -504,7 +591,7 @@ export function bakedMeshRecord({ primName, positions, normals, uvs, indices, ma
   };
 }
 
-export function scenePayload({ rootPath, sourceKind, meshes, materials, cameras, lights, warnings }) {
+export function scenePayload({ rootPath, sourceKind, meshes, materials, cameras, lights, warnings, assets = [] }) {
   return {
     rootPath,
     upAxis: "Y",
@@ -519,7 +606,7 @@ export function scenePayload({ rootPath, sourceKind, meshes, materials, cameras,
     },
     meshes,
     materials,
-    assets: materials.map((m) => ({ path: m.materialX.path, data: m.materialX.data.buffer })),
+    assets: materials.map((m) => ({ path: m.materialX.path, data: m.materialX.data.buffer })).concat(assets),
     cameras,
     lights,
     warnings,

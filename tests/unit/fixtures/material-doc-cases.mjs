@@ -34,9 +34,57 @@ export const materialDocCases = () => {
       }
     }
   }
-  
+
   {
-    const refs = (info) => ({ file: `t${info.index}.png`, wrapS: 33071, wrapT: 10497, magFilter: 9728, texCoord: info.texCoord });
+    // Texture graphs: every pbrt texture kind on each colour slot, textured roughness.
+    const img = (extra = {}) => ({ kind: 'image', file: 't.png', colorspace: 'srgb_texture', uaddress: 'periodic', vaddress: 'periodic', uv: null, scale: 1, invert: false, floatChannel: 'first', ...extra });
+    const tex = (spec, name = 'T') => ({ type: 'texture', values: [name], texture: spec });
+    const specs = {
+      imagemap: img({ uv: [2, 0, 0, 3, 0.5, 0.25], uaddress: 'clamp', vaddress: 'constant', scale: 0.5, invert: true }),
+      'imagemap linear rotated': img({ colorspace: null, uv: [0.8, 0.6, -0.6, 0.8, 0, 0] }),
+      'imagemap gamma': img({ colorspace: 'g22_rec709' }),
+      constant: { kind: 'constant', value: [0.2, 0.4, 0.6] },
+      scale: { kind: 'scale', tex: img(), scale: img({ file: 's.png', colorspace: null }) },
+      mix: { kind: 'mix', tex1: img(), tex2: { kind: 'constant', value: 0.3 }, amount: img({ file: 'm.png', colorspace: null }) },
+      checkerboard: { kind: 'checker', tex1: { kind: 'constant', value: 1 }, tex2: img(), uv: [4, 0, 0, 4, 0, 0] },
+      unsupported: { kind: 'unsupported', reason: 'texture "F" of type "fbm" is not supported' },
+    };
+    for (const [label, spec] of Object.entries(specs)) {
+      for (const type of ['diffuse', 'coateddiffuse', 'conductor']) {
+        add(`pbrt ${type} texture ${label}`, pbrtMaterialDocument({ name: 'T', material: { type, params: { reflectance: tex(spec) } } }).xml);
+      }
+    }
+    add('pbrt coateddiffuse textured anisotropic roughness', pbrtMaterialDocument({ name: 'R', material: { type: 'coateddiffuse', params: {
+      uroughness: tex(img({ colorspace: null }), 'U'), vroughness: { type: 'float', values: [0.1] } } } }).xml);
+    add('pbrt dielectric textured roughness (sRGB float read)', pbrtMaterialDocument({ name: 'R', material: { type: 'dielectric', params: {
+      roughness: tex(img()), remaproughness: { type: 'bool', values: [false] } } } }).xml);
+    add('pbrt conductor textured roughness checker', pbrtMaterialDocument({ name: 'R', material: { type: 'conductor', params: {
+      roughness: tex(specs.checkerboard) } } }).xml);
+  }
+
+  {
+    // Mitsuba textures: bitmap and checkerboard on colours and alphas, plastic albedo matching.
+    const bitmap = { kind: 'image', file: 'b.jpg', colorspace: 'srgb_texture', uaddress: 'mirror', vaddress: 'mirror', uv: [0.8, -0.6, 0.6, 0.8, 0.1, 0.2], scale: 1, invert: false, floatChannel: 'luminance' };
+    const raw = { ...bitmap, file: 'r.png', colorspace: null, uaddress: 'clamp', vaddress: 'clamp', uv: null };
+    const checker = { kind: 'checker', tex1: { kind: 'constant', value: 0.4 }, tex2: bitmap, uv: [2, 0, 0, -2, 0, 2] };
+    const t = (spec) => ({ type: 'texture', plugin: spec.kind === 'checker' ? 'checkerboard' : 'bitmap', value: null, spec });
+    for (const [label, spec] of Object.entries({ bitmap, raw, checker })) {
+      add(`mitsuba diffuse ${label}`, mitsubaMaterialDocument({ name: 'D', bsdf: { type: 'diffuse', props: { reflectance: t(spec) } } }).xml);
+      for (const nonlinear of [false, true]) {
+        add(`mitsuba roughplastic ${label} nonlinear=${nonlinear}`, mitsubaMaterialDocument({ name: 'P', bsdf: { type: 'roughplastic', props: {
+          diffuse_reflectance: t(spec), specular_reflectance: t(raw), alpha: num(0.1), nonlinear: { type: 'boolean', value: nonlinear } } } }).xml);
+      }
+      add(`mitsuba roughconductor alpha ${label}`, mitsubaMaterialDocument({ name: 'C', bsdf: { type: 'roughconductor', props: {
+        alpha_u: t(spec), alpha_v: num(0.2), specular_reflectance: t(spec), material: { type: 'string', value: 'Au' } } } }).xml);
+      add(`mitsuba roughdielectric ${label}`, mitsubaMaterialDocument({ name: 'G', bsdf: { type: 'roughdielectric', props: {
+        alpha: t(spec), specular_transmittance: t(spec), specular_reflectance: t(raw) } } }).xml);
+    }
+    add('mitsuba plastic textured alpha', mitsubaMaterialDocument({ name: 'A', bsdf: { type: 'roughplastic', props: {
+      diffuse_reflectance: t(bitmap), alpha: t(raw) } } }).xml);
+  }
+
+  {
+    const refs = (info) =>({ file: `t${info.index}.png`, wrapS: 33071, wrapT: 10497, magFilter: 9728, texCoord: info.texCoord });
     const ext = {
       KHR_materials_clearcoat: { clearcoatFactor: 1, clearcoatRoughnessFactor: 0.1 }, KHR_materials_transmission: { transmissionFactor: 0.8 },
       KHR_materials_volume: { thicknessFactor: 2, attenuationDistance: 3, attenuationColor: [1, 0.5, 0.5] }, KHR_materials_ior: { ior: 1.45 },
