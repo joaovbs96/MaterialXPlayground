@@ -181,10 +181,10 @@ export const VENDOR_DEPS = [
   {
     id: "mxslc",
     name: "ShadingLanguageX compiler (mxslc)",
-    version: "0.3.1",
+    version: "0.3.2",
     source: {
       zip: "https://github.com/jakethorn/ShadingLanguageX/releases/download/mxslcxx-{version}/mxslc_JsMxslc_package.zip",
-      sha256: "2c30ff2e54edfa6ec3ced67cc2967d279ede62ee3fc6d41b84bdc8b8ce31d01a",
+      sha256: "b732301f4ea9f95d2e7c1469e0b68ec1e1e04368fa134ee094451bd05e5fe36f",
     },
     license: { url: "https://github.com/jakethorn/ShadingLanguageX/blob/mxslcxx-{version}/LICENSE", file: "LICENSE" },
     fetchOnly: true,

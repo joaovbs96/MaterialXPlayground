@@ -39,9 +39,9 @@
     {
       "id": "mxslc",
       "kind": "zip",
-      "version": "0.3.1",
-      "source": "https://github.com/jakethorn/ShadingLanguageX/releases/download/mxslcxx-0.3.1/mxslc_JsMxslc_package.zip",
-      "sha256": "2c30ff2e54edfa6ec3ced67cc2967d279ede62ee3fc6d41b84bdc8b8ce31d01a"
+      "version": "0.3.2",
+      "source": "https://github.com/jakethorn/ShadingLanguageX/releases/download/mxslcxx-0.3.2/mxslc_JsMxslc_package.zip",
+      "sha256": "b732301f4ea9f95d2e7c1469e0b68ec1e1e04368fa134ee094451bd05e5fe36f"
     },
     {
       "id": "pako",
@@ -348,28 +348,28 @@
     {
       "path": "mxslc/JsMxslc.data",
       "dep": "mxslc",
-      "source": "https://github.com/jakethorn/ShadingLanguageX/releases/download/mxslcxx-0.3.1/mxslc_JsMxslc_package.zip!/JsMxslc.data",
+      "source": "https://github.com/jakethorn/ShadingLanguageX/releases/download/mxslcxx-0.3.2/mxslc_JsMxslc_package.zip!/JsMxslc.data",
       "sha256": "c6a08a77575fec0dc3c9c6019fc22b2f4e2f426ca339bd6fa445d3f3f3207364",
       "bytes": 3930257
     },
     {
       "path": "mxslc/JsMxslc.js",
       "dep": "mxslc",
-      "source": "https://github.com/jakethorn/ShadingLanguageX/releases/download/mxslcxx-0.3.1/mxslc_JsMxslc_package.zip!/JsMxslc.js",
-      "sha256": "34460990529238c1705de9832d81f842098cd6c6920f9b35d29a1a0a4a75162e",
+      "source": "https://github.com/jakethorn/ShadingLanguageX/releases/download/mxslcxx-0.3.2/mxslc_JsMxslc_package.zip!/JsMxslc.js",
+      "sha256": "f1ef97b8dbefd1b4bfbb68d0adb904522a559840c31c4f438382d532bbbbbd40",
       "bytes": 193582
     },
     {
       "path": "mxslc/JsMxslc.wasm",
       "dep": "mxslc",
-      "source": "https://github.com/jakethorn/ShadingLanguageX/releases/download/mxslcxx-0.3.1/mxslc_JsMxslc_package.zip!/JsMxslc.wasm",
-      "sha256": "50841c25c5566651bc629442d949f19226e040b8540954f58a7ac51e2f9e4886",
-      "bytes": 2030195
+      "source": "https://github.com/jakethorn/ShadingLanguageX/releases/download/mxslcxx-0.3.2/mxslc_JsMxslc_package.zip!/JsMxslc.wasm",
+      "sha256": "b1b30745dbdbf5f7f6080ba3bcd5e247cf459b5ee3588a4ce39911b86202d175",
+      "bytes": 2074085
     },
     {
       "path": "mxslc/LICENSE",
       "dep": "mxslc",
-      "source": "https://github.com/jakethorn/ShadingLanguageX/releases/download/mxslcxx-0.3.1/mxslc_JsMxslc_package.zip!/LICENSE",
+      "source": "https://github.com/jakethorn/ShadingLanguageX/releases/download/mxslcxx-0.3.2/mxslc_JsMxslc_package.zip!/LICENSE",
       "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
       "bytes": 11357
     },
