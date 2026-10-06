@@ -12,6 +12,8 @@ const {
 // behaviour of a page with no overrides; the engine installs real readers.
 const HOST_DEFAULTS = {
     keyLightRotation: (rad) => new THREE.Matrix4().makeRotationY(-rad),
+    // A page with no override has no tilted domes, so the tilt is ignored here.
+    envLookupMatrix: (rad) => new THREE.Matrix4().makeRotationY(Math.PI / 2 + rad),
     displayExposureScale: () => 1,
     displayTransform: () => 'srgb',
     clock: () => ({ time: 0, frame: 0 }),
@@ -44,7 +46,7 @@ const setHostFromSnapshot = (obj) => {
     }
     setHost(providers);
 };
-const keyLightRotationMatrix = (rad) => host.keyLightRotation(rad);
+const keyLightRotationMatrix = (rad, tilt) => host.keyLightRotation(rad, tilt);
 const getSpecularEnvMethod = () => host.specularEnvMethod();
 const getDiffuseEnvMethod = () => host.diffuseEnvMethod();
 const sceneTextureFastPathEnabled = () => host.sceneTextureFast();
@@ -751,7 +753,7 @@ const makeLightEntry = (over) => Object.assign({
 // that is not 1, which reads as one blown highlight over a correct scene.
 // maxLights is the material's own MAX_LIGHT_SOURCES (see the light-limit
 // tiers); absent, the full rig + key + stage reservation applies.
-const currentLights = (rigLights, keyLight, rotRad, stageLights, envScale, lightScales = null, maxLights = null) => {
+const currentLights = (rigLights, keyLight, rotRad, stageLights, envScale, lightScales = null, maxLights = null, envTilt = null) => {
     const rig = rigLights || [];
     const total = Number.isFinite(maxLights) && maxLights > rig.length
         ? maxLights : rig.length + 1 + STAGE_LIGHT_SLOTS;
@@ -762,7 +764,7 @@ const currentLights = (rigLights, keyLight, rotRad, stageLights, envScale, light
     if (keyLight) {
         out.push(makeLightEntry({
             type: LIGHT_TYPE_DIRECTIONAL,
-            direction: keyLight.direction.clone().applyMatrix4(keyLightRotationMatrix(rotRad || 0)),
+            direction: keyLight.direction.clone().applyMatrix4(keyLightRotationMatrix(rotRad || 0, envTilt)),
             color: new THREE.Vector3(keyLight.color[0], keyLight.color[1], keyLight.color[2]),
             intensity: keyLight.intensity * (Number.isFinite(envScale) ? envScale : 1),
         }));
@@ -965,13 +967,10 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
     if (has('u_time')) uniforms.u_time = { value: host.clock().time };
     if (has('u_frame')) uniforms.u_frame = { value: host.clock().frame };
     bindEnvironmentSamplers(uniforms, declaredList, env, diffuseEnvMethod);
-    // envTilt carries a dome light's non-vertical orientation. The rotation
-    // slider stays a pure yaw, so the dome's yaw is decomposed out of the tilt
-    // and re-applied here: with the slider at the dome's own yaw this
-    // reproduces the authored orientation exactly.
+    // envTilt: a dome light's orientation with its yaw factored out (the slider
+    // owns the yaw). u_envMatrix is world to lat-long, so it carries the inverse.
     if (has('u_envMatrix')) {
-        const m = new THREE.Matrix4().makeRotationY(Math.PI / 2 + envRotationRad);
-        uniforms.u_envMatrix = { value: envTilt ? m.multiply(envTilt) : m };
+        uniforms.u_envMatrix = { value: envTilt ? host.envLookupMatrix(envRotationRad, envTilt) : new THREE.Matrix4().makeRotationY(Math.PI / 2 + envRotationRad) };
     }
     if (has('u_envRadianceMips')) uniforms.u_envRadianceMips = { value: mips };
     if (has('u_envRadianceSamples')) uniforms.u_envRadianceSamples = { value: 16 };
@@ -1038,7 +1037,7 @@ const createMtlxSceneUniforms = ({ compiled, env = null, lightData = [], stageLi
     if (has('u_shadowMatrix')) uniforms.u_shadowMatrix = { value: shadowMatrix ? shadowMatrix.clone() : shadowOffMatrix() };
     if (has('u_lightData')) {
         const entries = currentLights(lightData, env && env.keyLight, envRotationRad, stageLights,
-            envExposure * Math.max(0, Number(environmentKeyScale) || 0), lightScales, compiled.maxLights);
+            envExposure * Math.max(0, Number(environmentKeyScale) || 0), lightScales, compiled.maxLights, envTilt);
         uniforms.u_lightData = { value: entries };
     }
     if (has('u_numActiveLightSources')) uniforms.u_numActiveLightSources = { value: activeLightCount(lightData, env && env.keyLight, stageLights, compiled.maxLights) };

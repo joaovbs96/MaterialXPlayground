@@ -84,7 +84,8 @@ const {
 } = MtlxThreeMaterial;
 // Host providers for it: each reads exactly what the code did before the move.
 MtlxThreeMaterial.setHost({
-    keyLightRotation: (rad) => keyLightRotationMatrix(rad),
+    keyLightRotation: (rad, tilt) => keyLightRotationMatrix(rad, tilt),
+    envLookupMatrix: (rad, tilt) => MtlxRender.envLookupMatrix(rad, tilt),
     displayExposureScale: () => displayExposureScale(),
     displayTransform: () => getDisplayTransform(),
     clock: () => MTLX_CLOCK,
@@ -2506,7 +2507,7 @@ const releaseGlContext = (canvas) => {
 };
 // Moved to js/shared/render-environment.js; lazy alias, called only at
 // runtime, well after that file has loaded.
-const keyLightRotationMatrix = (rad) => MtlxRender.keyLightRotationMatrix(rad);
+const keyLightRotationMatrix = (rad, tilt) => MtlxRender.keyLightRotationMatrix(rad, tilt);
 // Live-updates ONLY the key-light slot (last entry) of an already-bound
 // u_lightData array in place, mutates values, never replaces the
 // array/uniform object (three r128 caches the struct-array layout).
