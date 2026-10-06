@@ -1,4 +1,4 @@
-// Pure ESM MaterialX 1.39 document emitters for glTF PBR, OBJ/MTL, pbrt-v4 and the
+// Pure ESM MaterialX 1.39 document emitters for glTF PBR, OBJ/MTL, pbrt-v4, Mitsuba and the
 // flattened UsdPreviewSurface payload. No DOM, no THREE, no WASM, so the
 // stage worker, main-thread loaders and node tests can all import it.
 
@@ -986,6 +986,15 @@ function pbrtEta(param, notes) {
   return pbrtFloat(param, 1.5);
 }
 
+// uniform_edf emits emission_color * emission_luminance as radiance, so
+// luminance 1 with color L reproduces a renderer's radiance L literally.
+function setRadianceEmission(shader, emission) {
+  if (Array.isArray(emission) && emission.some((v) => v !== 0)) {
+    setInput(shader, "emission_color", "color3", { value: formatVector(emission, 3) });
+    setInput(shader, "emission_luminance", "float", { value: "1" });
+  }
+}
+
 // One MaterialX open_pbr_surface document for a pbrt-v4 material
 // ({ type, params }); emission is the rgb radiance of an AreaLightSource.
 export function pbrtMaterialDocument({ name, material, emission } = {}) {
@@ -1047,12 +1056,161 @@ export function pbrtMaterialDocument({ name, material, emission } = {}) {
     if (!used.has(key)) notes.push("parameter \"" + key + "\" is not imported");
   }
 
-  // uniform_edf emits emission_color * emission_luminance as radiance, so
-  // luminance 1 with color L reproduces pbrt's L literally.
-  if (Array.isArray(emission) && emission.some((v) => v !== 0)) {
-    setInput(shader, "emission_color", "color3", { value: formatVector(emission, 3) });
-    setInput(shader, "emission_luminance", "float", { value: "1" });
+  setRadianceEmission(shader, emission);
+
+  const result = finish(doc, shader, "M_" + (name || "material"));
+  return { xml: result.xml, materialName: result.materialName, shaderName: result.shaderName, notes };
+}
+
+// ---------------------------------------------------------------- Mitsuba
+
+// Mitsuba's named IORs (include/mitsuba/render/ior.h).
+export const MITSUBA_NAMED_IORS = {
+  "vacuum": 1.0, "helium": 1.000036, "hydrogen": 1.000132, "air": 1.000277,
+  "carbon dioxide": 1.00045, "water": 1.333, "acetone": 1.36, "ethanol": 1.361,
+  "carbon tetrachloride": 1.461, "glycerol": 1.4729, "benzene": 1.501, "silicone oil": 1.52045,
+  "bromine": 1.661, "water ice": 1.31, "fused quartz": 1.458, "pyrex": 1.47,
+  "acrylic glass": 1.49, "polypropylene": 1.49, "bk7": 1.5046, "sodium chloride": 1.544,
+  "amber": 1.55, "pet": 1.575, "diamond": 2.419,
+};
+
+// Mitsuba alpha is the microfacet alpha; OpenPBR roughness r has alpha = r^2.
+export function mitsubaAlphaToOpenPbr(alpha) {
+  return Math.min(1, Math.sqrt(Math.max(0, Number(alpha) || 0)));
+}
+
+// An IOR property: a float, or a name from the table (unknown names: 1.5).
+export function mitsubaIor(prop, fallback, notes = [], label = "ior") {
+  if (!prop) return fallback;
+  if (prop.type === "string") {
+    const key = String(prop.value).trim().toLowerCase();
+    if (MITSUBA_NAMED_IORS[key] !== undefined) return MITSUBA_NAMED_IORS[key];
+    notes.push(label + ': unknown IOR name "' + prop.value + '", 1.5 is used');
+    return 1.5;
   }
+  const v = Number(prop.value);
+  return Number.isFinite(v) ? v : fallback;
+}
+
+function mitsubaRgb(prop, fallback, notes, label) {
+  if (!prop) return fallback;
+  if (prop.type === "rgb") return prop.value.slice(0, 3).map(Number);
+  if (prop.type === "float") return [prop.value, prop.value, prop.value].map(Number);
+  if (prop.type === "texture") { notes.push(label + " is a " + (prop.plugin || "texture") + " texture; textures are not imported, the default is used"); return fallback; }
+  notes.push(label + " is a " + prop.type + " value, which is not imported; the default is used");
+  return fallback;
+}
+
+// OpenPBR roughness from alpha or alpha_u/alpha_v (averaged, with a note).
+export function mitsubaMaterialRoughness(props, fallbackAlpha, notes = []) {
+  const p = props || {};
+  const read = (key) => {
+    const v = p[key];
+    if (v && v.type === "texture") { notes.push(key + " is a texture; textures are not imported"); return null; }
+    return v ? Number(v.value) : null;
+  };
+  const base = read("alpha");
+  const au = read("alpha_u") ?? base ?? fallbackAlpha;
+  const av = read("alpha_v") ?? base ?? fallbackAlpha;
+  if (Math.abs(au - av) > 1e-9) notes.push("anisotropic alpha (u " + au + ", v " + av + ") is averaged");
+  return mitsubaAlphaToOpenPbr((au + av) / 2);
+}
+
+// A conductor's complex IOR from eta/k or a named material (relative to
+// ext_eta); null means "none", Mitsuba's perfect mirror.
+function mitsubaConductorIor(p, notes, legacy) {
+  const ext = mitsubaIor(p.ext_eta, 1, notes, "ext_eta");
+  if (p.eta || p.k) {
+    const eta = mitsubaRgb(p.eta, [0, 0, 0], notes, "eta");
+    const k = mitsubaRgb(p.k, [1, 1, 1], notes, "k");
+    return { eta: eta.map((c) => c / ext), k: k.map((c) => c / ext) };
+  }
+  const name = p.material ? String(p.material.value) : (legacy ? "Cu" : "none");
+  if (name === "none") return null;
+  let metal = PBRT_NAMED_METALS[name] || PBRT_NAMED_METALS[name.replace(/_palik$/, "")];
+  if (!metal) {
+    notes.push('named conductor "' + name + '" is not in the RGB table, copper is used');
+    metal = PBRT_NAMED_METALS.Cu;
+  }
+  return { eta: metal.eta.map((c) => c / ext), k: metal.k.map((c) => c / ext) };
+}
+
+const MITSUBA_SILENT_KEYS = ["distribution", "sample_visible"];
+
+// One open_pbr_surface document for a Mitsuba bsdf ({ type, props }, already
+// unwrapped from twosided); emission is an area emitter's rgb radiance.
+// legacy marks pre-2.0 files, whose conductor default material is Cu.
+export function mitsubaMaterialDocument({ name, bsdf, emission, legacy = false } = {}) {
+  const doc = createDocument();
+  const notes = [];
+  const shader = doc.addNode("open_pbr_surface", "SR_" + (name || "material"), "surfaceshader");
+  const type = (bsdf && bsdf.type) || "diffuse";
+  const props = (bsdf && bsdf.props) || {};
+  const used = new Set(MITSUBA_SILENT_KEYS);
+  const take = (key) => { used.add(key); return props[key]; };
+  const rough = type.startsWith("rough");
+  const roughness = () => {
+    ["alpha", "alpha_u", "alpha_v"].forEach((k) => used.add(k));
+    return rough ? mitsubaMaterialRoughness(props, 0.1, notes) : 0;
+  };
+  const checkDistribution = () => {
+    const d = props.distribution ? String(props.distribution.value) : "beckmann";
+    if (rough && d === "beckmann") notes.push("the Beckmann distribution is rendered with the GGX of OpenPBR");
+  };
+  const setColor = (input, rgb) => setInput(shader, input, "color3", { value: formatVector(rgb, 3) });
+  const setFloat = (input, v) => setInput(shader, input, "float", { value: formatNumber(v) });
+  const notWhite = (rgb) => rgb.some((c) => c !== 1);
+
+  if (type === "diffuse") {
+    setColor("base_color", mitsubaRgb(take("reflectance"), [0.5, 0.5, 0.5], notes, "reflectance"));
+    setFloat("specular_weight", 0);
+  } else if (type === "plastic" || type === "roughplastic") {
+    const base = mitsubaRgb(take("diffuse_reflectance"), [0.5, 0.5, 0.5], notes, "diffuse_reflectance");
+    const spec = mitsubaRgb(take("specular_reflectance"), [1, 1, 1], notes, "specular_reflectance");
+    const ior = mitsubaIor(take("int_ior"), 1.49, notes, "int_ior") / mitsubaIor(take("ext_ior"), 1.000277, notes, "ext_ior");
+    const nonlinear = take("nonlinear");
+    if (nonlinear && nonlinear.value === true) notes.push("nonlinear (internal scattering darkening) has no OpenPBR equivalent, ignored");
+    checkDistribution();
+    setColor("base_color", base);
+    setFloat("specular_weight", 1);
+    if (notWhite(spec)) setColor("specular_color", spec);
+    setFloat("specular_ior", ior);
+    setFloat("specular_roughness", roughness());
+  } else if (type === "dielectric" || type === "roughdielectric" || type === "thindielectric") {
+    const ior = mitsubaIor(take("int_ior"), 1.5046, notes, "int_ior") / mitsubaIor(take("ext_ior"), 1.000277, notes, "ext_ior");
+    const spec = mitsubaRgb(take("specular_reflectance"), [1, 1, 1], notes, "specular_reflectance");
+    const trans = mitsubaRgb(take("specular_transmittance"), [1, 1, 1], notes, "specular_transmittance");
+    checkDistribution();
+    setColor("base_color", [1, 1, 1]);
+    setFloat("transmission_weight", 1);
+    if (notWhite(trans)) setColor("transmission_color", trans);
+    if (notWhite(spec)) setColor("specular_color", spec);
+    setFloat("specular_ior", ior);
+    setFloat("specular_roughness", roughness());
+    if (type === "thindielectric") setFloat("geometry_thin_walled", 1);
+  } else if (type === "conductor" || type === "roughconductor") {
+    ["material", "eta", "k", "ext_eta"].forEach((k) => used.add(k));
+    const ior = mitsubaConductorIor(props, notes, legacy);
+    const spec = mitsubaRgb(take("specular_reflectance"), [1, 1, 1], notes, "specular_reflectance");
+    checkDistribution();
+    setFloat("base_metalness", 1);
+    if (!ior) {
+      setColor("base_color", spec);
+    } else {
+      setColor("base_color", conductorF0(ior.eta, ior.k).map((c, i) => c * spec[i]));
+      setColor("specular_color", conductorF82Tint(ior.eta, ior.k));
+    }
+    setFloat("specular_roughness", roughness());
+  } else {
+    notes.push('bsdf "' + type + '" is not supported, a grey diffuse is used');
+    for (const key of Object.keys(props)) used.add(key);
+    setColor("base_color", [0.5, 0.5, 0.5]);
+    setFloat("specular_weight", 0);
+  }
+  for (const key of Object.keys(props)) {
+    if (!used.has(key)) notes.push('parameter "' + key + '" is not imported');
+  }
+  setRadianceEmission(shader, emission);
 
   const result = finish(doc, shader, "M_" + (name || "material"));
   return { xml: result.xml, materialName: result.materialName, shaderName: result.shaderName, notes };

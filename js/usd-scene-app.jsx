@@ -8,9 +8,9 @@
     // ('mtlx-load-scene'); pickers, drop and the example are hidden there.
     const IN_VSCODE = !!window.__MTLX_VSCODE__;
     const ROOT_EXTENSIONS = ['.usd', '.usda', '.usdc', '.usdz'];
-    // glTF/OBJ/pbrt roots route through window.MtlxSceneSources (js/usd-scene-sources.js)
+    // glTF/OBJ/pbrt/Mitsuba (.xml) roots route through window.MtlxSceneSources (js/usd-scene-sources.js)
     // instead of the USD worker; see detectRootKind() and load() below.
-    const MODEL_ROOT_EXTENSIONS = ['.glb', '.gltf', '.obj', '.pbrt'];
+    const MODEL_ROOT_EXTENSIONS = ['.glb', '.gltf', '.obj', '.pbrt', '.xml'];
     // Sentinel MtlxSelect option (item 4): picking it reveals every root
     // candidate instead of just the top-level ones, never a real root path.
     const SHOW_ALL_ROOT_FILES_VALUE = '__mtlx_scene_show_all_files__';
@@ -227,7 +227,7 @@
     // Source containers (the dropped .glb/.usdz/.obj and friends) are never
     // textures: handing one to the material preview ships megabytes through
     // the embed for nothing.
-    const CONTAINER_EXTENSIONS = ['.glb', '.gltf', '.obj', '.pbrt', '.ply', '.gz', '.fbx', '.zip', '.usd', '.usda', '.usdc', '.usdz'];
+    const CONTAINER_EXTENSIONS = ['.glb', '.gltf', '.obj', '.pbrt', '.xml', '.ply', '.gz', '.fbx', '.zip', '.usd', '.usda', '.usdc', '.usdz'];
     // Files the floating material preview and the graph hand-off get: the
     // renderer's own per-material map, plus any scene file whose name
     // matches a file="..." reference the renderer did not resolve. Pure so
@@ -313,14 +313,15 @@
     };
     // Model-only root selection (no USD candidate present): a single root
     // wins outright; otherwise prefer the shallowest .gltf/.glb, then a .pbrt
-    // no other .pbrt includes, then .obj (glTF and pbrt carry a scene graph).
+    // no other .pbrt includes, then a Mitsuba .xml, then .obj.
     function pickDefaultModelRoot(modelCandidates, referenced) {
         if (modelCandidates.length === 0) return '';
         if (modelCandidates.length === 1) return modelCandidates[0].path;
         const gltfLike = modelCandidates.filter((f) => ext(f.path) === '.gltf' || ext(f.path) === '.glb');
         const pbrtRoots = modelCandidates.filter((f) => ext(f.path) === '.pbrt'
             && !(referenced && referenced.has(String(f.path).replace(/\\/g, '/').toLowerCase())));
-        const pool = (gltfLike.length ? gltfLike : (pbrtRoots.length ? pbrtRoots : modelCandidates.filter((f) => ext(f.path) === '.obj'))) || [];
+        const mitsubaRoots = modelCandidates.filter((f) => ext(f.path) === '.xml');
+        const pool = (gltfLike.length ? gltfLike : (pbrtRoots.length ? pbrtRoots : (mitsubaRoots.length ? mitsubaRoots : modelCandidates.filter((f) => ext(f.path) === '.obj')))) || [];
         const sorted = (pool.length ? pool : modelCandidates).slice().sort(shallowestFirst);
         return sorted[0].path;
     }
@@ -363,6 +364,19 @@
         }
         return referenced;
     }
+    // .xml candidates without a <scene> root element near the top are not
+    // Mitsuba scenes: they are never picked and stay out of the default list.
+    async function scanNonSceneXmlCandidates(candidates) {
+        const out = new Set();
+        for (const file of candidates) {
+            if (ext(file.path) !== '.xml') continue;
+            const blob = blobOfCandidate(file);
+            let head = '';
+            try { head = blob ? await blob.slice(0, 4096).text() : ''; } catch (e) { head = ''; }
+            if (!/<scene[\s>]/.test(head)) out.add(String(file.path).replace(/\\/g, '/').toLowerCase());
+        }
+        return out;
+    }
     // A USD root always wins the default pick over a co-uploaded model
     // root, which comes back as an ignoredModelRoots entry for the
     // caller's diagnostics; with no USD root, a model root is picked.
@@ -374,9 +388,12 @@
         const candidates = rootCandidates(files);
         if (candidates.length === 0) return { path: '', ignoredModelRoots: [], topLevelPaths: [] };
         const usdCandidates = candidates.filter((f) => isUsdRootPath(f.path));
-        const modelCandidates = candidates.filter((f) => isModelRootPath(f.path));
+        const nonSceneXml = await scanNonSceneXmlCandidates(candidates);
+        const modelCandidates = candidates.filter((f) => isModelRootPath(f.path)
+            && !nonSceneXml.has(String(f.path).replace(/\\/g, '/').toLowerCase()));
         const gltfReferenced = await scanGltfCandidateReferences(candidates);
         (await scanPbrtCandidateReferences(candidates)).forEach((r) => gltfReferenced.add(r));
+        nonSceneXml.forEach((r) => gltfReferenced.add(r));
         const candidatePaths = candidates.map((f) => f.path);
         if (usdCandidates.length === 0) {
             const path = pickDefaultModelRoot(modelCandidates, gltfReferenced);
@@ -589,7 +606,7 @@
     };
     // Scene section: the root's format in plain words ('.usd' is sniffed for the
     // crate header), named units for metersPerUnit, and byte sizes.
-    const SCENE_FORMAT_LABELS = { '.usda': 'USD', '.usdc': 'USD binary', '.usdz': 'USDZ package', '.gltf': 'glTF', '.glb': 'glTF binary', '.obj': 'OBJ', '.pbrt': 'PBRT v4' };
+    const SCENE_FORMAT_LABELS = { '.usda': 'USD', '.usdc': 'USD binary', '.usdz': 'USDZ package', '.gltf': 'glTF', '.glb': 'glTF binary', '.obj': 'OBJ', '.pbrt': 'PBRT v4', '.xml': 'Mitsuba' };
     const sceneFormatLabel = (path, usdBinary) => (ext(String(path || '')) === '.usd'
         ? (usdBinary ? 'USD binary' : 'USD')
         : (SCENE_FORMAT_LABELS[ext(String(path || ''))] || ''));
@@ -1666,7 +1683,7 @@
         readback: 'Reading back the result...',
         package: 'Packaging the download...',
     };
-    // Export as USD dialog (glTF/OBJ/pbrt scenes). Runs the OpenUSD worker's
+    // Export as USD dialog (glTF/OBJ/pbrt/Mitsuba scenes). Runs the OpenUSD worker's
     // ExportStage through MtlxSceneSources.exportUsdStage and downloads the result.
     function ExportUsdDialog({ open, onClose, stage, files, rootBasename }) {
         const [materialMode, setMaterialMode] = React.useState('reference');
@@ -2346,6 +2363,7 @@
             const loader = kind === 'gltf' ? (sources && sources.loadGltfStage)
                 : kind === 'obj' ? (sources && sources.loadObjStage)
                 : kind === 'pbrt' ? (sources && sources.loadPbrtStage)
+                : kind === 'mitsuba' ? (sources && sources.loadMitsubaStage)
                 : apiFunction('loadUsdStage');
             if (typeof loader !== 'function') { setError('Scene loader is unavailable in this build.'); setStatus('error'); return; }
             const generation = ++generationRef.current;
@@ -3446,7 +3464,7 @@
         if (stage) lastCardStageRef.current = { stage, files, rootPath };
         const lastCard = lastCardStageRef.current;
         const cardStage = stage || (busy && lastCard && lastCard.files === files && lastCard.rootPath === rootPath ? lastCard.stage : null);
-        const sceneKind = isUsdRootPath(rootPath) ? 'usd' : (/\.(glb|gltf)$/i.test(rootPath) ? 'gltf' : (/\.obj$/i.test(rootPath) ? 'obj' : (/\.pbrt$/i.test(rootPath) ? 'pbrt' : '')));
+        const sceneKind = isUsdRootPath(rootPath) ? 'usd' : (/\.(glb|gltf)$/i.test(rootPath) ? 'gltf' : (/\.obj$/i.test(rootPath) ? 'obj' : (/\.pbrt$/i.test(rootPath) ? 'pbrt' : (/\.xml$/i.test(rootPath) ? 'mitsuba' : ''))));
         const sceneFormat = sceneFormatLabel(rootPath, rootUsdBinary);
         const sceneBytes = files.reduce((sum, file) => sum + sceneFileBytes(file), 0);
         const sceneMissing = cardStage
@@ -3908,7 +3926,7 @@
         );
         // One slot: Cancel while anything loads, Reload once a stage is shown, else Load.
         const sourceKind = stage && stage.summary && stage.summary.sourceKind;
-        const canExportUsd = sourceKind === 'gltf' || sourceKind === 'obj' || sourceKind === 'pbrt';
+        const canExportUsd = sourceKind === 'gltf' || sourceKind === 'obj' || sourceKind === 'pbrt' || sourceKind === 'mitsuba';
         const sceneSlotButton = busy ? (
             <button type="button" data-testid="usd-scene-cancel" onClick={cancel} className={BTN_SECONDARY + ' flex-1 min-w-0 gap-1'}>
                 <MtlxIcon name="x" className="w-3.5 h-3.5 flex-none" />Cancel
@@ -3934,7 +3952,7 @@
                                     placeholder="Drop scene files or choose"
                                     multiple
                                     icon="files"
-                                    accept={'.usd,.usda,.usdc,.usdz,.glb,.gltf,.obj,.mtl,.bin,.mtlx,.pbrt,.ply,.gz,' + window.textureAccept()}
+                                    accept={'.usd,.usda,.usdc,.usdz,.glb,.gltf,.obj,.mtl,.bin,.mtlx,.pbrt,.ply,.gz,.xml,' + window.textureAccept()}
                                     onFiles={chooseFiles}
                                     inputTestId="usd-scene-file-picker"
                                 />
@@ -4081,7 +4099,7 @@
                                     data-testid="usd-scene-export-usd"
                                     onClick={() => setExportOpen(true)}
                                     disabled={!canExportUsd}
-                                    title={canExportUsd ? 'Export this scene as USD' : 'Export as USD is available for glTF, GLB, OBJ and PBRT scenes'}
+                                    title={canExportUsd ? 'Export this scene as USD' : 'Export as USD is available for glTF, GLB, OBJ, PBRT and Mitsuba scenes'}
                                     className={BTN_SECONDARY + ' flex-1 min-w-0 gap-1'}
                                 >
                                     <MtlxIcon name="file-download" className="w-3.5 h-3.5 flex-none" />Export USD
@@ -4246,7 +4264,7 @@
                             />
                             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-center px-6">
                                 <div className="text-stage-fg-subtle text-sm max-w-sm">
-                                    Drop a USD stage (.usd, .usda, .usdc, .usdz), a glTF (.gltf, .glb), an OBJ (.obj) or a PBRT v4 scene (.pbrt) and its referenced files
+                                    Drop a USD stage (.usd, .usda, .usdc, .usdz), a glTF (.gltf, .glb), an OBJ (.obj), a PBRT v4 scene (.pbrt) or a Mitsuba scene (.xml) and its referenced files
                                 </div>
                             </div>
                         </React.Fragment>

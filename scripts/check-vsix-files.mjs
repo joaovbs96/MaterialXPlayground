@@ -139,10 +139,13 @@ const RUNTIME_ASSETS = [
   "js/usd/usd-stage-loader.js",
   "js/usd/usd-stage-worker.js",
   "js/usd/usd-webview-worker-shim.js",
-  // glTF/OBJ scene roots (js/usd-scene-sources.js import()s the loaders; the
+  // glTF/OBJ/pbrt/Mitsuba scene roots (js/usd-scene-sources.js import()s the loaders; the
   // loaders and the stage worker import the MaterialX converters).
   "js/usd/gltf-stage-loader.js",
   "js/usd/obj-stage-loader.js",
+  "js/usd/pbrt-stage-loader.js",
+  "js/usd/mitsuba-stage-loader.js",
+  "js/usd/scene-import-common.js",
   "js/usd/mtlx-material-docs.js",
   // Node thumbnail worker pieces: loaded through Worker URLs and dynamic import().
   // WP5 must add js/graph/thumb-worker.js once it exists.
