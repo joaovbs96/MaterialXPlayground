@@ -1,4 +1,4 @@
-// Pure ESM MaterialX 1.39 document emitters for glTF PBR, OBJ/MTL and the
+// Pure ESM MaterialX 1.39 document emitters for glTF PBR, OBJ/MTL, pbrt-v4 and the
 // flattened UsdPreviewSurface payload. No DOM, no THREE, no WASM, so the
 // stage worker, main-thread loaders and node tests can all import it.
 
@@ -861,4 +861,199 @@ export function usdPreviewSurfaceDocument({ name, record, textureRefs } = {}) {
   noteRepeatedImages(ctx);
   const result = finish(doc, shader, "M_" + (name || "material"));
   return { xml: result.xml, materialName: result.materialName, shaderName: result.shaderName, notes: ctx.notes };
+}
+
+// ---------------------------------------------------------------- PBRT v4
+
+// RGB complex IOR of pbrt-v4's named metal spectra ("metal-<X>-eta/-k"):
+// Tungsten's ComplexIorData.hpp (spectral data integrated to linear sRGB).
+// CuZn is absent there: Mitsuba's documented brass RGB is used instead.
+export const PBRT_NAMED_METALS = {
+  Ag: { eta: [0.1552646489, 0.1167232965, 0.1383806959], k: [4.8283433224, 3.1222459278, 2.1469504455] },
+  Al: { eta: [1.6574599595, 0.8803689579, 0.5212287346], k: [9.2238691996, 6.2695232477, 4.8370012281] },
+  Au: { eta: [0.1431189557, 0.3749570432, 1.4424785571], k: [3.9831604247, 2.3857207478, 1.6032152899] },
+  Cu: { eta: [0.2004376970, 0.9240334304, 1.1022119527], k: [3.9129485033, 2.4528477015, 2.1421879552] },
+  CuZn: { eta: [0.444, 0.527, 1.094], k: [3.695, 2.765, 1.829] },
+  MgO: { eta: [2.0895885542, 1.6507224525, 1.5948759692], k: [0, 0, 0] },
+  TiO2: { eta: [3.4566203131, 2.8017076558, 2.9051485020], k: [0.0001026662, 0, 0.0006356902] },
+};
+
+// pbrt-v4 RoughnessToAlpha is sqrt(r) when remaproughness is true (the
+// default), else the value is alpha itself; OpenPBR uses alpha = r^2.
+export function pbrtRoughnessToOpenPbr(value, remap = true) {
+  const r = Math.max(0, Number(value) || 0);
+  const alpha = remap ? Math.sqrt(r) : r;
+  return Math.min(1, Math.sqrt(alpha));
+}
+
+// Normal-incidence reflectance of a conductor, n + ik per channel.
+export function conductorF0(eta, k) {
+  return [0, 1, 2].map((i) => {
+    const n = eta[i], kk = k[i];
+    return ((n - 1) * (n - 1) + kk * kk) / ((n + 1) * (n + 1) + kk * kk);
+  });
+}
+
+// Exact unpolarized Fresnel of a conductor (pbrt's FrComplex), one channel.
+function frComplex(cosI, n, k) {
+  const mul = (a, b) => [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]];
+  const div = (a, b) => { const d = b[0] * b[0] + b[1] * b[1]; return [(a[0] * b[0] + a[1] * b[1]) / d, (a[1] * b[0] - a[0] * b[1]) / d]; };
+  const sqrtC = (a) => {
+    const m = Math.hypot(a[0], a[1]);
+    return [Math.sqrt((m + a[0]) / 2), Math.sqrt(Math.max(0, (m - a[0]) / 2)) * (a[1] < 0 ? -1 : 1)];
+  };
+  const eta = [n, k];
+  const sin2T = div([1 - cosI * cosI, 0], mul(eta, eta));
+  const cosT = sqrtC([1 - sin2T[0], -sin2T[1]]);
+  const etaCosI = [n * cosI, k * cosI];
+  const etaCosT = mul(eta, cosT);
+  const rParl = div([etaCosI[0] - cosT[0], etaCosI[1] - cosT[1]], [etaCosI[0] + cosT[0], etaCosI[1] + cosT[1]]);
+  const rPerp = div([cosI - etaCosT[0], -etaCosT[1]], [cosI + etaCosT[0], etaCosT[1]]);
+  return (rParl[0] * rParl[0] + rParl[1] * rParl[1] + rPerp[0] * rPerp[0] + rPerp[1] * rPerp[1]) / 2;
+}
+
+// OpenPBR's F82 tint (specular_color on a metal): the exact Fresnel at
+// cos = 1/7 over Schlick's value there, clamped to [0, 1].
+export function conductorF82Tint(eta, k) {
+  const f0 = conductorF0(eta, k);
+  const mu = 1 / 7;
+  return [0, 1, 2].map((i) => {
+    const schlick = f0[i] + (1 - f0[i]) * Math.pow(1 - mu, 5);
+    const exact = frComplex(mu, eta[i], k[i]);
+    return Math.min(1, Math.max(0, schlick > 0 ? exact / schlick : 1));
+  });
+}
+
+// Reads one parsed parameter ({ type, values }) as an RGB triple, or null.
+function pbrtRgb(param, notes, label) {
+  if (!param) return null;
+  const v = param.values || [];
+  if (param.type === "rgb" || param.type === "color") return v.length >= 3 ? [Number(v[0]), Number(v[1]), Number(v[2])] : null;
+  if (param.type === "float" && v.length) return [Number(v[0]), Number(v[0]), Number(v[0])];
+  if (param.type === "texture") { notes.push(label + " is a texture; textures are not imported, the default is used"); return null; }
+  notes.push(label + " is a " + param.type + " value, which is not imported; the default is used");
+  return null;
+}
+
+function pbrtFloat(param, fallback) {
+  if (!param || param.type === "texture") return fallback;
+  const v = Number((param.values || [])[0]);
+  return Number.isFinite(v) ? v : fallback;
+}
+
+function pbrtBool(param, fallback) {
+  if (!param) return fallback;
+  const v = (param.values || [])[0];
+  if (typeof v === "boolean") return v;
+  if (v === "true") return true;
+  if (v === "false") return false;
+  return fallback;
+}
+
+// OpenPBR roughness from roughness/uroughness/vroughness/remaproughness.
+// Anisotropic alphas are averaged, with a note.
+export function pbrtMaterialRoughness(params, notes = []) {
+  const p = params || {};
+  if (p.roughness && p.roughness.type === "texture") notes.push("roughness is a texture; textures are not imported");
+  const base = pbrtFloat(p.roughness, 0);
+  const u = pbrtFloat(p.uroughness, base);
+  const v = pbrtFloat(p.vroughness, base);
+  const remap = pbrtBool(p.remaproughness, true);
+  const au = remap ? Math.sqrt(Math.max(0, u)) : Math.max(0, u);
+  const av = remap ? Math.sqrt(Math.max(0, v)) : Math.max(0, v);
+  if (Math.abs(au - av) > 1e-9) notes.push("anisotropic roughness (u " + u + ", v " + v + ") is averaged");
+  return Math.min(1, Math.sqrt((au + av) / 2));
+}
+
+// A conductor's eta or k: rgb, a named "metal-X-eta/k" spectrum, or the
+// pbrt default (copper).
+function pbrtConductorChannel(param, which, notes) {
+  if (!param) return PBRT_NAMED_METALS.Cu[which];
+  const first = (param.values || [])[0];
+  if (param.type === "spectrum" && typeof first === "string") {
+    const m = /^metal-([A-Za-z0-9]+)-(eta|k)$/.exec(first);
+    if (m && PBRT_NAMED_METALS[m[1]]) return PBRT_NAMED_METALS[m[1]][m[2]];
+    notes.push("unknown named spectrum \"" + first + "\" for " + which + ", copper is used");
+    return PBRT_NAMED_METALS.Cu[which];
+  }
+  return pbrtRgb(param, notes, which) || PBRT_NAMED_METALS.Cu[which];
+}
+
+const PBRT_ROUGHNESS_KEYS = ["roughness", "uroughness", "vroughness", "remaproughness"];
+
+function pbrtEta(param, notes) {
+  if (param && param.type === "spectrum") { notes.push("spectral eta is not imported, 1.5 is used"); return 1.5; }
+  return pbrtFloat(param, 1.5);
+}
+
+// One MaterialX open_pbr_surface document for a pbrt-v4 material
+// ({ type, params }); emission is the rgb radiance of an AreaLightSource.
+export function pbrtMaterialDocument({ name, material, emission } = {}) {
+  const doc = createDocument();
+  const notes = [];
+  const shader = doc.addNode("open_pbr_surface", "SR_" + (name || "material"), "surfaceshader");
+  const type = (material && material.type) || "diffuse";
+  const params = (material && material.params) || {};
+  const used = new Set(["type"]);
+  const take = (key) => { used.add(key); return params[key]; };
+  const roughness = () => { PBRT_ROUGHNESS_KEYS.forEach((key) => used.add(key)); return pbrtMaterialRoughness(params, notes); };
+
+  if (type === "diffuse") {
+    const rgb = pbrtRgb(take("reflectance"), notes, "reflectance") || [0.5, 0.5, 0.5];
+    setInput(shader, "base_color", "color3", { value: formatVector(rgb, 3) });
+    setInput(shader, "specular_weight", "float", { value: "0" });
+  } else if (type === "coateddiffuse") {
+    const rgb = pbrtRgb(take("reflectance"), notes, "reflectance") || [0.5, 0.5, 0.5];
+    const rough = roughness();
+    const eta = pbrtEta(take("eta"), notes);
+    for (const key of ["thickness", "albedo", "g", "maxdepth", "nsamples"]) {
+      if (params[key]) { used.add(key); notes.push(key + " (coating layer) is not imported"); }
+    }
+    setInput(shader, "base_color", "color3", { value: formatVector(rgb, 3) });
+    setInput(shader, "specular_weight", "float", { value: "0" });
+    setInput(shader, "coat_weight", "float", { value: "1" });
+    setInput(shader, "coat_ior", "float", { value: formatNumber(eta) });
+    setInput(shader, "coat_roughness", "float", { value: formatNumber(rough) });
+  } else if (type === "dielectric") {
+    const rough = roughness();
+    const eta = pbrtEta(take("eta"), notes);
+    setInput(shader, "base_color", "color3", { value: "1, 1, 1" });
+    setInput(shader, "transmission_weight", "float", { value: "1" });
+    setInput(shader, "specular_ior", "float", { value: formatNumber(eta) });
+    setInput(shader, "specular_roughness", "float", { value: formatNumber(rough) });
+  } else if (type === "conductor") {
+    const rough = roughness();
+    const reflectance = take("reflectance");
+    const etaParam = take("eta");
+    const kParam = take("k");
+    setInput(shader, "base_metalness", "float", { value: "1" });
+    if (reflectance) {
+      const rgb = pbrtRgb(reflectance, notes, "reflectance") || [1, 1, 1];
+      setInput(shader, "base_color", "color3", { value: formatVector(rgb, 3) });
+    } else {
+      const eta = pbrtConductorChannel(etaParam, "eta", notes);
+      const k = pbrtConductorChannel(kParam, "k", notes);
+      setInput(shader, "base_color", "color3", { value: formatVector(conductorF0(eta, k), 3) });
+      setInput(shader, "specular_color", "color3", { value: formatVector(conductorF82Tint(eta, k), 3) });
+    }
+    setInput(shader, "specular_roughness", "float", { value: formatNumber(rough) });
+  } else {
+    notes.push("material type \"" + type + "\" is not supported, a grey diffuse is used");
+    for (const key of Object.keys(params)) used.add(key);
+    setInput(shader, "base_color", "color3", { value: "0.5, 0.5, 0.5" });
+    setInput(shader, "specular_weight", "float", { value: "0" });
+  }
+  for (const key of Object.keys(params)) {
+    if (!used.has(key)) notes.push("parameter \"" + key + "\" is not imported");
+  }
+
+  // uniform_edf emits emission_color * emission_luminance as radiance, so
+  // luminance 1 with color L reproduces pbrt's L literally.
+  if (Array.isArray(emission) && emission.some((v) => v !== 0)) {
+    setInput(shader, "emission_color", "color3", { value: formatVector(emission, 3) });
+    setInput(shader, "emission_luminance", "float", { value: "1" });
+  }
+
+  const result = finish(doc, shader, "M_" + (name || "material"));
+  return { xml: result.xml, materialName: result.materialName, shaderName: result.shaderName, notes };
 }

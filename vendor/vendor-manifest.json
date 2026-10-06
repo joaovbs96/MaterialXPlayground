@@ -479,6 +479,13 @@
       "bytes": 26375
     },
     {
+      "path": "three/PLYLoader.js",
+      "dep": "three",
+      "source": "three@0.128.0",
+      "sha256": "0a75d83753f655fb8c1ab50ef2eacb1e31cd685aadfce31a9c5f6dc60a275961",
+      "bytes": 11558
+    },
+    {
       "path": "three/RGBELoader.js",
       "dep": "three",
       "source": "three@0.128.0",
