@@ -5,9 +5,22 @@
     // Rotates the extracted key light to track env rotation (rig lights are
     // historically fixed, only this one rotates). RotY(-rad): env content
     // shifts by +rad, so the light direction shifts by -rad to match.
-    const keyLightRotationMatrix = (rad) => new window.THREE.Matrix4().makeRotationY(-rad);
+    // A tilted dome (tilt = its authored orientation with the yaw factored out, YXZ)
+    // is the frame RotY(PI/2 - rad) * tilt relative to the rotation-0 frame RotY(PI/2).
+    const keyLightRotationMatrix = (rad, tilt) => {
+        const THREE = window.THREE;
+        if (!tilt) return new THREE.Matrix4().makeRotationY(-rad);
+        return new THREE.Matrix4().makeRotationY(Math.PI / 2 - rad).multiply(tilt).multiply(new THREE.Matrix4().makeRotationY(-Math.PI / 2));
+    };
     // World direction of an extracted key light under an env rotation.
-    const keyLightDirection = (keyLight, rad) => keyLight.direction.clone().applyMatrix4(keyLightRotationMatrix(rad));
+    const keyLightDirection = (keyLight, rad, tilt) => keyLight.direction.clone().applyMatrix4(keyLightRotationMatrix(rad, tilt));
+    // u_envMatrix, world to lat-long lookup (mx_latlong_map_lookup multiplies the world
+    // direction by it): RotY(PI/2) at rotation 0, after undoing the content rotation.
+    const envLookupMatrix = (rad, tilt) => {
+        const THREE = window.THREE;
+        if (!tilt) return new THREE.Matrix4().makeRotationY(Math.PI / 2 + rad);
+        return new THREE.Matrix4().makeRotationY(Math.PI / 2).multiply(keyLightRotationMatrix(rad, tilt).transpose());
+    };
 
     // Skybox <-> IBL rotation calibration, derived from u_envMatrix and
     // MaterialX's longitude convention: rotation.y = PI - rad matches
@@ -630,7 +643,7 @@ void main() {
         placeUsdSceneStudioLight,
         backdropBaseRotation: BG_BASE,
         backdropRotationSign: BG_SIGN,
-        keyLightRotationMatrix: (rad) => keyLightRotationMatrix(rad),
+        keyLightRotationMatrix: (rad, tilt) => keyLightRotationMatrix(rad, tilt),
         studioMaxPolar: STUDIO_MAX_POLAR,
         studioMaxOrbitDistance: STUDIO_MAX_ORBIT_DISTANCE,
         studioFloorClearance: STUDIO_FLOOR_CLEARANCE,
@@ -681,6 +694,7 @@ void main() {
     window.MtlxRender = Object.assign(window.MtlxRender || {}, {
         keyLightRotationMatrix,
         keyLightDirection,
+        envLookupMatrix,
         createPreviewBackdrop,
         studioFloorPolarLimit,
         studioCatcherVisible,
