@@ -35,6 +35,7 @@ export const VENDOR_DEPS = [
         "examples/js/loaders/GLTFLoader.js": "GLTFLoader.js",
         "examples/js/loaders/OBJLoader.js": "OBJLoader.js",
         "examples/js/loaders/PLYLoader.js": "PLYLoader.js",
+        "examples/js/loaders/TGALoader.js": "TGALoader.js",
         "examples/js/controls/OrbitControls.js": "OrbitControls.js",
         "examples/js/loaders/DRACOLoader.js": "DRACOLoader.js",
         "examples/js/libs/draco/gltf/draco_wasm_wrapper.js": "draco/draco_wasm_wrapper.js",

@@ -74,7 +74,7 @@ MtlxGenCore.setHost({
 // in js/shared/mtlx-three-material.js so the thumbnail worker can build it too.
 const {
     getDummyTex, shadowOffMatrix, getDummyTexWhite, getDummyTex3DWhite, loadExrTexture, loadHdrTexture,
-    UTIF_SUPPORTED_COMPRESSION, loadTifTexture, loadBoundedBitmapTexture, readImageDimensions, mxValueToThreeUniform,
+    UTIF_SUPPORTED_COMPRESSION, loadTifTexture, loadTgaTexture, loadBoundedBitmapTexture, readImageDimensions, mxValueToThreeUniform,
     linToSrgb, srgbToLin, rgbToHex, hexToRgb, DEFAULT_VALUE_TEXTURES, DEFAULT_VALUE_TEXTURE_SET, defaultValueToRgba,
     getFilenameDefaultTexture, defaultValueTexture, isFilenameDefaultTexture, samplerHoldsDefault,
     rebindFilenameDefault, configureLoadedTexture, UV_GEOMPROP_ALIASES, aliasUvGeomprops, prepGeometry,
@@ -956,6 +956,7 @@ const loadTextureForHit = async (hit, blob, view, samplerModes) => {
     if (ext === 'exr') return loadExrTexture(blob);
     if (ext === 'hdr') return loadHdrTexture(blob);
     if (ext === 'tif' || ext === 'tiff') return loadTifTexture(blob, hit.key);
+    if (ext === 'tga') return loadTgaTexture(blob, hit.key);
     if (view && view.maxTextureSize && typeof createImageBitmap === 'function') {
         return loadBoundedBitmapTexture(blob, Number(view.maxTextureSize), samplerModes);
     }
@@ -1194,8 +1195,8 @@ const bindDroppedTextures = (view, fileMap, onBound) => {
                     }
                     return { error };
                 });
-            } else if (ext === 'exr' || ext === 'hdr' || ext === 'tif' || ext === 'tiff') {
-                const startDecode = () => ext === 'exr' ? loadExrTexture(blob) : ext === 'hdr' ? loadHdrTexture(blob) : loadTifTexture(blob, hit.key);
+            } else if (ext === 'exr' || ext === 'hdr' || ext === 'tif' || ext === 'tiff' || ext === 'tga') {
+                const startDecode = () => ext === 'exr' ? loadExrTexture(blob) : ext === 'hdr' ? loadHdrTexture(blob) : ext === 'tga' ? loadTgaTexture(blob, hit.key) : loadTifTexture(blob, hit.key);
                 const parsePromise = runHeavyTextureDecode(startDecode);
                 return parsePromise.then((tex) => {
                     if (!tex) return; // unsupported/corrupt, the node default color stands
@@ -1343,8 +1344,8 @@ const decodeTextureSource = async (blob, ext, path, tier, renderer, bounded, bit
         if (tex && Number.isFinite(tier) && !bitmapsOnly) capKtx2MipLevels(tex, tier);
         return tex;
     }
-    if (ext === 'exr' || ext === 'hdr' || ext === 'tif' || ext === 'tiff') {
-        const startDecode = () => (ext === 'exr' ? loadExrTexture(blob) : ext === 'hdr' ? loadHdrTexture(blob) : loadTifTexture(blob, path));
+    if (ext === 'exr' || ext === 'hdr' || ext === 'tif' || ext === 'tiff' || ext === 'tga') {
+        const startDecode = () => (ext === 'exr' ? loadExrTexture(blob) : ext === 'hdr' ? loadHdrTexture(blob) : ext === 'tga' ? loadTgaTexture(blob, path) : loadTifTexture(blob, path));
         let tex = await runHeavyTextureDecode(startDecode);
         if (tex && bounded) {
             try { tex = await boundDecodedTexture(tex, tier); } catch (e) { /* keep the undecimated texture */ }
@@ -5765,7 +5766,7 @@ Object.assign(window, {
     normPath, joinRefPath, readDroppedItems, expandZips, isHiddenSideFile, findFileForRef, findFilesForRef, preferKtx2Sibling, resolveIncludes, readMtlxText, readMtlxXml,
     isExportAttribution, splitXmlEnvelope, withXmlEnvelope, escapeXmlAttrSpecials, preserveSourceFormatting,
     TEXTURE_CACHE, TEXTURE_SOURCES, textureCacheKey, textureCacheKeyAsync, hasBlobIdentity, samplerCacheKey, normalizeSamplerAddressMode, collectImageSamplerModes, annotateFilenameSamplerModes, bindDroppedTextures, createTextureSession, createUdimVariantUniforms,
-    loadExrTexture, loadHdrTexture, loadTifTexture, loadKtx2Texture, capKtx2MipLevels,
+    loadExrTexture, loadHdrTexture, loadTifTexture, loadTgaTexture, loadKtx2Texture, capKtx2MipLevels,
     runHeavyTextureDecode,
     loadBoundedBitmapTexture,
     resetTexturePerf, sceneTextureFastPathEnabled,

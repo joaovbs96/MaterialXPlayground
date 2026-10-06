@@ -493,6 +493,13 @@
       "bytes": 12572
     },
     {
+      "path": "three/TGALoader.js",
+      "dep": "three",
+      "source": "three@0.128.0",
+      "sha256": "919899fb923e9c2f09e0bada9a5d9d0de1f4fffdedd91ca3d981abfeeaab1d1c",
+      "bytes": 11364
+    },
+    {
       "path": "three/basis/basis_transcoder.js",
       "dep": "three",
       "source": "three@0.128.0",

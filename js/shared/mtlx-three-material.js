@@ -166,6 +166,21 @@ const loadHdrTexture = async (blob) => {
     }
 };
 
+// Parses a dropped .tga Blob via THREE.TGALoader (three r128) into an 8bpc RGBA
+// texture. The loader writes rows top first whatever the file's origin, like
+// every other decoder here, so the texture keeps flipY off.
+const loadTgaTexture = async (blob, path) => {
+    if (typeof THREE.TGALoader === 'undefined') {
+        console.warn('mtlx-engine: THREE.TGALoader unavailable; .tga textures keep the node default color.');
+        return null;
+    }
+    const d = new THREE.TGALoader().parse(await blob.arrayBuffer());
+    if (!d || !d.data || !d.width || !d.height) throw new Error('TGA decode failed for ' + (path || '(unknown)'));
+    const tex = new THREE.DataTexture(d.data, d.width, d.height, THREE.RGBAFormat, THREE.UnsignedByteType);
+    tex.minFilter = tex.magFilter = THREE.LinearFilter;
+    return tex;
+};
+
 // Compressions UTIF.js actually decodes (see vendor/utif/UTIF.js decode._decompress).
 // 32946 (old Deflate) is not in that list but is the same zlib stream as 8,
 // so it is remapped below before decodeImage runs.
@@ -1139,6 +1154,7 @@ globalThis.MtlxThreeMaterial = {
     loadHdrTexture,
     UTIF_SUPPORTED_COMPRESSION,
     loadTifTexture,
+    loadTgaTexture,
     loadBoundedBitmapTexture,
     readImageDimensions,
     mxValueToThreeUniform,
