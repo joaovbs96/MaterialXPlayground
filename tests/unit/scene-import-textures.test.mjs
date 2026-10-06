@@ -53,7 +53,8 @@ test('pbrt imagemap: encoding, wrap, scale, invert and uv mapping', () => {
   const warnings = [];
   const warn = (m) => warnings.push(m);
   assert.equal(pbrtImageColorspace('a.png'), 'srgb_texture');
-  assert.equal(pbrtImageColorspace('a.tga'), null); // pbrt-v4: sRGB is the default for PNG only
+  assert.equal(pbrtImageColorspace('a.tga'), 'srgb_texture'); // the format spec: sRGB for every 8-bit image
+  assert.equal(pbrtImageColorspace('a.pfm'), null);
   assert.equal(pbrtImageColorspace('a.jpg', 'sRGB'), 'srgb_texture');
   assert.equal(pbrtImageColorspace('a.exr', 'sRGB'), null);
   assert.equal(pbrtImageColorspace('a.png', 'linear'), null);
@@ -296,7 +297,7 @@ test('loadPbrtStage: textured material, PFM texture, image infinite light and di
   ];
   const stage = await loadPbrtStage({ files, rootPath: 'scene/s.pbrt' });
   const xml = text(stage.materials[0]);
-  assert.match(xml, /value="scene\/tex\/wood.tga" uniform="true"/); // .tga: linear in pbrt-v4
+  assert.match(xml, /value="scene\/tex\/wood.tga" colorspace="srgb_texture"/); // 8-bit: sRGB by the format spec
   assert.match(xml, /value="__pbrt_rough.hdr" uniform="true"/);
   assert.match(xml, /name="in2" type="vector2" value="2, 1"/);
   assert.ok(stage.assets.some((a) => a.path === '__pbrt_rough.hdr'));
@@ -312,7 +313,7 @@ test('loadPbrtStage: textured material, PFM texture, image infinite light and di
   assert.deepEqual(sun.color, [3, 3, 3]);
   nearAll(sun.matrix.slice(8, 11), [0, 1, 0]);
   assert.ok(stage.warnings.includes('Texture file not found: "tex/none.png" (drop the textures folder together with the scene)'));
-  assert.ok(stage.warnings.some((w) => /^\[info\] Texture "wood": pbrt-v4 reads 8-bit images other than PNG as linear/.test(w)));
+  assert.ok(!stage.warnings.some((w) => /Texture "wood"/.test(w)));
   assert.ok(stage.warnings.some((w) => /^\[info\] Environment map sky.pfm: pbrt's equal-area square resampled/.test(w)));
 
   // Export USD packages the TGA and the converted PFM, and writes the distant light.

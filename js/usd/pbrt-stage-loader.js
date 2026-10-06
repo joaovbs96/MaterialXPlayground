@@ -328,11 +328,11 @@ export function pbrtAreaLightRadiance(params, warn) {
 const PBRT_WRAP = { repeat: "periodic", clamp: "clamp", black: "constant" };
 const FLOAT_IMAGE = /\.(exr|pfm|hdr)$/i;
 
-// MaterialX file colorspace for a pbrt-v4 imagemap: "encoding" defaults to sRGB
-// for .png only, else linear (textures.cpp); float images are always linear.
+// MaterialX file colorspace for a pbrt-v4 imagemap: "encoding" defaults to sRGB for
+// every 8-bit image, as the file format spec defines it; float images are always linear.
 export function pbrtImageColorspace(filename, encoding, warn = () => {}) {
   if (FLOAT_IMAGE.test(String(filename))) return null;
-  const enc = String(encoding ?? (/\.png$/i.test(String(filename)) ? "sRGB" : "linear")).trim();
+  const enc = String(encoding ?? "sRGB").trim();
   if (enc === "sRGB") return "srgb_texture";
   if (enc === "linear") return null;
   const g = /^gamma\s+([0-9.eE+-]+)$/.exec(enc);
@@ -386,9 +386,6 @@ export function pbrtTextureSpec(name, textures, warn = () => {}, stack = []) {
       let wrap = PBRT_WRAP[wrapName];
       if (!wrap) { say('wrap "' + wrapName + '" is read as repeat'); wrap = "periodic"; }
       const scale = p.scale ? Number(p.scale.values[0]) : 1;
-      if (!p.encoding && !/\.png$/i.test(file) && !FLOAT_IMAGE.test(file)) {
-        warn('[info] Texture "' + name + '": pbrt-v4 reads 8-bit images other than PNG as linear unless "encoding" says otherwise, so ' + file + " is not sRGB-decoded");
-      }
       return {
         kind: "image", file, dir: tex.dir, colorspace: pbrtImageColorspace(file, p.encoding ? p.encoding.values[0] : undefined, say),
         uaddress: wrap, vaddress: wrap, uv: pbrtUvMapping(p, say),
