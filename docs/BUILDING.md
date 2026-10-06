@@ -33,7 +33,8 @@
 
 - `.github/workflows/deploy.yml` runs on every push/PR to `main`: a clean `npm ci && npm run build` must be byte-identical to the commit.
 - Then `npm run check` runs.
-- Only after both pass does a push to `main` deploy to GitHub Pages.
+- Pages deploys only from a published release: `deploy.yml`'s `publish` job calls `.github/workflows/pages-publish.yml` with the release tag, which stages the site, the gallery, the source facts and the blog, then deploys.
+- A push to `main` that touches `blog-src/**` runs `.github/workflows/blog-deploy.yml`: the same `pages-publish.yml`, with the site from the latest release tag and the blog from that commit. The app stays at the released version.
 
 ## When to run what
 
@@ -46,6 +47,7 @@
 | Want a non-default MaterialX version locally (Compare) | `npm run vendor:versions` |
 | `libraries/` or anything affecting node docs | `npm run build:nodelib` |
 | Tutorial content (`tutorials-src/`) | `npm run build:tutorials` |
+| Blog posts or templates (`blog-src/`) | nothing for the build; preview with `npm run blog:build` or `npm run blog:serve` |
 | `js/shared/render-settings.js` (rows, codecs, embed attrs) | `npm run build:render` (or `npm run build`), so `docs/RENDER-FEATURES.md` does not go stale |
 | Anything under `index.html`, `js/**` (excluding `js/materialx/`), or `vendor/vendor-manifest.json` | `npm run build:buildid` (or `npm run build`) |
 | `index.html` structure or webview-only fragments | `npm run build:webview` |
@@ -168,6 +170,17 @@ Version: `YYYY.M.patch` like a real release, but with `patch` offset by `900000 
 ## Desktop test builds from a branch
 
 `.github/workflows/package-desktop.yml` builds an unsigned desktop (Electron) installer from any branch. In the Actions tab pick **"Package desktop test build"**, set **"Use workflow from"** to the branch, choose the platform (windows, macos, linux or all) and run it. Download the installer from the run's artifacts (`materialx-playground-desktop-<os>-<branch>-<sha7>`, kept 14 days). Nothing is published. A `verify` job builds once and fails fast on stale committed artifacts; the platform jobs then repeat `release.yml`'s `desktop` job steps, which must be kept in sync. Builds are unsigned: on Windows use SmartScreen "More info" then "Run anyway"; on macOS right-click Open, or run `xattr -dr com.apple.quarantine "/Applications/MaterialX Playground.app"`. The workflow only appears in the Actions tab once it is on the default branch.
+
+## Blog
+
+The blog is an [Eleventy](https://www.11ty.dev/) site in `blog-src/`, served at `/blog/` on the web only (not in the `.vsix` or the desktop app).
+
+- Write a post: add `blog-src/posts/<slug>.md` with front matter `title`, `description`, `date`, `tags`, and optionally `author`, `image`, `toc` and `draft: true`. The slug is the URL. Em-dashes fail the build.
+- Preview: `npm run blog:install` once, then `npm run blog:serve` (includes drafts, restarts on edits; refresh the browser) or `npm run blog:build` and `npx serve .`, then open `/blog/`.
+- Publish: merge to `main`. `blog-deploy.yml` deploys it on top of the latest release. Drafts are never published.
+- Output: `blog/` is gitignored and never committed; CI builds it with `--pathprefix /MaterialXPlayground/blog/`. It also writes `feed.xml` (Atom), `sitemap.xml`, `search.json` and `posts.json` (the home page's Latest posts strip).
+- Pages pull the site header and theme from the app root (`window.__MTLX_SUBSITE__`, `__MTLX_APP_ROOT__`), so blog CSS uses only `--mtlx-*` theme tokens; `check-theme-literals` scans `blog-src/`.
+- Dependencies: Eleventy is build-time only, so it lives in `blog-src/package.json` with its own lockfile, outside the extension manifest and the vendor registry, like `electron/`. Its audit runs in `dependency-audit.yml`. `chokidar` is overridden to 4.x to drop a vulnerable `braces`; Eleventy's own watcher then misses edits, which is why `serve` restarts through `node --watch-path`.
 
 ## Publishing to the VS Code Marketplace
 

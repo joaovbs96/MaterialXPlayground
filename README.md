@@ -139,9 +139,9 @@ localStorage.setItem('mtlx_scene_prefilter_fix', '0');     // use the GGX-prefil
 
 ## VS Code extension (experimental)
 
-The playground also ships as a VS Code extension: opening a `.mtlx` file brings up the Node Graph Editor and Material Viewer beside the text editor, with edits synced live in both directions, plus in-editor validation diagnostics, hover documentation, outline and go-to-definition/find-references, snippets, auto-complete, color swatches with a picker, and the node library documentation as its own panel. A read-only USD Scene Viewer handles `.usd`, `.usda`, `.usdc` and `.usdz` files, and a "New Material from Example" command drops a ready-made material into your workspace.
+The playground also ships as a VS Code extension: opening a `.mtlx` file brings up the Node Graph Editor and Material Viewer beside the text editor, with edits synced live in both directions (graph edits keep your file's formatting and comments), plus in-editor validation diagnostics, hover documentation, outline and go-to-definition/find-references, rename, document formatting, file links, snippets, auto-complete, color swatches with a picker, and the node library documentation as its own panel. A MaterialX Playground sidebar holds quick actions, an Insert Node panel, the document's textures and files, and an outline. A read-only Scene Viewer opens USD (`.usd`, `.usda`, `.usdc`, `.usdz`), glTF (`.gltf`, `.glb`) and OBJ files, and a "New Material from Example" gallery drops a ready-made material into your workspace. The views follow your VS Code color theme by default.
 
-> ⚠️ **Early, experimental release.** The extension is a work in progress and hasn't had wide testing yet — things may not be 100%, so expect rough edges and please report anything broken on the [issue tracker](https://github.com/joaovbs96/MaterialXPlayground/issues). It is currently distributed only as a `.vsix` file on the releases page (not the Visual Studio Marketplace) and does not auto-update.
+> ⚠️ **Early, experimental release.** The extension is a work in progress and hasn't had wide testing yet, so expect rough edges and please report anything broken on the [issue tracker](https://github.com/joaovbs96/MaterialXPlayground/issues). For now it is distributed as a `.vsix` file on the releases page and does not auto-update; listings on the VS Code Marketplace and Open VSX are coming.
 
 ### Install
 
@@ -157,7 +157,7 @@ The packaged extension is fully self-contained: it bundles the MaterialX librari
 
 ### Update / uninstall
 
-There are no auto-updates: to update, download the `.vsix` from a newer release and install it over the existing one the same way. To uninstall, remove "MaterialX Playground" from the Extensions view, or run `code --uninstall-extension local.materialx-playground`.
+There are no auto-updates: to update, download the `.vsix` from a newer release and install it over the existing one the same way. To uninstall, remove "MaterialX Playground" from the Extensions view, or run `code --uninstall-extension MaterialXPlayground.materialx-playground`. If you installed a `.vsix` from an older release, its ID was `local.materialx-playground`: uninstall that one first, before installing a new version.
 
 ## Desktop app (experimental)
 
