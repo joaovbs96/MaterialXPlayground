@@ -2,13 +2,13 @@
 // upgraded like Mitsuba 3 does) scene .xml plus its .obj meshes into the
 // neutral stage payload. THREE.OBJLoader is a window global; the rest is pure.
 
-import { mitsubaMaterialDocument, sanitizeMtlxName } from "./mtlx-material-docs.js";
+import { mitsubaMaterialDocument, sanitizeMtlxName, forEachImageTexture } from "./mtlx-material-docs.js";
 import { objHasVertexNormals, computeSmoothNormals } from "./obj-stage-loader.js";
 import {
   checkAborted, normalizePath, dirOf, basenameOf, toArrayBuffer, resolveScenePath, createWarningSink,
   IDENTITY, mat4Multiply, mat4Invert, mat3Determinant, translateMatrix, scaleMatrix, rotateMatrix, bakeMeshTransform,
   cameraLensForFov, sceneCameraRecord, uniformDomeLight, texturedDomeLight, materialEntryFromDocument, bakedMeshRecord, scenePayload,
-  parseXml, MITSUBA_VERSION_PATTERN, rectangleFromTriangles, emitterStandInLight,
+  parseXml, MITSUBA_VERSION_PATTERN, rectangleFromTriangles, emitterStandInLight, prepareSceneTextures,
 } from "./scene-import-common.js";
 
 export { parseXml };
@@ -34,18 +34,27 @@ export function mitsubaSnakeCase(name) {
   return s;
 }
 
-// The upgrade Mitsuba 3 applies to pre-2.0 files: snake_case parameter
-// names (not <default>), lookAt to lookat, diffuse's diffuse_reflectance to
-// reflectance, "_" ids renamed. Texture uoffset/uscale moves are not needed.
+// The upgrade Mitsuba 3 applies to pre-2.0 files: snake_case names (not <default>),
+// lookAt to lookat, diffuse's diffuse_reflectance to reflectance, "_" ids renamed, and
+// uoffset/voffset/uscale/vscale as a to_uv of scale times translate (parser.cpp).
 export function upgradeMitsubaTree(root, version, warn = () => {}) {
   if (!version || version[0] >= 2) return root;
+  const UV_KEYS = ["uoffset", "voffset", "uscale", "vscale"];
   const visit = (el, parent) => {
     if (el.name === "lookAt") el.name = "lookat";
     if (el.attrs.name !== undefined && el.name !== "default") el.attrs.name = mitsubaSnakeCase(el.attrs.name);
     if (parent && parent.name === "bsdf" && parent.attrs.type === "diffuse" && el.attrs.name === "diffuse_reflectance") el.attrs.name = "reflectance";
     if (el.attrs.id && el.attrs.id[0] === "_") el.attrs.id = "ID" + el.attrs.id + "__UPGR";
-    if (["uoffset", "voffset", "uscale", "vscale"].includes(el.attrs.name)) warn('Mitsuba 0.x texture parameter "' + el.attrs.name + '" is not upgraded, ignored');
     for (const c of el.children) visit(c, el);
+    const uv = el.children.filter((c) => c.name === "float" && UV_KEYS.includes(c.attrs.name));
+    if (uv.length) {
+      const get = (key, fallback) => { const c = uv.find((x) => x.attrs.name === key); return c ? String(Number(c.attrs.value)) : fallback; };
+      el.children = el.children.filter((c) => !uv.includes(c));
+      el.children.push({ name: "transform", attrs: { name: "to_uv" }, children: [
+        { name: "translate", attrs: { x: get("uoffset", "0"), y: get("voffset", "0"), z: "0" }, children: [] },
+        { name: "scale", attrs: { x: get("uscale", "1"), y: get("vscale", "1"), z: "1" }, children: [] },
+      ] });
+    }
   };
   for (const c of root.children) visit(c, root);
   return root;
@@ -170,13 +179,90 @@ export function readMitsubaPlugin(el, warn = () => {}) {
       default:
         if (PLUGIN_TAGS.has(c.name)) {
           children.push(c);
-          if (c.name === "texture" && name) props[name] = { type: "texture", plugin: c.attrs.type, value: null };
+          if (c.name === "texture" && name) props[name] = { type: "texture", plugin: c.attrs.type, value: null, el: c };
         } else if (c.name !== "default") {
           warn("Element <" + c.name + "> is not supported, ignored");
         }
     }
   }
   return { tag: el.name, type: el.attrs.type || "", id: el.attrs.id, props, children, refs };
+}
+
+// --------------------------------------------------------------- textures
+
+// Affine uv maps [a, b, c, d, e, f] (u' = a u + c v + e, v' = b u + d v + f).
+const affineCompose = (p, q) => [ // p after q
+  p[0] * q[0] + p[2] * q[1], p[1] * q[0] + p[3] * q[1], p[0] * q[2] + p[2] * q[3], p[1] * q[2] + p[3] * q[3],
+  p[0] * q[4] + p[2] * q[5] + p[4], p[1] * q[4] + p[3] * q[5] + p[5],
+];
+const UV_IDENTITY = [1, 0, 0, 1, 0, 0];
+// Mitsuba's uv has v = 0 at the image's top row (bitmap rows top first, obj v flipped
+// on load by flip_tex_coords); MaterialX's v = 0 is the bottom. F swaps the two.
+const UV_FLIP = [1, 0, 0, -1, 0, 1];
+
+// Mitsuba's to_uv (a 4x4 property read as an AffineTransform3f: rows and columns 0, 1, 3).
+export function mitsubaUvTransform(matrix) {
+  const m = matrix || IDENTITY;
+  return [m[0], m[1], m[4], m[5], m[12], m[13]];
+}
+
+// A bitmap's texcoord map in MaterialX's convention: F to_uv F (null for the identity).
+export function mitsubaBitmapUv(toUv) {
+  const m = affineCompose(UV_FLIP, affineCompose(toUv || UV_IDENTITY, UV_FLIP)).map((v) => (Object.is(v, -0) ? 0 : v));
+  return m.every((v, i) => v === UV_IDENTITY[i]) ? null : m;
+}
+
+// A Mitsuba texture element as the format-neutral description mtlx-material-docs.js
+// builds graphs from: bitmap and checkerboard; other types are reported unsupported.
+export function mitsubaTextureSpec(el, byId, warn = () => {}, depth = 0) {
+  if (!el || depth > 16) return { kind: "unsupported", reason: "texture nesting is too deep" };
+  const plugin = readMitsubaPlugin(el, warn);
+  const p = resolveMitsubaTextureProps(plugin.props, byId, warn, depth + 1);
+  const toUv = p.to_uv && p.to_uv.type === "transform" ? mitsubaUvTransform(p.to_uv.value) : null;
+  if (plugin.type === "bitmap") {
+    if (!p.filename) return { kind: "unsupported", reason: "bitmap without a filename" };
+    const file = String(p.filename.value);
+    const wrapName = p.wrap_mode ? String(p.wrap_mode.value) : "repeat";
+    const wrap = { repeat: "periodic", mirror: "mirror", clamp: "clamp" }[wrapName];
+    if (!wrap) warn('bitmap wrap_mode "' + wrapName + '" is read as repeat');
+    if (p.gamma) warn("bitmap gamma is not applied");
+    const raw = !!(p.raw && p.raw.value === true);
+    return {
+      kind: "image", file, colorspace: raw || /\.(exr|hdr|pfm)$/i.test(file) ? null : "srgb_texture",
+      uaddress: wrap || "periodic", vaddress: wrap || "periodic",
+      uv: mitsubaBitmapUv(toUv), scale: 1, invert: false, floatChannel: "luminance",
+    };
+  }
+  if (plugin.type === "checkerboard") {
+    const value = (key, fallback) => {
+      const v = p[key];
+      if (!v) return { kind: "constant", value: fallback };
+      if (v.type === "texture") return v.spec || { kind: "unsupported", reason: key + " texture is not readable" };
+      if (v.type === "rgb") return { kind: "constant", value: v.value.slice(0, 3) };
+      if (v.type === "float") return { kind: "constant", value: Number(v.value) };
+      warn("checkerboard " + key + " given as " + v.type + " is not supported, " + fallback + " is used");
+      return { kind: "constant", value: fallback };
+    };
+    // Mitsuba picks color0 where fract(u) > 0.5 equals fract(v) > 0.5: even cells of floor(2 uv).
+    const uv = affineCompose([2, 0, 0, 2, 0, 0], affineCompose(toUv || UV_IDENTITY, UV_FLIP));
+    return { kind: "checker", tex1: value("color0", 0.4), tex2: value("color1", 0.2), uv };
+  }
+  return { kind: "unsupported", reason: 'texture "' + plugin.type + '" is not supported' };
+}
+
+// Plugin props with every texture (inline or <ref>) given its description in prop.spec.
+export function resolveMitsubaTextureProps(props, byId, warn = () => {}, depth = 0) {
+  const out = {};
+  for (const [key, prop] of Object.entries(props || {})) {
+    let el = prop && prop.type === "texture" ? prop.el : null;
+    if (prop && prop.type === "ref") {
+      const target = byId && byId.get(prop.value);
+      if (target && target.name === "texture") el = target;
+    }
+    if (!el) { out[key] = prop; continue; }
+    out[key] = { type: "texture", plugin: el.attrs.type, value: null, spec: mitsubaTextureSpec(el, byId, warn, depth) };
+  }
+  return out;
 }
 
 // --------------------------------------------------------------- the scene
@@ -239,12 +325,13 @@ export function mitsubaEnvmapDomeMatrix(toWorld) {
   return { matrix: m, mirrored };
 }
 
-// Mitsuba's rectangle: [-1, 1]^2 in the local xy plane, normal +z.
+// Mitsuba's rectangle: [-1, 1]^2 in the local xy plane, normal +z. Its uv is
+// (local + 1) / 2 with Mitsuba's v = 0 at the image top, so ours is flipped in v.
 export function rectangleArrays() {
   return {
     positions: new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]),
     normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]),
-    uvs: new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]),
+    uvs: new Float32Array([0, 1, 1, 1, 1, 0, 0, 0]),
     indices: new Uint32Array([0, 1, 2, 0, 2, 3]),
   };
 }
@@ -315,7 +402,8 @@ export function interpretMitsubaScene(rootEl, warn = () => {}) {
         node = inner[0];
         continue;
       }
-      return { label: label || node.attrs.id || null, twoSided, bsdf: { type: plugin.type, props: plugin.props }, key: label ? "id:" + label : "inline:" + twoSided + ":" + JSON.stringify(plugin.props) + plugin.type };
+      const props = resolveMitsubaTextureProps(plugin.props, byId, warn);
+      return { label: label || node.attrs.id || null, twoSided, bsdf: { type: plugin.type, props }, key: label ? "id:" + label : "inline:" + twoSided + ":" + JSON.stringify(props) + plugin.type };
     }
     throw new Error("bsdf nesting is too deep");
   };
@@ -376,6 +464,7 @@ export function interpretMitsubaScene(rootEl, warn = () => {}) {
         filename: p.filename ? p.filename.value : null,
         toWorld: p.to_world ? p.to_world.value : IDENTITY.slice(),
         faceNormals: !!(p.face_normals && p.face_normals.value),
+        flipTexCoords: !(p.flip_tex_coords && p.flip_tex_coords.value === false),
         flipNormals: !!(p.flip_normals && p.flip_normals.value),
         material, emission,
       });
@@ -445,6 +534,16 @@ export async function loadMitsubaStage({ files, rootPath, signal, onProgress, de
   const scene = interpretMitsubaScene(parseXml(await readText(root)), warn);
   report("parse", 1, 1, "Parsed " + basenameOf(root));
 
+  // Image textures the bsdfs use: resolved against the drop, PFM converted.
+  const images = [];
+  for (const shape of scene.shapes) {
+    for (const prop of Object.values((shape.material && shape.material.bsdf.props) || {})) {
+      if (prop && prop.spec) forEachImageTexture(prop.spec, (spec) => images.push(spec));
+    }
+  }
+  const readBytes = async (path) => { checkAborted(signal); return new Uint8Array(await toArrayBuffer(fileByPath.get(path).data)); };
+  const textures = await prepareSceneTextures({ images, rootDir, fileByPath, prefix: "mitsuba", warn, readBytes });
+
   const usedMaterialNames = new Set();
   const materialEntries = [];
   const materialPathByKey = new Map();
@@ -454,7 +553,7 @@ export async function loadMitsubaStage({ files, rootPath, signal, onProgress, de
     if (materialPathByKey.has(key)) return materialPathByKey.get(key);
     const label = resolved.label || "mitsuba_" + resolved.bsdf.type;
     const name = sanitizeMtlxName(emission ? label + "_emissive" : label, usedMaterialNames);
-    const doc = mitsubaMaterialDocument({ name, bsdf: resolved.bsdf, emission, legacy: scene.legacy });
+    const doc = mitsubaMaterialDocument({ name, bsdf: resolved.bsdf, emission, legacy: scene.legacy, textureFile: textures.textureFile });
     for (const note of doc.notes) warn(label + ": " + note);
     const entry = materialEntryFromDocument(doc, name, "mitsuba");
     materialEntries.push(entry);
@@ -491,6 +590,9 @@ export async function loadMitsubaStage({ files, rootPath, signal, onProgress, de
         const resolved = resolveScenePath(shape.filename, rootDir, rootDir, fileByPath);
         if (!resolved) { warn('OBJ file not found: "' + shape.filename + '" (drop the models folder together with the scene)'); continue; }
         arrays = await readObj(resolved);
+        // flip_tex_coords (default true) makes Mitsuba's v = 1 - v_obj, which is the
+        // OBJ v MaterialX expects; without it the OBJ v is flipped here instead.
+        if (!shape.flipTexCoords && arrays.uvs) arrays = { ...arrays, uvs: arrays.uvs.map((v, i) => (i % 2 ? 1 - v : v)) };
         label = label || basenameOf(shape.filename).replace(/\.obj$/i, "");
       } else {
         arrays = rectangleArrays();
@@ -567,5 +669,5 @@ export async function loadMitsubaStage({ files, rootPath, signal, onProgress, de
 
   report("extract-materials", 1, 1, "Extracted materials");
   report("prepare-geometry", 1, 1, "Prepared geometry");
-  return scenePayload({ rootPath: root, sourceKind: "mitsuba", meshes: meshRecords, materials: materialEntries, cameras, lights, warnings });
+  return scenePayload({ rootPath: root, sourceKind: "mitsuba", meshes: meshRecords, materials: materialEntries, cameras, lights, warnings, assets: textures.assets });
 }
