@@ -8,68 +8,10 @@ import {
   checkAborted, normalizePath, dirOf, basenameOf, toArrayBuffer, resolveScenePath, createWarningSink,
   IDENTITY, mat4Multiply, mat3Determinant, translateMatrix, scaleMatrix, rotateMatrix, bakeMeshTransform,
   cameraLensForFov, sceneCameraRecord, uniformDomeLight, materialEntryFromDocument, bakedMeshRecord, scenePayload,
+  parseXml, MITSUBA_VERSION_PATTERN,
 } from "./scene-import-common.js";
 
-// --------------------------------------------------------------- XML parser
-
-const XML_ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
-const decodeEntities = (s) => s.replace(/&(#x[0-9a-fA-F]+|#\d+|amp|lt|gt|quot|apos);/g, (m, e) => (e[0] === "#"
-  ? String.fromCodePoint(e[1] === "x" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10))
-  : XML_ENTITIES[e]));
-
-// Minimal XML reader for scene files: elements { name, attrs, children }.
-// Text content, comments, processing instructions, DOCTYPE and CDATA are
-// skipped (Mitsuba stores every value in attributes).
-export function parseXml(text) {
-  const src = String(text ?? "");
-  const root = { name: "#document", attrs: {}, children: [] };
-  const stack = [root];
-  const n = src.length;
-  let i = 0;
-  while (i < n) {
-    const lt = src.indexOf("<", i);
-    if (lt === -1) break;
-    if (src.startsWith("<!--", lt)) { const e = src.indexOf("-->", lt + 4); if (e === -1) throw new Error("Unterminated XML comment"); i = e + 3; continue; }
-    if (src.startsWith("<![CDATA[", lt)) { const e = src.indexOf("]]>", lt); if (e === -1) throw new Error("Unterminated CDATA"); i = e + 3; continue; }
-    if (src[lt + 1] === "?" || src[lt + 1] === "!") { const e = src.indexOf(">", lt); if (e === -1) throw new Error("Unterminated XML declaration"); i = e + 1; continue; }
-    if (src[lt + 1] === "/") {
-      const e = src.indexOf(">", lt);
-      if (e === -1) throw new Error("Unterminated closing tag");
-      const name = src.slice(lt + 2, e).trim();
-      const top = stack.pop();
-      if (!top || top.name !== name || !stack.length) throw new Error("Mismatched closing tag </" + name + ">");
-      i = e + 1;
-      continue;
-    }
-    let j = lt + 1;
-    while (j < n && !/[\s/>]/.test(src[j])) j++;
-    const el = { name: src.slice(lt + 1, j), attrs: {}, children: [] };
-    for (;;) {
-      while (j < n && /\s/.test(src[j])) j++;
-      if (j >= n) throw new Error("Unterminated tag <" + el.name + ">");
-      if (src[j] === ">" || (src[j] === "/" && src[j + 1] === ">")) break;
-      let k = j;
-      while (k < n && !/[\s=/>]/.test(src[k])) k++;
-      const key = src.slice(j, k);
-      while (k < n && /\s/.test(src[k])) k++;
-      if (src[k] !== "=") throw new Error("Attribute " + key + " of <" + el.name + "> has no value");
-      k++;
-      while (k < n && /\s/.test(src[k])) k++;
-      const q = src[k];
-      if (q !== '"' && q !== "'") throw new Error("Attribute " + key + " of <" + el.name + "> is not quoted");
-      const end = src.indexOf(q, k + 1);
-      if (end === -1) throw new Error("Unterminated attribute " + key);
-      el.attrs[key] = decodeEntities(src.slice(k + 1, end));
-      j = end + 1;
-    }
-    stack[stack.length - 1].children.push(el);
-    if (src[j] === "/") { i = j + 2; continue; }
-    stack.push(el);
-    i = j + 1;
-  }
-  if (stack.length !== 1) throw new Error("Unclosed element <" + stack[stack.length - 1].name + ">");
-  return root.children[0] || null;
-}
+export { parseXml };
 
 // --------------------------------------------------------- version upgrade
 
@@ -308,8 +250,9 @@ const BSDF_WRAPPERS = new Set(["bumpmap", "normalmap", "mask"]);
 // environments }; warn(message) collects warnings.
 export function interpretMitsubaScene(rootEl, warn = () => {}) {
   if (!rootEl || rootEl.name !== "scene") throw new Error("Not a Mitsuba scene: the root element is <" + (rootEl ? rootEl.name : "none") + ">, expected <scene>");
-  let version = parseMitsubaVersion(rootEl.attrs.version);
-  if (!version) { warn("The <scene> has no version attribute; it is read as Mitsuba 3"); version = [3, 0, 0]; }
+  // Mitsuba requires the version attribute (see MITSUBA_VERSION_PATTERN).
+  if (!MITSUBA_VERSION_PATTERN.test(String(rootEl.attrs.version || "").trim())) throw new Error("Not a Mitsuba scene: the <scene> has no valid version attribute");
+  const version = parseMitsubaVersion(rootEl.attrs.version);
   if (version[0] > 3) warn("Mitsuba scene version " + version.join(".") + " is newer than 3.x; it is read as 3.x");
   upgradeMitsubaTree(rootEl, version, warn);
   if (version[0] < 2) warn("[info] Mitsuba " + version.join(".") + " scene upgraded to the 3.x parameter names");

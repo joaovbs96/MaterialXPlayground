@@ -1,6 +1,6 @@
 // Pure helpers shared by the renderer scene importers (pbrt-v4, Mitsuba):
-// paths, 4x4 matrices, transform baking, camera lens, and the neutral stage
-// payload records. No DOM, no THREE, so node tests can import it.
+// paths, the XML reader and Mitsuba scene detection, 4x4 matrices, transform
+// baking, camera lens, payload records. No DOM, no THREE, so node tests can import it.
 
 export function checkAborted(signal) {
   if (signal && signal.aborted) {
@@ -55,6 +55,165 @@ export function createWarningSink() {
   const warnings = [];
   const seen = new Set();
   return { warnings, warn: (message) => { if (!seen.has(message)) { seen.add(message); warnings.push(message); } } };
+}
+
+// --------------------------------------------------------------- XML parser
+
+const XML_ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+const decodeEntities = (s) => s.replace(/&(#x[0-9a-fA-F]+|#\d+|amp|lt|gt|quot|apos);/g, (m, e) => (e[0] === "#"
+  ? String.fromCodePoint(e[1] === "x" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10))
+  : XML_ENTITIES[e]));
+
+// Minimal XML reader for scene files: elements { name, attrs, children }.
+// Text content, comments, processing instructions, DOCTYPE and CDATA are
+// skipped (Mitsuba stores every value in attributes).
+export function parseXml(text) {
+  const src = String(text ?? "");
+  const root = { name: "#document", attrs: {}, children: [] };
+  const stack = [root];
+  const n = src.length;
+  let i = 0;
+  while (i < n) {
+    const lt = src.indexOf("<", i);
+    if (lt === -1) break;
+    if (src.startsWith("<!--", lt)) { const e = src.indexOf("-->", lt + 4); if (e === -1) throw new Error("Unterminated XML comment"); i = e + 3; continue; }
+    if (src.startsWith("<![CDATA[", lt)) { const e = src.indexOf("]]>", lt); if (e === -1) throw new Error("Unterminated CDATA"); i = e + 3; continue; }
+    if (src[lt + 1] === "?" || src[lt + 1] === "!") { const e = src.indexOf(">", lt); if (e === -1) throw new Error("Unterminated XML declaration"); i = e + 1; continue; }
+    if (src[lt + 1] === "/") {
+      const e = src.indexOf(">", lt);
+      if (e === -1) throw new Error("Unterminated closing tag");
+      const name = src.slice(lt + 2, e).trim();
+      const top = stack.pop();
+      if (!top || top.name !== name || !stack.length) throw new Error("Mismatched closing tag </" + name + ">");
+      i = e + 1;
+      continue;
+    }
+    let j = lt + 1;
+    while (j < n && !/[\s/>]/.test(src[j])) j++;
+    const el = { name: src.slice(lt + 1, j), attrs: {}, children: [] };
+    for (;;) {
+      while (j < n && /\s/.test(src[j])) j++;
+      if (j >= n) throw new Error("Unterminated tag <" + el.name + ">");
+      if (src[j] === ">" || (src[j] === "/" && src[j + 1] === ">")) break;
+      let k = j;
+      while (k < n && !/[\s=/>]/.test(src[k])) k++;
+      const key = src.slice(j, k);
+      while (k < n && /\s/.test(src[k])) k++;
+      if (src[k] !== "=") throw new Error("Attribute " + key + " of <" + el.name + "> has no value");
+      k++;
+      while (k < n && /\s/.test(src[k])) k++;
+      const q = src[k];
+      if (q !== '"' && q !== "'") throw new Error("Attribute " + key + " of <" + el.name + "> is not quoted");
+      const end = src.indexOf(q, k + 1);
+      if (end === -1) throw new Error("Unterminated attribute " + key);
+      el.attrs[key] = decodeEntities(src.slice(k + 1, end));
+      j = end + 1;
+    }
+    stack[stack.length - 1].children.push(el);
+    if (src[j] === "/") { i = j + 2; continue; }
+    stack.push(el);
+    i = j + 1;
+  }
+  if (stack.length !== 1) throw new Error("Unclosed element <" + stack[stack.length - 1].name + ">");
+  return root.children[0] || null;
+}
+
+// ------------------------------------------------------ Mitsuba detection
+
+// Mitsuba 3 requires a version on the root element (xml.cpp: "missing version
+// attribute in root element"), so a <scene> without one is not a Mitsuba scene.
+export const MITSUBA_VERSION_PATTERN = /^\d+(\.\d+){1,2}$/;
+const MITSUBA_SCENE_CHILDREN = new Set(["shape", "sensor", "emitter", "integrator"]);
+export const MITSUBA_SNIFF_BYTES = 4096;
+
+// Prolog check on the head of a file: BOM, XML declaration, comments, DOCTYPE
+// and whitespace, then <scene version="x.y[.z]">. Returns the version or null.
+export function sniffMitsubaSceneVersion(head) {
+  const s = String(head ?? "");
+  let i = s.charCodeAt(0) === 0xfeff ? 1 : 0;
+  for (;;) {
+    while (i < s.length && /\s/.test(s[i])) i++;
+    if (s.startsWith("<?", i)) { const e = s.indexOf("?>", i + 2); if (e === -1) return null; i = e + 2; continue; }
+    if (s.startsWith("<!--", i)) { const e = s.indexOf("-->", i + 4); if (e === -1) return null; i = e + 3; continue; }
+    if (/^<!DOCTYPE/i.test(s.slice(i, i + 9))) {
+      const gt = s.indexOf(">", i), br = s.indexOf("[", i);
+      const e = br !== -1 && (gt === -1 || br < gt) ? s.indexOf("]", br) : i;
+      const close = e === -1 ? -1 : s.indexOf(">", e);
+      if (close === -1) return null;
+      i = close + 1;
+      continue;
+    }
+    break;
+  }
+  const open = /^<([A-Za-z_][\w.:-]*)/.exec(s.slice(i, i + 256));
+  if (!open || open[1] !== "scene") return null;
+  const end = s.indexOf(">", i);
+  if (end === -1) return null;
+  const tag = s.slice(i + open[0].length, end);
+  const attr = /([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+  let m;
+  while ((m = attr.exec(tag))) {
+    if (m[1] !== "version") continue;
+    const value = (m[2] ?? m[3] ?? "").trim();
+    return MITSUBA_VERSION_PATTERN.test(value) ? value : null;
+  }
+  return null;
+}
+
+// Full check: a <scene version> root with at least one direct shape, sensor,
+// emitter or integrator child that has a type. Returns { version, includes } or null.
+export function mitsubaSceneInfo(text) {
+  if (!sniffMitsubaSceneVersion(String(text ?? "").slice(0, MITSUBA_SNIFF_BYTES))) return null;
+  let root;
+  try { root = parseXml(text); } catch (e) { return null; }
+  if (!root || root.name !== "scene" || !MITSUBA_VERSION_PATTERN.test(String(root.attrs.version || "").trim())) return null;
+  if (!root.children.some((c) => MITSUBA_SCENE_CHILDREN.has(c.name) && c.attrs.type)) return null;
+  const includes = root.children.filter((c) => c.name === "include" && c.attrs.filename).map((c) => c.attrs.filename);
+  return { version: root.attrs.version.trim(), includes };
+}
+
+// Numeric version order ("3.0.0" > "0.6.0", "2.10" > "2.9").
+export function compareMitsubaVersions(a, b) {
+  const pa = String(a).split(".").map(Number), pb = String(b).split(".").map(Number);
+  for (let k = 0; k < 3; k++) { const d = (pa[k] || 0) - (pb[k] || 0); if (d) return d; }
+  return 0;
+}
+
+// Text of a dropped entry's data (File/Blob, ArrayBuffer, typed array or string),
+// optionally only its first maxBytes.
+export async function readEntryText(data, maxBytes = Infinity) {
+  if (typeof data === "string") return Number.isFinite(maxBytes) ? data.slice(0, maxBytes) : data;
+  if (data && typeof data.slice === "function" && typeof data.text === "function") {
+    return Number.isFinite(maxBytes) ? data.slice(0, maxBytes).text() : data.text();
+  }
+  let bytes;
+  if (data instanceof ArrayBuffer) bytes = new Uint8Array(data);
+  else if (ArrayBuffer.isView(data)) bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  else return "";
+  return new TextDecoder().decode(Number.isFinite(maxBytes) ? bytes.subarray(0, maxBytes) : bytes);
+}
+
+// Valid Mitsuba roots among .xml entries [{ path, data }]: sniff, full check,
+// minus files another candidate <include>s. Best first: highest version,
+// shallowest path, alphabetical. Every other .xml is an ordinary companion file.
+export async function classifyMitsubaXmlFiles(files) {
+  const scenes = [];
+  for (const entry of Array.isArray(files) ? files : []) {
+    if (!entry || !/\.xml$/i.test(String(entry.path || ""))) continue;
+    let info = null;
+    try {
+      if (sniffMitsubaSceneVersion(await readEntryText(entry.data, MITSUBA_SNIFF_BYTES))) info = mitsubaSceneInfo(await readEntryText(entry.data));
+    } catch (e) { info = null; }
+    if (info) scenes.push({ path: normalizePath(entry.path), ...info });
+  }
+  const included = new Set();
+  for (const scene of scenes) {
+    for (const ref of scene.includes) included.add(joinPath(dirOf(scene.path), ref).toLowerCase());
+  }
+  const depth = (p) => p.split("/").length;
+  const roots = scenes.filter((s) => !included.has(s.path.toLowerCase())).sort((a, b) => compareMitsubaVersions(b.version, a.version)
+    || depth(a.path) - depth(b.path) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return { roots: roots.map((s) => s.path), versions: Object.fromEntries(roots.map((s) => [s.path, s.version])) };
 }
 
 // ------------------------------------------------------------------ matrices

@@ -12,7 +12,8 @@
 
     // Accepts either a single path/File-like value, or a list of dropped
     // files (each { path } or a File), and reports the first root kind found
-    // among the recognized extensions, preferring usd > gltf > pbrt > mitsuba > obj.
+    // among the recognized extensions, preferring usd > gltf > pbrt > mitsuba > obj
+    // (by extension only; detectRootKindForFiles checks a Mitsuba root's content).
     const detectRootKind = (pathOrFiles) => {
         const candidates = [];
         if (Array.isArray(pathOrFiles)) {
@@ -34,6 +35,28 @@
             if (rank[kind] > bestRank) { best = kind; bestRank = rank[kind]; }
         }
         return best;
+    };
+
+    // Mitsuba detection is by content, not by .xml: see classifyMitsubaXmlFiles
+    // in js/usd/scene-import-common.js.
+    let pendingCommon;
+    const loadCommonModule = () => {
+        if (!pendingCommon) pendingCommon = import('./usd/scene-import-common.js');
+        return pendingCommon;
+    };
+    const classifyMitsubaXmlFiles = (files) => loadCommonModule().then((module) => module.classifyMitsubaXmlFiles(files));
+    // detectRootKind plus the content check: an .xml root that is not a Mitsuba
+    // scene gives '' (no supported scene).
+    const detectRootKindForFiles = async (files, rootPath) => {
+        const kind = detectRootKind(rootPath);
+        if (kind !== 'mitsuba') return kind;
+        const norm = (p) => String(p || '').replace(/\\/g, '/').toLowerCase();
+        const key = norm(rootPath);
+        const entry = (Array.isArray(files) ? files : []).find((f) => f && norm(f.path) === key);
+        if (!entry) return kind;
+        const module = await loadCommonModule();
+        const text = await module.readEntryText(entry.data);
+        return module.mitsubaSceneInfo(text) ? kind : '';
     };
 
     let pendingGltf;
@@ -90,6 +113,8 @@
     window.MtlxSceneSources = {
         exportUsdStage,
         detectRootKind,
+        detectRootKindForFiles,
+        classifyMitsubaXmlFiles,
         loadGltfStage: (options) => loadGltfModule().then((module) => module.loadGltfStage(options)),
         loadObjStage: (options) => loadObjModule().then((module) => module.loadObjStage(options)),
         loadPbrtStage: (options) => loadPbrtModule().then((module) => module.loadPbrtStage(options)),
