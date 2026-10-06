@@ -3,9 +3,9 @@
 # -----------------------------------------------------------------------------
 # Publishes a blog change without waiting for a release: the app is rebuilt
 # from the latest release tag (never from main) and the blog from the pushed
-# commit, through the same pages-publish.yml a release uses. blog_required
-# makes the run fail, instead of silently skipping the blog, when the
-# released header cannot host it yet.
+# commit, through the same pages-publish.yml a release uses. While the latest
+# release's header cannot host the blog yet (releases before the blog), the
+# run skips with a notice; the next release deploys the blog itself.
 # -----------------------------------------------------------------------------
 
 name: Blog deploy
@@ -28,6 +28,7 @@ jobs:
       contents: read
     outputs:
       tag: ${{ steps.latest.outputs.tag }}
+      ready: ${{ steps.latest.outputs.ready }}
     steps:
       - name: Find the latest release tag
         id: latest
@@ -39,9 +40,17 @@ jobs:
           [ -n "$TAG" ] || { echo "::error::No published release found."; exit 1; }
           echo "latest release: $TAG" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          # Same check pages-publish.yml makes: the released header must know subsites.
+          if gh api "repos/$REPO/contents/js/site-header.js?ref=$TAG" -H "Accept: application/vnd.github.raw" | grep -q __MTLX_SUBSITE__; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::$TAG predates the blog; skipping until a release can host it." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
 
   publish:
     needs: resolve
+    if: needs.resolve.outputs.ready == 'true'
     permissions:
       contents: read
       pages: write
