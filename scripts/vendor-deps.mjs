@@ -35,7 +35,6 @@ export const VENDOR_DEPS = [
         "examples/js/loaders/GLTFLoader.js": "GLTFLoader.js",
         "examples/js/loaders/OBJLoader.js": "OBJLoader.js",
         "examples/js/loaders/PLYLoader.js": "PLYLoader.js",
-        "examples/js/loaders/TGALoader.js": "TGALoader.js",
         "examples/js/controls/OrbitControls.js": "OrbitControls.js",
         "examples/js/loaders/DRACOLoader.js": "DRACOLoader.js",
         "examples/js/libs/draco/gltf/draco_wasm_wrapper.js": "draco/draco_wasm_wrapper.js",
@@ -51,6 +50,16 @@ export const VENDOR_DEPS = [
       },
     },
     license: { url: "https://github.com/mrdoob/three.js/blob/HEAD/LICENSE", file: "LICENSE.txt" },
+  },
+  {
+    // Loaded on demand (MtlxVendor.load) the first time a .tga texture is decoded;
+    // it only adds THREE.TGALoader, so the global the loader checks is THREE itself.
+    id: "three-tga",
+    name: "three.js",
+    dir: "three",
+    source: { npm: "three", files: { "examples/js/loaders/TGALoader.js": "TGALoader.js" } },
+    license: { url: "https://github.com/mrdoob/three.js/blob/HEAD/LICENSE" },
+    module: { entry: "TGALoader.js", kind: "script", global: "THREE" },
   },
   {
     id: "three-147",

@@ -79,6 +79,11 @@
       "version": "0.147.0"
     },
     {
+      "id": "three-tga",
+      "kind": "npm",
+      "version": "0.128.0"
+    },
+    {
       "id": "usd-webview-bindings",
       "kind": "files",
       "version": "2026.10.1"
@@ -494,7 +499,7 @@
     },
     {
       "path": "three/TGALoader.js",
-      "dep": "three",
+      "dep": "three-tga",
       "source": "three@0.128.0",
       "sha256": "919899fb923e9c2f09e0bada9a5d9d0de1f4fffdedd91ca3d981abfeeaab1d1c",
       "bytes": 11364

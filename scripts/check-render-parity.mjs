@@ -455,7 +455,6 @@ const EAGER_EMBED_FILES = [
   "vendor/three/DRACOLoader.js",
   "vendor/three/KTX2Loader.js",
   "vendor/three/OBJLoader.js",
-  "vendor/three/TGALoader.js",
   "vendor/three/OrbitControls.js",
   "js/mtlx-assets.js",
   "js/shared/theme-tokens.js",

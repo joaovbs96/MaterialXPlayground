@@ -166,12 +166,15 @@ const loadHdrTexture = async (blob) => {
     }
 };
 
-// Parses a dropped .tga Blob via THREE.TGALoader (three r128) into an 8bpc RGBA
-// texture. The loader writes rows top first whatever the file's origin, like
-// every other decoder here, so the texture keeps flipY off.
+// Parses a dropped .tga Blob via THREE.TGALoader (three r128, loaded on first use through
+// MtlxVendor) into an 8bpc RGBA texture; rows come top first, so flipY stays off.
+// Pages without the vendor runtime (the embed) keep the node default with a warning.
 const loadTgaTexture = async (blob, path) => {
+    if (typeof THREE.TGALoader === 'undefined' && typeof MtlxVendor !== 'undefined' && MtlxVendor.has('three-tga')) {
+        try { await MtlxVendor.load('three-tga'); } catch (e) { console.warn('mtlx-engine: could not load TGALoader:', e); }
+    }
     if (typeof THREE.TGALoader === 'undefined') {
-        console.warn('mtlx-engine: THREE.TGALoader unavailable; .tga textures keep the node default color.');
+        console.warn('mtlx-engine: .tga textures are not supported here (no TGALoader); ' + (path || 'the texture') + ' keeps the node default color.');
         return null;
     }
     const d = new THREE.TGALoader().parse(await blob.arrayBuffer());

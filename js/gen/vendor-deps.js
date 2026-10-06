@@ -101,6 +101,17 @@ window.MTLX_VENDOR_DEPS = {
     "version": "0.147.0",
     "licenseUrl": "https://github.com/mrdoob/three.js/blob/HEAD/LICENSE"
   },
+  "three-tga": {
+    "dir": "three",
+    "name": "three.js",
+    "version": "0.128.0",
+    "licenseUrl": "https://github.com/mrdoob/three.js/blob/HEAD/LICENSE",
+    "module": {
+      "entry": "TGALoader.js",
+      "kind": "script",
+      "global": "THREE"
+    }
+  },
   "usd-webview-bindings": {
     "dir": "usd-webview-bindings",
     "name": "OpenUSD WebView Bindings",
