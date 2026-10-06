@@ -84,6 +84,8 @@ Where MaterialX Playground is heading, grouped by area: the rendering engine sha
 - [done] **Desktop app page**: a page for the desktop app with its features and download links for Windows, macOS and Linux from the latest release.
 - [done] **VS Code page refresh**: the VS Code extension page lists everything the extension does today, including the sidebar, formatting, themes and the Scene Viewer.
 - [done] **Blog**: a blog on the website for updates, deep dives and tips, written in Markdown, with tags, search and an Atom feed. Web only.
+- [planned] **Pages search engines can find**: the tools and the node docs all live behind one address today, so search engines see a single page. Give every MaterialX node in the docs and every tool its own page with its own title and description, plus sitemaps for all of them.
+- [planned] **Faster first load**: compile the app ahead of time instead of in the browser, so pages appear sooner on a first visit.
 
 ## Themes
 

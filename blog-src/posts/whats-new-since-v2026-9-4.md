@@ -1,5 +1,5 @@
 ---
-title: What's coming in the next release
+title: What's new in MaterialX Playground v2026.10.1
 description: New scene formats and USD export in the Scene Viewer, one renderer behind every tool, ShadingLanguageX in the Graph Editor, themes, a much bigger VS Code extension and a new home for the Playground on the web.
 date: 2026-10-06
 draft: true
@@ -9,7 +9,7 @@ tags:
   - vscode
 ---
 
-The last release, v2026.9.4, came out in mid September. A lot has landed since then, so the next release is a big one. Here is what is coming, grouped by what it means for you rather than by when it was written. Everything still runs in your browser on MaterialX 1.39.5, with nothing to install.
+The last release, v2026.9.4, came out in mid September. A lot has landed since then, so this release is a big one. Here is what is new, grouped by what it means for you rather than by when it was written. Everything still runs in your browser on MaterialX 1.39.5, with nothing to install.
 
 ## The Scene Viewer opens more than USD
 
@@ -84,6 +84,8 @@ The Playground is no longer dark only.
 - **Build Info & Licenses** in the header lists every bundled library and asset and the MaterialX release in use.
 - **This blog.** Posts like this one, with an Atom feed and the latest posts on the home page.
 
-## When
+## Try it
 
-All of this ships in the next release. Until then, the [roadmap]({{ appRoot }}#!roadmap) shows what is done and what is next, and the [issue tracker](https://github.com/joaovbs96/MaterialXPlayground/issues) is open for bug reports and ideas.
+Everything above is live on this site now: open the [Material Viewer]({{ appRoot }}#!viewer), the [Scene Viewer]({{ appRoot }}#!scene) or the [Graph Editor]({{ appRoot }}#!graph) and try it out. The desktop app and the VS Code extension are on the [releases page](https://github.com/joaovbs96/MaterialXPlayground/releases).
+
+The [roadmap]({{ appRoot }}#!roadmap) shows what comes next, and the [issue tracker](https://github.com/joaovbs96/MaterialXPlayground/issues) is open for bug reports and ideas.
