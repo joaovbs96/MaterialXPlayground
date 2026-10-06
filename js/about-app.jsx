@@ -844,7 +844,8 @@ function AboutNodeCard({ material, xml }) {
     );
 }
 
-// The Share slide's snippet, the same element the Embed Builder emits.
+// The Share slide's snippet, the same element the Embed Builder emits. The
+// visitor's own file is a relative src, resolved against their page.
 function AboutSnippet({ carried }) {
     const [copied, setCopied] = React.useState(false);
     const site = (window.SITE_LINKS && window.SITE_LINKS.site) || '';
@@ -2206,7 +2207,7 @@ function AboutApp({ active = true } = {}) {
                             Open it in the Embed Builder <MtlxIcon name="arrow-right" className="w-4 h-4" />
                         </a>
                     </AboutRise>
-                    {carried.kind === 'mine' && <AboutRise i={4}><p className="text-[13px] text-fg-subtle">Host the file next to your page, and the snippet above shows it.</p></AboutRise>}
+                    {carried.kind === 'mine' && <AboutRise i={4}><p className="text-[13px] text-fg-subtle">Put the downloaded file next to your page and open the page from a web server, for example <code className="font-mono text-[12px]">npx serve --cors</code>. Opened straight from disk, the browser blocks it.</p></AboutRise>}
                 </div>
             );
             case 'anywhere': return (

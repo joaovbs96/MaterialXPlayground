@@ -455,7 +455,13 @@ window.MTLX_DIFFUSE_ENV = 'sh';
             }
             var url = new URL('viewer.html', base);
             var qp = url.searchParams;
-            if (this.src) qp.set('src', this.src);
+            // A relative src means "next to the host page", so resolve it here:
+            // the iframe would otherwise resolve it against the embed's own origin.
+            if (this.src) {
+                var srcUrl = this.src;
+                try { srcUrl = new URL(this.src, document.baseURI).href; } catch (e) { /* keep as given */ }
+                qp.set('src', srcUrl);
+            }
             if (this.geometry) qp.set('geometry', this.geometry);
             if (this.env !== undefined) qp.set('env', String(this.env));
             if (this.exposure !== undefined) qp.set('exposure', String(this.exposure));
