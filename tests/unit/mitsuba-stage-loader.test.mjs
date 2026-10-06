@@ -20,7 +20,7 @@ import {
   loadMitsubaStage,
 } from '../../js/usd/mitsuba-stage-loader.js';
 import { mat4Invert, mat3Determinant, cameraLensForFov, bakeMeshTransform } from '../../js/usd/scene-import-common.js';
-import { mitsubaMaterialDocument, mitsubaIor, mitsubaAlphaToOpenPbr, conductorF0 } from '../../js/usd/mtlx-material-docs.js';
+import { mitsubaMaterialDocument, mitsubaIor, mitsubaAlphaToOpenPbr, conductorF0, mitsubaPlasticBaseColor, openPbrDielectricAlbedo } from '../../js/usd/mtlx-material-docs.js';
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) <= eps, a + ' != ' + b);
 const nearAll = (a, b, eps = 1e-6) => { assert.equal(a.length, b.length); a.forEach((v, i) => near(v, b[i], eps)); };
@@ -163,11 +163,13 @@ test('materials: plastic, conductor, dielectric', () => {
     int_ior: { type: 'float', value: 1.5 }, ext_ior: { type: 'float', value: 1.25 }, nonlinear: { type: 'boolean', value: true },
     distribution: { type: 'string', value: 'ggx' },
   } } });
-  assert.equal(inputOf(plastic.xml, 'base_color'), '1, 0.5, 0');
+  const matched = mitsubaPlasticBaseColor([1, 0.5, 0], 1.2, 0.04, true).color;
+  nearAll(inputOf(plastic.xml, 'base_color').split(',').map(Number), matched, 1e-5);
   assert.equal(inputOf(plastic.xml, 'specular_weight'), '1');
   assert.equal(inputOf(plastic.xml, 'specular_ior'), '1.2');
   assert.equal(inputOf(plastic.xml, 'specular_roughness'), '0.2'); // sqrt(0.04)
-  assert.equal(plastic.notes.length, 1); // nonlinear
+  assert.equal(plastic.notes.length, 1); // R = 1 at eta 1.2 clamps; nonlinear is honoured
+  assert.match(plastic.notes[0], /1 channel/);
   // Defaults: polypropylene in air, smooth plastic.
   const smooth = mitsubaMaterialDocument({ name: 'S', bsdf: { type: 'plastic', props: {} } });
   near(Number(inputOf(smooth.xml, 'specular_ior')), 1.49 / 1.000277, 1e-5);
@@ -199,6 +201,30 @@ test('materials: plastic, conductor, dielectric', () => {
   assert.equal(mitsubaIor({ type: 'string', value: 'unobtainium' }, 1, notes), 1.5);
   assert.equal(notes.length, 1);
   near(mitsubaAlphaToOpenPbr(0.09), 0.3);
+});
+
+test('plastic albedo matching: Mitsuba diffuse albedo to OpenPBR base_color', () => {
+  // eta 1.5: Fdr_int 0.596811 (Mitsuba fit at 1/eta), 1 - Fdr_ext 0.908222 (exact
+  // Fresnel), E_spec 0.086220 (MaterialX analytic GGX albedo, alpha ~ 0).
+  const fdrInt = 0.596811, tExt = 0.908222, espec = 0.086220;
+  near(openPbrDielectricAlbedo(1.5, 0), espec, 1e-5);
+  const hand = (r, nl) => r / (1 - (nl ? r : 1) * fdrInt) * tExt * tExt / 2.25 / (1 - espec);
+  const rs = [1, 0.379, 0.0135];
+  for (const nl of [true, false]) {
+    const { color, clamped } = mitsubaPlasticBaseColor(rs, 1.5, 0, nl);
+    nearAll(color, rs.map((r) => hand(r, nl)), 1e-5);
+    assert.equal(clamped, 0);
+  }
+  nearAll(mitsubaPlasticBaseColor(rs, 1.5, 0, true).color, [0.995064, 0.196501, 0.005460], 1e-5);
+  // Linear plastic is nearly the identity: Mitsuba's (1 - Fdr_ext) vs OpenPBR's 1 - E_spec.
+  mitsubaPlasticBaseColor(rs, 1.5, 0, false).color.forEach((b, i) => near(b, rs[i], 0.005 * rs[i]));
+  // Monotonic in R, and an out-of-range target clamps with a count.
+  const ramp = Array.from({ length: 21 }, (_, i) => i / 20);
+  const out = mitsubaPlasticBaseColor(ramp, 1.5, 0.01, true).color;
+  out.slice(1).forEach((b, i) => assert.ok(b > out[i]));
+  const hot = mitsubaPlasticBaseColor([1, 0.5, 0], 3, 0, false);
+  assert.equal(hot.clamped, 1);
+  assert.equal(hot.color[0], 1);
 });
 
 test('scene: twosided wrapper, refs, unsupported elements', () => {

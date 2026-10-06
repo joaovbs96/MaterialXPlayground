@@ -1135,6 +1135,64 @@ function mitsubaConductorIor(p, notes, legacy) {
   return { eta: metal.eta.map((c) => c / ext), k: metal.k.map((c) => c / ext) };
 }
 
+// Mitsuba's fresnel_diffuse_reflectance fit (render/fresnel.h).
+function mitsubaFdrFit(eta) {
+  const inv = 1 / eta;
+  if (eta < 1) return 0.0636 * inv + eta * (eta * -1.4399 + 0.7099) + 0.6681;
+  return 0.919317 + inv * (-3.4793 + inv * (6.75335 + inv * (-7.80989 + inv * (4.98554 + inv * -1.36881))));
+}
+
+// Unpolarized dielectric Fresnel, same as MaterialX mx_fresnel_dielectric.
+function dielectricFresnel(c, eta) {
+  const g2 = eta * eta + c * c - 1;
+  if (g2 < 0) return 1;
+  const g = Math.sqrt(g2);
+  return 0.5 * ((g - c) / (g + c)) ** 2 * (1 + (((g + c) * c - 1) / ((g - c) * c + 1)) ** 2);
+}
+
+// Cosine-weighted hemisphere average of f(mu): integral of f(mu) 2 mu dmu.
+function cosineAverage(f, n = 512) {
+  let sum = 0;
+  for (let i = 0; i < n; i++) { const mu = (i + 0.5) / n; sum += f(mu) * 2 * mu; }
+  return sum / n;
+}
+
+const GGX_ALBEDO_FIT = [
+  [0.1003, -0.6303, 9.748, -2.038, 29.34, -8.245, -26.44, 19.99, -5.448],
+  [0.9345, -2.323, 2.229, -3.748, 1.424, -0.7684, 1.436, 0.2913, 0.6286],
+  [1, -1.765, 8.263, 11.53, 28.96, -7.507, -36.11, 15.86, 33.37],
+  [1, 0.2281, 15.94, -55.83, 13.08, 41.26, 54.9, 300.2, -285.1],
+];
+
+// Hemispherical albedo of OpenPBR's dielectric specular layer as MaterialX
+// renders it: mx_ggx_dir_albedo_analytic times mx_ggx_energy_compensation.
+export function openPbrDielectricAlbedo(eta, alpha) {
+  const y = Math.min(1, Math.max(alpha, 1e-8)), y2 = y * y;
+  const f0 = ((eta - 1) / (eta + 1)) ** 2;
+  return cosineAverage((x) => {
+    const x2 = x * x;
+    const r = GGX_ALBEDO_FIT.map((k) => k[0] + k[1] * x + k[2] * y + k[3] * x * y + k[4] * x2 + k[5] * y2 + k[6] * x2 * y + k[7] * x * y2 + k[8] * x2 * y2);
+    const a = Math.min(1, Math.max(0, r[0] / r[2])), b = Math.min(1, Math.max(0, r[1] / r[3]));
+    return (f0 * a + b) * (1 + dielectricFresnel(x, eta) * (1 - (a + b)) / (a + b));
+  });
+}
+
+// base_color whose OpenPBR diffuse albedo b (1 - E_spec) matches Mitsuba 3 plastic's
+// R / (1 - k Fdr_int) (1 - Fdr_ext)^2 / eta^2 (k = R if nonlinear, else 1); per channel,
+// clamped to [0, 1]. roughplastic is approximated with the smooth interface terms.
+export function mitsubaPlasticBaseColor(rgb, eta, alpha = 0, nonlinear = false) {
+  const fdrInt = mitsubaFdrFit(1 / eta);
+  const tExt = 1 - cosineAverage((mu) => dielectricFresnel(mu, eta));
+  const scale = (tExt * tExt) / (eta * eta) / (1 - openPbrDielectricAlbedo(eta, alpha));
+  let clamped = 0;
+  const color = rgb.map((r) => {
+    const b = (r / (1 - (nonlinear ? r : 1) * fdrInt)) * scale;
+    if (b > 1 || b < 0) clamped++;
+    return Math.min(1, Math.max(0, b));
+  });
+  return { color, clamped };
+}
+
 const MITSUBA_SILENT_KEYS = ["distribution", "sample_visible"];
 
 // One open_pbr_surface document for a Mitsuba bsdf ({ type, props }, already
@@ -1169,13 +1227,15 @@ export function mitsubaMaterialDocument({ name, bsdf, emission, legacy = false }
     const spec = mitsubaRgb(take("specular_reflectance"), [1, 1, 1], notes, "specular_reflectance");
     const ior = mitsubaIor(take("int_ior"), 1.49, notes, "int_ior") / mitsubaIor(take("ext_ior"), 1.000277, notes, "ext_ior");
     const nonlinear = take("nonlinear");
-    if (nonlinear && nonlinear.value === true) notes.push("nonlinear (internal scattering darkening) has no OpenPBR equivalent, ignored");
     checkDistribution();
-    setColor("base_color", base);
+    const specRoughness = roughness();
+    const matched = mitsubaPlasticBaseColor(base, ior, specRoughness * specRoughness, !!(nonlinear && nonlinear.value === true));
+    if (matched.clamped) notes.push("diffuse_reflectance needs an albedo outside OpenPBR's base_color range in " + matched.clamped + " channel(s), clamped");
+    setColor("base_color", matched.color);
     setFloat("specular_weight", 1);
     if (notWhite(spec)) setColor("specular_color", spec);
     setFloat("specular_ior", ior);
-    setFloat("specular_roughness", roughness());
+    setFloat("specular_roughness", specRoughness);
   } else if (type === "dielectric" || type === "roughdielectric" || type === "thindielectric") {
     const ior = mitsubaIor(take("int_ior"), 1.5046, notes, "int_ior") / mitsubaIor(take("ext_ior"), 1.000277, notes, "ext_ior");
     const spec = mitsubaRgb(take("specular_reflectance"), [1, 1, 1], notes, "specular_reflectance");
