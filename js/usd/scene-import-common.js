@@ -382,6 +382,12 @@ export function uniformDomeLight(color) {
   };
 }
 
+// A lat-long environment image: a textured dome light (colour white, intensity
+// the radiance scale) whose matrix is in the UsdLuxDomeLight convention.
+export function texturedDomeLight({ textureFile, matrix, intensity = 1 }) {
+  return { ...uniformDomeLight([1, 1, 1]), matrix: matrix.slice(), textureFile, textureFormat: "latlong", intensity };
+}
+
 // --------------------------------------------------- emitter stand-in lights
 
 const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];

@@ -18,6 +18,8 @@ import {
   flatShadedArrays,
   interpretMitsubaScene,
   loadMitsubaStage,
+  mitsubaEnvmapUv,
+  mitsubaEnvmapDomeMatrix,
 } from '../../js/usd/mitsuba-stage-loader.js';
 import { mat4Invert, mat3Determinant, cameraLensForFov, bakeMeshTransform } from '../../js/usd/scene-import-common.js';
 import { mitsubaMaterialDocument, mitsubaIor, mitsubaAlphaToOpenPbr, conductorF0, mitsubaPlasticBaseColor, openPbrDielectricAlbedo } from '../../js/usd/mtlx-material-docs.js';
@@ -300,4 +302,84 @@ test('loadMitsubaStage: obj with face normals, rectangle emitter, constant dome,
   nearAll(cam.matrix.slice(12, 15), [0, 0, 5]);
   nearAll(cam.matrix.slice(8, 11), [0, 0, 1]); // looks down -z toward the origin
   nearAll(cam.matrix.slice(0, 3), [1, 0, 0]); // image right is world +x
+});
+
+// The Scene Viewer's dome lookup for a yaw-only dome (usd-scene-renderer.js
+// sceneDomeEnvironment plus mtlx-three-material.js u_envMatrix), then
+// MaterialX mx_latlong_projection: u = atan2(x, -z) / 2pi + 0.5, v = 0.5 - asin(y) / pi.
+const viewerDomeUv = (dir, dome) => {
+  const rotationDeg = Math.atan2(dome[8], dome[10]) * 180 / Math.PI;
+  const a = Math.PI / 2 + (90 - rotationDeg) * Math.PI / 180;
+  const x = Math.cos(a) * dir[0] + Math.sin(a) * dir[2], z = -Math.sin(a) * dir[0] + Math.cos(a) * dir[2];
+  const u = Math.atan2(x, -z) / (2 * Math.PI) + 0.5;
+  return [u - Math.floor(u), 0.5 - Math.asin(dir[1] / Math.hypot(...dir)) / Math.PI];
+};
+const nearUv = (a, b, eps = 1e-9) => { near(Math.min(Math.abs(a[0] - b[0]), 1 - Math.abs(a[0] - b[0])), 0, eps); near(a[1], b[1], eps); };
+const IDENTITY_DOME = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+// car2's envmap to_world (a yaw of about -43.9 deg), row-major as in the XML.
+const CAR2_ENV = xform('<matrix value="0.720696 0 -0.693251 0 0 1 0 0 0.693251 0 0.720696 0 0 0 0 1"/>');
+
+test('mitsubaEnvmapUv: Mitsuba 3 latlong convention on known directions', () => {
+  nearUv(mitsubaEnvmapUv([0, 0, 1]), [0.5, 0.5]); // image centre
+  nearUv(mitsubaEnvmapUv([1, 0, 0]), [0.25, 0.5]);
+  nearUv(mitsubaEnvmapUv([-1, 0, 0]), [0.75, 0.5]);
+  nearUv(mitsubaEnvmapUv([0, 0, -1]), [0, 0.5]); // the seam
+  near(mitsubaEnvmapUv([0, 1, 0])[1], 0); // top row is up
+  near(mitsubaEnvmapUv([0, -1, 0])[1], 1);
+  const rotY90 = xform('<rotate y="1" angle="90"/>');
+  nearUv(mitsubaEnvmapUv([1, 0, 0], rotY90), [0.5, 0.5]); // measured in Mitsuba 3.9.1 (scalar_rgb eval)
+  nearUv(mitsubaEnvmapUv([0, 0, 1], rotY90), [0.75, 0.5]);
+});
+
+test('mitsubaEnvmapDomeMatrix: the viewer dome sees the same image as Mitsuba', () => {
+  const { matrix, mirrored } = mitsubaEnvmapDomeMatrix(CAR2_ENV);
+  assert.equal(mirrored, false);
+  const centre = apply(CAR2_ENV, [0, 0, 1]), quarter = apply(CAR2_ENV, [1, 0, 0]);
+  nearUv(viewerDomeUv(centre, matrix), [0.5, 0.5], 1e-6);
+  nearUv(viewerDomeUv(quarter, matrix), [0.25, 0.5], 1e-6);
+  nearUv(viewerDomeUv([0, 0, 1], IDENTITY_DOME), [0.5, 0.5]);
+  nearUv(viewerDomeUv([1, 0, 0], IDENTITY_DOME), [0.25, 0.5]);
+  for (const yaw of [0, 30, -43.9, 90, 180, 271]) {
+    const toWorld = mitsubaTransform(parseXml('<transform name="to_world"><scale value="3"/><rotate y="1" angle="' + yaw + '"/><translate x="5" z="-2"/></transform>'));
+    const dome = mitsubaEnvmapDomeMatrix(toWorld).matrix;
+    nearAll(dome.slice(12, 15), [0, 0, 0]);
+    near(Math.hypot(dome[0], dome[1], dome[2]), 1);
+    for (const d of [[1, 0, 0], [0.3, 0.5, -0.8], [-0.6, -0.2, 0.1], [0.05, 0.99, 0.02], [-0.4, 0.1, 0.9]]) {
+      nearUv(viewerDomeUv(d, dome), mitsubaEnvmapUv(d, toWorld), 1e-6);
+    }
+  }
+  const mirror = mitsubaEnvmapDomeMatrix(xform('<scale x="-1"/>'));
+  assert.equal(mirror.mirrored, true);
+  near(mat3Determinant(mirror.matrix), 1);
+});
+
+test('loadMitsubaStage: envmap becomes a textured dome light and wins over a constant', async () => {
+  const enc = (s) => new TextEncoder().encode(s);
+  const xml = [
+    '<scene version="3.0.0">',
+    '  <shape type="rectangle"/>',
+    '  <emitter type="constant"><rgb name="radiance" value="0.3"/></emitter>',
+    '  <emitter type="envmap">',
+    '    <string name="filename" value="textures/sky.exr"/><float name="scale" value="2.5"/>',
+    '    <transform name="to_world"><rotate y="1" angle="90"/><translate y="4"/></transform>',
+    '  </emitter>',
+    '</scene>',
+  ].join('\n');
+  const stage = await loadMitsubaStage({ files: [{ path: 'car/scene.xml', data: enc(xml) }, { path: 'car/textures/sky.exr', data: new Uint8Array(4) }], rootPath: 'car/scene.xml' });
+  assert.equal(stage.lights.length, 1);
+  const dome = stage.lights[0];
+  assert.equal(dome.type, 'domelight');
+  assert.equal(dome.textureFile, 'car/textures/sky.exr');
+  assert.equal(dome.intensity, 2.5);
+  assert.equal(dome.exposure, 0);
+  assert.deepEqual(dome.color, [1, 1, 1]);
+  nearAll(dome.matrix, [0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1]);
+  assert.ok(stage.warnings.some((w) => /constant emitter is not added/.test(w)));
+  assert.ok(!stage.warnings.some((w) => /envmap/.test(w) && /not supported/.test(w)));
+
+  const missing = await loadMitsubaStage({ files: [{ path: 'scene.xml', data: enc(xml.replace(/  <emitter type="constant">.*\n/, '')) }], rootPath: 'scene.xml' });
+  assert.equal(missing.lights[0].textureFile, 'textures/sky.exr');
+  near(missing.lights[0].intensity, 2.5);
+  assert.ok(missing.warnings.includes('Environment map not found: "textures/sky.exr" (drop the textures folder together with the scene)'));
+  assert.ok(!missing.warnings.some((w) => /constant emitter/.test(w)));
 });

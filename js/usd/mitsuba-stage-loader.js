@@ -6,8 +6,8 @@ import { mitsubaMaterialDocument, sanitizeMtlxName } from "./mtlx-material-docs.
 import { objHasVertexNormals, computeSmoothNormals } from "./obj-stage-loader.js";
 import {
   checkAborted, normalizePath, dirOf, basenameOf, toArrayBuffer, resolveScenePath, createWarningSink,
-  IDENTITY, mat4Multiply, mat3Determinant, translateMatrix, scaleMatrix, rotateMatrix, bakeMeshTransform,
-  cameraLensForFov, sceneCameraRecord, uniformDomeLight, materialEntryFromDocument, bakedMeshRecord, scenePayload,
+  IDENTITY, mat4Multiply, mat4Invert, mat3Determinant, translateMatrix, scaleMatrix, rotateMatrix, bakeMeshTransform,
+  cameraLensForFov, sceneCameraRecord, uniformDomeLight, texturedDomeLight, materialEntryFromDocument, bakedMeshRecord, scenePayload,
   parseXml, MITSUBA_VERSION_PATTERN, rectangleFromTriangles, emitterStandInLight,
 } from "./scene-import-common.js";
 
@@ -212,6 +212,33 @@ export function mitsubaCameraMatrix(toWorld) {
   return m;
 }
 
+// Mitsuba 3's envmap lookup (src/emitters/envmap.cpp, eval): local = to_world^-1 * dir,
+// u = atan2(x, -z) / 2pi wrapped to [0, 1), v = acos(y) / pi with v = 0 the top row.
+// The image centre is local +z, u = 0.25 is +x, u = 0 (the seam) is -z.
+export function mitsubaEnvmapUv(dir, toWorld = IDENTITY) {
+  const inv = mat4Invert(toWorld);
+  const x = inv[0] * dir[0] + inv[4] * dir[1] + inv[8] * dir[2];
+  const y = inv[1] * dir[0] + inv[5] * dir[1] + inv[9] * dir[2];
+  const z = inv[2] * dir[0] + inv[6] * dir[1] + inv[10] * dir[2];
+  const len = Math.hypot(x, y, z) || 1;
+  const u = Math.atan2(x, -z) / (2 * Math.PI);
+  return [u - Math.floor(u), Math.acos(Math.max(-1, Math.min(1, y / len))) / Math.PI];
+}
+
+// The viewer's dome (UsdLuxDomeLight) also maps local +z to the image centre,
+// +x to u = 0.25 and +y to the top, so the dome matrix is to_world's rotation:
+// translation and scale dropped, and a mirror (det < 0) undone on x with mirrored set.
+export function mitsubaEnvmapDomeMatrix(toWorld) {
+  const m = toWorld.slice();
+  const mirrored = mat3Determinant(m) < 0;
+  for (let c = 0; c < 3; c++) {
+    const len = (Math.hypot(m[c * 4], m[c * 4 + 1], m[c * 4 + 2]) || 1) * (mirrored && c === 0 ? -1 : 1);
+    for (let r = 0; r < 3; r++) m[c * 4 + r] /= len;
+  }
+  m[12] = 0; m[13] = 0; m[14] = 0;
+  return { matrix: m, mirrored };
+}
+
 // Mitsuba's rectangle: [-1, 1]^2 in the local xy plane, normal +z.
 export function rectangleArrays() {
   return {
@@ -245,9 +272,9 @@ export function flatShadedArrays({ positions, uvs, indices }) {
 const IGNORED_TOP_LEVEL = new Set(["default", "integrator"]);
 const BSDF_WRAPPERS = new Set(["bumpmap", "normalmap", "mask"]);
 
-// Interprets the parsed <scene> into shapes, bsdfs, camera, film and
-// constant environments. Returns { version, legacy, shapes, camera, film,
-// environments }; warn(message) collects warnings.
+// Interprets the parsed <scene> into shapes, bsdfs, camera, film, constant
+// environments and envmaps. Returns { version, legacy, shapes, camera, film,
+// environments, envmaps }; warn(message) collects warnings.
 export function interpretMitsubaScene(rootEl, warn = () => {}) {
   if (!rootEl || rootEl.name !== "scene") throw new Error("Not a Mitsuba scene: the root element is <" + (rootEl ? rootEl.name : "none") + ">, expected <scene>");
   // Mitsuba requires the version attribute (see MITSUBA_VERSION_PATTERN).
@@ -293,7 +320,7 @@ export function interpretMitsubaScene(rootEl, warn = () => {}) {
     throw new Error("bsdf nesting is too deep");
   };
 
-  const scene = { version, legacy, shapes: [], camera: null, film: { width: 768, height: 576 }, environments: [] };
+  const scene = { version, legacy, shapes: [], camera: null, film: { width: 768, height: 576 }, environments: [], envmaps: [] };
   for (const el of rootEl.children) {
     if (IGNORED_TOP_LEVEL.has(el.name) || el.name === "bsdf" || el.name === "texture") continue;
     if (el.name === "sensor") {
@@ -314,7 +341,15 @@ export function interpretMitsubaScene(rootEl, warn = () => {}) {
     if (el.name === "emitter") {
       const plugin = readMitsubaPlugin(el, warn);
       if (plugin.type === "constant") scene.environments.push(mitsubaRadiance(plugin.props.radiance, warn));
-      else warn('Emitter "' + plugin.type + '" is not supported, skipped');
+      else if (plugin.type === "envmap") {
+        const p = plugin.props;
+        if (!p.filename) { warn('Emitter "envmap" without a filename skipped (a bitmap object is not readable from XML)'); continue; }
+        if (p.gamma) warn("envmap gamma is not applied");
+        scene.envmaps.push({
+          filename: String(p.filename.value), scale: p.scale ? Number(p.scale.value) : 1,
+          toWorld: p.to_world ? p.to_world.value : IDENTITY.slice(),
+        });
+      } else warn('Emitter "' + plugin.type + '" is not supported, skipped');
       continue;
     }
     if (el.name === "shape") {
@@ -505,11 +540,23 @@ export async function loadMitsubaStage({ files, rootPath, signal, onProgress, de
     }));
   }
 
+  // The viewer shows one environment: an envmap wins over a constant (Mitsuba sums them).
   const lights = [];
-  scene.environments.forEach((color, i) => {
-    if (i > 0) { warn("More than one constant emitter; only the first is used"); return; }
-    lights.push(uniformDomeLight(color));
-  });
+  if (scene.envmaps.length) {
+    const envmap = scene.envmaps[0];
+    if (scene.envmaps.length > 1) warn("More than one envmap emitter; only the first is used");
+    if (scene.environments.length) warn("The constant emitter is not added to the envmap (Mitsuba sums them); the envmap is used alone");
+    const textureFile = resolveScenePath(envmap.filename, rootDir, rootDir, fileByPath);
+    if (!textureFile) warn('Environment map not found: "' + envmap.filename + '" (drop the textures folder together with the scene)');
+    const { matrix, mirrored } = mitsubaEnvmapDomeMatrix(envmap.toWorld);
+    if (mirrored) warn("The envmap to_world mirrors the environment; it is imported unmirrored");
+    lights.push(texturedDomeLight({ textureFile: textureFile || envmap.filename, matrix, intensity: Number.isFinite(envmap.scale) ? envmap.scale : 1 }));
+  } else {
+    scene.environments.forEach((color, i) => {
+      if (i > 0) { warn("More than one constant emitter; only the first is used"); return; }
+      lights.push(uniformDomeLight(color));
+    });
+  }
   lights.push(...standIns);
   if (standIns.length) warn("[info] " + standIns.length + " viewer-only rect light(s) stand in for rectangle emitters in the real-time view; Export USD keeps only the emissive meshes");
   if (nonRectEmitters) warn("[info] " + nonRectEmitters + " area emitter(s) are not rectangle shapes: they glow but do not light the real-time view");
