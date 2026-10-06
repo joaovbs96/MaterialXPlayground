@@ -2,13 +2,14 @@
 // and plymesh files, .ply.gz too) into the neutral stage payload. THREE and
 // THREE.PLYLoader are window globals here; the parser parts are pure.
 
-import { pbrtMaterialDocument, sanitizeMtlxName } from "./mtlx-material-docs.js";
+import { pbrtMaterialDocument, sanitizeMtlxName, forEachImageTexture } from "./mtlx-material-docs.js";
 import {
   checkAborted, normalizePath, dirOf, basenameOf, joinPath, toArrayBuffer, resolveScenePath, createWarningSink,
   IDENTITY, mat4Multiply, mat4Invert, mat3Determinant, translateMatrix, scaleMatrix, rotateMatrix, bakeMeshTransform,
-  cameraLensForFov, sceneCameraRecord, uniformDomeLight, materialEntryFromDocument, bakedMeshRecord, scenePayload,
-  rectangleFromTriangles, windingNormal, emitterStandInLight,
+  cameraLensForFov, sceneCameraRecord, uniformDomeLight, texturedDomeLight, distantLightRecord, materialEntryFromDocument, bakedMeshRecord, scenePayload,
+  rectangleFromTriangles, windingNormal, emitterStandInLight, prepareSceneTextures, decodeFloatImage, sanitizeAssetName,
 } from "./scene-import-common.js";
+import { encodeRadianceHdr } from "./pfm-image.js";
 
 export { joinPath, IDENTITY, mat4Multiply, mat4Invert, mat3Determinant, translateMatrix, scaleMatrix, rotateMatrix, bakeMeshTransform };
 
@@ -178,6 +179,8 @@ export async function interpretPbrtScene({ rootPath, readText, resolve, warn }) 
     namedMaterials: new Map(),
     shapes: [],
     infiniteLights: [],
+    distantLights: [],
+    textures: new Map(),
   };
   let state = { ctm: IDENTITY.slice(), material: { type: "diffuse", params: {} }, areaLight: null, reverseOrientation: false };
   const stack = [];
@@ -265,8 +268,8 @@ export async function interpretPbrtScene({ rootPath, readText, resolve, warn }) 
           break;
         }
         case "LightSource": {
-          if (a[0] === "infinite" && !d.params.filename) scene.infiniteLights.push({ params: d.params, ctm: state.ctm.slice() });
-          else if (a[0] === "infinite") warn('LightSource "infinite" with an environment map ("' + d.params.filename.values[0] + '") is not supported, skipped');
+          if (a[0] === "infinite") scene.infiniteLights.push({ params: d.params, ctm: state.ctm.slice(), dir: here });
+          else if (a[0] === "distant") scene.distantLights.push({ params: d.params, ctm: state.ctm.slice() });
           else warn('LightSource "' + a[0] + '" is not supported, skipped');
           break;
         }
@@ -282,7 +285,11 @@ export async function interpretPbrtScene({ rootPath, readText, resolve, warn }) 
         case "ObjectBegin": inObject++; warn("ObjectBegin/ObjectInstance (instancing) is not supported, object \"" + a[0] + "\" skipped"); break;
         case "ObjectEnd": inObject = Math.max(0, inObject - 1); break;
         case "ObjectInstance": warn('ObjectInstance "' + a[0] + '" is not supported, skipped'); break;
-        case "Texture": warn('Texture "' + a[0] + '" is not supported, skipped'); break;
+        case "Texture": {
+          if (scene.textures.has(a[0])) warn('Texture "' + a[0] + '" is defined twice; the last definition is used');
+          scene.textures.set(a[0], { name: a[0], type: a[1] || "spectrum", texClass: a[2] || "", params: d.params, dir: here });
+          break;
+        }
         case "MakeNamedMedium":
         case "MediumInterface": warn(d.name + " (participating media) is not supported, ignored"); break;
         case "Attribute": warn('Attribute "' + a[0] + '" defaults are not supported, ignored'); break;
@@ -314,6 +321,256 @@ export function pbrtAreaLightRadiance(params, warn) {
   if (p.power) warn('Light "power" is not supported, the radiance L is used as given');
   if (p.illuminance) warn('Light "illuminance" is not supported, the radiance L is used as given');
   return rgb.map((c) => c * (Number.isFinite(scale) ? scale : 1));
+}
+
+// ----------------------------------------------------------------- textures
+
+const PBRT_WRAP = { repeat: "periodic", clamp: "clamp", black: "constant" };
+const FLOAT_IMAGE = /\.(exr|pfm|hdr)$/i;
+
+// MaterialX file colorspace for a pbrt-v4 imagemap: "encoding" defaults to sRGB
+// for .png only, else linear (textures.cpp); float images are always linear.
+export function pbrtImageColorspace(filename, encoding, warn = () => {}) {
+  if (FLOAT_IMAGE.test(String(filename))) return null;
+  const enc = String(encoding ?? (/\.png$/i.test(String(filename)) ? "sRGB" : "linear")).trim();
+  if (enc === "sRGB") return "srgb_texture";
+  if (enc === "linear") return null;
+  const g = /^gamma\s+([0-9.eE+-]+)$/.exec(enc);
+  if (g) {
+    const gamma = Number(g[1]);
+    if (Math.abs(gamma - 2.2) < 1e-3) return "g22_rec709";
+    if (Math.abs(gamma - 1.8) < 1e-3) return "g18_rec709";
+    const near = Math.abs(gamma - 1.8) < Math.abs(gamma - 2.2) ? "g18_rec709" : "g22_rec709";
+    warn('encoding "' + enc + '" is approximated with MaterialX ' + near);
+    return near;
+  }
+  warn('encoding "' + enc + '" is not recognized, the image is read as linear');
+  return null;
+}
+
+// pbrt's 2D "uv" mapping (s = su u + du, t = sv v + dv) as an affine uv map; pbrt-v4
+// flips t for the image lookup, so its texcoord convention is MaterialX's own.
+export function pbrtUvMapping(params, warn = () => {}) {
+  const p = params || {};
+  const mapping = p.mapping ? String(p.mapping.values[0]) : "uv";
+  if (mapping !== "uv") warn('mapping "' + mapping + '" is not supported, uv mapping is used');
+  const n = (key, fallback) => { const v = p[key] ? Number(p[key].values[0]) : fallback; return Number.isFinite(v) ? v : fallback; };
+  const m = [n("uscale", 1), 0, 0, n("vscale", 1), n("udelta", 0), n("vdelta", 0)];
+  return m[0] === 1 && m[3] === 1 && m[4] === 0 && m[5] === 0 ? null : m;
+}
+
+// A named pbrt texture as the format-neutral description mtlx-material-docs.js
+// builds graphs from (imagemap, constant, scale, mix, 2D checkerboard).
+export function pbrtTextureSpec(name, textures, warn = () => {}, stack = []) {
+  const tex = textures && textures.get(name);
+  if (!tex) return { kind: "unsupported", reason: 'texture "' + name + '" is not defined' };
+  if (stack.includes(name)) return { kind: "unsupported", reason: 'texture "' + name + '" references itself' };
+  const p = tex.params || {};
+  const say = (message) => warn('Texture "' + name + '": ' + message);
+  const inner = stack.concat(name);
+  const value = (key, fallback) => {
+    const param = p[key];
+    if (!param) return { kind: "constant", value: fallback };
+    if (param.type === "texture") return pbrtTextureSpec(String(param.values[0]), textures, warn, inner);
+    if ((param.type === "rgb" || param.type === "color") && param.values.length >= 3) return { kind: "constant", value: param.values.slice(0, 3).map(Number) };
+    if (param.type === "float") return { kind: "constant", value: Number(param.values[0]) };
+    say(key + " given as " + param.type + " is not supported, " + fallback + " is used");
+    return { kind: "constant", value: fallback };
+  };
+  const str = (key, fallback) => (p[key] ? String(p[key].values[0]) : fallback);
+  switch (tex.texClass) {
+    case "imagemap": {
+      const file = str("filename", "");
+      if (!file) return { kind: "unsupported", reason: 'texture "' + name + '" has no filename' };
+      const wrapName = str("wrap", "repeat");
+      let wrap = PBRT_WRAP[wrapName];
+      if (!wrap) { say('wrap "' + wrapName + '" is read as repeat'); wrap = "periodic"; }
+      const scale = p.scale ? Number(p.scale.values[0]) : 1;
+      if (!p.encoding && !/\.png$/i.test(file) && !FLOAT_IMAGE.test(file)) {
+        warn('[info] Texture "' + name + '": pbrt-v4 reads 8-bit images other than PNG as linear unless "encoding" says otherwise, so ' + file + " is not sRGB-decoded");
+      }
+      return {
+        kind: "image", file, dir: tex.dir, colorspace: pbrtImageColorspace(file, p.encoding ? p.encoding.values[0] : undefined, say),
+        uaddress: wrap, vaddress: wrap, uv: pbrtUvMapping(p, say),
+        scale: Number.isFinite(scale) ? scale : 1, invert: !!(p.invert && p.invert.values[0] === true), floatChannel: "first",
+      };
+    }
+    case "constant": return value("value", 1);
+    case "scale": return { kind: "scale", tex: value("tex", 1), scale: value("scale", 1) };
+    case "mix": return { kind: "mix", tex1: value("tex1", 0), tex2: value("tex2", 1), amount: value("amount", 0.5) };
+    case "checkerboard": {
+      const dim = p.dimension ? Number(p.dimension.values[0]) : 2;
+      if (dim !== 2) return { kind: "unsupported", reason: 'texture "' + name + '" is a 3D checkerboard, which is not supported' };
+      return { kind: "checker", tex1: value("tex1", 1), tex2: value("tex2", 0), uv: pbrtUvMapping(p, say) };
+    }
+    default:
+      return { kind: "unsupported", reason: 'texture "' + name + '" of type "' + tex.texClass + '" is not supported' };
+  }
+}
+
+// The material with every "texture" parameter resolved into param.texture.
+export function pbrtMaterialWithTextures(material, textures, warn = () => {}) {
+  if (!material || !material.params) return material;
+  const params = {};
+  for (const [key, param] of Object.entries(material.params)) {
+    params[key] = param && param.type === "texture" && textures && textures.has(String(param.values[0]))
+      ? { ...param, texture: pbrtTextureSpec(String(param.values[0]), textures, warn) } : param;
+  }
+  return { ...material, params };
+}
+
+// ------------------------------------------------------- infinite and distant
+
+// pbrt-v4 EqualAreaSquareToSphere (src/pbrt/util/math.cpp), [0, 1]^2 to the unit sphere.
+export function equalAreaSquareToSphere(px, py) {
+  const u = 2 * px - 1, v = 2 * py - 1;
+  const up = Math.abs(u), vp = Math.abs(v);
+  const signedDistance = 1 - (up + vp);
+  const r = 1 - Math.abs(signedDistance);
+  const phi = (r === 0 ? 1 : (vp - up) / r + 1) * Math.PI / 4;
+  const z = (signedDistance < 0 || Object.is(signedDistance, -0) ? -1 : 1) * (1 - r * r);
+  const cosPhi = Math.abs(Math.cos(phi)) * (u < 0 || Object.is(u, -0) ? -1 : 1);
+  const sinPhi = Math.abs(Math.sin(phi)) * (v < 0 || Object.is(v, -0) ? -1 : 1);
+  const s = r * Math.sqrt(Math.max(0, 2 - r * r));
+  return [cosPhi * s, sinPhi * s, z];
+}
+
+const ATAN_FIT = [0.406758566246788489601959989e-5, 0.636226545274016134946890922156, 0.61572017898280213493197203466e-2,
+  -0.247333733281268944196501420480, 0.881770664775316294736387951347e-1, 0.419038818029165735901852432784e-1, -0.251390972343483509333252996350e-1];
+
+// pbrt-v4 EqualAreaSphereToSquare (Clarberg's mapping), the inverse of the above.
+export function equalAreaSphereToSquare(dx, dy, dz) {
+  const x = Math.abs(dx), y = Math.abs(dy), z = Math.abs(dz);
+  const r = Math.sqrt(Math.max(0, 1 - z));
+  const a = Math.max(x, y);
+  const b = a === 0 ? 0 : Math.min(x, y) / a;
+  let phi = 0;
+  for (let i = ATAN_FIT.length - 1; i >= 0; i--) phi = phi * b + ATAN_FIT[i];
+  if (x < y) phi = 1 - phi;
+  let v = phi * r;
+  let u = r - v;
+  if (dz < 0) { const t = u; u = 1 - v; v = 1 - t; }
+  u = dx < 0 || Object.is(dx, -0) ? -u : u;
+  v = dy < 0 || Object.is(dy, -0) ? -v : v;
+  return [0.5 * (u + 1), 0.5 * (v + 1)];
+}
+
+// pbrt-v4 RemapPixelCoords for WrapMode::OctahedralSphere (util/image.h).
+function octahedralTexel(x, y, w, h) {
+  if (x < 0) { x = -x; y = h - 1 - y; } else if (x >= w) { x = 2 * w - 1 - x; y = h - 1 - y; }
+  if (y < 0) { x = w - 1 - x; y = -y; } else if (y >= h) { x = w - 1 - x; y = 2 * h - 1 - y; }
+  return [Math.min(w - 1, Math.max(0, x)), Math.min(h - 1, Math.max(0, y))];
+}
+
+// Resamples an equal-area square map (rgb, top row first) into a lat-long in the dome's
+// convention (+z at the centre, +x at u = 0.25, +y on top); domeToLight (3x3, column-major)
+// maps dome directions into the light frame. Bilinear, with pbrt's octahedral wrap.
+export function equalAreaToLatLong({ width: n, height, data }, outWidth = Math.min(4096, Math.max(1024, 2 * n)), domeToLight = [1, 0, 0, 0, 1, 0, 0, 0, 1]) {
+  const W = outWidth, H = W / 2;
+  const out = new Float32Array(W * H * 3);
+  const L = domeToLight;
+  const at = (x, y, c) => { const [tx, ty] = octahedralTexel(x, y, n, height); return data[(ty * n + tx) * 3 + c]; };
+  for (let j = 0; j < H; j++) {
+    const theta = ((j + 0.5) / H) * Math.PI;
+    const st = Math.sin(theta), ct = Math.cos(theta);
+    for (let i = 0; i < W; i++) {
+      const phi = ((i + 0.5) / W) * 2 * Math.PI;
+      const d = [Math.sin(phi) * st, ct, -Math.cos(phi) * st];
+      const lx = L[0] * d[0] + L[3] * d[1] + L[6] * d[2];
+      const ly = L[1] * d[0] + L[4] * d[1] + L[7] * d[2];
+      const lz = L[2] * d[0] + L[5] * d[1] + L[8] * d[2];
+      const len = Math.hypot(lx, ly, lz) || 1;
+      const [s, t] = equalAreaSphereToSquare(lx / len, ly / len, lz / len);
+      const fx = s * n - 0.5, fy = t * height - 0.5;
+      const x0 = Math.floor(fx), y0 = Math.floor(fy);
+      const ax = fx - x0, ay = fy - y0;
+      for (let c = 0; c < 3; c++) {
+        const top = at(x0, y0, c) * (1 - ax) + at(x0 + 1, y0, c) * ax;
+        const bottom = at(x0, y0 + 1, c) * (1 - ax) + at(x0 + 1, y0 + 1, c) * ax;
+        out[(j * W + i) * 3 + c] = top * (1 - ay) + bottom * ay;
+      }
+    }
+  }
+  return { width: W, height: H, data: out };
+}
+
+// Upper-hemisphere (light-space +z) illuminance of an equal-area map, as pbrt-v4
+// computes it for the "illuminance" parameter (lights.cpp, including its 2 pi / N^2).
+export function equalAreaIlluminance({ width, height, data }) {
+  let sum = 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const w = equalAreaSquareToSphere((x + 0.5) / width, (y + 0.5) / height);
+      if (w[2] <= 0) continue;
+      const i = (y * width + x) * 3;
+      sum += (data[i] * 0.2126 + data[i + 1] * 0.7152 + data[i + 2] * 0.0722) * w[2];
+    }
+  }
+  return (sum * 2 * Math.PI) / (width * height);
+}
+
+const linear3 = (m) => [m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]];
+const normalize3 = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return v.map((c) => c / l); };
+
+// Dome of an image infinite light: its rotation (handedness mirror times CTM, no scale)
+// splits into a yaw about +y, the dome matrix, and the rest (tilt, any mirror), which
+// domeToLight folds into the resampled image so a level sky's zenith is the top row.
+export function pbrtInfiniteDome(ctm, worldMirror) {
+  const m = mat4Multiply(worldMirror, ctm);
+  const mirrored = mat3Determinant(m) < 0;
+  const cols = [0, 1, 2].map((c) => normalize3([m[c * 4], m[c * 4 + 1], m[c * 4 + 2]]));
+  if (mirrored) cols[2] = cols[2].map((v) => -v);
+  const P = [...cols[0], ...cols[1], ...cols[2]]; // proper rotation, 3x3 column-major
+  const yaw = Math.atan2(P[6], P[8]);
+  const c = Math.cos(yaw), s = Math.sin(yaw);
+  const yawT = [c, 0, s, 0, 1, 0, -s, 0, c]; // Ry(yaw) transposed
+  // domeToLight = S * P^T * Ry(yaw), S the z flip of a mirrored transform.
+  const PT = [P[0], P[3], P[6], P[1], P[4], P[7], P[2], P[5], P[8]];
+  const ry = [yawT[0], yawT[3], yawT[6], yawT[1], yawT[4], yawT[7], yawT[2], yawT[5], yawT[8]];
+  const mul3 = (A, B) => { const o = new Array(9); for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) o[j * 3 + i] = A[i] * B[j * 3] + A[3 + i] * B[j * 3 + 1] + A[6 + i] * B[j * 3 + 2]; return o; };
+  const domeToLight = mul3(mirrored ? [1, 0, 0, 0, 1, 0, 0, 0, -1] : [1, 0, 0, 0, 1, 0, 0, 0, 1], mul3(PT, ry));
+  const matrix = [c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1];
+  return { matrix, mirrored, yawDeg: (yaw * 180) / Math.PI, domeToLight };
+}
+
+// An rgb emission parameter (rgb or float L), white by default.
+function pbrtLightColor(params, warn) {
+  const p = params || {};
+  if (p.L && (p.L.type === "rgb" || p.L.type === "float")) {
+    const v = p.L.values.map(Number);
+    return p.L.type === "float" ? [v[0], v[0], v[0]] : v.slice(0, 3);
+  }
+  if (p.L) warn("Light radiance given as " + p.L.type + " is not supported, white is used");
+  return [1, 1, 1];
+}
+
+// pbrt-v4 DistantLight: rgb L times scale (times "illuminance") is the irradiance facing
+// the light, like UsdLux DistantLight's intensity * color in lux, so color = L and
+// intensity = scale (* illuminance); the light travels from "from" to "to".
+export function pbrtDistantLight({ params, ctm }, worldMirror, warn = () => {}, name = "distant") {
+  const p = params || {};
+  const color = pbrtLightColor(p, warn);
+  const scale = p.scale ? Number(p.scale.values[0]) : 1;
+  const illuminance = p.illuminance ? Number(p.illuminance.values[0]) : -1;
+  const point = (key, fallback) => (p[key] ? p[key].values.slice(0, 3).map(Number) : fallback);
+  const from = point("from", [0, 0, 0]), to = point("to", [0, 0, 1]);
+  const w = [from[0] - to[0], from[1] - to[1], from[2] - to[2]];
+  if (!(Math.hypot(w[0], w[1], w[2]) > 0)) { warn('LightSource "distant" with from = to skipped'); return null; }
+  const m = linear3(mat4Multiply(worldMirror, ctm));
+  const toLight = [m[0] * w[0] + m[3] * w[1] + m[6] * w[2], m[1] * w[0] + m[4] * w[1] + m[7] * w[2], m[2] * w[0] + m[5] * w[1] + m[8] * w[2]];
+  const intensity = (Number.isFinite(scale) ? scale : 1) * (illuminance > 0 ? illuminance : 1);
+  return distantLightRecord({ name, toLight, color, intensity });
+}
+
+// pbrt-v4 uniform infinite light radiance: rgb L times scale, times
+// illuminance / pi when "illuminance" is given (lights.cpp).
+export function pbrtUniformInfiniteRadiance(params, warn = () => {}) {
+  const p = params || {};
+  const rgb = pbrtLightColor(p, warn);
+  const scale = p.scale ? Number(p.scale.values[0]) : 1;
+  const illuminance = p.illuminance ? Number(p.illuminance.values[0]) : -1;
+  const k = (Number.isFinite(scale) ? scale : 1) * (illuminance > 0 ? illuminance / Math.PI : 1);
+  return rgb.map((c) => c * k);
 }
 
 // ------------------------------------------------------------------ meshes
@@ -379,11 +636,47 @@ function defaultGunzip(bytes) {
   return pako.ungzip(bytes);
 }
 
+// An image infinite light as a textured dome: the equal-area square map is resampled
+// into a lat-long .hdr payload asset, intensity = scale (times illuminance / the map's
+// upper-hemisphere illuminance when given). Returns { light, asset } or null.
+export async function pbrtImageDomeLight({ light, handed, rootDir, fileByPath, readBytes, warn = () => {}, decodeExr }) {
+  const p = light.params;
+  const ref = String(p.filename.values[0]);
+  const path = resolvePbrtPath(ref, light.dir ?? rootDir, rootDir, fileByPath);
+  if (!path) { warn('Environment map not found: "' + ref + '" (drop the textures folder together with the scene)'); return null; }
+  if (p.L) warn('Infinite light: "L" and "filename" together are not valid in pbrt-v4; the image is used');
+  if (p.portal) warn("Infinite light portals are not supported, ignored");
+  try {
+    const image = await decodeFloatImage(await readBytes(path), path, { decodeExr });
+    if (image.width !== image.height) throw new Error("pbrt-v4 needs a square equal-area map, this one is " + image.width + "x" + image.height);
+    const dome = pbrtInfiniteDome(light.ctm, handed.matrix);
+    const latlong = equalAreaToLatLong(image, undefined, dome.domeToLight);
+    const scale = p.scale ? Number(p.scale.values[0]) : 1;
+    let intensity = Number.isFinite(scale) ? scale : 1;
+    const illuminance = p.illuminance ? Number(p.illuminance.values[0]) : -1;
+    if (illuminance > 0) {
+      const k = equalAreaIlluminance(image);
+      if (k > 0) intensity *= illuminance / k;
+    }
+    const assetPath = "__pbrt_env_" + sanitizeAssetName(basenameOf(path)) + ".hdr";
+    warn("[info] Environment map " + basenameOf(path) + ": pbrt's equal-area square resampled to a " + latlong.width + "x" + latlong.height + " lat-long .hdr"
+      + ", yaw " + dome.yawDeg.toFixed(1) + " deg on the dome, tilt" + (dome.mirrored ? " and mirror" : "") + " folded into the image");
+    return {
+      light: texturedDomeLight({ textureFile: assetPath, matrix: dome.matrix, intensity }),
+      asset: { path: assetPath, data: encodeRadianceHdr(latlong).buffer },
+    };
+  } catch (e) {
+    if (e && e.name === "AbortError") throw e;
+    warn('Environment map "' + path + '" could not be read (' + ((e && e.message) || e) + "); the default environment is used");
+    return null;
+  }
+}
+
 // ------------------------------------------------------------------- loader
 
 // options.decodePly(arrayBuffer) and options.gunzip(Uint8Array) override the
 // browser defaults (PLYLoader, pako), which lets Node tests run the loader.
-export async function loadPbrtStage({ files, rootPath, signal, onProgress, decodePly, gunzip } = {}) {
+export async function loadPbrtStage({ files, rootPath, signal, onProgress, decodePly, gunzip, decodeExr } = {}) {
   const report = (phase, done, total, message) => {
     if (typeof onProgress === "function") onProgress({ phase, done, total, fraction: total > 0 ? done / total : 0, message });
   };
@@ -411,6 +704,21 @@ export async function loadPbrtStage({ files, rootPath, signal, onProgress, decod
 
   const handed = pbrtHandedness(scene.camera && scene.camera.cameraFromWorld);
   const rootDir = dirOf(root);
+  const readBytes = async (path) => { checkAborted(signal); return new Uint8Array(await toArrayBuffer(fileByPath.get(path).data)); };
+
+  // Image textures the materials use: resolved against the drop, PFM converted.
+  const images = [];
+  const usedTextureNames = new Set();
+  const collectTextures = (material) => {
+    for (const param of Object.values((material && material.params) || {})) {
+      if (param && param.type === "texture") usedTextureNames.add(String(param.values[0]));
+    }
+  };
+  scene.namedMaterials.forEach(collectTextures);
+  scene.shapes.forEach((shape) => collectTextures(shape.material));
+  for (const name of usedTextureNames) forEachImageTexture(pbrtTextureSpec(name, scene.textures), (spec) => images.push(spec));
+  const textures = await prepareSceneTextures({ images, rootDir, fileByPath, prefix: "pbrt", warn, readBytes });
+  const assets = textures.assets.slice();
 
   // Materials: one document per (material, emission) pair actually used.
   const usedMaterialNames = new Set();
@@ -430,7 +738,7 @@ export async function loadPbrtStage({ files, rootPath, signal, onProgress, decod
     const key = contentKey + "|" + (emission ? emission.join(",") : "");
     if (materialPathByKey.has(key)) return materialPathByKey.get(key);
     const name = sanitizeMtlxName(emission ? label + "_emissive" : label, usedMaterialNames);
-    const doc = pbrtMaterialDocument({ name, material, emission });
+    const doc = pbrtMaterialDocument({ name, material: pbrtMaterialWithTextures(material, scene.textures, warn), emission, textureFile: textures.textureFile });
     for (const note of doc.notes) warn(label + ": " + note);
     const entry = materialEntryFromDocument(doc, name, "pbrt");
     materialEntries.push(entry);
@@ -522,11 +830,19 @@ export async function loadPbrtStage({ files, rootPath, signal, onProgress, decod
     cameras.push(sceneCameraRecord({ matrix: pbrtCameraMatrix(scene.camera.cameraFromWorld, handed.matrix), lens, focusDistance: focus }));
   }
 
-  // A constant infinite light becomes a uniform dome (colour = radiance).
+  // The first infinite light is the dome: uniform (colour = radiance) or an image.
   const lights = [];
-  scene.infiniteLights.forEach((light, i) => {
-    if (i > 0) { warn("More than one infinite light; only the first is used"); return; }
-    lights.push(uniformDomeLight(pbrtAreaLightRadiance(light.params, warn)));
+  if (scene.infiniteLights.length > 1) warn("More than one infinite light; only the first is used");
+  const infinite = scene.infiniteLights[0];
+  if (infinite && infinite.params.filename) {
+    const dome = await pbrtImageDomeLight({ light: infinite, handed, rootDir, fileByPath, readBytes, warn, decodeExr });
+    if (dome) { lights.push(dome.light); assets.push(dome.asset); }
+  } else if (infinite) {
+    lights.push(uniformDomeLight(pbrtUniformInfiniteRadiance(infinite.params, warn)));
+  }
+  scene.distantLights.forEach((light, i) => {
+    const record = pbrtDistantLight(light, handed.matrix, warn, i ? "distant_" + (i + 1) : "distant");
+    if (record) lights.push(record);
   });
   lights.push(...standIns);
   if (standIns.length) warn("[info] " + standIns.length + " viewer-only rect light(s) stand in for rectangular area emitters in the real-time view; Export USD keeps only the emissive meshes");
@@ -539,5 +855,5 @@ export async function loadPbrtStage({ files, rootPath, signal, onProgress, decod
   report("extract-materials", 1, 1, "Extracted materials");
   report("prepare-geometry", 1, 1, "Prepared geometry");
 
-  return scenePayload({ rootPath: root, sourceKind: "pbrt", meshes: meshRecords, materials: materialEntries, cameras, lights, warnings });
+  return scenePayload({ rootPath: root, sourceKind: "pbrt", meshes: meshRecords, materials: materialEntries, cameras, lights, warnings, assets });
 }
