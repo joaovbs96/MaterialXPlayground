@@ -91,6 +91,7 @@ export const VENDOR_DEPS = [
     name: "JSZip",
     source: { npm: "jszip", files: { "dist/jszip.min.js": "jszip.min.js", "LICENSE.markdown": "LICENSE.markdown" } },
     license: { url: "https://github.com/Stuk/jszip/blob/HEAD/LICENSE.markdown", file: "LICENSE.markdown" },
+    module: { entry: "jszip.min.js", kind: "script", global: "JSZip" },
   },
   {
     id: "utif",

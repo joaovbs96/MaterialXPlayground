@@ -45,6 +45,11 @@
         return pendingCommon;
     };
     const classifyMitsubaXmlFiles = (files) => loadCommonModule().then((module) => module.classifyMitsubaXmlFiles(files));
+    // JSZip loads lazily (registry entry "jszip"), only when a .zip is chosen.
+    const expandSceneZips = (entries) => loadCommonModule().then((module) => module.expandSceneZips(entries, async (data) => {
+        const JSZipLib = await window.MtlxVendor.load('jszip');
+        return JSZipLib.loadAsync(data);
+    }));
     // detectRootKind plus the content check: an .xml root that is not a Mitsuba
     // scene gives '' (no supported scene).
     const detectRootKindForFiles = async (files, rootPath) => {
@@ -115,6 +120,7 @@
         detectRootKind,
         detectRootKindForFiles,
         classifyMitsubaXmlFiles,
+        expandSceneZips,
         loadGltfStage: (options) => loadGltfModule().then((module) => module.loadGltfStage(options)),
         loadObjStage: (options) => loadObjModule().then((module) => module.loadObjStage(options)),
         loadPbrtStage: (options) => loadPbrtModule().then((module) => module.loadPbrtStage(options)),

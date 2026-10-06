@@ -2330,6 +2330,25 @@
             // leaves today's behavior of waiting on an explicit pick.
             if (preferredRoot) await load(next, preferredRoot);
         };
+        // Expands chosen .zip files before root picking; null after a failure
+        // (shown in the scene error area) or when a newer choice superseded it.
+        const expandChosen = async (entries, generation) => {
+            if (!entries.some((f) => /\.zip$/i.test(f.path))) return entries;
+            setStatus('loading'); setError(''); setLoadErrorDetails([]);
+            try {
+                const sources = window.MtlxSceneSources;
+                if (!sources || typeof sources.expandSceneZips !== 'function') throw new Error('Zip support is unavailable in this build.');
+                const result = await sources.expandSceneZips(entries);
+                if (!mountedRef.current || generation !== generationRef.current) return null;
+                result.warnings.forEach((w) => console.warn(w));
+                return result.files;
+            } catch (e) {
+                if (!mountedRef.current || generation !== generationRef.current) return null;
+                const message = (e && e.message) || String(e);
+                setError(message); setStatus('error'); setLoadErrorDetails(['[error] ' + message]);
+                return null;
+            }
+        };
         const chooseFiles = async (list) => {
             treeSceneKeyRef.current = null; // new files: a fresh outliner
             const generation = ++generationRef.current;
@@ -2337,8 +2356,8 @@
             if (handleRef.current && handleRef.current.dispose) handleRef.current.dispose();
             handleRef.current = null; setHandle(null); setStage(null);
             window.__mtlxUsdSceneHandle = null;
-            const next = await readFiles(list);
-            applyChosenFiles(next, generation);
+            const next = await expandChosen(await readFiles(list), generation);
+            if (next) applyChosenFiles(next, generation);
         };
         const chooseFilesFromMap = async (map) => {
             treeSceneKeyRef.current = null;
@@ -2347,7 +2366,8 @@
             if (handleRef.current && handleRef.current.dispose) handleRef.current.dispose();
             handleRef.current = null; setHandle(null); setStage(null);
             window.__mtlxUsdSceneHandle = null;
-            applyChosenFiles(filesFromMap(map), generation);
+            const next = await expandChosen(filesFromMap(map), generation);
+            if (next) applyChosenFiles(next, generation);
         };
         // VS Code: missing-file entries already sent to the host for the
         // current host seq; each is asked for once.
@@ -3965,7 +3985,7 @@
                                     placeholder="Drop scene files or choose"
                                     multiple
                                     icon="files"
-                                    accept={'.usd,.usda,.usdc,.usdz,.glb,.gltf,.obj,.mtl,.bin,.mtlx,.pbrt,.ply,.gz,.xml,' + window.textureAccept()}
+                                    accept={'.usd,.usda,.usdc,.usdz,.glb,.gltf,.obj,.mtl,.bin,.mtlx,.pbrt,.ply,.gz,.xml,.zip,' + window.textureAccept()}
                                     onFiles={chooseFiles}
                                     inputTestId="usd-scene-file-picker"
                                 />

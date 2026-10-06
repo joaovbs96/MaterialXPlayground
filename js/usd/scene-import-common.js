@@ -193,6 +193,30 @@ export async function readEntryText(data, maxBytes = Infinity) {
   return new TextDecoder().decode(Number.isFinite(maxBytes) ? bytes.subarray(0, maxBytes) : bytes);
 }
 
+// Expands .zip entries ([{ path, data }]) one level, keeping the paths inside
+// each zip. .usdz is a USD package and is never expanded. loadZip(data)
+// resolves to a JSZip instance; a nested zip stays as-is with a warning.
+export async function expandSceneZips(entries, loadZip) {
+  const hidden = (p) => /(^|\/)(__MACOSX\/|\._[^/]*$|\.DS_Store$)/i.test(p);
+  const files = [];
+  const warnings = [];
+  for (const entry of entries) {
+    if (!/\.zip$/i.test(normalizePath(entry.path))) { files.push(entry); continue; }
+    let zip;
+    try { zip = await loadZip(entry.data); } catch (e) {
+      throw new Error("Could not read " + basenameOf(entry.path) + ": " + (e && e.message ? e.message : e));
+    }
+    for (const name of Object.keys(zip.files)) {
+      const item = zip.files[name];
+      const path = normalizePath(name);
+      if (item.dir || hidden(path)) continue;
+      if (/\.zip$/i.test(path)) { warnings.push("[warning] Nested zip not expanded: " + path); continue; }
+      files.push({ path, data: await item.async("blob") });
+    }
+  }
+  return { files, warnings };
+}
+
 // Valid Mitsuba roots among .xml entries [{ path, data }]: sniff, full check,
 // minus files another candidate <include>s. Best first: highest version,
 // shallowest path, alphabetical. Every other .xml is an ordinary companion file.
