@@ -86,6 +86,7 @@
         let currentEnv = null;
         let mode = 'studio';
         let rotation = 0;
+        let tilt = null;
         let exposure = 1;
         let disposed = false;
         let bounds = null;
@@ -101,7 +102,7 @@
             const source = envDirection;
             if (!source) return null;
             const direction = source.clone ? source.clone() : new THREE.Vector3(Number(source[0]) || 0, Number(source[1]) || 0, Number(source[2]) || -1);
-            if (typeof studio.keyLightRotationMatrix === 'function') direction.applyMatrix4(studio.keyLightRotationMatrix(rotation));
+            if (typeof studio.keyLightRotationMatrix === 'function') direction.applyMatrix4(studio.keyLightRotationMatrix(rotation, tilt));
             return direction.normalize();
         };
         const updateLight = () => {
@@ -157,9 +158,16 @@
             applyVisibility();
             return lightingEnabled;
         };
-        const setRotation = (radians) => {
+        // tilt: a dome's authored non-vertical orientation (keyLightRotationMatrix),
+        // so the backdrop shows the same frame the lighting samples.
+        const setRotation = (radians, nextTilt) => {
             rotation = Number.isFinite(Number(radians)) ? Number(radians) : 0;
-            environmentSky.rotation.y = baseRotation + rotationSign * rotation;
+            tilt = nextTilt || null;
+            if (tilt && typeof studio.keyLightRotationMatrix === 'function') {
+                environmentSky.quaternion.setFromRotationMatrix(studio.keyLightRotationMatrix(rotation, tilt).multiply(new THREE.Matrix4().makeRotationY(baseRotation)));
+            } else {
+                environmentSky.rotation.set(0, baseRotation + rotationSign * rotation, 0);
+            }
             updateLight();
             return rotation;
         };

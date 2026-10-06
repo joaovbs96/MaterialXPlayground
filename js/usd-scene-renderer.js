@@ -491,6 +491,16 @@ const sceneResolveDomeTexture = (fileMap, stage, rawRef) => {
 // scratchpad/displacement-verified/color-parity/dome-yaw/dome-yaw.md.
 const sceneDomeYawDegFromRotation = (rotationDeg) => (((90 - Number(rotationDeg || 0)) % 360) + 360) % 360;
 
+// Splits a dome's local-to-world matrix YXZ into RotY(yaw) * tilt: the slider owns
+// the yaw, every environment consumer applies the tilt (keyLightRotationMatrix in
+// js/shared/render-environment.js). A yaw-only dome has no tilt.
+const sceneDomeOrientation = (matrix) => {
+    const euler = new THREE.Euler().setFromRotationMatrix(matrix, 'YXZ');
+    const tilt = (Math.abs(euler.x) > 1e-9 || Math.abs(euler.z) > 1e-9)
+        ? new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(euler.x, 0, euler.z, 'YXZ')) : null;
+    return { tilt, rotationDeg: ((euler.y * 180 / Math.PI) % 360 + 360) % 360 };
+};
+
 // Builds the environment a stage's own dome light describes, so a stage
 // renders under the lighting it was authored with. Returns null when the
 // stage has no dome; never throws, since a light must not block a load.
@@ -524,14 +534,7 @@ const sceneDomeEnvironment = async (stage, fileMap, warnings) => {
             fileName = 'dome colour';
         }
         if (!env) return null;
-        // Only a Y rotation is representable, so take the yaw and report a
-        // tilt the environment cannot express rather than silently dropping it.
-        // Decompose YXZ into a yaw the rotation slider owns and the residual
-        // tilt, so the slider stays a plain yaw while the dome's full authored
-        // orientation still reaches u_envMatrix.
-        const euler = new THREE.Euler().setFromRotationMatrix(sceneMatrix(dome.matrix), 'YXZ');
-        const tilt = new THREE.Matrix4().makeRotationFromEuler(new THREE.Euler(euler.x, 0, euler.z, 'YXZ'));
-        const rotationDeg = ((euler.y * 180 / Math.PI) % 360 + 360) % 360;
+        const { tilt, rotationDeg } = sceneDomeOrientation(sceneMatrix(dome.matrix));
         const exposure = (Number(dome.intensity) || 0) * Math.pow(2, Number(dome.exposure) || 0);
         if (Number(dome.diffuse) !== 1 || Number(dome.specular) !== 1) {
             warn('Dome light ' + dome.primPath + ' sets diffuse/specular multipliers, which are not applied');
@@ -789,10 +792,9 @@ const mxLatlongProjectionJS = (nx, ny, nz) => {
 //
 // keyDirWorld, when supplied, must be the SAME already-rotated key light
 // direction the ordinary light loop uses (MtlxRender.keyLightDirection(
-// env.keyLight, envRotationRad), see the call sites below): passed in
-// rather than re-derived from envMatrix's own rotation (a different construction, makeRotationY(Math.PI/2 +
-// envRotationRad)) to avoid a second, error-prone decomposition of the
-// same angle.
+// env.keyLight, envRotationRad, envTilt), see the call sites below): passed in
+// rather than re-derived from envMatrix (MtlxRender.envLookupMatrix, a different
+// construction) to avoid a second, error-prone decomposition of the same rotation.
 //
 // Returns a closure eStored(nx, ny, nz, Vb) -> [r, g, b] in stored units
 // (pi already folded in, matching mx_environment_irradiance): the convolved
@@ -4417,7 +4419,7 @@ const scenePruneUnreachableNodes = (xml) => {
             // against local emitters by irradiance.
             const envKey = env && env.keyLight;
             if (envKey && envKey.direction) {
-                const keyDirection = window.MtlxRender.keyLightDirection(envKey, envRotationRad);
+                const keyDirection = window.MtlxRender.keyLightDirection(envKey, envRotationRad, envTilt);
                 const keyIntensity = Math.max(0, Number(envKey.intensity) || 0) * (Number.isFinite(envExposure) ? envExposure : 1);
                 // An exhausted environment contribution must not consume one
                 // of the bounded caster slots.  This also keeps env exposure
@@ -4444,7 +4446,7 @@ const scenePruneUnreachableNodes = (xml) => {
             // those stages a shadow at all.
             if (!ranked.length) {
                 const keyDir = env && env.keyLight && env.keyLight.direction
-                    ? window.MtlxRender.keyLightDirection(env.keyLight, envRotationRad) : null;
+                    ? window.MtlxRender.keyLightDirection(env.keyLight, envRotationRad, envTilt) : null;
                 const keyEnergy = env && env.keyLight
                     ? Math.max(0, Number(env.keyLight.intensity) || 0) * Math.max(0, Number(envExposure) || 0) : 0;
                 if (!keyDir || keyEnergy <= 0) {
@@ -4950,9 +4952,9 @@ const scenePruneUnreachableNodes = (xml) => {
             if (window.ensureConvolvedIrradiance) window.ensureConvolvedIrradiance(renderer, env, sceneDiffuseEnvMethod());
             const exposure = typeof envExposure !== 'undefined' ? envExposure : (domeLight ? domeLight.exposure : 1);
             const rotRad = typeof envRotationRad !== 'undefined' ? envRotationRad : 0;
-            const envMatrix = new THREE.Matrix4().makeRotationY(Math.PI / 2 + rotRad);
+            const envMatrix = window.MtlxRender.envLookupMatrix(rotRad, envTilt);
             const keyDirWorld = (env && env.keyLight && env.keyLight.direction)
-                ? window.MtlxRender.keyLightDirection(env.keyLight, rotRad)
+                ? window.MtlxRender.keyLightDirection(env.keyLight, rotRad, envTilt)
                 : null;
             const eStored = makeEStoredSampler(env, exposure, envMatrix, keyDirWorld);
             if (!eStored) return null;
@@ -5430,7 +5432,7 @@ const scenePruneUnreachableNodes = (xml) => {
             environmentBridge = window.MtlxRender.createStageEnvironment({ scene, renderer, camera, contentRoot: sceneRoot });
             if (env) environmentBridge.setEnvironment(env);
             if (domeLight) {
-                environmentBridge.setEnvRotation(envRotationRad);
+                environmentBridge.setEnvRotation(envRotationRad, envTilt);
                 environmentBridge.setEnvExposure(envExposure);
             }
         }
@@ -6497,6 +6499,8 @@ const scenePruneUnreachableNodes = (xml) => {
             if (!next || stopped) return false;
             env = sceneKeyEnv(next);
             if (environmentBridge && environmentBridge.setEnvironment) environmentBridge.setEnvironment(env);
+            // Re-syncs the sky with envTilt, which leaving the dome clears.
+            if (environmentBridge && environmentBridge.setEnvRotation) environmentBridge.setEnvRotation(envRotationRad, envTilt);
             applyMaterialEnvironment();
             reshadeSkyBounce(); applySkyBounce();
             markLocalEnvDirty();
@@ -6505,7 +6509,7 @@ const scenePruneUnreachableNodes = (xml) => {
         };
         const setEnvRotation = (radians) => {
             envRotationRad = Number(radians) || 0;
-            if (environmentBridge && environmentBridge.setEnvRotation) environmentBridge.setEnvRotation(envRotationRad);
+            if (environmentBridge && environmentBridge.setEnvRotation) environmentBridge.setEnvRotation(envRotationRad, envTilt);
             applyMaterialEnvironment();
             reshadeSkyBounce(); applySkyBounce();
             markLocalEnvDirty();
