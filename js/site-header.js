@@ -9,10 +9,16 @@
 (function () {
     'use strict';
 
-    // True in every real context: the old standalone pages (material-viewer,
-    // node-graph) are gone, so this script only ever loads inside the shell
-    // (index.html, or a hosted webview via __MTLX_VSCODE__/__MTLX_ELECTRON__).
-    var IS_SHELL = /(^|\/)(index\.html)?$/i.test(location.pathname) || !!window.__MTLX_VSCODE__ || !!window.__MTLX_ELECTRON__;
+    // Subsite pages (the blog, a future tutorials site) set __MTLX_SUBSITE__
+    // and __MTLX_APP_ROOT__ (the relative path back to the app) before this
+    // script runs; every nav link and fetch there is prefixed with APP_ROOT.
+    var SUBSITE = window.__MTLX_SUBSITE__ || (window.__MTLX_TUTORIALS__ ? 'tutorials' : null);
+    var APP_ROOT = window.__MTLX_APP_ROOT__ || '../';
+
+    // True in every real context but a subsite: the shell (index.html, or a
+    // hosted webview via __MTLX_VSCODE__/__MTLX_ELECTRON__). The !SUBSITE
+    // guard matters: the path regex alone also matches a subsite's "/blog/".
+    var IS_SHELL = !SUBSITE && (/(^|\/)(index\.html)?$/i.test(location.pathname) || !!window.__MTLX_VSCODE__ || !!window.__MTLX_ELECTRON__);
 
     // The site name. Change it here and it changes everywhere
     // (header, and — via window.SITE_TITLE — anything React renders).
@@ -41,6 +47,8 @@
     };
     LINKS.issues = LINKS.repo + '/issues';
     LINKS.releases = LINKS.repo + '/releases/latest';
+    // Every release with its notes (the header's About > Release notes item).
+    LINKS.releaseNotes = LINKS.repo + '/releases';
 
     // Repo slug ("owner/name"), derived from LINKS.repo rather than
     // hardcoded — consumed by the GitHub repo widget markup below and by
@@ -177,6 +185,8 @@
                 html += '<div class="mtlx-theme-group" role="presentation">' + g.label + '</div>' + g.items.map(themeItemHtml).join('');
             });
         }
+        // Subsites drop Customize: its event is only handled by js/shell.jsx.
+        if (SUBSITE) return html;
         return html + '<div class="mtlx-theme-sep" role="separator"></div>' + customizeItemHtml();
     }
     function themeRowHtml() {
@@ -305,6 +315,29 @@
             '<path d="M9 6l11 0" /><path d="M9 12l11 0" /><path d="M9 18l11 0" />' +
             '<path d="M5 6l0 .01" /><path d="M5 12l0 .01" /><path d="M5 18l0 .01" />' +
         '</svg>';
+    // Tabler "device-desktop", for the Desktop app entry.
+    var ICON_NAV_DESKTOP =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M3 5a1 1 0 0 1 1 -1h16a1 1 0 0 1 1 1v10a1 1 0 0 1 -1 1h-16a1 1 0 0 1 -1 -1v-10z" />' +
+            '<path d="M7 20h10" /><path d="M9 16v4" /><path d="M15 16v4" />' +
+        '</svg>';
+    // Tabler "news", for the Blog tab (matches MTLX_ICON_PATHS.news).
+    var ICON_NAV_BLOG =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M16 6h3a1 1 0 0 1 1 1v11a2 2 0 0 1 -4 0v-13a1 1 0 0 0 -1 -1h-10a1 1 0 0 0 -1 1v12a3 3 0 0 0 3 3h11" />' +
+            '<path d="M8 8l4 0" /><path d="M8 12l4 0" /><path d="M8 16l4 0" />' +
+        '</svg>';
+    // Tabler "info-circle" (matches MTLX_ICON_PATHS['info-circle']), for the About group.
+    var ICON_NAV_ABOUT =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0" /><path d="M12 9h.01" /><path d="M11 12h1v4h1" />' +
+        '</svg>';
+    // The Playground's logo mark, single-tone like the other menu icons: the
+    // outer path alone is the disc with the swoosh cut out of it.
+    var ICON_NAV_PLAYGROUND =
+        '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
+            '<path d="M12,2 C17.523000717163086,2 22,6.4770002365112305 22,12 C22,17.523000717163086 17.523000717163086,22 12,22 C6.4770002365112305,22 2,17.523000717163086 2,12 C2,6.4770002365112305 6.4770002365112305,2 12,2 C12,2 12,2 12,2 ZM18,11 C17.447715759277344,11 17,11.447714805603027 17,12 C17,14.76142406463623 14.76142406463623,17 12,17 C11.447714805603027,17 11,17.447715759277344 11,18 C11,18.552284240722656 11.447714805603027,19 12,19 C15.86599349975586,19 19,15.86599349975586 19,12 C19,11.447714805603027 18.552284240722656,11 18,11 C18,11 18,11 18,11 Z" />' +
+        '</svg>';
     var ICON_CHEVRON_DOWN =
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="mtlx-tab-chevron">' +
             '<path d="M6 9l6 6l6 -6" />' +
@@ -316,25 +349,33 @@
             '<path d="M15 4h5v5" />' +
         '</svg>';
 
-    // Pages of the site, in nav order. Plain entries are shellHref-only, as
-    // before; `group: true` entries instead carry `items` (own shellHref/
-    // href/icon/badge/status), rendered as a dropdown by B/C below.
+    // Pages of the site, in nav order. Entries carry a shellHref (hash route)
+    // or an `href` (a real page such as the blog, see hrefFor); `group: true`
+    // entries instead carry `items`, rendered as a dropdown by B/C below.
     var NAV = [
         { id: 'home', label: 'Home', shellHref: '#!home', icon: ICON_NAV_HOME, mobileOnly: true },
-        { id: 'docs', label: 'Node Specs', shellHref: '#!docs', icon: ICON_NAV_DOCS },
-        { id: 'viewer', label: 'Material Viewer', shellHref: '#!viewer', icon: ICON_NAV_VIEWER },
-        { id: 'scene', label: 'Scene Viewer', shellHref: '#!scene', icon: ICON_NAV_SCENE, badge: 'Experimental' },
-        { id: 'compare', label: 'Compare', shellHref: '#!compare', icon: ICON_NAV_COMPARE },
+        { id: 'viewers', label: 'Viewers', group: true, icon: ICON_NAV_VIEWER, items: [
+            { id: 'viewer', label: 'Material Viewer', shellHref: '#!viewer', icon: ICON_NAV_VIEWER },
+            { id: 'scene', label: 'Scene Viewer', shellHref: '#!scene', icon: ICON_NAV_SCENE, badge: 'Experimental' },
+            { id: 'compare', label: 'Compare', shellHref: '#!compare', icon: ICON_NAV_COMPARE },
+        ] },
         { id: 'graph', label: 'Graph Editor', shellHref: '#!graph', icon: ICON_NAV_GRAPH },
+        { id: 'docs', label: 'Node Specs', shellHref: '#!docs', icon: ICON_NAV_DOCS },
         { id: 'learn', label: 'Learn', group: true, icon: ICON_NAV_LEARN, items: [
             { id: 'whatIsMaterialx', label: 'What is MaterialX?', shellHref: '#!what-is-materialx', icon: '<span class="mtlx-menu-logo" aria-hidden="true"></span>' },
             { id: 'gallery', label: 'Material Gallery', shellHref: '#!gallery', icon: ICON_NAV_GALLERY },
             { id: 'tutorials', label: 'Tutorials', icon: ICON_NAV_LEARN, status: 'soon' },
-            { id: 'roadmap', label: 'Roadmap', shellHref: '#!roadmap', icon: ICON_NAV_ROADMAP },
         ] },
         { id: 'integrate', label: 'Integrate', group: true, icon: ICON_NAV_INTEGRATE, items: [
             { id: 'builder', label: 'Embed Builder', shellHref: '#!builder', icon: ICON_NAV_BUILDER, badge: 'Experimental' },
             { id: 'vscode', label: 'VS Code extension', shellHref: '#!vscode', icon: ICON_NAV_VSCODE, badge: 'Experimental' },
+            { id: 'desktop', label: 'Desktop app', shellHref: '#!desktop', icon: ICON_NAV_DESKTOP, badge: 'Experimental' },
+        ] },
+        { id: 'aboutGroup', label: 'About', group: true, icon: ICON_NAV_ABOUT, items: [
+            { id: 'about', label: 'The MaterialX Playground', shellHref: '#!about', icon: ICON_NAV_PLAYGROUND },
+            { id: 'blog', label: 'Blog', href: 'blog/', icon: ICON_NAV_BLOG },
+            { id: 'roadmap', label: 'Roadmap', shellHref: '#!roadmap', icon: ICON_NAV_ROADMAP },
+            { id: 'releaseNotes', label: 'Release notes', href: LINKS.releaseNotes, external: true, icon: ICON_TAG },
         ] },
     ];
 
@@ -363,32 +404,49 @@
         if (hash === '#!compare') { return 'compare'; }
         if (hash === '#!builder' || hash.indexOf('#!builder?') === 0) { return 'builder'; }
         if (hash === '#!vscode') { return 'vscode'; }
+        if (hash === '#!desktop') { return 'desktop'; }
         if (hash === '#!what-is-materialx') { return 'whatIsMaterialx'; }
         if (hash === '#!gallery' || hash.indexOf('#!gallery?') === 0) { return 'gallery'; }
         if (hash === '#!roadmap') { return 'roadmap'; }
+        if (hash === '#!about' || hash.indexOf('#!about?') === 0) { return 'about'; }
         if (hash === '#!docs' || hash.indexOf('#/') === 0) { return 'docs'; }
         return 'home';
     }
     // Thin wrapper kept for readability at this file's own call sites.
     function shellActiveId(hash) { return shellRouteFor(hash); }
 
-    // NAV carries no pathname `match` anymore: the standalone-page
-    // branch is gone, so the active tab always comes from the current
-    // hash (see IS_SHELL's own comment).
-    var activeId = shellActiveId(window.location.hash || '');
+    // The active tab comes from the current hash, except on a subsite,
+    // which has no shell hash and marks its own tab (e.g. 'blog') instead.
+    var activeId = SUBSITE ? SUBSITE : shellActiveId(window.location.hash || '');
 
-    // VS Code nav filtering: the webview always drops Home (no landing
-    // page) and the Learn/Integrate dropdowns (browser-only surfaces). The
-    // custom editor also drops Docs; the standalone docs panel keeps only Docs,
-    // and the USD scene editor keeps the Scene Viewer plus the Graph Editor.
+    // A NAV item's actual href: its real `href` or its hash route, prefixed
+    // with APP_ROOT on a subsite so every link leads back into the app.
+    function hrefFor(item) {
+        var href = item.href || item.shellHref;
+        return SUBSITE ? APP_ROOT + href : href;
+    }
+
+    // VS Code nav filtering: the webview drops Home (no landing page) and
+    // every dropdown group, keeping only its own tool tabs, flattened out of
+    // their groups. The custom editor keeps Material Viewer + Graph Editor;
+    // the docs panel keeps only Docs; the USD scene editor keeps the Scene
+    // Viewer plus the Graph Editor. The desktop app drops the web-only Blog
+    // item from the About group (its pages are not shipped).
     var navItems = window.__MTLX_VSCODE__
-        ? NAV.filter(function (t) {
-            if (t.group || t.id === 'home') return false;
+        ? navLeaves(NAV).filter(function (t) {
             if (window.__MTLX_DOCS_ONLY__) return t.id === 'docs';
             if (window.__MTLX_SCENE_ONLY__) return t.id === 'scene' || t.id === 'graph';
             return t.id === 'viewer' || t.id === 'graph';
         })
-        : NAV;
+        : window.__MTLX_ELECTRON__
+            ? NAV.map(function (t) {
+                if (!t.group) return t;
+                var copy = {};
+                for (var k in t) copy[k] = t[k];
+                copy.items = t.items.filter(function (i) { return i.id !== 'blog'; });
+                return copy;
+            })
+            : NAV;
 
     // One dropdown menu item, desktop flavor: internal items share data-nav
     // with the plain tabs above; external ones append the external-link
@@ -411,7 +469,7 @@
                 badge + ICON_EXTERNAL_LINK +
                 '</a>';
         }
-        return '<a role="menuitem" tabindex="-1" href="' + item.shellHref + '"' +
+        return '<a role="menuitem" tabindex="-1" href="' + hrefFor(item) + '"' +
             (IS_SHELL ? ' data-nav="' + item.id + '"' : '') +
             (active ? ' aria-current="page"' : '') +
             ' class="mtlx-menu-item' + (active ? ' is-active' : '') + '">' +
@@ -440,7 +498,7 @@
                 badge + ICON_EXTERNAL_LINK +
                 '</a>';
         }
-        return '<a href="' + item.shellHref + '"' +
+        return '<a href="' + hrefFor(item) + '"' +
             (IS_SHELL ? ' data-nav="' + item.id + '"' : '') +
             (active ? ' aria-current="page"' : '') +
             ' class="mtlx-tab-mobile' + (active ? ' is-active' : '') + '">' +
@@ -469,7 +527,7 @@
             '</div>';
         }
         var active = item.id === activeId;
-        var href = item.shellHref; // shellHref-only, see NAV's own comment above
+        var href = hrefFor(item);
         // The badge is intentionally desktop-tab-only skipped: a top-level
         // tab (unlike a group's dropdown items) sits directly in the
         // measured-collapse header bar below, and the extra pill width
@@ -491,7 +549,7 @@
                 item.items.map(renderMobileItem).join('');
         }
         var active = item.id === activeId;
-        var href = item.shellHref; // shellHref-only, see NAV's own comment above
+        var href = hrefFor(item);
         var badge = item.badge ? '<span class="mtlx-menu-badge">' + item.badge + '</span>' : '';
         return '<a href="' + href + '"' +
             (IS_SHELL ? ' data-nav="' + item.id + '"' : '') +
@@ -538,7 +596,7 @@
                 // tabs (no more flex sibling ahead of them) -- see
                 // .mtlx-header-bar's layout comment in site-header.css.
                 (window.__MTLX_VSCODE__ ? '' :
-                '<a href="' + (IS_SHELL ? '#!home' : 'index.html') + '"' +
+                '<a href="' + (SUBSITE ? APP_ROOT + '#!home' : (IS_SHELL ? '#!home' : 'index.html')) + '"' +
                     ' class="mtlx-brand" title="' + SITE_TITLE + '">' +
                     '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" class="mtlx-brand-icon">' +
                         LOGO_PATHS +
@@ -573,12 +631,12 @@
                     '</div>' +
                     // About button, immediately left of the GitHub widget.
                     // Dispatches an event for js/shell.jsx's AboutDialog to
-                    // pick up (same "just a CustomEvent" contract as the
-                    // settings cog below).
+                    // pick up, so subsites (no shell) leave it out.
+                    (SUBSITE ? '' :
                     '<button type="button" id="mtlx-about-btn" class="mtlx-icon-btn"' +
-                        ' title="About" aria-label="About">' +
+                        ' title="Build Info &amp; Licenses" aria-label="Build Info &amp; Licenses">' +
                         ICON_ABOUT +
-                    '</button>' +
+                    '</button>') +
                     // GitHub repo widget (flat icon + text link, no pill
                     // chrome): octocat + short repo name + async facts row,
                     // filled in below. Visible name is REPO_NAME only
@@ -640,11 +698,12 @@
                     '<div id="mtlx-theme-row" class="mtlx-theme-row" role="radiogroup" aria-label="Theme"></div>' +
                     '<div id="mtlx-theme-more" class="mtlx-theme-morewrap"></div>' +
                     // Opens the Theme editor panel, same event as the desktop popup's Customize item.
+                    (SUBSITE ? '' :
                     '<div class="mtlx-theme-morewrap">' +
                         '<button type="button" id="mtlx-theme-customize-mobile" class="mtlx-menu-item mtlx-theme-more-btn mtlx-theme-customize">' +
                             ICON_CUSTOMIZE + '<span class="mtlx-menu-label">Customize&hellip;</span>' +
                         '</button>' +
-                    '</div>' +
+                    '</div>') +
                     // .mtlx-mobile-link-brand adds a flex row (icon + text)
                     // over .mtlx-mobile-link's flat styling, kept separate
                     // from .mtlx-source-mobile (its gap suits a square glyph).
@@ -653,10 +712,11 @@
                     // AboutDialog, same event as the header button above.
                     // Ordered right before the GitHub row, mirroring the
                     // desktop cluster's About-then-GitHub order.
+                    (SUBSITE ? '' :
                     '<button type="button" id="mtlx-about-btn-mobile" class="mtlx-mobile-link mtlx-mobile-link-brand">' +
                         ICON_ABOUT_MOBILE +
-                        '<span>About</span>' +
-                    '</button>' +
+                        '<span>Build Info &amp; Licenses</span>' +
+                    '</button>') +
                     // Flat copy of the desktop GitHub widget (octocat +
                     // repo slug + facts row) instead of a plain "Source"
                     // link; initSourceFacts() below fills both containers.
@@ -738,7 +798,7 @@
         });
     }
 
-    // ---- Nav dropdown menus (Learn/Integrate groups) ---------------------
+    // ---- Nav dropdown menus (Viewers/Learn/Integrate/About groups) -------
     // Hover-intent open/close delays, full keyboard support (arrows, Home/
     // End, Escape, Tab) and click-outside dismissal. No-op where there are
     // no groups (e.g. under VS Code), so measure()/hashchange stay safe.
@@ -1115,7 +1175,7 @@
     // the api.github.com rate limit) with the GitHub API (stars/forks).
     // Best-effort: a failure never leaves more than a plain icon+name link.
     (function initSourceFacts() {
-        // Resolves with the merged facts (or null) so js/vscode-app.jsx can
+        // Resolves with the merged facts (or null) so the product pages can
         // reuse this instead of a second API call. Fires exactly once, after
         // BOTH sources below have settled.
         var resolveFacts;
@@ -1138,7 +1198,7 @@
         if (window.__MTLX_ELECTRON__) { resolveFacts(null); return; }
         if (document.documentElement.classList.contains('embed-mode')) { resolveFacts(null); return; }
 
-        var CACHE_KEY = 'mtlx_source_facts_v3';
+        var CACHE_KEY = 'mtlx_source_facts_v4';
         // sessionStorage survives reloads and only dies with the tab, so
         // without a TTL a long-lived tab pins the release tag and counts
         // indefinitely and no amount of Ctrl+R shifts them. 30 min stays
@@ -1165,6 +1225,44 @@
             parent.appendChild(span);
         }
 
+        // Desktop app downloads (js/desktop-app.jsx), matched by asset name.
+        // macZip needs the "-mac" suffix so the offline site zip never matches.
+        var DESKTOP_ASSET_RULES = [
+            { key: 'winSetup', test: function (n) { return /Setup[ .][^/]*\.exe$/i.test(n); } },
+            { key: 'winPortable', test: function (n) { return /\.exe$/i.test(n) && !/Setup/i.test(n); } },
+            { key: 'macDmg', test: function (n) { return /\.dmg$/i.test(n); } },
+            { key: 'macZip', test: function (n) { return /-mac\.zip$/i.test(n); } },
+            { key: 'linuxAppImage', test: function (n) { return /\.AppImage$/i.test(n); } },
+            { key: 'linuxDeb', test: function (n) { return /\.deb$/i.test(n); } },
+        ];
+        function isAsset(a) {
+            return !!a && typeof a.name === 'string' && typeof a.url === 'string' && /^https:\/\//.test(a.url);
+        }
+        function desktopFromRelease(assets) {
+            var out = {};
+            for (var i = 0; i < assets.length; i++) {
+                var a = assets[i];
+                if (!a || typeof a.name !== 'string') continue;
+                for (var j = 0; j < DESKTOP_ASSET_RULES.length; j++) {
+                    var rule = DESKTOP_ASSET_RULES[j];
+                    if (!out[rule.key] && rule.test(a.name)) out[rule.key] = { name: a.name, url: a.browser_download_url, size: a.size };
+                }
+            }
+            return out;
+        }
+        // Per key the API asset wins (it carries the size); baked fills gaps.
+        function mergedDesktop() {
+            var out = {};
+            var api = (apiFacts && apiFacts.desktop) || {};
+            var baked = (bakedFacts && bakedFacts.desktop) || {};
+            for (var j = 0; j < DESKTOP_ASSET_RULES.length; j++) {
+                var key = DESKTOP_ASSET_RULES[j].key;
+                if (isAsset(api[key])) out[key] = api[key];
+                else if (isAsset(baked[key])) out[key] = { name: baked[key].name, url: baked[key].url };
+            }
+            return out;
+        }
+
         // Best-known state from each source, merged fresh on every render.
         // Baked wins for version/vsix identity; the API only ever adds
         // stars/forks, plus the vsix size once the release lists the asset.
@@ -1186,6 +1284,7 @@
                 stars: apiFacts ? apiFacts.stars : undefined,
                 forks: apiFacts ? apiFacts.forks : undefined,
                 vsix: vsix,
+                desktop: mergedDesktop(),
                 t: (apiFacts && apiFacts.t) || Date.now(),
             };
         }
@@ -1217,7 +1316,7 @@
         // Document-relative, never root-absolute: Pages serves this site under
         // a subpath and index.html carries a base href. Cache-busted by the
         // build id when available; no build id just fetches plain.
-        var bakedUrl = './source-facts.json' + (window.__MTLX_BUILD ? '?b=' + encodeURIComponent(window.__MTLX_BUILD) : '');
+        var bakedUrl = (SUBSITE ? APP_ROOT : './') + 'source-facts.json' + (window.__MTLX_BUILD ? '?b=' + encodeURIComponent(window.__MTLX_BUILD) : '');
         fetch(bakedUrl)
             .then(function (r) { return r.ok ? r.json() : null; })
             .catch(function () { return null; })
@@ -1265,6 +1364,7 @@
                 stars: repoData ? repoData.stargazers_count : undefined,
                 forks: repoData ? repoData.forks_count : undefined,
                 vsix: vsix,
+                desktop: releaseData && Array.isArray(releaseData.assets) ? desktopFromRelease(releaseData.assets) : {},
                 t: Date.now(),
             };
             try { sessionStorage.setItem(CACHE_KEY, JSON.stringify(apiFacts)); } catch (e) { /* best-effort */ }
