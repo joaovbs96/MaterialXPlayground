@@ -147,6 +147,7 @@ const RUNTIME_ASSETS = [
   "js/usd/mitsuba-stage-loader.js",
   "js/usd/scene-import-common.js",
   "js/usd/mtlx-material-docs.js",
+  "js/usd/pfm-image.js",
   // Node thumbnail worker pieces: loaded through Worker URLs and dynamic import().
   // WP5 must add js/graph/thumb-worker.js once it exists.
   "js/shared/worker-module-link.js",

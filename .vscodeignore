@@ -32,6 +32,7 @@
 !js/usd/mitsuba-stage-loader.js
 !js/usd/scene-import-common.js
 !js/usd/mtlx-material-docs.js
+!js/usd/pfm-image.js
 !js/materialx/LICENSE.txt
 !js/materialx/1.39.5/JsMaterialXGenShader.js
 !js/materialx/1.39.5/JsMaterialXGenShader.wasm
