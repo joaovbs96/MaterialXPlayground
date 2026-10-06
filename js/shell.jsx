@@ -1139,7 +1139,7 @@ function AboutDialog() {
                 ) : null}
                 <div className="text-[11px] text-fg-muted mb-1">
                     <span className="text-fg-secondary">Assets: </span>
-                    Shader Ball and Cloth mesh (CC BY 4.0), MaterialX Shader Ball (Apache-2.0), HDRIs (CC BY 4.0 / CC0), UV checker texture and Motley Patchwork Rug (MIT). See the{' '}
+                    Shader Ball and Cloth mesh (CC BY 4.0), MaterialX Shader Ball (Apache-2.0), Dragon (Stanford scan via the Khronos glTF Sample Assets, non-commercial), HDRIs (CC BY 4.0 / CC0), UV checker texture and Motley Patchwork Rug (MIT). See the{' '}
                     {links.repo ? (
                         <a href={links.repo + '#asset-credits'} target="_blank" rel="noopener noreferrer"
                             className="text-accent-fg hover:text-accent-fg-strong underline">README</a>

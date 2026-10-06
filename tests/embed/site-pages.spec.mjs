@@ -81,6 +81,19 @@ test('@smoke About page renders and the header groups highlight their active pag
   await page.locator('[data-about-dot="color"]').click();
   await expect(deck).toHaveAttribute('data-slide', 'color');
   await expect(colorSource).toContainText('0.86, 0.16, 0.07');
+  // Go further starts on the Dragon with its credit line; Restart brings it back.
+  const dragonChip = page.locator('[data-about-shape="dragon"]');
+  const dragonCredit = page.locator('[data-about-credit="dragon"]');
+  await page.locator('[data-about-dot="further"]').click();
+  await expect(deck).toHaveAttribute('data-slide', 'further');
+  await expect(dragonChip).toHaveAttribute('aria-pressed', 'true');
+  await expect(dragonCredit).toBeVisible();
+  await page.locator('[data-about-shape="cube"]').click();
+  await expect(dragonCredit).toBeHidden();
+  await page.locator('[data-about-nav="restart"]').click();
+  await expect(deck).toHaveAttribute('data-index', '0');
+  await page.locator('[data-about-dot="further"]').click();
+  await expect(dragonChip).toHaveAttribute('aria-pressed', 'true');
   await page.keyboard.press('End');
   await expect(page.locator('#about-next-h')).toHaveText('Out in the open');
   await page.keyboard.press('Home');

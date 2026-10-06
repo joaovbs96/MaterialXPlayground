@@ -2316,6 +2316,31 @@ const getClothGeometry = () => {
     return clothGeometryPromise;
 };
 
+// Per-view model (createMtlxRenderView's `modelUrl`): the custom-model parse,
+// cached per URL and never written to the global CUSTOM_GEOM slot. null on failure.
+const modelUrlGeomCache = new Map();
+const getModelUrlGeometry = (url) => {
+    const abs = new URL(url, document.baseURI).href;
+    if (!modelUrlGeomCache.has(abs)) {
+        modelUrlGeomCache.set(abs, (async () => {
+            const clean = abs.split('?')[0].split('#')[0];
+            const ext = clean.slice(clean.lastIndexOf('.') + 1).toLowerCase();
+            const base = clean.slice(clean.lastIndexOf('/') + 1) || 'model';
+            const r = await fetch(abs);
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const data = ext === 'glb' ? await r.arrayBuffer() : await r.text();
+            const opts = ext === 'obj' ? undefined : { resourcePath: clean.slice(0, clean.lastIndexOf('/') + 1) };
+            const root = await parseModelRoot(ext, data, base, opts);
+            return prepGeometry(buildCustomGeometryFromRoot(root, base));
+        })().catch((e) => {
+            console.warn('preview model load failed, falling back to sphere:', url, e);
+            modelUrlGeomCache.delete(abs);
+            return null;
+        }));
+    }
+    return modelUrlGeomCache.get(abs);
+};
+
 // Builds cube/sphere/cloth/shaderball-mtlx preview geometry, the shaderball/
 // shaderball-scene presets are full GLB scenes handled separately by
 // instantiateShaderballScene(). Any unrecognized `which` falls back to
@@ -4619,6 +4644,9 @@ const createPreviewContent = ({
     // Settings surface whose quality level this view follows (viewer, compare,
     // docs, graph, embed); defaults from the host.
     surface = null,
+    // Optional per-view .glb/.gltf/.obj URL for the sphere/cube path; leaves
+    // the global geometry choice and custom-model slot alone.
+    modelUrl = null,
 }) => {
     const renderSurface = surface || previewLevelSurface();
     // 'shaderball-scene' -> full authored GLB scene with its detached camera;
@@ -5152,7 +5180,7 @@ const createPreviewContent = ({
                 renderer, isAlive: () => !stopped,
                 budget: createTriangleBudget({ perMesh: triangleBudget, total: Infinity, enabled: true }),
                 textureSession,
-                cacheKey: (level) => baseGeomCacheKey(geomName, sceneMode, level),
+                cacheKey: (level) => baseGeomCacheKey(modelUrl ? 'url:' + modelUrl : geomName, sceneMode, level),
                 creaseByNormals: true,
                 firstBuildTimeoutMs: 4000,
                 debounceMs: 150,
@@ -5222,7 +5250,8 @@ const createPreviewContent = ({
                 // The first frame reads mesh.matrixWorld before render() syncs it.
                 sceneGroup.updateMatrixWorld(true);
             } else {
-                geometry = prepGeometry(await buildPreviewGeometry(geomName));
+                const urlGeom = modelUrl && !flat2d ? await getModelUrlGeometry(modelUrl) : null;
+                geometry = prepGeometry(urlGeom ? urlGeom.clone() : await buildPreviewGeometry(geomName));
                 // Initial 2D fit; don't rely on the ResizeObserver's first fire.
                 if (flat2d) fitQuadToAspect((canvas.clientWidth || h.width) / (canvas.clientHeight || h.height));
             }

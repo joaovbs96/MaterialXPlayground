@@ -180,7 +180,8 @@ const FORBIDDEN_PREFIXES = [
     .filter((v) => v !== DEFAULT_MTLX_VERSION)
     .map((v) => `js/materialx/${v}/`),
 ];
-const FORBIDDEN_FILES = ["CLAUDE.md"];
+// The About page's dragon is web and desktop only (Stanford non-commercial terms, About is unreachable here).
+const FORBIDDEN_FILES = ["CLAUDE.md", "models/dragon.glb", "models/LICENSE_dragon.txt"];
 
 // gallery/ is mostly forbidden too, but the package job trims it down to
 // exactly two allowed shapes before `vsce package` runs (see .vscodeignore

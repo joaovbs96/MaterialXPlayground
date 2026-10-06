@@ -1,0 +1,16 @@
+Dragon model, from the DragonAttenuation model in the Khronos glTF Sample Assets repository
+Source: https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/DragonAttenuation
+
+The dragon model is based on the one from Morgan McGuire's Computer Graphics Archive (https://casual-effects.com/data). Original dragon mesh data based on a Stanford Scan (http://www.graphics.stanford.edu/data/3Dscanrep/) © 1996 Stanford University.
+
+Copyright:
+  © 1996, Stanford University Computer Graphics Laboratory (original scan)
+  © 2017, Morgan McGuire (conversion and cleanup)
+
+The file in this directory (dragon.glb) is a copy of that glTF model. This project only displays it as a static preview shape: it shows the visitor's material on the mesh, with camera orbit only.
+
+This model is NOT covered by this repository's Apache License 2.0. It is used under the Stanford 3D Scanning Repository terms, summarized here (the source pages above are authoritative):
+
+  - Free redistribution and use for research are allowed, with an acknowledgement to the Stanford University Computer Graphics Laboratory.
+  - It may not be used for commercial purposes, or included in a product that is sold, without permission from Stanford.
+  - Stanford asks that the dragon be treated with cultural sensitivity: it should not be animated, morphed, cut up or otherwise used in a disrespectful or destructive way.

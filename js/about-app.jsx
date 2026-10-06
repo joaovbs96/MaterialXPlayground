@@ -85,8 +85,10 @@ const ABOUT_SWATCHES = [
 const ABOUT_COAT_COLOR = [1, 0.9, 0.74];
 const ABOUT_MINE_START = { color: ABOUT_SWATCHES[0].lin, metal: 1, rough: 0.35, coat: 1 };
 const ABOUT_STUDIO_ENV = 'env_maps/studio_kontrast_04_1k.exr';
-// Go further's shapes: engine preview geometry names (GLOBAL_GEOM_VALUES).
+// Go further's shapes: engine preview geometry names (GLOBAL_GEOM_VALUES), or a
+// per-view model URL (models/LICENSE_dragon.txt) that leaves the Viewer's model alone.
 const ABOUT_SHAPES = [
+    { id: 'dragon', label: 'Dragon', model: 'models/dragon.glb' },
     { id: 'cube', label: 'Cube' },
     { id: 'sphere', label: 'Sphere' },
     { id: 'cloth', label: 'Cloth' },
@@ -95,7 +97,13 @@ const ABOUT_SHAPES = [
 ];
 // The visitor's light: env changes only on a light button; spin is the Look slide's Play.
 const ABOUT_LIGHT_START = { env: 'default', rot: null, exposure: 1, spin: false };
-const ABOUT_SHAPE_START = 'cube';
+const ABOUT_SHAPE_START = 'dragon';
+const ABOUT_DRAGON_LINKS = {
+    stanford: 'http://www.graphics.stanford.edu/data/3Dscanrep/',
+    mcguire: 'https://casual-effects.com/data',
+    khronos: 'https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/DragonAttenuation',
+};
+const ABOUT_CREDIT_LINK = 'underline underline-offset-2 hover:text-fg';
 const ABOUT_LIGHTS = [
     { id: 'default', label: 'Soft studio' },
     { id: 'studio', label: 'Contrast studio' },
@@ -999,12 +1007,14 @@ function AboutStage({ active, idx, slide, geom: wantGeom, mine, light, probe, to
                 } else {
                     if (live) { live.release(); viewRef.current = null; window.__mtlxAboutHandle = null; }
                     statsRef.current.builds++;
+                    const shapeDef = ABOUT_SHAPES.find((sh) => sh.id === geom);
+                    const shapeModel = (shapeDef && shapeDef.model) || null;
                     const view = await createMtlxRenderView({
                         canvas: canvasRef.current,
                         mx: env.mx, gen: env.gen, genContext: env.genContext,
                         renderable: renderable.node, lightData: env.lightData,
                         label: 'about-stage', materialName: renderable.name,
-                        needsLighting: true, geomName: geom,
+                        needsLighting: true, geomName: shapeModel ? 'sphere' : geom, modelUrl: shapeModel,
                         autoRotate: false, backdrop: 'none', wheelMode: 'none',
                         maxPixelRatio: 1.5,
                         isMounted: () => mountedRef.current,
@@ -2170,6 +2180,11 @@ function AboutApp({ active = true } = {}) {
                                 </button>
                             ))}
                         </div>
+                        {/* Always laid out, only hidden: the chips and link below keep their place. */}
+                        <p data-about-credit="dragon" aria-hidden={shape !== 'dragon'}
+                            className={'mt-2 text-[12px] leading-snug text-fg-subtle' + (shape === 'dragon' ? '' : ' invisible')}>
+                                Dragon: <a href={ABOUT_DRAGON_LINKS.stanford} target="_blank" rel="noopener noreferrer" className={ABOUT_CREDIT_LINK}>Stanford scan</a> (© 1996 Stanford University) via <a href={ABOUT_DRAGON_LINKS.mcguire} target="_blank" rel="noopener noreferrer" className={ABOUT_CREDIT_LINK}>Morgan McGuire's archive</a> and the <a href={ABOUT_DRAGON_LINKS.khronos} target="_blank" rel="noopener noreferrer" className={ABOUT_CREDIT_LINK}>Khronos glTF Sample Assets</a>.
+                        </p>
                     </AboutRise>
                     <AboutRise i={3}><AboutToolLink href="#!scene" id="scene">Open the Scene Viewer</AboutToolLink></AboutRise>
                 </div>
