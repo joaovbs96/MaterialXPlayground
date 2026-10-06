@@ -590,6 +590,11 @@ const MTL_OPTIONS = {
 
 const MTL_NUMERIC = new Set(["Ns", "Ni", "d", "Tr", "illum", "Pr", "Pm", "Ps", "Pc", "Pcr", "Ke_strength"]);
 const MTL_COLOR = new Set(["Ka", "Kd", "Ks", "Ke", "Tf"]);
+const MTL_MAPS = new Set(["map_Ka", "map_Kd", "map_Ks", "map_Ke", "map_Ns", "map_d", "map_Tr", "map_Bump",
+  "map_Normal", "map_Pr", "map_Pm", "map_Ps", "map_Pc", "map_Pcr", "bump", "norm", "disp", "decal"]);
+// MTL keywords are matched case-insensitively: every known keyword is stored
+// under this canonical spelling, so map_bump, MAP_KD or kd reach the consumers.
+const MTL_CANONICAL = new Map([...MTL_NUMERIC, ...MTL_COLOR, ...MTL_MAPS, "newmtl"].map(k => [k.toLowerCase(), k]));
 
 function normalizePath(value) {
   return String(value ?? "").replace(/\\/g, "/").trim();
@@ -619,7 +624,9 @@ export function parseMtl(text) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;
     const space = line.search(/\s/);
-    const key = space < 0 ? line : line.slice(0, space);
+    const rawKey = space < 0 ? line : line.slice(0, space);
+    const lowerKey = rawKey.toLowerCase();
+    const key = MTL_CANONICAL.get(lowerKey) ?? (lowerKey.startsWith("map_") ? lowerKey : rawKey);
     const rest = space < 0 ? "" : line.slice(space + 1).trim();
     if (key === "newmtl") {
       current = { name: rest };
@@ -627,7 +634,7 @@ export function parseMtl(text) {
       continue;
     }
     if (!current) continue;
-    if (key.startsWith("map_") || key === "bump" || key === "norm" || key === "disp" || key === "decal") {
+    if (key.startsWith("map_") || MTL_MAPS.has(key)) {
       const record = parseMapLine(rest);
       if (record) current[key] = record;
       continue;

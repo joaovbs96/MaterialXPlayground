@@ -216,17 +216,15 @@
         return { color: new THREE.Vector3(color[0], color[1], color[2]), intensity: scalar };
     }
 
-    // A cone authored through UsdLuxShapingAPI becomes a real spot light;
-    // MaterialX's mx_spot_light smoothsteps between the two angles as cosines.
+    // UsdLux cone: full strength up to cutoff*(1-softness), fading to 0 at the
+    // cutoff. mx_spot_light smoothsteps in cosine space, so only the endpoints
+    // match the spec exactly; the curve between them is a cosine smoothstep.
     function coneOf(record) {
         var angle = record.coneAngle;
         if (angle == null || !Number.isFinite(Number(angle))) return null;
-        var outer = Math.cos(Math.min(89.9, Math.max(0, Number(angle))) * DEG);
+        var cutoff = Math.min(89.9, Math.max(0, Number(angle))) * DEG;
         var softness = Math.min(1, Math.max(0, num(record.coneSoftness, 0)));
-        // smoothstep runs from outer up to inner, so the gap between them is
-        // the penumbra: softness 0 collapses it to a hard edge.
-        var inner = outer + (1 - outer) * softness;
-        return { inner: Math.min(1, inner), outer: outer };
+        return { inner: Math.cos(cutoff * (1 - softness)), outer: Math.cos(cutoff) };
     }
 
     // Sample positions across an emitter's surface, in the light's own local

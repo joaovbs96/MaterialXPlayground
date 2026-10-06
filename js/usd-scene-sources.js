@@ -48,7 +48,35 @@
         return pendingObj;
     };
 
+    let pendingExport;
+    const loadExportModules = () => {
+        if (!pendingExport) pendingExport = Promise.all([import('./usd/usd-stage-export.js'), import('./usd/usd-stage-loader.js')]);
+        return pendingExport;
+    };
+
+    // Payload -> { blob, filename, warnings } through the OpenUSD worker's ExportStage,
+    // which also packages the download. options.onProgress(phase) gets prepare, runtime,
+    // write, stage, readback, package; the per-phase timings go to console.debug.
+    const exportUsdStage = async (payload, options = {}) => {
+        const report = (phase) => { if (typeof options.onProgress === 'function') options.onProgress(phase); };
+        const t0 = performance.now();
+        report('prepare');
+        const [exporter, loader] = await loadExportModules();
+        const job = await exporter.buildExportJob(payload, options);
+        if (options.signal && options.signal.aborted) throw new DOMException('USD export aborted', 'AbortError');
+        const t1 = performance.now();
+        const result = await loader.exportUsdStage(
+            { spec: job.spec, files: job.files, package: { stem: job.stem, materialMode: job.materialMode, format: job.format } },
+            { signal: options.signal, onProgress: (v) => report(v && v.phase) });
+        if (!result || !result.ok) throw new Error((result && result.error) || 'USD export failed');
+        if (!result.package) throw new Error('The USD runtime returned no package.');
+        console.debug('[usd-export] timings ms', JSON.stringify(Object.assign({ build: Math.round(t1 - t0), total: Math.round(performance.now() - t0) }, result.timings || {})));
+        const blob = new Blob([result.package.bytes], { type: 'application/octet-stream' });
+        return { blob, filename: result.package.filename, warnings: job.warnings.concat(result.warnings || []) };
+    };
+
     window.MtlxSceneSources = {
+        exportUsdStage,
         detectRootKind,
         loadGltfStage: (options) => loadGltfModule().then((module) => module.loadGltfStage(options)),
         loadObjStage: (options) => loadObjModule().then((module) => module.loadObjStage(options)),

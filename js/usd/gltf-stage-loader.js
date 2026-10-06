@@ -276,19 +276,14 @@ export function apertureAndFocalLengthFromYfov(yfovRadians, aspectRatio) {
   return { horizontalAperture, verticalAperture, focalLength };
 }
 
-// KHR_lights_punctual spot cones are inner/outer angles in radians; the USD
-// sphere-light shaping API this maps onto is a cone angle (degrees) plus a
-// 0..1 softness fraction between the inner and outer cosines. Solving
-// coneOf()'s own inner = outer + (1-outer)*softness for softness given both
-// cosines keeps the reconstructed cone exact.
+// KHR_lights_punctual spot cones are inner/outer angles in radians; UsdLux
+// shaping:cone:softness is angle space, smoothStart = cutoff * (1 - softness),
+// so softness = 1 - inner / outer, clamped to [0, 1].
 export function spotConeSoftnessFromAngles(innerConeAngleRadians, outerConeAngleRadians) {
   const inner = Number.isFinite(innerConeAngleRadians) ? innerConeAngleRadians : 0;
   const outer = Number.isFinite(outerConeAngleRadians) ? outerConeAngleRadians : Math.PI / 4;
-  const cosInner = Math.cos(Math.min(Math.max(inner, 0), Math.PI / 2));
-  const cosOuter = Math.cos(Math.min(Math.max(outer, 0), Math.PI / 2));
-  const denom = 1 - cosOuter;
-  if (!(denom > 1e-6)) return 0;
-  return Math.min(1, Math.max(0, (cosInner - cosOuter) / denom));
+  if (!(outer > 1e-6)) return 0;
+  return Math.min(1, Math.max(0, 1 - Math.max(inner, 0) / outer));
 }
 
 // Shared shape for every light record this loader emits, matching the
@@ -748,6 +743,8 @@ export async function loadGltfStage({ files, rootPath, signal, onProgress } = {}
         castsShadow: true,
         subdivisionScheme: "none",
         materialPath,
+        // glTF default is single-sided; only the USD export reads this today.
+        doubleSided: materialIndex >= 0 && !!(rawJson.materials && rawJson.materials[materialIndex] && rawJson.materials[materialIndex].doubleSided === true),
         groups: [],
       });
     });

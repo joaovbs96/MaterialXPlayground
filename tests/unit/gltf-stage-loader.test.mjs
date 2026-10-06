@@ -213,15 +213,12 @@ test('spotConeSoftnessFromAngles: equal inner/outer is a hard edge', () => {
   assert.equal(softness, 0);
 });
 
-test('spotConeSoftnessFromAngles: a cone halfway between hard and full-soft', () => {
-  const inner = Math.PI / 8;
-  const outer = Math.PI / 4;
-  const softness = spotConeSoftnessFromAngles(inner, outer);
-  assert.ok(softness > 0 && softness < 1);
-  // Reconstructing coneOf()'s own inner cosine from this softness matches.
-  const cosOuter = Math.cos(outer);
-  const rebuiltCosInner = cosOuter + (1 - cosOuter) * softness;
-  assert.ok(Math.abs(rebuiltCosInner - Math.cos(inner)) < 1e-9);
+test('spotConeSoftnessFromAngles: angle space, 1 - inner/outer (0.3, 0.6 rad -> 0.5)', () => {
+  assert.ok(Math.abs(spotConeSoftnessFromAngles(0.3, 0.6) - 0.5) < 1e-9);
+});
+
+test('spotConeSoftnessFromAngles: zero outer angle is a hard edge', () => {
+  assert.equal(spotConeSoftnessFromAngles(0, 0), 0);
 });
 
 const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];

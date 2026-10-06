@@ -1625,6 +1625,111 @@
             {summary ? <span className="flex-1 min-w-0 text-right text-xs text-fg-subtle truncate" title={summary}>{summary}</span> : null}
         </div>
     );
+    const EXPORT_MATERIAL_OPTIONS = [
+        { value: 'reference', label: 'USD + referenced .mtlx files' },
+        { value: 'networks', label: 'MaterialX as UsdShade networks' },
+    ];
+    const EXPORT_FORMAT_OPTIONS = [
+        { value: 'usda', label: 'USDA (text)' },
+        { value: 'usdc', label: 'USDC (binary)' },
+        { value: 'usdz', label: 'USDZ (package)' },
+    ];
+    const EXPORT_PHASE_TEXT = {
+        prepare: 'Preparing materials and textures...',
+        runtime: 'Starting the OpenUSD runtime...',
+        write: 'Copying files into the runtime...',
+        stage: 'Writing the USD stage...',
+        readback: 'Reading back the result...',
+        package: 'Packaging the download...',
+    };
+    // Export as USD dialog (glTF/OBJ scenes). Runs the OpenUSD worker's
+    // ExportStage through MtlxSceneSources.exportUsdStage and downloads the result.
+    function ExportUsdDialog({ open, onClose, stage, files, rootBasename }) {
+        const [materialMode, setMaterialMode] = React.useState('reference');
+        const [format, setFormat] = React.useState('usda');
+        const [busy, setBusy] = React.useState(false);
+        const [error, setError] = React.useState('');
+        const [note, setNote] = React.useState('');
+        const [phase, setPhase] = React.useState('');
+        const controllerRef = React.useRef(null);
+        const mountedRef = React.useRef(true);
+        React.useEffect(() => () => { mountedRef.current = false; if (controllerRef.current) controllerRef.current.abort(); }, []);
+        useEscapeToClose(onClose, open && !busy);
+        if (!open) return null;
+        const pickMode = (value) => {
+            setMaterialMode(value);
+            if (value === 'reference' && format === 'usdz') setFormat('usda');
+        };
+        const run = async () => {
+            const sources = window.MtlxSceneSources;
+            if (!sources || typeof sources.exportUsdStage !== 'function') { setError('USD export is unavailable in this build.'); return; }
+            const controller = new AbortController();
+            controllerRef.current = controller;
+            setBusy(true); setError(''); setNote(''); setPhase('');
+            const onProgress = (value) => { if (mountedRef.current && controllerRef.current === controller) setPhase(value || ''); };
+            try {
+                const result = await sources.exportUsdStage(stage, { files, materialMode, format, signal: controller.signal, onProgress });
+                if (!mountedRef.current) return;
+                downloadBlob(result.blob, result.filename);
+                const count = (result.warnings || []).length;
+                setNote('Exported ' + result.filename + (count ? ' (' + count + ' warning' + (count === 1 ? '' : 's') + ', see the console)' : ''));
+                if (count) console.warn('USD export warnings:\n' + result.warnings.join('\n'));
+            } catch (e) {
+                if (!mountedRef.current || controller.signal.aborted || (e && e.name === 'AbortError')) return;
+                setError(String(e && e.message || e));
+            } finally {
+                if (controllerRef.current === controller) {
+                    controllerRef.current = null;
+                    if (mountedRef.current) { setBusy(false); setPhase(''); }
+                }
+            }
+        };
+        // Cancel settles the UI at once; the aborted export discards its worker.
+        const close = () => {
+            const controller = controllerRef.current;
+            controllerRef.current = null;
+            if (controller) { controller.abort(); setBusy(false); setPhase(''); }
+            onClose();
+        };
+        return (
+            <DialogFrame
+                open={open}
+                title="Export USD"
+                onClose={close}
+                panelClassName="bg-surface-raised border border-line-strong rounded-lg shadow-2xl w-[26rem] max-w-[90%] overflow-hidden flex flex-col"
+            >
+                <div data-testid="usd-scene-export-dialog" className="px-4 py-3 space-y-3 text-[12px]">
+                    <div className="text-fg-muted truncate" title={rootBasename}>{rootBasename}</div>
+                    <label className="flex items-center gap-3">
+                        <span className={SCENE_ROW_LABEL + ' shrink-0 w-16'}>Materials</span>
+                        <div className="flex-1 min-w-0">
+                            <MtlxSelect value={materialMode} options={EXPORT_MATERIAL_OPTIONS} onChange={pickMode} defValue={null}
+                                size="sm" variant="field" block disabled={busy} ariaLabel="Material export mode" />
+                        </div>
+                    </label>
+                    <label className="flex items-center gap-3">
+                        <span className={SCENE_ROW_LABEL + ' shrink-0 w-16'}>Format</span>
+                        <div className="flex-1 min-w-0">
+                            <MtlxSelect value={format} options={EXPORT_FORMAT_OPTIONS} onChange={setFormat} defValue={null}
+                                size="sm" variant="field" block disabled={busy} ariaLabel="USD format"
+                                disabledOptions={materialMode === 'reference' ? ['usdz'] : []}
+                                titles={{ usdz: materialMode === 'reference' ? 'USDZ cannot contain .mtlx files' : 'Single-file package' }} />
+                        </div>
+                    </label>
+                    {materialMode === 'reference' && (
+                        <div className="text-[11px] text-fg-subtle">USDZ cannot contain .mtlx files</div>
+                    )}
+                    {busy && <div data-testid="usd-scene-export-progress" className="text-fg-muted animate-pulse">{EXPORT_PHASE_TEXT[phase] || 'Exporting...'}</div>}
+                    {error && <div role="alert" data-testid="usd-scene-export-error" className="bg-error-bg/60 border border-error-border/60 text-error-text rounded px-3 py-2 break-words">{error}</div>}
+                    {note && !error && <div data-testid="usd-scene-export-note" className="text-fg-muted break-words">{note}</div>}
+                    <div className="flex items-center justify-end gap-1.5 pt-1">
+                        <button type="button" onClick={close} className={BTN_SECONDARY}>{busy ? 'Cancel' : 'Close'}</button>
+                        <button type="button" data-testid="usd-scene-export-run" onClick={run} disabled={busy} className={BTN_PRIMARY + ' disabled:opacity-50 disabled:cursor-not-allowed'}>Export</button>
+                    </div>
+                </div>
+            </DialogFrame>
+        );
+    }
     // Slim viewport indicator for material/texture/geometry rebuilds after a
     // settings change (handle.onRebuildProgress). Shown after a short delay so
     // instant rebuilds never flash; DOM only, so captures never include it.
@@ -2045,6 +2150,7 @@
         const [diffuseEnvConvolve, setDiffuseEnvConvolveState] = React.useState(() => sceneStored('diffuseEnv') !== 'sh');
         const envSettingsRef = React.useRef({ rotation: 0, exposureLinear: 1, backdrop: 'studio', autoRotate: false });
         const [recordOpen, setRecordOpen] = React.useState(false);
+        const [exportOpen, setExportOpen] = React.useState(false);
         const envOverrideRef = React.useRef(null);
         // True while envRotation holds an authored dome rotationDeg rather
         // than a plain engine-degree value; gates the yaw conversion below.
@@ -3776,6 +3882,8 @@
             fullscreenPortalRoot()
         );
         // One slot: Cancel while anything loads, Reload once a stage is shown, else Load.
+        const sourceKind = stage && stage.summary && stage.summary.sourceKind;
+        const canExportUsd = sourceKind === 'gltf' || sourceKind === 'obj';
         const sceneSlotButton = busy ? (
             <button type="button" data-testid="usd-scene-cancel" onClick={cancel} className={BTN_SECONDARY + ' flex-1 min-w-0 gap-1'}>
                 <MtlxIcon name="x" className="w-3.5 h-3.5 flex-none" />Cancel
@@ -3939,9 +4047,21 @@
                         <div data-testid="usd-scene-info-empty" className="text-xs text-fg-subtle">No scene loaded</div>
                     ) : null)}
 
-                    {sceneSlotButton ? (
+                    {sceneSlotButton || stage ? (
                         <div className="flex items-center gap-1.5 pt-0.5">
                             {sceneSlotButton}
+                            {stage && !busy ? (
+                                <button
+                                    type="button"
+                                    data-testid="usd-scene-export-usd"
+                                    onClick={() => setExportOpen(true)}
+                                    disabled={!canExportUsd}
+                                    title={canExportUsd ? 'Export this scene as USD' : 'Export as USD is available for glTF, GLB and OBJ scenes'}
+                                    className={BTN_SECONDARY + ' flex-1 min-w-0 gap-1'}
+                                >
+                                    <MtlxIcon name="file-download" className="w-3.5 h-3.5 flex-none" />Export USD
+                                </button>
+                            ) : null}
                         </div>
                     ) : null}
                 </section>
@@ -4329,6 +4449,9 @@
                 <div role="alert" data-testid="usd-scene-error" className="absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-error-bg/90 border border-error-border/60 text-error-text text-sm rounded-lg px-4 py-2.5 break-words shadow-lg">{error}</div>
             )}
 
+            {exportOpen && canExportUsd && (
+                <ExportUsdDialog open={exportOpen} onClose={() => setExportOpen(false)} stage={stage} files={filesRef.current} rootBasename={rootBasename} />
+            )}
             {recordOpen && (
                 <RecordGifDialog open={recordOpen} onClose={() => setRecordOpen(false)}
                     viewRef={handleRef} baseName={rootBasename ? rootBasename.replace(/\.[^.]+$/, '') : 'usd-scene'} transparent={false} />

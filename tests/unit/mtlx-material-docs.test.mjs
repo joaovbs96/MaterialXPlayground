@@ -390,6 +390,18 @@ test('mtl: parses options, numbers and paths', () => {
   assert.equal(materials.get('2nd Material').Pr, 0.3);
 });
 
+test('mtl: keywords match case-insensitively', () => {
+  const materials = parseMtl(['NEWMTL Head', 'kd 1 0 0', 'MAP_KD diffuse.jpg', 'map_bump -bm 0.001 bump-lowRes.png', 'NS 5'].join('\n'));
+  const head = materials.get('Head');
+  assert.deepEqual(head.Kd, [1, 0, 0]);
+  assert.equal(head.Ns, 5);
+  assert.equal(head.map_Kd.path, 'diffuse.jpg');
+  assert.equal(head.map_Bump.path, 'bump-lowRes.png');
+  const { xml } = objMtlDocument({ name: 'Head', mtl: head, textureRefs: (record) => record.path });
+  assert.match(xml, /heighttonormal/);
+  assert.match(xml, /bump-lowRes\.png/);
+});
+
 test('mtl: converts to open_pbr_surface', () => {
   const materials = parseMtl([
     'newmtl Wood',
