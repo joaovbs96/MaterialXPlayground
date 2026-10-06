@@ -48,15 +48,15 @@ const problems = (label, xml) => {
   return out;
 };
 
-import { materialDocCases } from './fixtures/material-doc-cases.mjs';
+import { materialDocCases, usdShadeCases } from './fixtures/material-doc-cases.mjs';
 
 test('nodedef index is populated', () => {
   assert.ok(defs.get('open_pbr_surface'));
   assert.ok(defs.get('gltf_pbr'));
 });
 
-test('every importer material document matches its nodedefs', () => {
-  const cases = materialDocCases();
+test('every importer material document matches its nodedefs', async () => {
+  const cases = materialDocCases().concat(await usdShadeCases());
   assert.ok(cases.length >= 30);
   assert.deepEqual(cases.flatMap((c) => problems(c.label, c.xml)), []);
 });

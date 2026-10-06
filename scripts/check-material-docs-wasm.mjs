@@ -4,7 +4,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import { materialDocCases } from "../tests/unit/fixtures/material-doc-cases.mjs";
+import { materialDocCases, usdShadeCases } from "../tests/unit/fixtures/material-doc-cases.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const version = fs.readdirSync(path.join(root, "js", "materialx")).find((n) => /^\d/.test(n));
@@ -17,7 +17,7 @@ const stdlib = mx.loadStandardLibraries(ctx);
 const msg = (e) => (typeof e === "number" ? mx.getExceptionMessage(e) : (e && e.message) || String(e));
 
 let failures = 0;
-for (const { label, xml } of materialDocCases()) {
+for (const { label, xml } of materialDocCases().concat(await usdShadeCases())) {
   try {
     const doc = mx.createDocument();
     await mx.readFromXmlString(doc, xml);

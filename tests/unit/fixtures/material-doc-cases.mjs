@@ -76,3 +76,45 @@ export const materialDocCases = () => {
   add('usd displayColor fallback', '<?xml version="1.0"?><materialx version="1.39"><standard_surface name="SR_displayColor" type="surfaceshader"><input name="base" type="float" value="1" /><input name="base_color" type="color3" value="0.18, 0.18, 0.18" /><input name="specular_roughness" type="float" value="0.5" /></standard_surface><surfacematerial name="M_displayColor" type="material"><input name="surfaceshader" type="surfaceshader" nodename="SR_displayColor" /></surfacematerial></materialx>');
   return cases;
 };
+
+// UsdShade networks driven through the worker's converter (usd-stage-worker.js).
+const SHADER = (name, id, lines) => `    def Shader "${name}"\n    {\n        uniform token info:id = "${id}"\n${lines.map((l) => '        ' + l).join('\n')}\n    }\n`;
+const MATERIAL = (terminals, shaders) => `#usda 1.0\ndef Material "M"\n{\n${terminals.map((t) => '    ' + t).join('\n')}\n${shaders.join('')}}\n`;
+export const usdShadeCases = async () => {
+  const { readFileSync } = await import('node:fs');
+  const vm = await import('node:vm');
+  // The worker is a classic script: evaluate it the way the other worker unit tests do.
+  const workerUrl = new URL('../../../js/usd/usd-stage-worker.js', import.meta.url);
+  const source = readFileSync(new URL('../../../js/shared/mesh-subdivision.js', import.meta.url), 'utf8') + '\n' + readFileSync(workerUrl, 'utf8')
+    .replace(/^import "[^"]*";\s*$/m, '')
+    .replace(/^const RUNTIME_DIR = .*$/m, 'const RUNTIME_DIR = null;')
+    + '\nthis.__build = buildUsdShadeMaterialX;';
+  const context = { Map, Set, Math, Number, TextDecoder, TextEncoder, ArrayBuffer, Uint8Array, URL, console, postMessage() {}, self: {} };
+  vm.runInNewContext(source, context, { filename: workerUrl.pathname });
+  const buildUsdShadeMaterialX = context.__build;
+  const out = [];
+  const build = (label, usda, options = { allowPreviewSurface: true }) => {
+    const r = buildUsdShadeMaterialX({}, '/', '/M', [{ path: 'a.usda', text: usda }], options);
+    if (!r) throw new Error('usd shade fixture produced no document: ' + label);
+    out.push({ label, xml: r.xml });
+  };
+  build('usd preview network', readFileSync(new URL('./usd-preview-network.usda', import.meta.url), 'utf8'));
+  const reader = (name, id, type) => SHADER(name, id, [`string inputs:varname = "set_${name}"`, type + ' outputs:result']);
+  build('usd preview rgba texture + primvar readers', MATERIAL(
+    ['token outputs:surface.connect = </M/Surf.outputs:surface>'],
+    [SHADER('Surf', 'UsdPreviewSurface', ['color3f inputs:diffuseColor.connect = </M/Tex.outputs:rgba>', 'float inputs:opacity.connect = </M/F.outputs:result>',
+      'float3 inputs:normal.connect = </M/V3.outputs:result>', 'token outputs:surface']),
+    SHADER('Tex', 'UsdUVTexture', ['asset inputs:file = @t.png@', 'float2 inputs:st.connect = </M/Uv.outputs:result>', 'float4 outputs:rgba']),
+    reader('Uv', 'UsdPrimvarReader_float2', 'float2'), reader('F', 'UsdPrimvarReader_float', 'float'),
+    reader('V3', 'UsdPrimvarReader_float3', 'float3'), reader('S', 'UsdPrimvarReader_string', 'string')]));
+  build('usd mtlx network', MATERIAL(
+    ['token outputs:mtlx:surface.connect = </M/Surf.outputs:out>', 'token outputs:mtlx:displacement.connect = </M/Disp.outputs:out>'],
+    [SHADER('Surf', 'ND_standard_surface_surfaceshader', ['color3f inputs:base_color.connect = </M/Img.outputs:out>', 'float inputs:base = 0.8',
+      'float3 inputs:normal.connect = </M/Nm.outputs:out>', 'token outputs:out']),
+    SHADER('Img', 'ND_image_color3', ['asset inputs:file = @t.png@', 'float2 inputs:texcoord.connect = </M/Tc.outputs:out>', 'color3f outputs:out']),
+    SHADER('Nm', 'ND_normalmap', ['float3 inputs:in.connect = </M/Img2.outputs:out>', 'float inputs:scale = 1', 'float3 outputs:out']),
+    SHADER('Img2', 'ND_image_vector3', ['asset inputs:file = @n.png@', 'float3 outputs:out']),
+    SHADER('Tc', 'ND_texcoord_vector2', ['float2 outputs:out']),
+    SHADER('Disp', 'ND_displacement_float', ['float inputs:displacement = 0.1', 'float inputs:scale = 1', 'token outputs:out'])]), { allowPreviewSurface: false });
+  return out;
+};
