@@ -1712,9 +1712,12 @@
                 const result = await sources.exportUsdStage(stage, { files, materialMode, format, signal: controller.signal, onProgress });
                 if (!mountedRef.current) return;
                 downloadBlob(result.blob, result.filename);
-                const count = (result.warnings || []).length;
+                // [info] lines (e.g. skipped viewer-only stand-in lights) are not warnings.
+                const all = result.warnings || [];
+                const count = all.filter((line) => !/^\[info\]/.test(String(line))).length;
                 setNote('Exported ' + result.filename + (count ? ' (' + count + ' warning' + (count === 1 ? '' : 's') + ', see the console)' : ''));
-                if (count) console.warn('USD export warnings:\n' + result.warnings.join('\n'));
+                if (count) console.warn('USD export warnings:\n' + all.join('\n'));
+                else if (all.length) console.info('USD export notes:\n' + all.join('\n'));
             } catch (e) {
                 if (!mountedRef.current || controller.signal.aborted || (e && e.name === 'AbortError')) return;
                 setError(String(e && e.message || e));

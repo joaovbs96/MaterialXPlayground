@@ -7,6 +7,7 @@ import {
   checkAborted, normalizePath, dirOf, basenameOf, joinPath, toArrayBuffer, resolveScenePath, createWarningSink,
   IDENTITY, mat4Multiply, mat4Invert, mat3Determinant, translateMatrix, scaleMatrix, rotateMatrix, bakeMeshTransform,
   cameraLensForFov, sceneCameraRecord, uniformDomeLight, materialEntryFromDocument, bakedMeshRecord, scenePayload,
+  rectangleFromTriangles, windingNormal, emitterStandInLight,
 } from "./scene-import-common.js";
 
 export { joinPath, IDENTITY, mat4Multiply, mat4Invert, mat3Determinant, translateMatrix, scaleMatrix, rotateMatrix, bakeMeshTransform };
@@ -317,6 +318,19 @@ export function pbrtAreaLightRadiance(params, warn) {
 
 // ------------------------------------------------------------------ meshes
 
+// Emitting side of a baked pbrt emitter, in our frame. pbrt's triangle normal is
+// the winding normal, flipped by ReverseOrientation xor a handedness-swapping CTM,
+// or turned toward the shading normals N when given; our Z mirror negates the winding.
+export function pbrtEmitterFacing({ baked, indices, ctm, reverseOrientation, mirror }) {
+  if (baked.normals && baked.normals.length) {
+    const sum = [0, 0, 0];
+    for (let i = 0; i < baked.normals.length; i += 3) { sum[0] += baked.normals[i]; sum[1] += baked.normals[i + 1]; sum[2] += baked.normals[i + 2]; }
+    return sum;
+  }
+  const sign = ((!!reverseOrientation !== (mat3Determinant(ctm) < 0)) ? -1 : 1) * (mirror ? -1 : 1);
+  return windingNormal(baked.positions, indices).map((c) => c * sign);
+}
+
 // Reads the pbrt trianglemesh parameters into typed arrays.
 export function trianglemeshArrays(params) {
   const P = params.P ? params.P.values.map(Number) : null;
@@ -439,6 +453,8 @@ export async function loadPbrtStage({ files, rootPath, signal, onProgress, decod
   const usedPrimNames = new Set();
   let emitterCount = 0;
   let oneSidedEmitters = 0;
+  const standIns = [];
+  let nonRectEmitters = 0;
   const total = scene.shapes.length;
   report("extract-geometry", 0, total, "Reading meshes");
   for (let s = 0; s < total; s++) {
@@ -480,6 +496,19 @@ export async function loadPbrtStage({ files, rootPath, signal, onProgress, decod
       uvs: arrays.uvs ? Float32Array.from(arrays.uvs) : null, indices: baked.indices,
       materialPath: materialPathFor(shape.material, emission), doubleSided: true,
     }));
+    if (emission) {
+      const rect = rectangleFromTriangles(baked.positions, baked.indices);
+      if (!rect) nonRectEmitters++;
+      else {
+        const facing = pbrtEmitterFacing({ baked, indices: arrays.indices, ctm: shape.ctm, reverseOrientation: shape.reverseOrientation, mirror: handed.mirror });
+        const twoSided = shape.areaLight.params.twosided && shape.areaLight.params.twosided.values[0] === true;
+        const meshPath = "/" + primName;
+        for (const [side, suffix] of twoSided ? [[1, "_standin"], [-1, "_standin_back"]] : [[1, "_standin"]]) {
+          const light = emitterStandInLight({ rect, facing: facing.map((c) => c * side), color: emission, meshPath, name: primName + suffix });
+          if (light) standIns.push(light);
+        }
+      }
+    }
     report("extract-geometry", s + 1, total, "Reading meshes");
   }
   if (!meshRecords.length) throw new Error("No renderable meshes in " + root);
@@ -499,6 +528,9 @@ export async function loadPbrtStage({ files, rootPath, signal, onProgress, decod
     if (i > 0) { warn("More than one infinite light; only the first is used"); return; }
     lights.push(uniformDomeLight(pbrtAreaLightRadiance(light.params, warn)));
   });
+  lights.push(...standIns);
+  if (standIns.length) warn("[info] " + standIns.length + " viewer-only rect light(s) stand in for rectangular area emitters in the real-time view; Export USD keeps only the emissive meshes");
+  if (nonRectEmitters) warn("[info] " + nonRectEmitters + " area emitter(s) are not planar rectangles: they glow but do not light the real-time view");
 
   if (oneSidedEmitters) warn("[info] " + oneSidedEmitters + " one-sided area light(s) emit from both faces here (pbrt emits from the front face only)");
   warn("[info] pbrt scene: " + meshRecords.length + " mesh(es), " + emitterCount + " area light emitter(s), "

@@ -358,6 +358,87 @@ export function uniformDomeLight(color) {
   };
 }
 
+// --------------------------------------------------- emitter stand-in lights
+
+const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const len3 = (a) => Math.hypot(a[0], a[1], a[2]);
+
+// A mesh that is exactly a planar rectangle: 2 triangles over 4 distinct corners
+// sharing one diagonal, planar and with equal diagonals within tolerance (relative
+// to the diagonal). Returns { center, xAxis, yAxis, normal, width, height } or null.
+export function rectangleFromTriangles(positions, indices, tolerance = 1e-4) {
+  const idx = indices ? Array.from(indices) : Array.from({ length: Math.floor(positions.length / 3) }, (_, i) => i);
+  if (idx.length !== 6) return null;
+  const pts = idx.map((i) => [positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]]);
+  if (!pts.every((p) => p.every(Number.isFinite))) return null;
+  let extent = 0;
+  for (const a of pts) for (const b of pts) extent = Math.max(extent, len3(sub3(a, b)));
+  if (!(extent > 0)) return null;
+  const eps = tolerance * extent;
+  const corners = [];
+  const cornerOf = pts.map((p) => {
+    let k = corners.findIndex((c) => len3(sub3(c, p)) <= eps);
+    if (k === -1) { k = corners.length; corners.push(p); }
+    return k;
+  });
+  if (corners.length !== 4) return null;
+  const triA = cornerOf.slice(0, 3), triB = cornerOf.slice(3, 6);
+  if (new Set(triA).size !== 3 || new Set(triB).size !== 3) return null;
+  const shared = triA.filter((k) => triB.includes(k));
+  if (shared.length !== 2) return null;
+  const P = corners[shared[0]], Q = corners[shared[1]];
+  const R = corners[triA.find((k) => !shared.includes(k))], S = corners[triB.find((k) => !shared.includes(k))];
+  const n = cross3(sub3(Q, P), sub3(R, P));
+  const nl = len3(n);
+  if (!(nl > 0)) return null;
+  if (Math.abs(dot3(sub3(S, P), n)) / nl > eps) return null;
+  const midPQ = [(P[0] + Q[0]) / 2, (P[1] + Q[1]) / 2, (P[2] + Q[2]) / 2];
+  const midRS = [(R[0] + S[0]) / 2, (R[1] + S[1]) / 2, (R[2] + S[2]) / 2];
+  if (len3(sub3(midPQ, midRS)) > eps || Math.abs(len3(sub3(Q, P)) - len3(sub3(S, R))) > eps) return null;
+  const e1 = sub3(R, P), e2 = sub3(Q, R);
+  const width = len3(e1), height = len3(e2);
+  if (!(width > eps && height > eps)) return null;
+  const xAxis = e1.map((c) => c / width), yAxis = e2.map((c) => c / height);
+  const normal = cross3(xAxis, yAxis);
+  return { center: midPQ, xAxis, yAxis, normal: normal.map((c) => c / len3(normal)), width, height };
+}
+
+// Sum of the right-hand winding normals of indexed triangles (unnormalized).
+export function windingNormal(positions, indices) {
+  const idx = indices ? Array.from(indices) : Array.from({ length: Math.floor(positions.length / 3) }, (_, i) => i);
+  const out = [0, 0, 0];
+  for (let t = 0; t + 2 < idx.length; t += 3) {
+    const p = [0, 1, 2].map((c) => [positions[idx[t + c] * 3], positions[idx[t + c] * 3 + 1], positions[idx[t + c] * 3 + 2]]);
+    const n = cross3(sub3(p[1], p[0]), sub3(p[2], p[0]));
+    out[0] += n[0]; out[1] += n[1]; out[2] += n[2];
+  }
+  return out;
+}
+
+// Viewer-only UsdLux rect light standing in for a rectangular area emitter, which
+// the real-time view cannot light from. It emits along the rectangle normal on
+// facing's side (local -Z); radiance is literal (intensity 1, exposure 0, normalize false).
+export function emitterStandInLight({ rect, facing, color, meshPath, name }) {
+  const side = rect ? dot3(facing, rect.normal) : 0;
+  if (!(Math.abs(side) > 0)) return null;
+  const z = rect.normal.map((c) => (side > 0 ? -c : c));
+  const x = rect.xAxis;
+  const y = cross3(z, x);
+  return {
+    primPath: "/Lights/" + name, name, type: "rectlight",
+    matrix: [x[0], x[1], x[2], 0, y[0], y[1], y[2], 0, z[0], z[1], z[2], 0, rect.center[0], rect.center[1], rect.center[2], 1],
+    textureFile: null, textureFormat: "automatic",
+    intensity: 1, exposure: 0, diffuse: 1, specular: 1,
+    color: color.slice(0, 3),
+    enableColorTemperature: false, colorTemperature: 6500,
+    radius: null, width: rect.width, height: rect.height, length: null, angle: null,
+    normalize: false, treatAsPoint: false, coneAngle: null, coneSoftness: null,
+    derivedFromEmitter: meshPath,
+  };
+}
+
 // ------------------------------------------------------------------ payload
 
 // Material entry for one generated MaterialX document ({ xml, materialName }).

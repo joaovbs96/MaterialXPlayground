@@ -8,7 +8,7 @@ import {
   checkAborted, normalizePath, dirOf, basenameOf, toArrayBuffer, resolveScenePath, createWarningSink,
   IDENTITY, mat4Multiply, mat3Determinant, translateMatrix, scaleMatrix, rotateMatrix, bakeMeshTransform,
   cameraLensForFov, sceneCameraRecord, uniformDomeLight, materialEntryFromDocument, bakedMeshRecord, scenePayload,
-  parseXml, MITSUBA_VERSION_PATTERN,
+  parseXml, MITSUBA_VERSION_PATTERN, rectangleFromTriangles, emitterStandInLight,
 } from "./scene-import-common.js";
 
 export { parseXml };
@@ -441,6 +441,8 @@ export async function loadMitsubaStage({ files, rootPath, signal, onProgress, de
   const usedPrimNames = new Set();
   let emitterCount = 0;
   let smoothed = 0;
+  const standIns = [];
+  let nonRectEmitters = 0;
   const total = scene.shapes.length;
   report("extract-geometry", 0, total, "Reading meshes");
   for (let s = 0; s < total; s++) {
@@ -479,6 +481,15 @@ export async function loadMitsubaStage({ files, rootPath, signal, onProgress, de
       materialPath: materialPathFor(shape.material, shape.emission),
       doubleSided: !!(shape.material && shape.material.twoSided),
     }));
+    if (shape.emission) {
+      // A rectangle emits toward its +z normal after to_world (flip_normals included).
+      const rect = shape.kind === "rectangle" ? rectangleFromTriangles(baked.positions, baked.indices) : null;
+      const light = rect && baked.normals ? emitterStandInLight({
+        rect, facing: [baked.normals[0], baked.normals[1], baked.normals[2]], color: shape.emission, meshPath: "/" + primName, name: primName + "_standin",
+      }) : null;
+      if (light) standIns.push(light);
+      else nonRectEmitters++;
+    }
     report("extract-geometry", s + 1, total, "Reading meshes");
   }
   if (!meshRecords.length) throw new Error("No renderable meshes in " + root);
@@ -499,6 +510,9 @@ export async function loadMitsubaStage({ files, rootPath, signal, onProgress, de
     if (i > 0) { warn("More than one constant emitter; only the first is used"); return; }
     lights.push(uniformDomeLight(color));
   });
+  lights.push(...standIns);
+  if (standIns.length) warn("[info] " + standIns.length + " viewer-only rect light(s) stand in for rectangle emitters in the real-time view; Export USD keeps only the emissive meshes");
+  if (nonRectEmitters) warn("[info] " + nonRectEmitters + " area emitter(s) are not rectangle shapes: they glow but do not light the real-time view");
 
   if (smoothed) warn("[info] " + smoothed + " OBJ mesh(es) without normals got smooth normals computed");
   if (emitterCount) warn("[info] " + emitterCount + " area light(s) emit from both faces here (Mitsuba emits from the front face only)");

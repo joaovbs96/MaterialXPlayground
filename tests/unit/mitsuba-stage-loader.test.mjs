@@ -290,8 +290,10 @@ test('loadMitsubaStage: obj with face normals, rectangle emitter, constant dome,
   const emissive = new TextDecoder().decode(stage.materials.find((m) => m.path === stage.meshes[1].materialPath).materialX.data);
   assert.equal(inputOf(emissive, 'emission_color'), '2, 4, 6');
   assert.equal(inputOf(emissive, 'emission_luminance'), '1');
-  assert.equal(stage.lights.length, 1);
+  assert.equal(stage.lights.length, 2);
   assert.deepEqual(stage.lights[0].color, [0.3, 0.3, 0.3]);
+  assert.equal(stage.lights[1].type, 'rectlight'); // the rectangle emitter's viewer-only stand-in
+  assert.equal(stage.lights[1].derivedFromEmitter, stage.meshes[1].primPath);
   const cam = stage.cameras[0];
   near(cam.verticalAperture, 18);
   near(cam.focalLength, 9); // fov 90 on the y axis: half height 9 / tan(45 deg)
