@@ -9,12 +9,14 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const tf = require('../../js/shared/texture-formats.js');
 
-test('TGA is not in the supported set (no decoder exists)', () => {
-    assert.ok(!tf.MTLX_TEXTURE_EXTS.includes('tga'));
+test('TGA has a dedicated decoder (three TGALoader); PFM is not decodable', () => {
+    assert.ok(tf.MTLX_TEXTURE_EXTS.includes('tga'));
+    assert.ok(tf.MTLX_DEDICATED_DECODER_EXTS.includes('tga'));
+    assert.ok(!tf.MTLX_TEXTURE_EXTS.includes('pfm'));
 });
 
 test('supported set matches mtlx-engine.js bindDroppedTextures decodable formats', () => {
-    const expected = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'exr', 'hdr', 'tif', 'tiff', 'ktx2'];
+    const expected = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'exr', 'hdr', 'tif', 'tiff', 'tga', 'ktx2'];
     assert.deepEqual([...tf.MTLX_TEXTURE_EXTS].sort(), [...expected].sort());
 });
 
@@ -33,11 +35,12 @@ test('textureAccept() lists every extension with a leading dot, comma separated'
     }
 });
 
-test('isTextureFile() matches known extensions case-insensitively, rejects tga', () => {
+test('isTextureFile() matches known extensions case-insensitively, rejects pfm', () => {
     assert.equal(tf.isTextureFile('foo.PNG'), true);
     assert.equal(tf.isTextureFile('foo.ktx2'), true);
     assert.equal(tf.isTextureFile('foo.KTX2'), true);
-    assert.equal(tf.isTextureFile('foo.tga'), false);
+    assert.equal(tf.isTextureFile('foo.TGA'), true);
+    assert.equal(tf.isTextureFile('foo.pfm'), false);
     assert.equal(tf.isTextureFile('foo.mtlx'), false);
     assert.equal(tf.isTextureFile(''), false);
 });
@@ -48,7 +51,7 @@ test('textureExtRegex() returns a fresh, stateless, case-insensitive regex', () 
     assert.notEqual(re1, re2);
     assert.ok(re1.test('a/b/c.jpeg'));
     assert.ok(re1.test('a/b/c.jpeg')); // repeat call: no lastIndex statefulness
-    assert.ok(!re1.test('a/b/c.tga'));
+    assert.ok(!re1.test('a/b/c.pfm'));
 });
 
 test('MTLX_TEXTURE_MIME has an entry for every supported extension', () => {

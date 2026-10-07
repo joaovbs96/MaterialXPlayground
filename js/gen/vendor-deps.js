@@ -35,7 +35,12 @@ window.MTLX_VENDOR_DEPS = {
     "dir": "jszip",
     "name": "JSZip",
     "version": "3.10.1",
-    "licenseUrl": "https://github.com/Stuk/jszip/blob/HEAD/LICENSE.markdown"
+    "licenseUrl": "https://github.com/Stuk/jszip/blob/HEAD/LICENSE.markdown",
+    "module": {
+      "entry": "jszip.min.js",
+      "kind": "script",
+      "global": "JSZip"
+    }
   },
   "katex": {
     "dir": "katex",
@@ -95,6 +100,17 @@ window.MTLX_VENDOR_DEPS = {
     "name": "three.js",
     "version": "0.147.0",
     "licenseUrl": "https://github.com/mrdoob/three.js/blob/HEAD/LICENSE"
+  },
+  "three-tga": {
+    "dir": "three",
+    "name": "three.js",
+    "version": "0.128.0",
+    "licenseUrl": "https://github.com/mrdoob/three.js/blob/HEAD/LICENSE",
+    "module": {
+      "entry": "TGALoader.js",
+      "kind": "script",
+      "global": "THREE"
+    }
   },
   "usd-webview-bindings": {
     "dir": "usd-webview-bindings",

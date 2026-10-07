@@ -402,6 +402,8 @@
                     loadHdrTexture(file).then(applyTex);
                 } else if (ext === 'tif' || ext === 'tiff') {
                     loadTifTexture(file).then(applyTex);
+                } else if (ext === 'tga') {
+                    loadTgaTexture(file).then(applyTex, () => {});
                 } else {
                     const url = URL.createObjectURL(file);
                     new THREE.TextureLoader().load(url, (tex) => {

@@ -202,7 +202,10 @@ export async function buildExportJob(payload, options = {}) {
 
   const usedLightNames = new Set();
   const lights = [];
+  let standIns = 0;
   for (const light of payload.lights ?? []) {
+    // Viewer-only stand-ins for emissive meshes: the meshes themselves are exported.
+    if (light && light.derivedFromEmitter) { standIns++; continue; }
     const m = light && Array.isArray(light.matrix) ? light.matrix : null;
     const known = light && (light.type === "distantlight" || light.type === "spherelight");
     if (!m || m.length !== 16 || !m.every(Number.isFinite) || !known) {
@@ -215,6 +218,8 @@ export async function buildExportJob(payload, options = {}) {
       ...gltfLightToUsdLux(light),
     });
   }
+
+  if (standIns) warnings.push("[info] " + standIns + " viewer-only stand-in rect light(s) not exported; their emissive meshes are");
 
   const spec = {
     workDir: "/export/" + id,

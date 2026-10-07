@@ -21,14 +21,18 @@
 !js/*
 !js/{docs,gen,graph,shared,vendor}/**
 # USD Scene Viewer: the stage worker, its VS Code blob-linking shim, the
-# glTF/OBJ loaders with their MaterialX converters, and the OpenUSD runtime
+# glTF/OBJ/pbrt/Mitsuba loaders with their MaterialX converters, and the OpenUSD runtime
 # (js/usd/index.js is a dev-only re-export).
 !js/usd/usd-stage-loader.js
 !js/usd/usd-stage-worker.js
 !js/usd/usd-webview-worker-shim.js
 !js/usd/gltf-stage-loader.js
 !js/usd/obj-stage-loader.js
+!js/usd/pbrt-stage-loader.js
+!js/usd/mitsuba-stage-loader.js
+!js/usd/scene-import-common.js
 !js/usd/mtlx-material-docs.js
+!js/usd/pfm-image.js
 !js/materialx/LICENSE.txt
 !js/materialx/1.39.5/JsMaterialXGenShader.js
 !js/materialx/1.39.5/JsMaterialXGenShader.wasm

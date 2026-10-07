@@ -1,8 +1,8 @@
-// Browser bridge for the glTF/GLB and OBJ(+MTL) stage loaders. Mirrors
+// Browser bridge for the glTF/GLB, OBJ(+MTL), pbrt-v4 and Mitsuba stage loaders. Mirrors
 // js/usd-scene-runtime.js's lazy-import pattern so the same relative
 // specifier keeps working in the shell, the VS Code webview and Electron.
 (() => {
-    const rootKindByExt = { usd: 'usd', usda: 'usd', usdc: 'usd', usdz: 'usd', glb: 'gltf', gltf: 'gltf', obj: 'obj' };
+    const rootKindByExt = { usd: 'usd', usda: 'usd', usdc: 'usd', usdz: 'usd', glb: 'gltf', gltf: 'gltf', obj: 'obj', pbrt: 'pbrt', xml: 'mitsuba' };
 
     const extOf = (value) => {
         const path = String(value || '').replace(/\\/g, '/');
@@ -12,7 +12,8 @@
 
     // Accepts either a single path/File-like value, or a list of dropped
     // files (each { path } or a File), and reports the first root kind found
-    // among the recognized extensions, preferring usd > gltf > obj.
+    // among the recognized extensions, preferring usd > gltf > pbrt > mitsuba > obj
+    // (by extension only; detectRootKindForFiles checks a Mitsuba root's content).
     const detectRootKind = (pathOrFiles) => {
         const candidates = [];
         if (Array.isArray(pathOrFiles)) {
@@ -27,13 +28,40 @@
         }
         let best = '';
         let bestRank = -1;
-        const rank = { usd: 2, gltf: 1, obj: 0 };
+        const rank = { usd: 4, gltf: 3, pbrt: 2, mitsuba: 1, obj: 0 };
         for (const candidate of candidates) {
             const kind = rootKindByExt[extOf(candidate)];
             if (!kind) continue;
             if (rank[kind] > bestRank) { best = kind; bestRank = rank[kind]; }
         }
         return best;
+    };
+
+    // Mitsuba detection is by content, not by .xml: see classifyMitsubaXmlFiles
+    // in js/usd/scene-import-common.js.
+    let pendingCommon;
+    const loadCommonModule = () => {
+        if (!pendingCommon) pendingCommon = import('./usd/scene-import-common.js');
+        return pendingCommon;
+    };
+    const classifyMitsubaXmlFiles = (files) => loadCommonModule().then((module) => module.classifyMitsubaXmlFiles(files));
+    // JSZip loads lazily (registry entry "jszip"), only when a .zip is chosen.
+    const expandSceneZips = (entries) => loadCommonModule().then((module) => module.expandSceneZips(entries, async (data) => {
+        const JSZipLib = await window.MtlxVendor.load('jszip');
+        return JSZipLib.loadAsync(data);
+    }));
+    // detectRootKind plus the content check: an .xml root that is not a Mitsuba
+    // scene gives '' (no supported scene).
+    const detectRootKindForFiles = async (files, rootPath) => {
+        const kind = detectRootKind(rootPath);
+        if (kind !== 'mitsuba') return kind;
+        const norm = (p) => String(p || '').replace(/\\/g, '/').toLowerCase();
+        const key = norm(rootPath);
+        const entry = (Array.isArray(files) ? files : []).find((f) => f && norm(f.path) === key);
+        if (!entry) return kind;
+        const module = await loadCommonModule();
+        const text = await module.readEntryText(entry.data);
+        return module.mitsubaSceneInfo(text) ? kind : '';
     };
 
     let pendingGltf;
@@ -46,6 +74,18 @@
     const loadObjModule = () => {
         if (!pendingObj) pendingObj = import('./usd/obj-stage-loader.js');
         return pendingObj;
+    };
+
+    let pendingPbrt;
+    const loadPbrtModule = () => {
+        if (!pendingPbrt) pendingPbrt = import('./usd/pbrt-stage-loader.js');
+        return pendingPbrt;
+    };
+
+    let pendingMitsuba;
+    const loadMitsubaModule = () => {
+        if (!pendingMitsuba) pendingMitsuba = import('./usd/mitsuba-stage-loader.js');
+        return pendingMitsuba;
     };
 
     let pendingExport;
@@ -78,7 +118,12 @@
     window.MtlxSceneSources = {
         exportUsdStage,
         detectRootKind,
+        detectRootKindForFiles,
+        classifyMitsubaXmlFiles,
+        expandSceneZips,
         loadGltfStage: (options) => loadGltfModule().then((module) => module.loadGltfStage(options)),
         loadObjStage: (options) => loadObjModule().then((module) => module.loadObjStage(options)),
+        loadPbrtStage: (options) => loadPbrtModule().then((module) => module.loadPbrtStage(options)),
+        loadMitsubaStage: (options) => loadMitsubaModule().then((module) => module.loadMitsubaStage(options)),
     };
 })();
