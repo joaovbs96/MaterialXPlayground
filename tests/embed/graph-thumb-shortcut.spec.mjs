@@ -51,7 +51,7 @@ test('V toggles every node of a multi-selection', async ({ page, embedURL }) => 
   await openGraphWith(page, embedURL, DOC);
   await card(page, 'n:c1').waitFor({ state: 'visible', timeout: WAIT_TIMEOUT });
   await selectCard(page, 'n:c1');
-  await card(page, 'n:c2').click({ position: { x: 12, y: 8 }, modifiers: ['Control'] });
+  await card(page, 'n:c2').click({ position: { x: 12, y: 8 }, modifiers: ['Shift'] });
   await page.keyboard.press('v');
   await expect(thumb(page, 'n:c1')).toHaveCount(1, { timeout: WAIT_TIMEOUT });
   await expect(thumb(page, 'n:c2')).toHaveCount(1, { timeout: WAIT_TIMEOUT });

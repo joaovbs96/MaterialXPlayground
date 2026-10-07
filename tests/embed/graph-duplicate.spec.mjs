@@ -1,7 +1,7 @@
 import { test, expect, WAIT_TIMEOUT } from './lib/test-base.mjs';
 
 // Graph Editor: duplicate the clicked node or the selection through Shift+D, the context and Edit
-// menus and Shift+drag; Ctrl+click extends a selection, Shift+click removes from it, a plain click collapses it.
+// menus and Shift+drag; Shift+click adds to a selection, Ctrl+click removes from it, a plain click collapses it.
 const DOC = [
   '<?xml version="1.0"?>',
   '<materialx version="1.39">',
@@ -70,7 +70,7 @@ test('the context menu duplicates the clicked node and keeps inner wires of a se
 
   // Selection of c1 + m1: the copy of m1 reads the copy of c1, not the original.
   await selectCard(page, 'n:c1');
-  await selectCard(page, 'n:m1', ['Control']);
+  await selectCard(page, 'n:m1', ['Shift']);
   await card(page, 'n:m1').click({ button: 'right', position: HEAD });
   await page.getByRole('menuitem', { name: 'Duplicate' }).click();
   await expect.poll(() => nodeCount(page)).toBe(6);
@@ -114,11 +114,17 @@ test('Shift+drag duplicates once past the dead zone, the copy follows the pointe
   await page.mouse.move(sx + 2, sy + 1);
   await page.waitForTimeout(150);
   expect(await nodeCount(page)).toBe(3);
-  // Past it, before release: the copy exists at once and tracks the pointer; the original stays.
-  await page.mouse.move(sx + 40, sy + 30, { steps: 5 });
+  // Just past it, before release: the copy appears on the original, offset only by the pointer travel.
+  await page.mouse.move(sx + 6, sy + 1);
   await expect.poll(() => nodeCount(page), { timeout: WAIT_TIMEOUT }).toBe(4);
   const copyId = (await cardIds(page)).find((id) => !['n:c1', 'n:m1', 'n:c2'].includes(id));
   expect(copyId).toMatch(/^n:c\d+$/);
+  const first = await card(page, copyId).boundingBox();
+  expect(Math.abs(first.x - before.x - 6)).toBeLessThan(1);
+  expect(Math.abs(first.y - before.y - 1)).toBeLessThan(1);
+  // Then it follows the pointer while the original stays.
+  await page.mouse.move(sx + 40, sy + 30, { steps: 5 });
+  await expect.poll(async () => Math.round((await card(page, copyId).boundingBox()).x - before.x)).toBe(40);
   await page.mouse.move(sx + 330, sy + 40, { steps: 10 });
   await expect.poll(async () => Math.round((await card(page, copyId).boundingBox()).x - before.x)).toBe(330);
   const copyBox = await card(page, copyId).boundingBox();
@@ -160,7 +166,7 @@ test('Shift+drag duplicates once past the dead zone, the copy follows the pointe
 test('Shift+drag on a selected node duplicates the whole selection and keeps inner wires', async ({ page, embedURL }) => {
   await openGraphWith(page, embedURL, DOC);
   await selectCard(page, 'n:c1');
-  await selectCard(page, 'n:m1', ['Control']);
+  await selectCard(page, 'n:m1', ['Shift']);
   const box = await card(page, 'n:m1').boundingBox();
   await page.keyboard.down('Shift');
   await page.mouse.move(box.x + HEAD.x, box.y + HEAD.y);
@@ -178,17 +184,20 @@ test('Shift+drag on a selected node duplicates the whole selection and keeps inn
   expect(mCopy.y).toBeGreaterThan(0.3);
 });
 
-test('Ctrl+click extends the selection, Shift+click removes a selected node and ignores an unselected one', async ({ page, embedURL }) => {
+test('Shift+click adds to the selection, Ctrl+click removes a selected node and ignores an unselected one', async ({ page, embedURL }) => {
   await openGraphWith(page, embedURL, DOC);
   await selectCard(page, 'n:c1');
-  await selectCard(page, 'n:c2', ['Control']);
-  await selectCard(page, 'n:m1', ['Control']);
-  expect(await selectedIds(page)).toEqual(['n:c1', 'n:c2', 'n:m1']);
   await selectCard(page, 'n:c2', ['Shift']);
-  expect(await selectedIds(page)).toEqual(['n:c1', 'n:m1']);
   await selectCard(page, 'n:m1', ['Shift']);
-  expect(await selectedIds(page)).toEqual(['n:c1']);
+  expect(await selectedIds(page)).toEqual(['n:c1', 'n:c2', 'n:m1']);
+  // Shift+click on a selected node keeps it selected.
   await selectCard(page, 'n:c2', ['Shift']);
+  expect(await selectedIds(page)).toEqual(['n:c1', 'n:c2', 'n:m1']);
+  await selectCard(page, 'n:c2', ['Control']);
+  expect(await selectedIds(page)).toEqual(['n:c1', 'n:m1']);
+  await selectCard(page, 'n:m1', ['Control']);
+  expect(await selectedIds(page)).toEqual(['n:c1']);
+  await selectCard(page, 'n:c2', ['Control']);
   expect(await selectedIds(page)).toEqual(['n:c1']);
   expect(await nodeCount(page)).toBe(3);
   await page.locator('.react-flow__pane').first().click({ position: { x: 5, y: 5 } });
@@ -198,13 +207,13 @@ test('Ctrl+click extends the selection, Shift+click removes a selected node and 
 test('a plain click inside a multi-selection collapses it, a plain drag moves all of it', async ({ page, embedURL }) => {
   await openGraphWith(page, embedURL, DOC);
   await selectCard(page, 'n:c1');
-  await selectCard(page, 'n:c2', ['Control']);
-  await selectCard(page, 'n:m1', ['Control']);
+  await selectCard(page, 'n:c2', ['Shift']);
+  await selectCard(page, 'n:m1', ['Shift']);
   await selectCard(page, 'n:c2');
   expect(await selectedIds(page)).toEqual(['n:c2']);
 
   await selectCard(page, 'n:c1');
-  await selectCard(page, 'n:c2', ['Control']);
+  await selectCard(page, 'n:c2', ['Shift']);
   const box = await card(page, 'n:c2').boundingBox();
   await page.mouse.move(box.x + HEAD.x, box.y + HEAD.y);
   await page.mouse.down();

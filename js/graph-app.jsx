@@ -6586,6 +6586,9 @@
                 const rebuilt = toFlow(descs, edges, flowOpts(capturePortModes()));
                 const pastedIds = new Set(created.map((c) => 'n:' + c.newName)
                     .concat(createdGraphs.map((c) => 'g:' + c.newName)));
+                pastedIds.sourceOf = {};
+                created.forEach((c) => { pastedIds.sourceOf['n:' + c.newName] = 'n:' + c.entry.name; });
+                createdGraphs.forEach((c) => { pastedIds.sourceOf['g:' + c.newName] = 'g:' + c.entry.name; });
                 setFlow({
                     edges: rebuilt.edges,
                     nodes: rebuilt.nodes.map((n) => (n.selected === pastedIds.has(n.id) ? n
@@ -7900,13 +7903,13 @@
                 if (writeLayoutToDoc(flow.nodes)) markDirty();
             };
 
-            // Shift+press on a node never reaches React Flow: a click drops a selected node from the
-            // selection; a drag past DRAG_SLOP_PX duplicates once (the node, or the selection it is in)
-            // and moves the copies while the originals stay. One undo step for the whole gesture.
+            // Shift/Ctrl+press on a node never reaches React Flow. Shift+click adds, Ctrl+click removes;
+            // Shift+drag past DRAG_SLOP_PX duplicates once (the node, or its selection) on the spot and
+            // moves the copies while the originals stay. One undo step for the whole gesture.
             const rfStoreRef = React.useRef(null);
             const swallowClickRef = React.useRef(0);
             const gestureApiRef = React.useRef(null);
-            const shiftDeselect = (id) => {
+            const deselectNode = (id) => {
                 const nodes = flowRef.current.nodes;
                 const self = nodes.find((n) => n.id === id);
                 if (!self || !self.selected) return;
@@ -7918,8 +7921,19 @@
                 if (remaining.length === 1) setSelectedId(remaining[0]);
                 else if (selectedIdRef.current === id) setSelectedId(null);
             };
+            const addToSelection = (id) => {
+                const node = flowRef.current.nodes.find((n) => n.id === id);
+                if (!node) return;
+                if (!node.selected) {
+                    setFlow((prev) => ({
+                        edges: prev.edges,
+                        nodes: prev.nodes.map((n) => (n.id === id && !n.selected ? Object.assign({}, n, { selected: true }) : n)),
+                    }));
+                }
+                onNodeClick({ shiftKey: true }, node); // primary + inspector follow the added node
+            };
             gestureApiRef.current = {
-                entriesForIds, duplicateEntries, writeLayoutToDoc, onNodeClick, shiftDeselect, beginUndoHold,
+                entriesForIds, duplicateEntries, writeLayoutToDoc, onNodeClick, deselectNode, addToSelection, beginUndoHold,
                 endUndoHold: () => { holdUndoRef.current = null; markDirty(); },
                 zoom: () => {
                     const inst = rfInstRef.current;
@@ -7949,14 +7963,15 @@
                     window.addEventListener('mouseup', up, true);
                 };
                 const onDown = (e) => {
-                    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.altKey) return;
+                    if (e.button !== 0 || e.altKey) return;
                     const t = e.target;
                     if (!t || !t.closest || t.closest('.react-flow__handle, input, textarea, select, button, [contenteditable="true"], .nodrag')) return;
                     const id = nodeIdAt(t, e.clientX, e.clientY);
                     if (!id) return;
                     const x0 = e.clientX, y0 = e.clientY;
                     const travel = (ev) => Math.hypot(ev.clientX - x0, ev.clientY - y0);
-                    if (!e.shiftKey) {
+                    const remove = e.ctrlKey || e.metaKey;
+                    if (!e.shiftKey && !remove) {
                         // The box-selection overlay hides the cards from onNodeClick: a plain click on it collapses here.
                         if (!t.closest('.react-flow__nodesselection-rect')) return;
                         track(() => {}, (ev) => {
@@ -7973,7 +7988,7 @@
                         if (!g.started) {
                             if (travel(ev) < DRAG_SLOP_PX) return;
                             g.started = true;
-                            if (scopeLockedRef.current) return;
+                            if (remove || scopeLockedRef.current) return;
                             const nodes = flowRef.current.nodes;
                             const ids = nodes.filter((n) => (g.wasSelected ? n.selected : n.id === id) && isCopyableNode(n)).map((n) => n.id);
                             const entries = ids.length ? api().entriesForIds(ids) : [];
@@ -7981,7 +7996,13 @@
                             api().beginUndoHold();
                             const pasted = api().duplicateEntries(entries, { mode: 'absolute', copyThumbs: true });
                             if (!pasted || !pasted.size) { api().endUndoHold(); return; }
-                            g.dup = { ids: pasted, base: {} };
+                            // Copies start exactly on their originals; the move below then adds the pointer travel.
+                            const base = {};
+                            pasted.forEach((cid) => {
+                                const src = nodes.find((n) => n.id === (pasted.sourceOf || {})[cid]);
+                                if (src) base[cid] = { x: src.position.x, y: src.position.y };
+                            });
+                            g.dup = { ids: pasted, base };
                             thumbActivity();
                         }
                         if (!g.dup) return;
@@ -8008,8 +8029,10 @@
                             });
                             api().writeLayoutToDoc(list);
                             api().endUndoHold();
-                        } else if (!g.started && g.wasSelected) {
-                            api().shiftDeselect(id);
+                        } else if (!g.started && remove) {
+                            if (g.wasSelected) api().deselectNode(id);
+                        } else if (!g.started) {
+                            api().addToSelection(id);
                         }
                     });
                 };
@@ -9271,6 +9294,8 @@
                                     selectionOnDrag={true}
                                     selectionMode={(RF.SelectionMode && RF.SelectionMode.Partial) || 'partial'}
                                     selectionKeyCode={null}
+                                    // Node clicks with Shift/Ctrl are handled by the canvas capture listener; this only
+                                    // keeps Ctrl+box selection additive, as before.
                                     multiSelectionKeyCode={['Meta', 'Control']}
                                     // React Flow's MIT text doesn't require on-screen credit, but
                                     // the bundle asks non-Pro users to keep it, so it stays visible
