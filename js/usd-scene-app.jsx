@@ -19,8 +19,11 @@
     // treatment as Compare's own empty slot.
     const EMPTY_STAGE_GRID_IMAGE = 'linear-gradient(to right, rgb(var(--mtlx-line-heavy) / calc(41 / 255)) 1px, transparent 1px), linear-gradient(to bottom, rgb(var(--mtlx-line-heavy) / calc(41 / 255)) 1px, transparent 1px)';
     const EMPTY_STAGE_GRID_MASK = 'radial-gradient(ellipse at center, rgba(0,0,0,1) 0%, rgba(0,0,0,0.9) 30%, rgba(0,0,0,0) 70%)';
-    // Popovers over the render: opacity is a theme param (0.95 dark, opaque light so render colors do not tint them).
-    const HUD_POPOVER_BG = 'rgb(var(--mtlx-surface-raised) / var(--mtlx-alpha-hud-popover))';
+    // Shared HUD pieces (js/shared/render-hud.jsx), also used by the Viewer and Compare.
+    const {
+        HUD_POPOVER_BG, HUD_POPOVER_CLASS, ROW_LABEL: SCENE_ROW_LABEL, InfoRow: SceneInfoRow,
+        SidebarSectionHeader, popoverHeader, QualitySegments: HudQualitySegments, TabStrip,
+    } = window.MtlxRenderHud;
 
     // Mirrors js/usd-scene-renderer.js sceneDomeYawDegFromRotation (not
     // exported, math not to be changed here): converts an authored dome
@@ -1494,16 +1497,6 @@
         </React.Fragment>
     );
 
-    // One label/value pair of the Scene section's facts: two cells of the Info grid,
-    // in the Statistics micro-label idiom.
-    const SCENE_ROW_LABEL = 'text-[10px] leading-4 font-semibold uppercase tracking-[0.08em] text-fg-subtle';
-    const SceneInfoRow = ({ label, testId, title, children }) => (
-        <React.Fragment>
-            <span className={SCENE_ROW_LABEL}>{label}</span>
-            <span data-testid={testId} title={title} className="min-w-0 truncate text-right text-[11px] leading-4 text-fg-secondary">{children}</span>
-        </React.Fragment>
-    );
-
     // Kept as one array so the list is easy to edit without touching the
     // popover markup below.
     const SCENE_KNOWN_ISSUES = [
@@ -1571,56 +1564,7 @@
     const SCENE_PRESENTATION_FIELD_OF = {
         bloom: 'bloom', bloomStrength: 'strength', bloomThreshold: 'threshold', bloomKnee: 'knee', bloomRadius: 'radius', hdrView: 'debugView',
     };
-    // Three-way quality control used by the Render settings popover.
-    // Kept local rather than moved into js/shared/mtlx-ui.jsx, which
-    // feeds the embed bundle where Tailwind utilities silently no-op.
-    const QUALITY_SEGMENT_TONES = {
-        hud: {
-            wrap: 'inline-flex rounded-lg border border-hud-line/50 overflow-hidden',
-            idle: 'bg-hud/70 backdrop-blur text-hud-fg hover:bg-hud-hover hover:text-hud-fg-strong',
-            active: 'mtlx-fill-accent-translucent text-on-accent border-accent-base',
-        },
-        panel: {
-            wrap: 'flex flex-1 rounded-lg border border-line-strong/50 overflow-hidden',
-            idle: 'bg-control/80 text-fg-secondary hover:bg-hover/80',
-            active: 'bg-selection/20 text-accent-fg-strong',
-        },
-    };
-    const QualitySegments = ({ value, onChange, disabled, tone }) => {
-        const cls = QUALITY_SEGMENT_TONES[tone] || QUALITY_SEGMENT_TONES.hud;
-        return (
-            <div
-                role="group"
-                aria-label="Render quality"
-                data-testid={tone === 'panel' ? 'usd-scene-quality-popover' : 'usd-scene-quality-toolbar'}
-                className={cls.wrap}
-            >
-                {SCENE_QUALITY_LEVELS.map((level, i) => {
-                    const active = value === level.id;
-                    return (
-                        <button
-                            key={level.id}
-                            type="button"
-                            data-testid={'usd-scene-quality-' + level.id}
-                            data-active={active ? 'true' : undefined}
-                            aria-pressed={active}
-                            title={level.title}
-                            disabled={disabled}
-                            onClick={() => onChange(level.id)}
-                            className={'h-7 px-2.5 flex items-center gap-1 text-[11px] font-medium whitespace-nowrap transition-colors '
-                                + 'first:rounded-l-[7px] last:rounded-r-[7px] disabled:opacity-60 disabled:cursor-not-allowed '
-                                + (tone === 'panel' ? 'flex-1 justify-center ' : '')
-                                + (i > 0 ? (tone === 'panel' ? 'border-l border-line-strong/50 ' : 'border-l border-hud-line/50 ') : '')
-                                + (active ? cls.active : cls.idle)}
-                        >
-                            {level.icon && <MtlxIcon name={level.icon} className="w-3.5 h-3.5 flex-none" />}
-                            {level.label}
-                        </button>
-                    );
-                })}
-            </div>
-        );
-    };
+    const QualitySegments = (props) => <HudQualitySegments levels={SCENE_QUALITY_LEVELS} testIdPrefix="usd-scene-quality" {...props} />;
     // Hierarchy type filter: the bottom row of the search box, no chrome of its own.
     const SCENE_TREE_GROUP_OPTIONS = [
         ['all', 'All', 'Show everything'],
@@ -1658,14 +1602,6 @@
     // share of the window tall, clamped to the window.
     const DIAGNOSTICS_POPOVER_W = 440;
     const DIAGNOSTICS_POPOVER_MAX_VH = 0.6;
-    // Title row of a flat sidebar section, in the Statistics header idiom.
-    const SidebarSectionHeader = ({ icon, title, summary, testId }) => (
-        <div data-testid={testId} className="flex items-center gap-2 min-w-0">
-            <MtlxIcon name={icon} className="w-4 h-4 text-fg-muted shrink-0" />
-            <span className="text-[13px] font-semibold text-fg shrink-0">{title}</span>
-            {summary ? <span className="flex-1 min-w-0 text-right text-xs text-fg-subtle truncate" title={summary}>{summary}</span> : null}
-        </div>
-    );
     const EXPORT_MATERIAL_OPTIONS = [
         { value: 'reference', label: 'USD + referenced .mtlx files' },
         { value: 'networks', label: 'MaterialX as UsdShade networks' },
@@ -3817,20 +3753,6 @@
             const left = box ? Math.max(8, Math.min(wanted, box.clientWidth - HUD_POPOVER_W - 8)) : wanted;
             return { left, width: 'min(' + HUD_POPOVER_W + 'px, calc(100% - 16px))', maxHeight: 'calc(100% - 56px)', backgroundColor: HUD_POPOVER_BG };
         };
-        const HUD_POPOVER_CLASS = 'absolute z-30 top-11 flex flex-col backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden';
-        const popoverHeader = (icon, title, subtitle, onClose, tag, mono) => (
-            <div className="flex-none flex items-center gap-2 px-3 py-2 border-b border-line">
-                <MtlxIcon name={icon} className="w-4 h-4 text-fg-muted shrink-0" />
-                <div className="flex-1 min-w-0 flex flex-col">
-                    <span className="text-[13px] font-semibold text-fg truncate">{title}</span>
-                    {subtitle ? <span className={'text-[11px] text-fg-subtle truncate' + (mono ? ' font-mono' : '')} title={subtitle}>{subtitle}</span> : null}
-                </div>
-                {tag ? <span className="shrink-0 text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border border-line-strong text-fg-muted">{tag}</span> : null}
-                <button type="button" aria-label="Close" onClick={onClose} className="shrink-0 p-1 rounded text-fg-secondary hover:text-fg hover:bg-hover">
-                    <MtlxIcon name="x" className="w-3.5 h-3.5" />
-                </button>
-            </div>
-        );
         const envNode = sceneTree ? sceneTree.groups.lights.children.find((node) => node.isEnvironment) : null;
         const envDome = handle && typeof handle.getDomeLight === 'function' ? handle.getDomeLight() : null;
         const envPopover = envPopoverOpen ? (
@@ -4408,19 +4330,7 @@
                                 </div>
                                 <div className="mt-1 text-[11px] text-fg-muted">{qualitySummaryText()}</div>
                             </div>
-                            <div className="flex-none flex items-center gap-1 px-2 pt-2 border-b border-line overflow-x-auto">
-                                {RENDER_TABS.map((tab) => (
-                                    <button
-                                        key={tab}
-                                        type="button"
-                                        onClick={() => setRenderTab(tab)}
-                                        className={'shrink-0 px-2.5 py-1.5 text-[11px] font-medium rounded-t-md border-b-2 whitespace-nowrap '
-                                            + (renderTab === tab ? 'border-accent-base text-accent-fg-strong' : 'border-transparent text-fg-muted hover:text-fg-soft')}
-                                    >
-                                        {RENDER_TAB_LABELS[tab]}
-                                    </button>
-                                ))}
-                            </div>
+                            <TabStrip tabs={RENDER_TABS} labels={RENDER_TAB_LABELS} value={renderTab} onChange={setRenderTab} />
                             <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-3 space-y-1">
                                 {renderTab === 'display' && renderDisplayTab()}
                                 {renderTab === 'lighting' && renderLightingTab()}

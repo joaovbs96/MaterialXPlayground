@@ -765,6 +765,10 @@
         document.documentElement.style.setProperty('--mtlx-header-h', h + 'px');
     };
     publishHeaderHeight();
+    // Any resize of the header (wrapping, banner, fonts) republishes the height.
+    if (headerRoot && typeof ResizeObserver === 'function') {
+        new ResizeObserver(publishHeaderHeight).observe(headerRoot);
+    }
 
     // Mobile hamburger + dropdown panel (plain JS, no framework — this
     // file isn't Babel-transformed). Both only exist in the innerHTML

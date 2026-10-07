@@ -321,7 +321,7 @@ function GalleryLicenseDialog({ material, onClose }) {
         return () => { cancelled = true; };
     }, [href]);
     const label = (material.license && material.license.label) || 'License';
-    return (
+    return ReactDOM.createPortal(
         <div
             className="fixed left-0 right-0 bottom-0 z-[55] flex items-center justify-center bg-scrim/85 p-4"
             style={{ top: 'var(--mtlx-header-h, 0px)' }}
@@ -364,7 +364,8 @@ function GalleryLicenseDialog({ material, onClose }) {
                     )}
                 </div>
             </div>
-        </div>
+        </div>,
+        fullscreenPortalRoot()
     );
 }
 
@@ -390,13 +391,13 @@ function GalleryDetailOverlay({
     // still on display while a new fetch is in flight.
     const ready = docStatus === 'ready' && !!doc && doc.id === shown.id;
     const hasCompanions = ready && Object.keys(doc.map).some((k) => k !== doc.rootKey);
-    return (
-        // Scrim now stops at the header's bottom edge (--mtlx-header-h)
-        // instead of covering it; .mtlx-header's raised z-index (60) keeps
-        // it and its dropdowns usable/visible while this popup is open.
+    return ReactDOM.createPortal(
+        // Portaled to <body> so no scroll-wrapper offset moves the scrim; it
+        // stops at the header's bottom edge (--mtlx-header-h), z-index 60 keeps the header usable.
         <div
             className={'fixed left-0 right-0 bottom-0 z-50 flex items-center justify-center bg-scrim/85 p-4' + (isOpen ? '' : ' hidden')}
             style={{ top: 'var(--mtlx-header-h, 0px)' }}
+            data-testid="gallery-overlay"
             onMouseDown={isOpen ? onClose : undefined}
             aria-hidden={!isOpen}
         >
@@ -552,7 +553,8 @@ function GalleryDetailOverlay({
             {isOpen && licenseOpen && (
                 <GalleryLicenseDialog material={shown} onClose={() => setLicenseOpen(false)} />
             )}
-        </div>
+        </div>,
+        fullscreenPortalRoot()
     );
 }
 
