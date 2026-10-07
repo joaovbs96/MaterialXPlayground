@@ -269,6 +269,32 @@
         });
         return out;
     };
+    // Multi-material sources: the inspector and its Graph Editor handoff carry only the
+    // picked material (pruned, definitions kept) and the files that material references.
+    // Pure so tests/unit/usd-scene-preview-files.test.mjs can exercise it.
+    const singleMaterialDocument = (doc, materialName) => {
+        const core = (typeof window !== 'undefined' && window.MtlxGenCore) || globalThis.MtlxGenCore;
+        const xml = (doc && doc.xml) || '';
+        if (!xml || !materialName || !core || core.documentMaterialNames(xml).length <= 1) return { xml, files: doc && doc.files, pruned: false };
+        const prunedXml = core.pruneDocumentToMaterial(xml, materialName);
+        if (prunedXml === xml) return { xml, files: doc.files, pruned: false };
+        const refs = [];
+        const tagRe = /<[^>]*\btype\s*=\s*(["'])filename\1[^>]*>/gi;
+        let tagMatch;
+        while ((tagMatch = tagRe.exec(prunedXml)) !== null) {
+            const valueMatch = /\b(?:value|default)\s*=\s*(["'])(.*?)\1/i.exec(tagMatch[0]);
+            if (valueMatch && valueMatch[2]) refs.push(valueMatch[2].replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&amp;/gi, '&'));
+        }
+        const files = {};
+        Object.keys((doc && doc.files) || {}).forEach((key) => {
+            const hit = refs.some((ref) => {
+                const udim = ref.indexOf('<UDIM>');
+                return udim >= 0 ? key.startsWith(ref.slice(0, udim)) : key === ref;
+            });
+            if (hit) files[key] = doc.files[key];
+        });
+        return { xml: prunedXml, files, pruned: true };
+    };
     const rootNamePattern = /(^|\/)root\.(usd|usda|usdc|usdz)$/i;
     const oldDefaultRoot = (candidates) => {
         const preferred = candidates.find((f) => rootNamePattern.test(f.path));
@@ -1163,8 +1189,9 @@
             if (fullscreenElement()) toggleFullscreen();
             const primSegments = sceneTreeSegments(shown.primPath);
             const materialName = shown.materialName || (primSegments.length ? primSegments[primSegments.length - 1] : null);
+            // The pruned single-material document the panel shows, named after the material.
             window.__mtlxPendingImport = {
-                xml: shown.xml, name: shown.name, files: handoffFiles || null,
+                xml: shown.xml, name: materialName || shown.name, files: handoffFiles || null,
                 select: materialName, implOf: null, materialName,
                 readOnly: true, readOnlySource: sceneFileName || 'the scene',
             };
@@ -1190,7 +1217,7 @@
                     onPointerUp={endDrag(dragRef)}
                 >
                     <div className="min-w-0 flex flex-col">
-                        <span className="text-[11px] text-fg-muted truncate max-w-[16rem]">{shown.primPath || ''}</span>
+                        <span data-testid="usd-scene-material-preview-path" className="text-[11px] text-fg-muted truncate max-w-[16rem]">{(shown.primPath || '') + (shown.subsetPath ? '/' + sceneTreeLeafName(shown.subsetPath) : '')}</span>
                         <span className="text-sm font-semibold text-fg truncate max-w-[16rem]">{shown.materialName || shown.name}</span>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
@@ -1216,6 +1243,7 @@
                             preview={IN_VSCODE ? false : 'right'}
                             previewTextures={handoffFiles}
                             previewName={shown.name}
+                            previewMaterial={shown.materialName || undefined}
                             previewExpanded
                             previewResizable
                             previewSplitStorageKey="mtlx_scene_material_preview_split"
@@ -1629,9 +1657,9 @@
         ['cameras', 'Cameras', 'Show only cameras'],
         ['lights', 'Lights', 'Show only lights'],
     ];
-    const SceneTreeGroupSegments = ({ value, onChange }) => {
+    const SceneTreeGroupSegments = ({ value, onChange, disabled }) => {
         return (
-            <div role="group" aria-label="Show in hierarchy" data-testid="usd-scene-tree-group" className="flex w-full border-t border-line">
+            <div role="group" aria-label="Show in hierarchy" data-testid="usd-scene-tree-group" className={'flex w-full border-t border-line' + (disabled ? ' opacity-50' : '')}>
                 {SCENE_TREE_GROUP_OPTIONS.map(([id, label, title], i) => {
                     const active = value === id;
                     return (
@@ -1642,6 +1670,7 @@
                             data-active={active ? 'true' : undefined}
                             aria-pressed={active}
                             title={title}
+                            disabled={!!disabled}
                             onClick={() => onChange(id)}
                             className={'h-6 min-w-0 flex-1 px-1 flex items-center justify-center text-[11px] font-medium transition-colors '
                                 + (i > 0 ? 'border-l border-line ' : '')
@@ -1897,6 +1926,8 @@
         // 'open' (double-click, Enter) shows the panel, placed at `anchor` when given;
         // 'swap' (single click) only changes what an open panel shows. The same
         // material again never reloads the graph.
+        const prunedDocsRef = React.useRef(new Map());
+        React.useEffect(() => { prunedDocsRef.current = new Map(); }, [stage]);
         const showMaterialPreview = (doc, info, mode, anchor) => {
             const current = previewPayloadRef.current;
             const same = previewOpenRef.current && !!current && current.previewMaterialPath === info.materialPath;
@@ -1906,7 +1937,16 @@
                 // (the USD prim leaf) are both only hints; resolve against the
                 // resolved document's own material element names.
                 const materialName = resolveDocMaterialName((doc && doc.xml) || null, (doc && doc.materialName) || info.materialName || null);
-                const payload = Object.assign({ primPath: info.primPath }, doc, { materialName, previewMaterialPath: info.materialPath });
+                // Cached per material path while the renderer's document stays the same.
+                const cached = prunedDocsRef.current.get(info.materialPath);
+                const single = cached && cached.source === (doc && doc.xml) && cached.materialName === materialName
+                    ? cached.result : singleMaterialDocument(doc, materialName);
+                prunedDocsRef.current.set(info.materialPath, { source: doc && doc.xml, materialName, result: single });
+                const payload = Object.assign({ primPath: info.primPath }, doc, {
+                    materialName, previewMaterialPath: info.materialPath,
+                    xml: single.xml, files: single.files, fullXml: doc && doc.xml, pruned: single.pruned,
+                    subsetPath: info.subsetPath || null,
+                });
                 previewPayloadRef.current = payload;
                 setPreviewPayload(payload);
             }
@@ -2686,7 +2726,7 @@
                 const hit = handle.pickAt(e.clientX, e.clientY);
                 if (!hit) return fail('no-hit');
                 if (!hit.materialPath) return fail('no-material', { hit });
-                const info = { primPath: hit.primPath, materialName: hit.materialName, materialPath: hit.materialPath };
+                const info = { primPath: hit.primPath, materialName: hit.materialName, materialPath: hit.materialPath, subsetPath: hit.subsetPath || null };
                 const bounds = container.getBoundingClientRect();
                 const anchor = { x: e.clientX - bounds.left, y: e.clientY - bounds.top };
                 const doc = handle.getMaterialDocument(hit.materialPath);
@@ -2724,13 +2764,15 @@
         }, [handle]);
 
         // Outliner: tree model, renderer sync, selection and activation.
-        const sceneTree = React.useMemo(() => (stage ? buildSceneTree(stage) : null), [stage]);
+        // Always a tree: with no stage it holds the four empty groups (sidebar placeholders).
+        const sceneTree = React.useMemo(() => buildSceneTree(stage), [stage]);
         // Same camera list as the hierarchy's Cameras group.
-        const cameraOptions = React.useMemo(() => (sceneTree
-            ? sceneTree.groups.cameras.children.map((node) => ({ value: node.isDefaultCamera ? 'default' : node.path, label: node.name }))
-            : []), [sceneTree]);
+        const cameraOptions = React.useMemo(() => {
+            const options = sceneTree.groups.cameras.children.map((node) => ({ value: node.isDefaultCamera ? 'default' : node.path, label: node.name }));
+            return options.length ? options : [{ value: 'default', label: 'Default camera' }];
+        }, [sceneTree]);
         React.useEffect(() => {
-            if (!sceneTree) return;
+            if (!stage) return;
             if (treeSceneKeyRef.current === rootPath) {
                 // The same stage reloaded (Apply, watcher, Reload): keep what still exists.
                 setTreeHidden((prev) => { const next = new Set(Array.from(prev).filter((id) => sceneTree.byId.has(id))); return next.size === prev.size ? prev : next; });
@@ -3525,7 +3567,7 @@
                 sample: errorLines.concat(warnings).slice(0, 5),
                 rootSelectVisible: !!document.querySelector('[data-testid="usd-scene-root-select"]'),
                 previewOpen, treeNodes: objectCount,
-                treeMaterials: sceneTree ? sceneTree.materialCount : 0, treeCameras: sceneTree ? sceneTree.cameraCount : 0, treeLights: sceneTree ? sceneTree.lightCount : 0,
+                treeMaterials: stage ? sceneTree.materialCount : 0, treeCameras: stage ? sceneTree.cameraCount : 0, treeLights: stage ? sceneTree.lightCount : 0,
                 visibleMeshes: visibleMeshCount,
                 // What the Scene section shows; inDom is false only while the sidebar is collapsed.
                 sceneCard: {
@@ -4052,76 +4094,75 @@
                         );
                     })()}
 
-                    {cardStage ? (
-                        <RenderSettingsSection surface="scene" keys={['backdrop']} variant="flat" labelClassName={SCENE_ROW_LABEL + ' shrink-0 pl-4'} draft={backdropRowBinding} />
+                    {/* Always shown: placeholders until a scene loads (disabled without a handle). */}
+                    <RenderSettingsSection surface="scene" keys={['backdrop']} variant="flat" labelClassName={SCENE_ROW_LABEL + ' shrink-0 pl-4'} draft={backdropRowBinding} />
+
+                    {!cardStage && !busy && (IN_VSCODE || files.length > 0) ? (
+                        <div data-testid="usd-scene-info-empty" className="text-xs text-fg-subtle">No scene loaded</div>
                     ) : null}
 
-                    {cardStage ? (
-                        <div data-testid="usd-scene-info" className="space-y-1">
-                            <div>
-                                <button
-                                    type="button"
-                                    data-testid="usd-scene-info-toggle"
-                                    aria-expanded={sceneInfoOpen}
-                                    title={sceneInfoOpen ? 'Hide the scene facts' : 'Show the scene facts'}
-                                    onClick={() => setSceneInfoOpen((open) => !open)}
-                                    className="w-full h-5 flex items-center justify-between gap-3 -mx-1 px-1 rounded text-left hover:bg-hover-subtle/60"
-                                >
-                                    <span className={SCENE_ROW_LABEL + ' inline-flex items-center gap-1 shrink-0'}>
-                                        <MtlxIcon name={sceneInfoOpen ? 'chevron-down' : 'chevron-right'} className="w-3 h-3" />Info
+                    <div data-testid="usd-scene-info" className="space-y-1">
+                        <div>
+                            <button
+                                type="button"
+                                data-testid="usd-scene-info-toggle"
+                                aria-expanded={sceneInfoOpen}
+                                title={sceneInfoOpen ? 'Hide the scene facts' : 'Show the scene facts'}
+                                onClick={() => setSceneInfoOpen((open) => !open)}
+                                className="w-full h-5 flex items-center justify-between gap-3 -mx-1 px-1 rounded text-left hover:bg-hover-subtle/60"
+                            >
+                                <span className={SCENE_ROW_LABEL + ' inline-flex items-center gap-1 shrink-0'}>
+                                    <MtlxIcon name={sceneInfoOpen ? 'chevron-down' : 'chevron-right'} className="w-3 h-3" />Info
+                                </span>
+                                {!sceneInfoOpen ? (
+                                    <span data-testid="usd-scene-info-summary" className="min-w-0 truncate text-right text-[11px] text-fg-subtle">
+                                        {[sceneFormat, sceneUpAxis ? sceneUpAxis.split(' ')[0] + ' up' : ''].filter(Boolean).join(', ') || rootBasename || 'No scene'}
                                     </span>
-                                    {!sceneInfoOpen ? (
-                                        <span data-testid="usd-scene-info-summary" className="min-w-0 truncate text-right text-[11px] text-fg-subtle">
-                                            {[sceneFormat, sceneUpAxis ? sceneUpAxis.split(' ')[0] + ' up' : ''].filter(Boolean).join(', ') || rootBasename}
-                                        </span>
-                                    ) : null}
-                                </button>
-                                {/* Collapsed rows stay mounted (hidden): the VS Code scene report reads them. */}
-                                <div data-testid="usd-scene-info-details" className={(sceneInfoOpen ? 'grid' : 'hidden') + ' grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 mt-0.5 mb-1 pl-4'}>
-                                    <SceneInfoRow label="File" testId="usd-scene-info-file" title={rootPath}>{rootBasename}</SceneInfoRow>
-                                    {sceneFormat ? <SceneInfoRow label="Format" testId="usd-scene-info-format">{sceneFormat}</SceneInfoRow> : null}
-                                    {sceneUnits ? <SceneInfoRow label="Units" testId="usd-scene-info-units">{sceneUnits}</SceneInfoRow> : null}
-                                    {sceneUpAxis ? <SceneInfoRow label="Up axis" testId="usd-scene-info-up-axis">{sceneUpAxis}</SceneInfoRow> : null}
-                                </div>
-                            </div>
-                            <div>
-                                <button
-                                    type="button"
-                                    data-testid="usd-scene-info-files-toggle"
-                                    aria-expanded={sceneFilesOpen}
-                                    title={sceneFilesOpen ? 'Hide the loaded files' : 'List the loaded files'}
-                                    onClick={() => setSceneFilesOpen((open) => !open)}
-                                    className="w-full h-5 flex items-center justify-between gap-3 -mx-1 px-1 rounded text-left hover:bg-hover-subtle/60"
-                                >
-                                    <span className={SCENE_ROW_LABEL + ' inline-flex items-center gap-1 shrink-0'}>
-                                        <MtlxIcon name={sceneFilesOpen ? 'chevron-down' : 'chevron-right'} className="w-3 h-3" />Files loaded
-                                    </span>
-                                    <span data-testid="usd-scene-info-files" className="min-w-0 truncate text-right text-[11px] text-fg-secondary">
-                                        {sceneFilesText}
-                                        {sceneMissing.length ? <span className="text-warning/90">{', ' + sceneMissing.length + ' missing'}</span> : null}
-                                    </span>
-                                </button>
-                                {sceneFilesOpen && (
-                                    <div data-testid="usd-scene-info-files-list" className="mt-1 max-h-40 overflow-y-auto custom-scrollbar rounded-md border border-line bg-surface-sunken/60 py-1">
-                                        {files.map((file) => (
-                                            <div key={file.path} className="flex items-baseline justify-between gap-2 px-2 py-0.5 text-[11px]">
-                                                <span className="min-w-0 truncate font-mono text-fg-secondary" title={file.path}>{file.path}</span>
-                                                <span className="shrink-0 font-mono tabular-nums text-fg-subtle">{formatByteSize(sceneFileBytes(file))}</span>
-                                            </div>
-                                        ))}
-                                        {sceneMissing.map((asset) => (
-                                            <div key={'missing:' + asset} data-missing="true" className="flex items-baseline justify-between gap-2 px-2 py-0.5 text-[11px]">
-                                                <span className="min-w-0 truncate font-mono text-fg-subtle" title={asset}>{asset}</span>
-                                                <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-warning/90">Missing</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
+                                ) : null}
+                            </button>
+                            {/* Collapsed rows stay mounted (hidden): the VS Code scene report reads them. */}
+                            <div data-testid="usd-scene-info-details" className={(sceneInfoOpen ? 'grid' : 'hidden') + ' grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 mt-0.5 mb-1 pl-4'}>
+                                <SceneInfoRow label="File" testId="usd-scene-info-file" title={rootPath}>{(cardStage && rootBasename) || '-'}</SceneInfoRow>
+                                {sceneFormat || !cardStage ? <SceneInfoRow label="Format" testId="usd-scene-info-format">{sceneFormat || '-'}</SceneInfoRow> : null}
+                                {sceneUnits || !cardStage ? <SceneInfoRow label="Units" testId="usd-scene-info-units">{sceneUnits || '-'}</SceneInfoRow> : null}
+                                {sceneUpAxis || !cardStage ? <SceneInfoRow label="Up axis" testId="usd-scene-info-up-axis">{sceneUpAxis || '-'}</SceneInfoRow> : null}
                             </div>
                         </div>
-                    ) : (!busy && (IN_VSCODE || files.length > 0) ? (
-                        <div data-testid="usd-scene-info-empty" className="text-xs text-fg-subtle">No scene loaded</div>
-                    ) : null)}
+                        <div>
+                            <button
+                                type="button"
+                                data-testid="usd-scene-info-files-toggle"
+                                aria-expanded={sceneFilesOpen}
+                                title={sceneFilesOpen ? 'Hide the loaded files' : 'List the loaded files'}
+                                onClick={() => setSceneFilesOpen((open) => !open)}
+                                className="w-full h-5 flex items-center justify-between gap-3 -mx-1 px-1 rounded text-left hover:bg-hover-subtle/60"
+                            >
+                                <span className={SCENE_ROW_LABEL + ' inline-flex items-center gap-1 shrink-0'}>
+                                    <MtlxIcon name={sceneFilesOpen ? 'chevron-down' : 'chevron-right'} className="w-3 h-3" />Files loaded
+                                </span>
+                                <span data-testid="usd-scene-info-files" className="min-w-0 truncate text-right text-[11px] text-fg-secondary">
+                                    {files.length ? sceneFilesText : '0 files'}
+                                    {sceneMissing.length ? <span className="text-warning/90">{', ' + sceneMissing.length + ' missing'}</span> : null}
+                                </span>
+                            </button>
+                            {sceneFilesOpen && (
+                                <div data-testid="usd-scene-info-files-list" className="mt-1 max-h-40 overflow-y-auto custom-scrollbar rounded-md border border-line bg-surface-sunken/60 py-1">
+                                    {files.map((file) => (
+                                        <div key={file.path} className="flex items-baseline justify-between gap-2 px-2 py-0.5 text-[11px]">
+                                            <span className="min-w-0 truncate font-mono text-fg-secondary" title={file.path}>{file.path}</span>
+                                            <span className="shrink-0 font-mono tabular-nums text-fg-subtle">{formatByteSize(sceneFileBytes(file))}</span>
+                                        </div>
+                                    ))}
+                                    {sceneMissing.map((asset) => (
+                                        <div key={'missing:' + asset} data-missing="true" className="flex items-baseline justify-between gap-2 px-2 py-0.5 text-[11px]">
+                                            <span className="min-w-0 truncate font-mono text-fg-subtle" title={asset}>{asset}</span>
+                                            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-warning/90">Missing</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
 
                     {sceneSlotButton || stage ? (
                         <div className="flex items-center gap-1.5 pt-0.5">
@@ -4142,60 +4183,83 @@
                     ) : null}
                 </section>
 
-                {sceneTree && (
-                    <section data-testid="usd-scene-section-hierarchy" className="flex-1 flex flex-col gap-2 px-3.5 py-3 border-t border-line">
-                        <SidebarSectionHeader icon="list-details" title="Hierarchy" summary={objectCount.toLocaleString() + ' object' + (objectCount === 1 ? '' : 's')} testId="usd-scene-section-header" />
-                        <div className="flex-none rounded-md border border-line-control bg-surface-sunken overflow-hidden focus-within:border-focus">
-                        <div className="relative h-[26px]">
-                            <MtlxIcon name="search" className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-fg-subtle pointer-events-none" />
-                            <input
-                                type="text"
-                                value={treeFilter}
-                                onChange={(e) => setTreeFilter(e.target.value)}
-                                onKeyDown={(e) => {
-                                    // An open popover (Diagnostics, Render settings,
-                                    // Environment, light info) owns the first Escape via
-                                    // its window-level useEscapeToClose listener; only
-                                    // intercept here once none of them are open.
-                                    if (e.key !== 'Escape' || !treeFilter) return;
-                                    if (diagnosticsOpen || renderSettingsOpen || envPopoverOpen || lightInfoPath) return;
-                                    e.stopPropagation(); setTreeFilter('');
-                                }}
-                                placeholder="Filter objects"
-                                aria-label="Filter objects"
-                                data-testid="usd-scene-tree-filter"
-                                spellCheck={false}
-                                className="w-full h-full bg-transparent border-0 pl-7 pr-2 text-[11px] text-fg-secondary placeholder-fg-subtle focus:outline-none"
-                            />
-                        </div>
-                        <SceneTreeGroupSegments value={treeGroup} onChange={setTreeGroup} />
-                        </div>
-                        {treeRows.length ? (
+                <section data-testid="usd-scene-section-hierarchy" className="flex-1 flex flex-col gap-2 px-3.5 py-3 border-t border-line">
+                    <SidebarSectionHeader icon="list-details" title="Hierarchy" summary={objectCount.toLocaleString() + ' object' + (objectCount === 1 ? '' : 's')} testId="usd-scene-section-header" />
+                    <div className="flex-none rounded-md border border-line-control bg-surface-sunken overflow-hidden focus-within:border-focus">
+                    <div className="relative h-[26px]">
+                        <MtlxIcon name="search" className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-fg-subtle pointer-events-none" />
+                        <input
+                            type="text"
+                            value={treeFilter}
+                            onChange={(e) => setTreeFilter(e.target.value)}
+                            disabled={!stage}
+                            onKeyDown={(e) => {
+                                // An open popover (Diagnostics, Render settings,
+                                // Environment, light info) owns the first Escape via
+                                // its window-level useEscapeToClose listener; only
+                                // intercept here once none of them are open.
+                                if (e.key !== 'Escape' || !treeFilter) return;
+                                if (diagnosticsOpen || renderSettingsOpen || envPopoverOpen || lightInfoPath) return;
+                                e.stopPropagation(); setTreeFilter('');
+                            }}
+                            placeholder="Filter objects"
+                            aria-label="Filter objects"
+                            data-testid="usd-scene-tree-filter"
+                            spellCheck={false}
+                            className="w-full h-full bg-transparent border-0 pl-7 pr-2 text-[11px] text-fg-secondary placeholder-fg-subtle focus:outline-none"
+                        />
+                    </div>
+                    <SceneTreeGroupSegments value={treeGroup} onChange={setTreeGroup} disabled={!stage} />
+                    </div>
+                    {!stage ? (
+                        <React.Fragment>
+                            {/* Placeholder: the four group headers, inert until a scene loads. */}
                             <SceneTree
-                                rows={treeRows}
-                                expanded={treeExpanded}
-                                selectedId={treeSelected}
+                                rows={sceneTree.roots}
+                                expanded={new Set()}
+                                selectedId=""
                                 hidden={treeHidden}
                                 hiddenLights={lightsHidden}
-                                lightsOff={!stageLightsOn}
-                                envLightingOff={envLightingOff}
-                                envEyeAvailable={!!handle && typeof handle.setEnvironmentLightingEnabled === 'function'}
+                                lightsOff={false}
+                                envLightingOff={false}
+                                envEyeAvailable={false}
                                 activeCamera={selectedCamera}
-                                revealToken={treeReveal}
-                                onToggleExpand={toggleTreeExpanded}
-                                onSelect={selectTreePath}
-                                onRowClick={clickTreeRow}
-                                onToggleHidden={toggleTreeHidden}
-                                onActivate={activateTreeNode}
+                                revealToken={0}
+                                onToggleExpand={() => {}}
+                                onSelect={() => {}}
+                                onRowClick={() => {}}
+                                onToggleHidden={() => {}}
+                                onActivate={() => {}}
                             />
-                        ) : (
-                            <div className="flex-1 text-xs text-fg-subtle">No objects match the filter.</div>
-                        )}
+                            <div data-testid="usd-scene-tree-empty" className="flex-none text-[11px] text-fg-subtle">Load a scene to list its objects, materials, cameras and lights.</div>
+                        </React.Fragment>
+                    ) : treeRows.length ? (
+                        <SceneTree
+                            rows={treeRows}
+                            expanded={treeExpanded}
+                            selectedId={treeSelected}
+                            hidden={treeHidden}
+                            hiddenLights={lightsHidden}
+                            lightsOff={!stageLightsOn}
+                            envLightingOff={envLightingOff}
+                            envEyeAvailable={!!handle && typeof handle.setEnvironmentLightingEnabled === 'function'}
+                            activeCamera={selectedCamera}
+                            revealToken={treeReveal}
+                            onToggleExpand={toggleTreeExpanded}
+                            onSelect={selectTreePath}
+                            onRowClick={clickTreeRow}
+                            onToggleHidden={toggleTreeHidden}
+                            onActivate={activateTreeNode}
+                        />
+                    ) : (
+                        <div className="flex-1 text-xs text-fg-subtle">No objects match the filter.</div>
+                    )}
+                    {stage ? (
                         <div className="flex-none text-[11px] text-fg-subtle truncate" title="Click a camera to look through it; while the material preview is open, a single click switches it.">
                             Double-click a row to preview its material.
                         </div>
-                    </section>
-                )}
+                    ) : null}
+                </section>
             </div>
         );
 
@@ -4371,23 +4435,21 @@
                             <MtlxIcon name="sun" className="w-4 h-4" />
                             {!hudCompact && <span>Environment settings</span>}
                         </button>
-                        {sceneTree && (
-                            <div data-testid="usd-scene-camera-select" className="flex-none">
-                                <MtlxSelect
-                                    value={selectedCamera}
-                                    options={cameraOptions}
-                                    defValue="default"
-                                    onChange={selectCamera}
-                                    icon="camera"
-                                    title="Camera"
-                                    ariaLabel="Camera"
-                                    variant="toolbar"
-                                    size="md"
-                                    maxWidth={hudCompact ? 110 : 180}
-                                    disabled={!handle}
-                                />
-                            </div>
-                        )}
+                        <div data-testid="usd-scene-camera-select" className="flex-none">
+                            <MtlxSelect
+                                value={selectedCamera}
+                                options={cameraOptions}
+                                defValue="default"
+                                onChange={selectCamera}
+                                icon="camera"
+                                title="Camera"
+                                ariaLabel="Camera"
+                                variant="toolbar"
+                                size="md"
+                                maxWidth={hudCompact ? 110 : 180}
+                                disabled={!handle}
+                            />
+                        </div>
                     </div>
 
                     {envPopover}

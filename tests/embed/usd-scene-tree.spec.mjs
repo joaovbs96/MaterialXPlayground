@@ -180,6 +180,27 @@ function screenPointOf(page, primPath) {
   }, primPath);
 }
 
+test('@scene the sidebar sections show empty placeholders before a scene loads', async ({ page, embedURL }) => {
+  await page.goto(embedURL + '/index.html#!scene');
+  await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
+  const headers = page.getByTestId('usd-scene-section-header');
+  await expect(headers).toHaveCount(2);
+  await expect(headers.nth(1)).toContainText('0 objects');
+  await expect(page.getByTestId('usd-scene-section-hierarchy')).toBeVisible();
+  await expect(page.getByTestId('usd-scene-tree-empty')).toBeVisible();
+  await expect(page.getByTestId('usd-scene-tree').locator('[role="treeitem"]')).toHaveCount(4);
+  await expect(page.getByTestId('usd-scene-tree-filter')).toBeDisabled();
+  await expect(page.getByTestId('usd-scene-tree-group').locator('button').first()).toBeDisabled();
+  await expect(page.getByTestId('usd-scene-info-file')).toHaveText('-');
+  await expect(page.getByTestId('usd-scene-info-up-axis')).toHaveText('-');
+  await expect(page.getByTestId('usd-scene-info-files')).toHaveText('0 files');
+  await expect(page.getByTestId('usd-scene-backdrop-select')).toBeVisible();
+  const camera = page.getByTestId('usd-scene-camera-select');
+  await expect(camera).toBeVisible();
+  await expect(camera.locator('button').first()).toBeDisabled();
+  await expect(camera).toContainText('Default camera');
+});
+
 test('@scene the outliner shows four groups and expands, collapses and navigates by keyboard', async ({ page, embedURL }) => {
   test.setTimeout(240000);
   await loadScene(page, embedURL, usdFiles());
@@ -226,7 +247,7 @@ test('@scene the outliner shows four groups and expands, collapses and navigates
   await expect(page.getByTestId('usd-scene-info-files')).toContainText(/^3 files, [\d.]+ (B|KB)$/);
   await expect(page.getByTestId('usd-scene-info-units')).toHaveText('Meters');
   await expect(page.getByTestId('usd-scene-info-up-axis')).toHaveText('Y');
-  await expect(page.getByTestId('usd-scene-camera-select')).toHaveCount(0);
+  await expect(page.getByTestId('usd-scene-camera-select')).toBeVisible();
   await expect(page.getByTestId('usd-scene-info-reload')).toBeEnabled();
   await expect(page.getByTestId('usd-scene-cancel')).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^Load root\.usda$/ })).toHaveCount(0);
