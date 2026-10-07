@@ -223,8 +223,8 @@ const EnvRenderPills = ({ surface, containerRef, showLabels = true, leading, env
         <React.Fragment>
             <div className="absolute top-2 left-2 z-30 flex items-center gap-2.5 flex-wrap max-w-[calc(100%-5rem)]">
                 {leading}
-                {pill(envPop, 'sun', 'Environment', toggleEnv, 'hud-env-pill')}
                 {pill(renderPop, 'settings-cog', 'Render settings', toggleRender, 'hud-render-pill')}
+                {pill(envPop, 'sun', 'Environment settings', toggleEnv, 'hud-env-pill')}
             </div>
             <HudPopover pop={envPop} containerRef={containerRef} testId="hud-env-popover">
                 {popoverHeader('sun', 'Environment', envSummary, envPop.close)}
