@@ -5,6 +5,7 @@
 // by index.html; this module never imports three itself.
 
 import { gltfPbrDocument, sanitizeMtlxName } from "./mtlx-material-docs.js";
+import { isAbsoluteFsRef, absIndexOf, resolveAbsFsRef } from "./scene-import-common.js";
 
 const DRACO_TIMEOUT_MS = 20000;
 
@@ -403,7 +404,9 @@ export async function resolveGltfBuffers(bufferDefs, { rootDir, binBytes, fileBy
     if (bufferHasExternalUri(bufferDef)) {
       let uri = bufferDef.uri;
       try { uri = decodeURIComponent(uri); } catch (e) { /* not percent-encoded */ }
-      const resolved = joinPath(rootDir, uri);
+      // Drive-letter/UNC uris are absolute filesystem paths (desktop app file sets).
+      const absolute = isAbsoluteFsRef(uri) ? resolveAbsFsRef(uri, absIndexOf(Array.from(fileByPath.values())), fileByPath.keys()) : null;
+      const resolved = absolute || joinPath(rootDir, uri);
       const entry = fileByPath.get(resolved) || fileByBasename.get(basenameOf(uri).toLowerCase());
       if (!entry) throw new Error("Select the .gltf together with its .bin file(s)");
       bytes = new Uint8Array(await toArrayBuffer(entry.data));
@@ -589,7 +592,8 @@ export async function loadGltfStage({ files, rootPath, signal, onProgress } = {}
       if (typeof image.uri === "string" && !/^data:/i.test(image.uri)) {
         let uri = image.uri;
         try { uri = decodeURIComponent(uri); } catch (e) { /* not percent-encoded */ }
-        const resolved = joinPath(rootDir, uri);
+        const absolute = isAbsoluteFsRef(uri) ? resolveAbsFsRef(uri, absIndexOf(Array.from(fileByPath.values())), fileByPath.keys()) : null;
+        const resolved = absolute || joinPath(rootDir, uri);
         if (fileByPath.has(resolved)) file = resolved;
       } else {
         const bytes = embeddedImageBytes(image);

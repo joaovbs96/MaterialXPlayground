@@ -15,6 +15,8 @@ const HOST_DEFAULTS = {
     samplerBudgetOverride: () => undefined,
     perfLog: () => false,
     debugShaders: () => false,
+    // Drive-letter/UNC refs as absolute paths; the engine turns it off in VS Code (unchanged there).
+    absoluteFsRefs: () => true,
 };
 const host = Object.assign({}, HOST_DEFAULTS);
 const setHost = (providers) => {
@@ -3010,10 +3012,17 @@ const normPath = (p) => String(p || '')
 // Join a base directory and a reference into one path, resolving '.' and
 // '..' segments. Backslashes normalize and a leading './' or '/' strips,
 // but case is preserved (unlike normPath, which lowercases for fuzzy
-// matching). Moved from the Scene's sceneJoinPath for the exact resolvers.
-const joinRefPath = (fromDir, ref) => {
-    const casedNorm = (v) => String(v || '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\//, '');
-    return casedNorm((fromDir ? fromDir + '/' : '') + String(ref || ''))
+// matching). Drive-letter (L:/) and UNC (//server) refs are absolute: fromDir
+// is ignored and the prefix kept (off: opts/host absoluteFsRefs false). Moved from sceneJoinPath.
+const joinRefPath = (fromDir, ref, opts) => {
+    const slashed = (v) => String(v || '').replace(/\\/g, '/');
+    const absOn = (opts && typeof opts.absoluteFsRefs === 'boolean' ? opts.absoluteFsRefs : (typeof host === 'undefined' || host.absoluteFsRefs() !== false));
+    const absRe = absOn ? /^(?:[a-zA-Z]:\/|\/\/(?!\/))/ : /(?!)/;
+    const raw = slashed(ref);
+    const full = absRe.test(raw) ? raw : (fromDir ? slashed(fromDir) + '/' : '') + raw;
+    const abs = absRe.exec(full);
+    const body = abs ? full.slice(abs[0].length) : full.replace(/^\.\//, '').replace(/^\//, '');
+    return (abs ? abs[0] : '') + body
         .split('/').reduce((out, part) => {
             if (!part || part === '.') return out;
             if (part === '..') { out.pop(); return out; }
@@ -3028,9 +3037,26 @@ const joinRefPath = (fromDir, ref) => {
 // composed scene can have duplicate basenames, so a miss must stay a miss).
 const findFileForRef = (fileMap, ref, opts) => {
     if (opts && opts.exact) {
-        const want = joinRefPath(opts.fromDir, ref);
-        if (!want || !Object.prototype.hasOwnProperty.call(fileMap, want)) return null;
-        return { key: want, how: 'exact' };
+        const absOn = (opts && typeof opts.absoluteFsRefs === 'boolean' ? opts.absoluteFsRefs : (typeof host === 'undefined' || host.absoluteFsRefs() !== false));
+        const want = joinRefPath(opts.fromDir, ref, { absoluteFsRefs: absOn });
+        if (want && Object.prototype.hasOwnProperty.call(fileMap, want)) return { key: want, how: 'exact' };
+        if (!absOn) return null;
+        // Absolute filesystem refs: the host's index (fileMap.__absIndex, lowercased
+        // absolute path -> key, desktop app only), then a unique longest key suffix.
+        const rawRef = String(ref || '').replace(/\\/g, '/');
+        const absWant = /^(?:[a-zA-Z]:\/|\/\/)/.test(want) ? want : (fileMap.__absIndex && /^\/(?!\/)/.test(rawRef) ? '/' + joinRefPath('', rawRef) : '');
+        if (!absWant) return null;
+        const lower = absWant.toLowerCase();
+        const indexed = fileMap.__absIndex && fileMap.__absIndex[lower];
+        if (indexed && Object.prototype.hasOwnProperty.call(fileMap, indexed)) return { key: indexed, how: 'absolute' };
+        let best = null;
+        let tie = false;
+        for (const key of Object.keys(fileMap)) {
+            const k = String(key).toLowerCase();
+            if (!k || !lower.endsWith('/' + k)) continue;
+            if (!best || k.length > best.length) { best = key; tie = false; } else if (k.length === best.length) tie = true;
+        }
+        return best && !tie ? { key: best, how: 'suffix' } : null;
     }
     const want = normPath(ref);
     if (!want) return null;
@@ -3057,12 +3083,18 @@ const findFilesForRef = (fileMap, ref, opts) => {
         const raw = String(ref || '');
         const splitParts = raw.split(/<UDIM>/i);
         if (splitParts.length !== 2) return [];
-        const prefix = splitParts[0], suffix = splitParts[1];
+        // An absolute tile ref matches the host's absolute paths (fileMap.__absIndex) instead of keys.
+        const absOn = (opts && typeof opts.absoluteFsRefs === 'boolean' ? opts.absoluteFsRefs : (typeof host === 'undefined' || host.absoluteFsRefs() !== false));
+        const absIndex = absOn && /^(?:[a-zA-Z]:[\\/]|[\\/]{2})/.test(raw) && fileMap.__absIndex ? fileMap.__absIndex : null;
+        const prefix = absIndex ? joinRefPath('', splitParts[0] + '_').slice(0, -1).toLowerCase() : splitParts[0];
+        const suffix = absIndex ? splitParts[1].replace(/\\/g, '/').toLowerCase() : splitParts[1];
         const hits = [];
-        for (const key of Object.keys(fileMap)) {
-            if (!key.startsWith(prefix) || !key.endsWith(suffix)) continue;
-            const end = suffix.length ? key.length - suffix.length : key.length;
-            const codeText = key.slice(prefix.length, end);
+        for (const candidate of (absIndex ? Object.keys(absIndex) : Object.keys(fileMap))) {
+            const key = absIndex ? absIndex[candidate] : candidate;
+            if (!candidate.startsWith(prefix) || !candidate.endsWith(suffix)) continue;
+            if (absIndex && !Object.prototype.hasOwnProperty.call(fileMap, key)) continue;
+            const end = suffix.length ? candidate.length - suffix.length : candidate.length;
+            const codeText = candidate.slice(prefix.length, end);
             if (!/^\d{4}$/.test(codeText)) continue;
             const code = Number(codeText);
             if (code < 1001) continue;

@@ -42,6 +42,7 @@ test('host hooks default to the unmodified page behaviour and survive a snapshot
     samplerBudgetOverride: null,
     perfLog: false,
     debugShaders: false,
+    absoluteFsRefs: true,
   });
   MtlxGenCore.setHostFromSnapshot({ lightLimit: false, specularEnvMethod: 'fis', samplerBudgetOverride: 12 });
   const next = MtlxGenCore.hostSnapshot();

@@ -7,6 +7,9 @@
     // In the VS Code extension the host sends the stage's file set
     // ('mtlx-load-scene'); pickers, drop and the example are hidden there.
     const IN_VSCODE = !!window.__MTLX_VSCODE__;
+    // The desktop app's main process sends scene file sets the same way (electron/preload/glue.js);
+    // unlike VS Code, pickers and drop stay available there.
+    const IN_ELECTRON = !!window.__MTLX_ELECTRON__;
     const ROOT_EXTENSIONS = ['.usd', '.usda', '.usdc', '.usdz'];
     // glTF/OBJ/pbrt/Mitsuba (.xml) roots route through window.MtlxSceneSources (js/usd-scene-sources.js)
     // instead of the USD worker; see detectRootKind() and load() below.
@@ -2421,6 +2424,20 @@
         });
         const load = async (loadFiles = filesRef.current, loadRoot = rootPath, options = {}) => {
             if (!loadRoot) { setError('Select one root layer before loading.'); setStatus('error'); return; }
+            // Desktop: a load the main process did not send is not a host load (no missing-file round trip).
+            if (IN_ELECTRON && !options.host) hostLoadRef.current = null;
+            // A lone .mtl (desktop file association or drop) opens as a MaterialX document in the Graph Editor.
+            if (/\.mtl$/i.test(loadRoot) && window.MtlxSceneSources && typeof window.MtlxSceneSources.convertMtlLibrary === 'function') {
+                try {
+                    const doc = await window.MtlxSceneSources.convertMtlLibrary(loadFiles, loadRoot);
+                    setStatus('idle');
+                    window.openInGraphEditor({ xml: doc.xml, name: doc.name, files: doc.files });
+                } catch (e) {
+                    const message = String(e && e.message || e);
+                    setError(message); setStatus('error'); setLoadErrorDetails(['[error] Scene failed to load: ' + message]);
+                }
+                return;
+            }
             // js/usd-scene-sources.js tells a glTF/OBJ root apart from a
             // USD one; its loaders resolve to the same neutral stage
             // payload, so everything downstream stays identical either way.
@@ -2454,7 +2471,7 @@
                 if (!mountedRef.current || controller.signal.aborted || generation !== generationRef.current) return;
                 // VS Code: layers the stage could not open are asked for before
                 // rendering; when the host finds any, its bigger set replaces this load.
-                if (IN_VSCODE && options.host && typeof window.__mtlxSceneReportMissing === 'function') {
+                if ((IN_VSCODE || IN_ELECTRON) && options.host && typeof window.__mtlxSceneReportMissing === 'function') {
                     const missing = unsentMissing(stageMissingEntries(result));
                     if (missing.length) {
                         updateProgress({ phase: 'parse', fraction: 1, label: 'Looking for ' + missing.length + ' missing file' + (missing.length === 1 ? '' : 's') }, generation);
@@ -2538,7 +2555,7 @@
             }
         };
         React.useEffect(() => {
-            if (!IN_VSCODE) return undefined;
+            if (!IN_VSCODE && !IN_ELECTRON) return undefined;
             const take = () => {
                 const payload = window.__mtlxPendingSceneImport;
                 window.__mtlxPendingSceneImport = null;
@@ -2657,7 +2674,7 @@
                     setHandle(nextHandle); setStatus('rendered');
                     // VS Code: textures and layers still missing once rendered go
                     // to the host; if it finds any, a bigger set reloads the scene.
-                    if (IN_VSCODE && hostLoadRef.current && typeof window.__mtlxSceneReportMissing === 'function') {
+                    if ((IN_VSCODE || IN_ELECTRON) && hostLoadRef.current && typeof window.__mtlxSceneReportMissing === 'function') {
                         const missing = unsentMissing(stageMissingEntries(stage).concat(renderMissingEntries(nextHandle, rootPath)));
                         if (missing.length) window.__mtlxSceneReportMissing(missing);
                     }
@@ -3170,6 +3187,8 @@
         const cancel = () => {
             generationRef.current += 1;
             if (abortRef.current) abortRef.current.abort();
+            // Desktop: also stops the main process's file collection and the fetches in flight.
+            if (IN_ELECTRON && typeof window.__mtlxSceneCancel === 'function') window.__mtlxSceneCancel();
             if (IN_VSCODE) {
                 // Also stops the host's file collection and the file fetches,
                 // leaving an empty viewport with a Reload action.

@@ -74,6 +74,44 @@
         "ext": "mtlx",
         "name": "MaterialX Document",
         "role": "Editor"
+      },
+      {
+        "ext": [
+          "usd",
+          "usda",
+          "usdc",
+          "usdz"
+        ],
+        "name": "USD Scene",
+        "description": "USD Scene",
+        "role": "Viewer"
+      },
+      {
+        "ext": [
+          "gltf",
+          "glb"
+        ],
+        "name": "glTF Scene",
+        "description": "glTF Scene",
+        "role": "Viewer"
+      },
+      {
+        "ext": "obj",
+        "name": "OBJ Model",
+        "description": "OBJ Model",
+        "role": "Viewer"
+      },
+      {
+        "ext": "mtl",
+        "name": "OBJ Material Library",
+        "description": "OBJ Material Library",
+        "role": "Viewer"
+      },
+      {
+        "ext": "pbrt",
+        "name": "pbrt Scene",
+        "description": "pbrt Scene",
+        "role": "Viewer"
       }
     ]
   }

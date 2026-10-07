@@ -8,6 +8,7 @@ const path = require('node:path');
 const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const docScanner = require('./doc-scanner');
+const sceneFileSet = require('./scene-file-set');
 const themePrefsLib = require('./theme-prefs');
 
 // macOS diverges on window chrome and menu layout, both decided at
@@ -44,7 +45,7 @@ const APP_HOST = 'playground';
 // js/site-header.js), plus 'home': the mobile nav's own Home link uses
 // '#!home' too, so it's the established hash for landing on Home, not
 // just shellRouteFor's unmatched-hash fallback.
-const ROUTE_HASHES = { docs: '#!docs', viewer: '#!viewer', compare: '#!compare', graph: '#!graph', home: '#!home' };
+const ROUTE_HASHES = { docs: '#!docs', viewer: '#!viewer', compare: '#!compare', graph: '#!graph', home: '#!home', scene: '#!scene' };
 const DEFAULT_ROUTE = 'graph';
 
 function urlForRoute(route) {
@@ -186,6 +187,10 @@ async function handleAppRequest(request) {
     if (url.hostname !== APP_HOST) {
         return plainTextResponse(404, isHead, 'Not found');
     }
+
+    // Scene Viewer file sets: exact token + id lookup (scene-file-set.js).
+    const sceneResponse = await sceneFileSet.handleSceneRequest(url.pathname, isHead);
+    if (sceneResponse) return sceneResponse;
 
     const result = await resolveSiteFile(getSiteRoot(), url.pathname);
     if (result.status === 403) return plainTextResponse(403, isHead, 'Forbidden');
@@ -409,13 +414,18 @@ ipcMain.handle('mtlx-open-recent', (event, filePath) => {
 // openPath): mirrors mtlx-open-recent's validation, then routes through
 // openInNewWindow like any other OS-driven open.
 ipcMain.handle('mtlx-open-path', (event, filePath) => {
+    // A dropped scene file (USD, glTF/GLB, OBJ, MTL, pbrt) opens in the Scene Viewer.
+    if (typeof filePath === 'string' && sceneFileSet.isSceneRootPath(filePath) && isExistingFile(filePath)) {
+        openSceneFromDrop(BrowserWindow.fromWebContents(event.sender), path.resolve(filePath));
+        return { ok: true };
+    }
     if (typeof filePath !== 'string' || !filePath || !fsSync.existsSync(filePath) || !/\.mtlx$/i.test(filePath)) {
         const sender = BrowserWindow.fromWebContents(event.sender);
         const base = typeof filePath === 'string' ? path.basename(filePath) : String(filePath);
         sendNotice(sender, {
             kind: 'open-path-rejected',
             level: 'warn',
-            text: 'Could not open ' + base + ': the file is missing or is not a .mtlx document.',
+            text: 'Could not open ' + base + ': the file is missing or is not a .mtlx document or a scene file.',
         });
         return { ok: false };
     }
@@ -789,7 +799,7 @@ function getMtlxArg(argv) {
 function getRouteArg(argv) {
     for (const a of argv) {
         if (typeof a !== 'string') continue;
-        const m = /^--mtlx-route=(docs|viewer|compare|graph)$/.exec(a);
+        const m = /^--mtlx-route=(docs|viewer|compare|graph|scene)$/.exec(a);
         if (m) return m[1];
     }
     return null;
@@ -865,6 +875,225 @@ async function runSmokeOpen(filePath) {
         finishSmoke(false, errMsg(e));
     }
 }
+
+// ---------------------------------------------------------------------
+// Scene Viewer disk access (scene-file-set.js). Protocol, ported from
+// vscode_extension/src/sceneProvider.js (seq: one open or reload; round:
+// the sets sent for it, 0 being the static collection):
+//   main -> page  'mtlx-scene-progress' { seq, found, bytes } while collecting
+//                 'mtlx-open-scene' { seq, round, name, root, fileUrls, mtimes, sizes, abs, totalBytes }
+//   page -> main  invoke 'mtlx-scene-missing' { seq, missing: [{ asset, introducedBy }] } -> { added, stillMissing }
+//                 'mtlx-scene-cancel' { seq }, 'mtlx-scene-reload'
+// One session per window, disposed on the next scene load or window close.
+
+// Image types the Scene Viewer decodes: js/shared/texture-formats.js is the source of truth.
+const SCENE_TEXTURE_EXTS = (() => {
+    try {
+        return require(path.join(getSiteRoot(), 'js', 'shared', 'texture-formats.js')).MTLX_TEXTURE_EXTS;
+    } catch (e) {
+        return undefined; // scene-file-set.js keeps its own copy of the list
+    }
+})();
+const SCENE_PROGRESS_INTERVAL_MS = 120;
+
+function isExistingFile(filePath) {
+    try {
+        return fsSync.statSync(filePath).isFile();
+    } catch (e) {
+        return false;
+    }
+}
+
+function sendToWindow(win, channel, payload) {
+    if (!win || win.isDestroyed()) return;
+    if (win.webContents.isLoading()) {
+        win.webContents.once('did-finish-load', () => { if (!win.isDestroyed()) win.webContents.send(channel, payload); });
+    } else {
+        win.webContents.send(channel, payload);
+    }
+}
+
+function disposeWindowScene(state) {
+    if (state && state.scene) {
+        sceneFileSet.disposeSession(state.scene.session);
+        state.scene = null;
+    }
+}
+
+// Called once per window from createWindow: a closed window drops its session.
+function trackWindowScenes(win) {
+    const state = getWindowState(win);
+    state.scene = null;
+    state.sceneSeq = 0;
+    state.sceneRootPath = null;
+    win.on('closed', () => disposeWindowScene(state));
+}
+
+function postSceneSet(win, scene) {
+    if (!win || win.isDestroyed()) return;
+    const snap = scene.session.snapshot();
+    const base = APP_SCHEME + '://' + APP_HOST;
+    const fileUrls = {};
+    const mtimes = {};
+    const sizes = {};
+    const abs = {};
+    for (const f of snap.files) {
+        fileUrls[f.rel] = base + sceneFileSet.filePathFor(scene.session, f);
+        mtimes[f.rel] = f.mtime;
+        sizes[f.rel] = f.size;
+        abs[f.rel] = f.abs;
+    }
+    snap.warnings.forEach((w) => console.warn('[main] scene "' + scene.name + '": ' + w));
+    sendToWindow(win, 'mtlx-open-scene', {
+        seq: scene.seq, round: scene.round, name: scene.name, root: snap.root,
+        fileUrls, mtimes, sizes, abs, totalBytes: snap.totalBytes,
+    });
+}
+
+// Collects rootPath's file set and sends it to win's Scene Viewer.
+async function openSceneFromDisk(rootPath, win) {
+    if (!win || win.isDestroyed()) return;
+    const state = getWindowState(win);
+    disposeWindowScene(state);
+    const seq = ++state.sceneSeq;
+    const name = path.basename(rootPath);
+    state.sceneRootPath = rootPath;
+    const live = () => !win.isDestroyed() && !!state.scene && state.scene.seq === seq && !state.scene.cancelled;
+    let lastProgress = 0;
+    const session = sceneFileSet.createSession(rootPath, {
+        textureExts: SCENE_TEXTURE_EXTS,
+        isCancelled: () => !live(),
+        onProgress: (p) => {
+            const now = Date.now();
+            if (now - lastProgress < SCENE_PROGRESS_INTERVAL_MS) return;
+            lastProgress = now;
+            sendToWindow(win, 'mtlx-scene-progress', { seq, found: p.found, bytes: p.bytes });
+        },
+    });
+    state.scene = { seq, session, name, round: 0, cancelled: false, missingChain: Promise.resolve() };
+    try {
+        await session.init();
+    } catch (e) {
+        if ((e && e.cancelled) || !live()) return;
+        disposeWindowScene(state);
+        dialog.showErrorBox('MaterialX Playground', 'Could not open "' + rootPath + '": ' + errMsg(e));
+        return;
+    }
+    if (!live()) return;
+    postSceneSet(win, state.scene);
+}
+
+// Shows the Scene Viewer in win and loads rootPath there.
+function openSceneIn(win, rootPath) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+    setWindowRoute(win, 'scene');
+    openSceneFromDisk(rootPath, win);
+}
+
+// A lone .mtl opens as a document in the Graph Editor, so a window with
+// unsaved graph edits is never reused for it.
+function sceneTargetUsable(win, rootPath) {
+    return !!win && !win.isDestroyed() && !(/\.mtl$/i.test(rootPath) && getWindowState(win).dirty);
+}
+
+// OS-driven scene opens (file association, second launch, macOS open-file).
+function openSceneRouted(rootPath) {
+    const target = openInNewWindow ? null : getRoutingTargetWindow();
+    if (!sceneTargetUsable(target, rootPath)) {
+        openSceneFromDisk(rootPath, createWindow('scene'));
+        return;
+    }
+    openSceneIn(target, rootPath);
+}
+
+// A scene file dropped on a window (glue.js's __mtlxDesktopPathDrop).
+function openSceneFromDrop(sender, rootPath) {
+    if (openInNewWindow) {
+        openSceneRouted(rootPath);
+        return;
+    }
+    const target = sceneTargetUsable(sender, rootPath) ? sender : null;
+    if (target) openSceneIn(target, rootPath);
+    else openSceneFromDisk(rootPath, createWindow('scene'));
+}
+
+// First argv entry naming an existing scene file (association launch args).
+function getSceneArg(argv) {
+    for (const a of argv) {
+        if (typeof a === 'string' && !a.startsWith('--') && sceneFileSet.isSceneRootPath(a) && isExistingFile(a)) return path.resolve(a);
+    }
+    return null;
+}
+
+ipcMain.handle('mtlx-scene-missing', (event, msg) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const state = win ? windowStates.get(win) : null;
+    const scene = state && state.scene;
+    const none = { added: 0, stillMissing: 0 };
+    if (!scene || !msg || msg.seq !== scene.seq || scene.cancelled || !Array.isArray(msg.missing)) return none;
+    const run = async () => {
+        if (state.scene !== scene || scene.cancelled) return none;
+        let result;
+        try {
+            result = await scene.session.resolveMissing(msg.missing);
+        } catch (e) {
+            if (!(e && e.cancelled)) console.error('[main] scene "' + scene.name + '": looking up missing files failed: ' + errMsg(e));
+            return none;
+        }
+        if (state.scene !== scene || scene.cancelled || result.limited || !result.tried) return none;
+        scene.round = result.round;
+        if (result.stillMissing.length) console.warn('[main] scene "' + scene.name + '": round ' + result.round + ' could not find ' + result.stillMissing.length + ' file(s)');
+        if (result.added.length) postSceneSet(win, scene);
+        return { added: result.added.length, stillMissing: result.stillMissing.length };
+    };
+    const reply = scene.missingChain.then(run, run);
+    scene.missingChain = reply.catch(() => none);
+    return reply;
+});
+
+ipcMain.on('mtlx-scene-cancel', (event, msg) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const state = win ? windowStates.get(win) : null;
+    if (!state || !state.scene) return;
+    if (msg && typeof msg.seq === 'number' && msg.seq < state.scene.seq) return; // about an older set
+    state.scene.cancelled = true;
+    disposeWindowScene(state);
+});
+
+ipcMain.on('mtlx-scene-reload', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const state = win ? windowStates.get(win) : null;
+    if (state && state.sceneRootPath) openSceneFromDisk(state.sceneRootPath, win);
+});
+
+// MTLX_SMOKE_OPEN_SCENE harness: opens a scene file in a fresh window and
+// waits for the Scene Viewer status to reach 'rendered' (or 'error').
+async function runSmokeOpenScene(filePath) {
+    try {
+        const win = createWindow('scene');
+        await new Promise((resolve) => win.webContents.once('did-finish-load', resolve));
+        await openSceneFromDisk(filePath, win);
+        const deadline = Date.now() + SMOKE_DEADLINE_MS;
+        let status = '';
+        while (Date.now() < deadline) {
+            try {
+                status = await win.webContents.executeJavaScript(
+                    "(document.querySelector('[data-testid=usd-scene-status]') || {}).textContent || ''"
+                );
+            } catch (e) {
+                status = '';
+            }
+            if (status === 'rendered') { finishSmoke(true, 'scene rendered: ' + filePath); return; }
+            if (status === 'error') break;
+            await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+        finishSmoke(false, 'scene status "' + status + '" for ' + filePath);
+    } catch (e) {
+        finishSmoke(false, errMsg(e));
+    }
+}
+// --------------------------------------------------- end Scene Viewer disk access
 
 // Path for our own menu-facing "Open Recent" list; additive to (not a
 // replacement for) app.addRecentDocument's OS-level jump-list integration.
@@ -1682,6 +1911,7 @@ function createWindow(route) {
     // 'closed' cleanup (watcher teardown, map entry removal) must be in
     // place from the start.
     getWindowState(win);
+    trackWindowScenes(win);
 
     // Tracks the single-window routing target (openMtlxRouted below):
     // the most recently focused window, cleared again once it closes.
@@ -1970,6 +2200,11 @@ if (!gotLock) {
             openMtlxRoutedTo(filePath, route);
             return;
         }
+        const scenePath = getSceneArg(argv);
+        if (scenePath) {
+            openSceneRouted(scenePath);
+            return;
+        }
         if (route) {
             openRouteRouted(route);
             return;
@@ -1991,7 +2226,8 @@ if (!gotLock) {
             pendingOpenFilePath = path.resolve(filePath);
             return;
         }
-        openMtlxRouted(path.resolve(filePath));
+        if (sceneFileSet.isSceneRootPath(filePath)) openSceneRouted(path.resolve(filePath));
+        else openMtlxRouted(path.resolve(filePath));
     });
 
     // GPU-process crash notices, plus a safe-mode offer after repeated
@@ -2088,8 +2324,15 @@ if (!gotLock) {
             runSmokeOpen(path.resolve(process.env.MTLX_SMOKE_OPEN));
             return;
         }
+        if (process.env.MTLX_SMOKE_OPEN_SCENE) {
+            runSmokeOpenScene(path.resolve(process.env.MTLX_SMOKE_OPEN_SCENE));
+            return;
+        }
 
-        const argFile = pendingOpenFilePath || getMtlxArg(process.argv);
+        // A macOS open-file before ready, or an association launch arg, may name a scene.
+        const pendingScene = pendingOpenFilePath && sceneFileSet.isSceneRootPath(pendingOpenFilePath) ? pendingOpenFilePath : null;
+        const argFile = pendingScene ? null : (pendingOpenFilePath || getMtlxArg(process.argv));
+        const argScene = argFile ? null : (pendingScene || getSceneArg(process.argv));
         const argRoute = getRouteArg(process.argv);
         pendingOpenFilePath = null;
         // Always honor an explicit route: it must not be dropped just
@@ -2097,9 +2340,11 @@ if (!gotLock) {
         // above). With no route: a file open lands in documentOpenView,
         // and a bare launch lands on Home (the renderer itself hops to
         // the graph editor if a crash-recovery draft is waiting).
-        const launchRoute = argRoute || (argFile ? documentOpenView : 'home');
+        // A scene file always lands in the Scene Viewer.
+        const launchRoute = argScene ? 'scene' : (argRoute || (argFile ? documentOpenView : 'home'));
         const win = createWindow(launchRoute);
         if (argFile) openMtlxFromDisk(argFile, win, false);
+        else if (argScene) openSceneFromDisk(argScene, win);
 
         app.on('activate', () => {
             if (BrowserWindow.getAllWindows().length === 0) createWindow('home');

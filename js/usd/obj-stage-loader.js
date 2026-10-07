@@ -4,7 +4,8 @@
 // THREE r128 (OBJLoader) is the window global already loaded by
 // index.html; this module never imports three itself.
 
-import { objMtlDocument, parseMtl, sanitizeMtlxName } from "./mtlx-material-docs.js";
+import { objMtlDocument, mtlLibraryDocument, parseMtl, sanitizeMtlxName } from "./mtlx-material-docs.js";
+import { isAbsoluteFsRef, absIndexOf, resolveAbsFsRef } from "./scene-import-common.js";
 
 function checkAborted(signal) {
   if (signal && signal.aborted) {
@@ -59,6 +60,14 @@ function indexByBasename(fileByPath) {
   return index;
 }
 
+// Drive-letter/UNC refs: the file loaded from that absolute path (desktop
+// app file sets), else a unique suffix match in the drop; null otherwise.
+function resolveAbsoluteEntry(ref, fileByPath) {
+  if (!isAbsoluteFsRef(ref)) return null;
+  const hit = resolveAbsFsRef(ref, absIndexOf(Array.from(fileByPath.values())), fileByPath.keys());
+  return hit && fileByPath.has(hit) ? hit : null;
+}
+
 // ---------------------------------------------------- pure, THREE-free parts
 
 // Every `mtllib` line's file names, in the order declared. A line can list
@@ -77,6 +86,8 @@ export function findMtllibNames(text) {
 // Resolves one mtllib reference: next to the .obj first, then anywhere in
 // the drop by basename. Returns the matching file path, or null.
 export function resolveMtllibPath(name, objDir, fileByPath, basenameIndex) {
+  const absolute = resolveAbsoluteEntry(name, fileByPath);
+  if (absolute) return absolute;
   const direct = joinPath(objDir, name);
   if (fileByPath.has(direct)) return direct;
   const base = basenameOf(name).toLowerCase();
@@ -90,6 +101,8 @@ export function resolveMtllibPath(name, objDir, fileByPath, basenameIndex) {
 export function resolveMtlTexturePath(record, mtlDir, objDir, fileByPath, basenameIndex) {
   if (!record || !record.path) return null;
   const raw = normalizePath(record.path);
+  const absolute = resolveAbsoluteEntry(raw, fileByPath);
+  if (absolute) return absolute;
   const fromMtl = joinPath(mtlDir, raw);
   if (fileByPath.has(fromMtl)) return fromMtl;
   const fromObj = joinPath(objDir, raw);
@@ -496,4 +509,33 @@ export async function loadObjStage({ files, rootPath, signal, onProgress } = {})
     warnings,
     transfer: [],
   };
+}
+
+// A lone .mtl library as one MaterialX document (every newmtl material) for
+// the Graph Editor: { xml, name, files }. Texture values are kept relative to
+// the .mtl's folder and files holds each resolved texture under that value.
+export async function convertMtlLibrary({ files, rootPath } = {}) {
+  const fileByPath = new Map();
+  for (const entry of Array.isArray(files) ? files : []) {
+    if (entry && entry.path) fileByPath.set(normalizePath(entry.path), entry);
+  }
+  const root = normalizePath(rootPath);
+  const rootFile = fileByPath.get(root);
+  if (!rootFile) throw new Error("Material library not found: " + root);
+  const mtlDir = dirOf(root);
+  const basenameIndex = indexByBasename(fileByPath);
+  const text = new TextDecoder().decode(await toArrayBuffer(rootFile.data));
+  const materials = parseMtl(text);
+  if (!materials.size) throw new Error(basenameOf(root) + " has no newmtl materials");
+  const outFiles = {};
+  const textureRefs = (record) => {
+    const resolved = resolveMtlTexturePath(record, mtlDir, mtlDir, fileByPath, basenameIndex);
+    if (!resolved) return null;
+    const value = mtlDir && resolved.startsWith(mtlDir + "/") ? resolved.slice(mtlDir.length + 1) : resolved;
+    outFiles[value] = fileByPath.get(resolved).data;
+    return value;
+  };
+  const doc = mtlLibraryDocument({ materials, textureRefs });
+  const name = basenameOf(root).replace(/\.mtl$/i, "") || "materials";
+  return { xml: doc.xml, name, files: outFiles, materialNames: doc.materialNames, notes: doc.notes };
 }
