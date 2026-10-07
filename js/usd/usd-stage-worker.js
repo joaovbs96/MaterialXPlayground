@@ -2157,6 +2157,15 @@ const IMPORTED_LIGHT_TYPES = new Set([
   "domelight", "distantlight", "spherelight", "rectlight", "disklight", "cylinderlight",
 ]);
 
+// A dome expects a texture when the file attribute is authored (even empty) or a V-Ray dome is switched to use one.
+function textureExpectation(leafMap, valueOf) {
+  if (leafMap.get("inputs:texture:file")?.isAuthored === true) return { expected: true, reason: "authored" };
+  const vray = leafMap.get("vray:LightDome_use_dome_tex");
+  const v = valueOf("vray:LightDome_use_dome_tex");
+  if (vray?.isAuthored !== false && v && v !== "0" && v !== "false") return { expected: true, reason: "vray" };
+  return { expected: false, reason: null };
+}
+
 function collectLights(api, root, graph, warn, evaluatedTransforms = null) {
   const entries = graphEntriesOfType(graph, name => name.endsWith("light"));
   const lights = [];
@@ -2183,7 +2192,8 @@ function collectLights(api, root, graph, warn, evaluatedTransforms = null) {
       matrix: evaluatedTransforms?.get(primPath) ?? matrix,
       textureFile: valueOf("inputs:texture:file") ?? null,
       // Authored with an empty value is not the same as absent (flat dome).
-      textureAuthored: leafMap.get("inputs:texture:file")?.isAuthored === true,
+      textureExpected: textureExpectation(leafMap, valueOf).expected,
+      textureExpectedReason: textureExpectation(leafMap, valueOf).reason,
       textureFormat: valueOf("inputs:texture:format") ?? "automatic",
       intensity: numberOf("inputs:intensity", LIGHT_DEFAULTS.intensity),
       exposure: numberOf("inputs:exposure", LIGHT_DEFAULTS.exposure),

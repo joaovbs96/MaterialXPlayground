@@ -46,3 +46,11 @@ test('@scene dome without a texture keeps the flat colour', async ({ page, embed
   const dome = await loadDome(page, embedURL, domeUsda('        color3f inputs:color = (0.2, 0.4, 0.8)'));
   expect(dome.fileName).toBe('dome colour');
 });
+
+test('@scene V-Ray dome set to use a texture that was not exported keeps the default environment', async ({ page, embedURL }) => {
+  test.setTimeout(240000);
+  const dome = await loadDome(page, embedURL, domeUsda('        color3f inputs:color = (1, 1, 1)\n        custom int vray:LightDome_use_dome_tex = 1'));
+  expect(dome.fileName).toBe('default environment');
+  await page.getByTestId('usd-scene-diagnostics-button').click();
+  await expect(page.getByTestId('usd-scene-diagnostics-popover')).toContainText('V-Ray dome is set to use a texture that was not exported');
+});

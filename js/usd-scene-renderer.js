@@ -513,7 +513,7 @@ const sceneDomeOrientation = (matrix) => {
 };
 
 // How a dome's texture attribute reads: a file path, authored but empty, or not authored.
-const sceneDomeTextureMode = (dome) => (dome && dome.textureFile ? 'file' : (dome && dome.textureAuthored ? 'empty' : 'flat'));
+const sceneDomeTextureMode = (dome) => (dome && dome.textureFile ? 'file' : (dome && dome.textureExpected ? 'empty' : 'flat'));
 
 // Builds the environment a stage's own dome light describes, so a stage
 // renders under the lighting it was authored with. Returns null when the
@@ -539,7 +539,9 @@ const sceneDomeEnvironment = async (stage, fileMap, warnings, defaultEnv) => {
             if (hit) { env = hit.env; fileName = hit.fileName; }
         };
         if (mode === 'empty') {
-            useDefault('is empty or could not be loaded');
+            useDefault(dome.textureExpectedReason === 'vray'
+                ? 'is not available: the V-Ray dome is set to use a texture that was not exported'
+                : 'is empty or could not be loaded');
         } else if (mode === 'file') {
             const resolved = sceneResolveDomeTexture(fileMap, stage, dome.textureFile);
             if (!resolved.path) {
