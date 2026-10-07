@@ -677,19 +677,20 @@ function mtlFile(ctx, record, label) {
   return file;
 }
 
-export function objMtlDocument({ name, mtl, textureRefs } = {}) {
+// One OBJ/MTL material's open_pbr_surface, appended to ctx.doc; `prefix` keeps
+// node names apart when several materials share one document.
+function mtlShader(ctx, name, mtl, prefix = "") {
   const source = mtl || {};
-  const doc = createDocument();
-  const ctx = { doc, textureRefs, notes: [] };
+  const doc = ctx.doc;
   const shader = doc.addNode("open_pbr_surface", "SR_" + (name || "material"), "surfaceshader");
 
   // Base color: map_Kd modulated by Kd when Kd is not white.
   const kd = Array.isArray(source.Kd) ? source.Kd : [0.8, 0.8, 0.8];
   const kdFile = mtlFile(ctx, source.map_Kd, "base color");
   if (kdFile) {
-    const image = applyMtlImageCommon(ctx, doc.addNode("image", "base_color_image", "color3"), kdFile, source.map_Kd.options, SRGB);
+    const image = applyMtlImageCommon(ctx, doc.addNode("image", prefix + "base_color_image", "color3"), kdFile, source.map_Kd.options, SRGB);
     if (kd.some(v => num(v, 1) !== 1)) {
-      const mul = doc.addNode("multiply", "base_color_tint", "color3");
+      const mul = doc.addNode("multiply", prefix + "base_color_tint", "color3");
       connect(mul, "in1", "color3", image);
       setInput(mul, "in2", "color3", { value: formatVector(kd, 3, 1) });
       connect(shader, "base_color", "color3", mul);
@@ -706,7 +707,7 @@ export function objMtlDocument({ name, mtl, textureRefs } = {}) {
   if (Number.isFinite(source.Pr)) roughness = source.Pr;
   const prFile = mtlFile(ctx, source.map_Pr, "roughness");
   if (prFile) {
-    const image = applyMtlImageCommon(ctx, doc.addNode("image", "roughness_image", "float"), prFile, source.map_Pr.options);
+    const image = applyMtlImageCommon(ctx, doc.addNode("image", prefix + "roughness_image", "float"), prFile, source.map_Pr.options);
     connect(shader, "specular_roughness", "float", image);
   } else {
     setInput(shader, "specular_roughness", "float", { value: formatNumber(roughness) });
@@ -715,7 +716,7 @@ export function objMtlDocument({ name, mtl, textureRefs } = {}) {
   // Metalness.
   const pmFile = mtlFile(ctx, source.map_Pm, "metalness");
   if (pmFile) {
-    const image = applyMtlImageCommon(ctx, doc.addNode("image", "metalness_image", "float"), pmFile, source.map_Pm.options);
+    const image = applyMtlImageCommon(ctx, doc.addNode("image", prefix + "metalness_image", "float"), pmFile, source.map_Pm.options);
     connect(shader, "base_metalness", "float", image);
   } else if (Number.isFinite(source.Pm)) {
     setInput(shader, "base_metalness", "float", { value: formatNumber(source.Pm) });
@@ -728,7 +729,7 @@ export function objMtlDocument({ name, mtl, textureRefs } = {}) {
   const opacity = Number.isFinite(source.d) ? source.d : Number.isFinite(source.Tr) ? 1 - source.Tr : 1;
   const dFile = mtlFile(ctx, source.map_d, "opacity");
   if (dFile) {
-    const image = applyMtlImageCommon(ctx, doc.addNode("image", "opacity_image", "float"), dFile, source.map_d.options);
+    const image = applyMtlImageCommon(ctx, doc.addNode("image", prefix + "opacity_image", "float"), dFile, source.map_d.options);
     connect(shader, "geometry_opacity", "float", image);
   } else if (opacity !== 1) {
     setInput(shader, "geometry_opacity", "float", { value: formatNumber(opacity) });
@@ -738,7 +739,7 @@ export function objMtlDocument({ name, mtl, textureRefs } = {}) {
   const ke = Array.isArray(source.Ke) ? source.Ke : null;
   const keFile = mtlFile(ctx, source.map_Ke, "emission");
   if (keFile) {
-    const image = applyMtlImageCommon(ctx, doc.addNode("image", "emission_image", "color3"), keFile, source.map_Ke.options, SRGB);
+    const image = applyMtlImageCommon(ctx, doc.addNode("image", prefix + "emission_image", "color3"), keFile, source.map_Ke.options, SRGB);
     connect(shader, "emission_color", "color3", image);
     setInput(shader, "emission_luminance", "float", { value: "1" });
   } else if (ke && ke.some(v => num(v, 0) !== 0)) {
@@ -751,19 +752,19 @@ export function objMtlDocument({ name, mtl, textureRefs } = {}) {
   const bumpRecord = source.map_Bump || source.bump;
   const normalFile = mtlFile(ctx, normalRecord, "normal map");
   if (normalFile) {
-    const image = applyMtlImageCommon(ctx, doc.addNode("image", "normal_image", "vector3"), normalFile, normalRecord.options);
-    const normalmap = doc.addNode("normalmap", "normal_map", "vector3");
+    const image = applyMtlImageCommon(ctx, doc.addNode("image", prefix + "normal_image", "vector3"), normalFile, normalRecord.options);
+    const normalmap = doc.addNode("normalmap", prefix + "normal_map", "vector3");
     connect(normalmap, "in", "vector3", image);
     connect(shader, "geometry_normal", "vector3", normalmap);
   } else {
     const bumpFile = mtlFile(ctx, bumpRecord, "bump map");
     if (bumpFile) {
-      const image = applyMtlImageCommon(ctx, doc.addNode("image", "bump_image", "float"), bumpFile, bumpRecord.options);
-      const height = doc.addNode("heighttonormal", "bump_to_normal", "vector3");
+      const image = applyMtlImageCommon(ctx, doc.addNode("image", prefix + "bump_image", "float"), bumpFile, bumpRecord.options);
+      const height = doc.addNode("heighttonormal", prefix + "bump_to_normal", "vector3");
       connect(height, "in", "float", image);
       const bm = Number(bumpRecord.options && bumpRecord.options.bm);
       setInput(height, "scale", "float", { value: formatNumber(Number.isFinite(bm) ? bm : 1) });
-      const normalmap = doc.addNode("normalmap", "bump_normal_map", "vector3");
+      const normalmap = doc.addNode("normalmap", prefix + "bump_normal_map", "vector3");
       connect(normalmap, "in", "vector3", height);
       connect(shader, "geometry_normal", "vector3", normalmap);
     }
@@ -774,9 +775,36 @@ export function objMtlDocument({ name, mtl, textureRefs } = {}) {
     setInput(shader, "transmission_weight", "float", { value: formatNumber(1 - opacity) });
   }
 
+  return shader;
+}
+
+export function objMtlDocument({ name, mtl, textureRefs } = {}) {
+  const doc = createDocument();
+  const ctx = { doc, textureRefs, notes: [] };
+  const shader = mtlShader(ctx, name, mtl);
   noteRepeatedImages(ctx);
   const result = finish(doc, shader, "M_" + (name || "material"));
   return { xml: result.xml, materialName: result.materialName, shaderName: result.shaderName, notes: ctx.notes };
+}
+
+// Every newmtl of a .mtl library in one document: SR_<name> open_pbr_surface
+// plus M_<name> surfacematerial per material, names made unique.
+export function mtlLibraryDocument({ materials, textureRefs } = {}) {
+  const doc = createDocument();
+  const ctx = { doc, textureRefs, notes: [] };
+  const materialNames = [];
+  const entries = materials instanceof Map ? Array.from(materials.entries()) : Object.entries(materials || {});
+  for (const [rawName, record] of entries) {
+    const name = sanitizeMtlxName(rawName);
+    const before = ctx.notes.length;
+    const shader = mtlShader(ctx, name, record, name + "_");
+    const material = doc.addNode("surfacematerial", "M_" + name, "material");
+    connect(material, "surfaceshader", "surfaceshader", shader);
+    materialNames.push(material.name);
+    for (let i = before; i < ctx.notes.length; i++) ctx.notes[i] = material.name + ": " + ctx.notes[i];
+  }
+  noteRepeatedImages(ctx);
+  return { xml: doc.toXml(), materialNames, notes: ctx.notes };
 }
 
 // --------------------------------------------------------- UsdPreviewSurface

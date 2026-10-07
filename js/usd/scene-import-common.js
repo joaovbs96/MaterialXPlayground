@@ -39,6 +39,10 @@ export async function toArrayBuffer(data) {
 // the root file, then a unique basename anywhere in the drop.
 export function resolveScenePath(ref, fromDir, rootDir, fileByPath) {
   const raw = normalizePath(ref);
+  if (isAbsoluteFsRef(raw)) {
+    const hit = resolveAbsFsRef(raw, absIndexOf(Array.from(fileByPath.values())), fileByPath.keys());
+    if (hit) return hit;
+  }
   for (const candidate of [joinPath(fromDir, raw), joinPath(rootDir, raw)]) {
     if (fileByPath.has(candidate)) return candidate;
   }
@@ -50,6 +54,48 @@ export function resolveScenePath(ref, fromDir, rootDir, fileByPath) {
     hit = path;
   }
   return hit;
+}
+
+// Drive-letter (`L:/`, `L:\`) and UNC (`//server`, `\\server`) refs are
+// absolute filesystem paths, not URL schemes. The desktop app tags each file
+// it loads from disk with its absolute path (File.__mtlxAbsPath).
+// Off in the VS Code webview, which keeps its earlier handling of such refs.
+export const absoluteFsRefsEnabled = () => !(typeof globalThis !== "undefined" && globalThis.__MTLX_VSCODE__);
+export const isAbsoluteFsRef = (ref) => absoluteFsRefsEnabled() && /^(?:[a-zA-Z]:[\\/]|[\\/]{2}(?![\\/]))/.test(String(ref ?? ""));
+
+// Forward slashes, dot segments resolved, `//` kept for UNC; lowercased for matching.
+export function absFsKey(ref) {
+  const raw = normalizePath(ref);
+  const m = absoluteFsRefsEnabled() ? /^(?:[a-zA-Z]:\/|\/\/)/.exec(raw) : null;
+  if (!m) return "";
+  return (m[0] + joinPath("", raw.slice(m[0].length))).toLowerCase();
+}
+
+// absFsKey -> file path, from the entries' __mtlxAbsPath tags (or an `abs` field).
+export function absIndexOf(entries) {
+  const index = new Map();
+  for (const entry of entries || []) {
+    const abs = entry && ((entry.data && entry.data.__mtlxAbsPath) || entry.abs);
+    if (entry && entry.path && typeof abs === "string" && isAbsoluteFsRef(abs)) index.set(absFsKey(abs), normalizePath(entry.path));
+  }
+  return index;
+}
+
+// An absolute ref's file: the host's absolute index first, then the
+// longest file path that is a unique suffix of the ref (a dropped folder).
+export function resolveAbsFsRef(ref, absIndex, paths) {
+  const key = absFsKey(ref);
+  if (!key) return null;
+  if (absIndex && absIndex.has(key)) return absIndex.get(key);
+  let best = null;
+  let bestLength = 0;
+  let tie = false;
+  for (const path of paths || []) {
+    const lower = normalizePath(path).toLowerCase();
+    if (!lower || !key.endsWith("/" + lower)) continue;
+    if (lower.length > bestLength) { best = path; bestLength = lower.length; tie = false; } else if (lower.length === bestLength) tie = true;
+  }
+  return tie ? null : best;
 }
 
 // Collects warnings once each, in first-seen order.

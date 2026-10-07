@@ -69,6 +69,7 @@ MtlxGenCore.setHost({
     samplerBudgetOverride: () => (typeof window !== 'undefined' ? window.__mtlxSamplerBudgetOverride : undefined),
     perfLog: () => !!window.MTLX_PERF_LOG,
     debugShaders: () => DEBUG_SHADERS,
+    absoluteFsRefs: () => !window.__MTLX_VSCODE__,
 });
 // The three.js side of a material (uniforms, textures, geometry, lights) lives
 // in js/shared/mtlx-three-material.js so the thumbnail worker can build it too.

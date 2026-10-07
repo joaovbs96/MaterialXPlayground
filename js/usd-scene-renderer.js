@@ -411,8 +411,12 @@ const sceneArray = (value) => value == null ? [] : (Array.isArray(value) ? value
 
 const sceneFileMap = (files, stage) => {
     const map = {};
+    // Desktop app: lowercased absolute path -> key, from File.__mtlxAbsPath
+    // (electron/preload/glue.js); non-enumerable, read by findFileForRef.
+    const absIndex = {};
     const add = (entry) => {
         if (!entry || !entry.path || entry.data == null) return;
+        if (typeof entry.data.__mtlxAbsPath === 'string') absIndex[entry.data.__mtlxAbsPath.replace(/\\/g, '/').toLowerCase()] = String(entry.path).replace(/\\/g, '/');
         // MaterialX texture binding expects Blob-like values. Blob/File
         // inputs are immutable; avoid duplicating large user-provided
         // ArrayBuffers before wrapping them.
@@ -433,6 +437,7 @@ const sceneFileMap = (files, stage) => {
     };
     sceneArray(files).forEach(add);
     sceneArray(stage && stage.assets).forEach(add);
+    if (Object.keys(absIndex).length) Object.defineProperty(map, '__absIndex', { value: absIndex, enumerable: false });
     return map;
 };
 
@@ -471,6 +476,12 @@ const sceneDomeTextureCandidates = (fileMap, stage) => {
 };
 const sceneResolveDomeTexture = (fileMap, stage, rawRef) => {
     const match = String(rawRef || '').trim().match(/^@(.*)@$/);
+    const authored = String(match ? match[1] : rawRef || '').replace(/\\/g, '/');
+    // Drive-letter and UNC paths resolve as absolute filesystem paths.
+    if (sceneAbsoluteFsRefs() && SCENE_ABS_FS_REF_RE.test(authored)) {
+        const hit = window.findFileForRef(fileMap, authored, { exact: true });
+        if (hit) return { path: hit.key, ref: authored };
+    }
     const ref = sceneNormPath(match ? match[1] : rawRef);
     if (!ref) return { path: null, reason: 'empty' };
     for (const dir of sceneDomeTextureCandidates(fileMap, stage)) {
@@ -625,6 +636,12 @@ const sceneUdimTiles = (ref, map) => {
 // included document still has its own declaring path; this keeps two
 // same-named textures in different layer directories distinct.
 const SCENE_CANONICAL_MARKER = '__MX_SCENE_CANONICAL__/';
+// Drive-letter (L:/, L:\) and UNC (//server, \\server) refs: absolute
+// filesystem paths, never URL schemes (which need two or more letters).
+const SCENE_ABS_FS_REF_RE = /^(?:[a-zA-Z]:[\\/]|[\\/]{2}(?![\\/]))/;
+const SCENE_URL_REF_RE = /^[a-z][a-z0-9+.-]+:/i;
+// VS Code keeps its earlier handling of absolute refs (treated as URLs, left as authored).
+const sceneAbsoluteFsRefs = () => !(typeof window !== 'undefined' && window.__MTLX_VSCODE__);
 const canonicalizeSceneFilenameInputs = (xml, declaringPath, map, finalize = false) => {
     // Some DCCs emit the USD/MaterialX UDIM token literally inside an XML
     // attribute. Escape it before parsing, while retaining the token for a
@@ -637,11 +654,13 @@ const canonicalizeSceneFilenameInputs = (xml, declaringPath, map, finalize = fal
     const base = sceneDir(declaringPath);
     const prefix = sceneFilePrefix(xml);
     const canonicalized = xml.replace(/<[^>]*\btype\s*=\s*(["'])filename\1[^>]*>/gi, (tag) => tag.replace(/\b(value|default)\s*=\s*(["'])(.*?)\2/i, (whole, attr, quote, ref) => {
-        if (!ref || ref.startsWith(SCENE_CANONICAL_MARKER) || /^(?:[a-z]+:|\/\/)/i.test(ref)) return whole;
+        const absOn = sceneAbsoluteFsRefs();
+        if (!ref || ref.startsWith(SCENE_CANONICAL_MARKER) || (absOn ? (SCENE_URL_REF_RE.test(ref) && !SCENE_ABS_FS_REF_RE.test(ref)) : /^(?:[a-z]+:|\/\/)/i.test(ref))) return whole;
         // Concatenate first, then normalize dot segments once. Normalizing
         // `../Texture` before adding the declaring directory loses the
         // document anchor and resolves Teapot/Looks/../Texture incorrectly.
-        const rooted = window.joinRefPath(base, String(prefix || '') + '/' + ref);
+        // An absolute ref ignores fileprefix, as MaterialX path joining does.
+        const rooted = window.joinRefPath(base, absOn && SCENE_ABS_FS_REF_RE.test(ref) ? ref : String(prefix || '') + '/' + ref);
         return attr + '=' + quote + SCENE_CANONICAL_MARKER + rooted + quote;
     }));
     // Once references are canonical, remove the active document prefix so
