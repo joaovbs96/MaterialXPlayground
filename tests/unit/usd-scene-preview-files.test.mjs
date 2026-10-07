@@ -59,3 +59,39 @@ test('the renderer map wins and containers in it are dropped', () => {
   const out = materialPreviewFiles(documentFiles, '', null);
   assert.deepEqual(Object.keys(out), ['tex.png']);
 });
+
+// singleMaterialDocument: the inspector's pruned document and only its textures.
+function loadSingleMaterialDocument() {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const source = fs.readFileSync(path.join(root, 'js', 'usd-scene-app.jsx'), 'utf8');
+  const start = source.indexOf('const CONTAINER_EXTENSIONS =');
+  const end = source.indexOf('const rootNamePattern =', start);
+  const context = {};
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(root, 'js', 'shared', 'mtlx-gen-core.js'), 'utf8'), context);
+  vm.runInContext(source.slice(start, end) + '\nthis.singleMaterialDocument = singleMaterialDocument;', context);
+  return context.singleMaterialDocument;
+}
+
+const TWO = '<?xml version="1.0"?>\n<materialx version="1.39">\n'
+  + '  <image name="a_img" type="color3"><input name="file" type="filename" value="tex/a.png" /></image>\n'
+  + '  <standard_surface name="a_srf" type="surfaceshader"><input name="base_color" type="color3" nodename="a_img" /></standard_surface>\n'
+  + '  <surfacematerial name="A" type="material"><input name="surfaceshader" type="surfaceshader" nodename="a_srf" /></surfacematerial>\n'
+  + '  <image name="b_img" type="color3"><input name="file" type="filename" value="tex/b.&lt;UDIM&gt;.png" /></image>\n'
+  + '  <standard_surface name="b_srf" type="surfaceshader"><input name="base_color" type="color3" nodename="b_img" /></standard_surface>\n'
+  + '  <surfacematerial name="B" type="material"><input name="surfaceshader" type="surfaceshader" nodename="b_srf" /></surfacematerial>\n'
+  + '</materialx>\n';
+
+test('a multi-material document is pruned to the picked material and its files', () => {
+  const single = loadSingleMaterialDocument();
+  const files = { 'tex/a.png': 1, 'tex/b.1001.png': 2, 'tex/b.1002.png': 3 };
+  const a = single({ xml: TWO, files }, 'A');
+  assert.equal(a.pruned, true);
+  assert.ok(a.xml.includes('name="A"') && !a.xml.includes('name="B"'));
+  assert.deepEqual(Object.keys(a.files), ['tex/a.png']);
+  const b = single({ xml: TWO, files }, 'B');
+  assert.deepEqual(Object.keys(b.files).sort(), ['tex/b.1001.png', 'tex/b.1002.png']);
+  const one = single({ xml: a.xml, files }, 'A');
+  assert.equal(one.pruned, false);
+  assert.equal(one.files, files);
+});

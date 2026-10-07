@@ -1593,6 +1593,10 @@ const createMtlxSceneView = async ({
     // The dome's tilt applies only while the dome is the active environment.
     let domeTilt = null;
     let envTilt = null;
+    // Environment rotation (mx_latlong yaw, radians) and exposure, seeded from a stage
+    // dome; read by every material build, the first one included.
+    let envRotationRad = 0;
+    let envExposure = 1;
     // True while the stage's dome is the active environment: global env
     // broadcasts (LIVE_VIEWS) then leave it alone unless sent with {user:true}.
     let domeActive = false;
@@ -2879,6 +2883,7 @@ const scenePruneUnreachableNodes = (xml) => {
             localEnvMap: localEnvEnabled ? localEnvTexture : null, localEnvMips, localEnvStrength, localEnvProbe, localEnvBoxMin, localEnvBoxMax, localEnvParallax,
             envTilt,
             thicknessScale, refractionTwoSided: true, sceneRadius,
+            envRotationRad, envExposure: environmentLightingEnabled ? envExposure : 0,
             environmentIndirectScale: shadowDiagnostic ? shadowDiagnostic.environmentIndirectScale : 1,
             environmentKeyScale: shadowDiagnostic ? shadowDiagnostic.environmentKeyScale : 1,
             lightScales: diagnosticLightScales(),
@@ -2990,6 +2995,8 @@ const scenePruneUnreachableNodes = (xml) => {
                 domeTilt = domeResult.tilt || null;
                 envTilt = domeTilt;
                 domeActive = true;
+                envRotationRad = sceneDomeYawDegFromRotation(domeLight.rotationDeg) * Math.PI / 180;
+                envExposure = domeLight.exposure;
             }
         }
         // Splitting an area light across its surface needs to know how far it
@@ -3778,8 +3785,8 @@ const scenePruneUnreachableNodes = (xml) => {
         // authored lighting; the sidebar mirrors these through getDomeLight().
         // The authored rotationDeg is a USD dome-light yaw, converted to the
         // engine's mx_latlong yaw (see sceneDomeYawDegFromRotation above).
-        let envRotationRad = domeLight ? sceneDomeYawDegFromRotation(domeLight.rotationDeg) * Math.PI / 180 : 0;
-        let envExposure = domeLight ? domeLight.exposure : 1;
+        envRotationRad = domeLight ? sceneDomeYawDegFromRotation(domeLight.rotationDeg) * Math.PI / 180 : 0;
+        envExposure = domeLight ? domeLight.exposure : 1;
         // Renders moments maps from the dominant stage/environment emitters.
         // Rebuilds happen when the camera, environment, or light controls
         // change; a settled frame does not redraw the atlas.
@@ -5544,6 +5551,8 @@ const scenePruneUnreachableNodes = (xml) => {
                         pendingTextures.push(...part.material.userData.mtlxScenePendingTextures);
                         delete part.material.userData.mtlxScenePendingTextures;
                     }
+                    // GeomSubset paths by material, for the inspector header (pickAt).
+                    const subsetPicks = sceneArray(record.groups).filter((g) => g && g.path).map((g) => ({ path: String(g.path), materialPath: String(g.materialPath || '') }));
                     drawMatrices.forEach((instanceMatrix, instanceIndex) => {
                         const object = new THREE.Mesh(part.geometry, part.material);
                         const partSuffix = parts.length > 1 ? '-part-' + partIndex : '';
@@ -5557,6 +5566,7 @@ const scenePruneUnreachableNodes = (xml) => {
                         object.userData.instanceIndex = instanceMatrix ? instanceIndex : undefined;
                         object.visible = !hiddenPrimPaths.has(object.userData.primPath);
                         object.userData.materialPath = String(record.materialPath || '');
+                        object.userData.subsets = subsetPicks;
                         object.userData.castsShadow = record.castsShadow !== false;
                         // Fallback albedo source for the diffuse bounce bake
                         // (sceneBounceAlbedo): the same authored constant
@@ -7430,8 +7440,11 @@ const scenePruneUnreachableNodes = (xml) => {
                     const materialPath = (material && material.userData && material.userData.mtlxSceneMaterialPath)
                         || (object.userData && object.userData.materialPath) || '';
                     const record = materialRecords.get(String(materialPath));
+                    // The GeomSubset carrying the hit material, when exactly one does.
+                    const subsetMatches = ((object.userData && object.userData.subsets) || []).filter((s) => materialPath && s.materialPath === String(materialPath));
                     return {
                         primPath: (object.userData && object.userData.primPath) || null,
+                        subsetPath: subsetMatches.length === 1 ? subsetMatches[0].path : null,
                         geometryPath: (object.userData && object.userData.geometryPath) || null,
                         instanceIndex: (object.userData && object.userData.instanceIndex !== undefined) ? object.userData.instanceIndex : null,
                         materialPath: materialPath || null,
