@@ -1,0 +1,15 @@
+---
+permalink: /sitemap.xml
+eleventyExcludeFromCollections: true
+---
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url><loc>{{ '/' | absUrl }}</loc>{% if collections.posts.length %}<lastmod>{{ collections.posts | getNewestCollectionItemDate | isoDate }}</lastmod>{% endif %}</url>
+    {%- for post in collections.posts %}
+    <url><loc>{{ post.url | absUrl }}</loc><lastmod>{{ (post.data.updated or post.date) | isoDate }}</lastmod></url>
+    {%- endfor %}
+    <url><loc>{{ '/tags/' | absUrl }}</loc></url>
+    {%- for tag in collections.tagList %}
+    <url><loc>{{ ('/tags/' + (tag | slugify) + '/') | absUrl }}</loc></url>
+    {%- endfor %}
+</urlset>

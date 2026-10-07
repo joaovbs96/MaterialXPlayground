@@ -299,6 +299,13 @@ const VIEW_DEPS = {
             'js/graph/graph-preview.jsx',
         ],
     },
+    // Dependency-only bundle: highlight.js and its XML pack, for read-only
+    // .mtlx source panes loaded on demand (the About page's Look inside).
+    xmlHighlight: {
+        css: [],
+        scripts: ['vendor/highlightjs/highlight.min.js', 'vendor/highlightjs/xml.min.js'],
+        babelScripts: [],
+    },
     // Dependency-only bundle for the Theme editor side panel (ThemeEditorHost
     // below), loaded on the first 'mtlx-open-theme-editor' event.
     themeEditor: {
@@ -337,9 +344,25 @@ const VIEW_DEPS = {
     vscode: {
         css: [],
         scripts: [],
-        babelScripts: ['js/shared/hero-grid.jsx'],
+        babelScripts: ['js/shared/hero-grid.jsx', 'js/shared/product-page.jsx'],
         app: 'js/vscode-app.jsx',
         globalName: 'VscodeApp',
+    },
+    desktop: {
+        css: [],
+        scripts: [],
+        babelScripts: ['js/shared/hero-grid.jsx', 'js/shared/product-page.jsx'],
+        app: 'js/desktop-app.jsx',
+        globalName: 'DesktopApp',
+    },
+    // "The MaterialX Playground" page (#!about): product-page blocks plus a
+    // live stage on the eagerly loaded engine (createMtlxRenderView).
+    about: {
+        css: [],
+        scripts: [],
+        babelScripts: ['js/shared/hero-grid.jsx', 'js/shared/product-page.jsx'],
+        app: 'js/about-app.jsx',
+        globalName: 'AboutApp',
     },
 };
 
@@ -902,8 +925,8 @@ function buildVendorEntries() {
     }).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-// About dialog opened from the header help button, available in every
-// host; it repeats the two disclaimer paragraphs of the web footer strip.
+// Build Info & Licenses dialog opened from the header (i) button, available in
+// every host; it repeats the two disclaimer paragraphs of the web footer strip.
 // Taller/wider than DesktopSettingsDialog to fit the license text.
 let __licenseCache = null;
 function AboutDialog() {
@@ -1022,7 +1045,10 @@ function AboutDialog() {
                     <div className="flex items-center gap-3 mtlx-dialog-brand">
                         <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24"
                             fill="currentColor" className="mtlx-brand-icon" dangerouslySetInnerHTML={{ __html: logoPaths }} />
-                        <div className="text-base font-semibold">{title}</div>
+                        <div className="min-w-0">
+                            <div className="text-base font-semibold">Build Info &amp; Licenses</div>
+                            <div className="text-[12px] text-fg-muted">{title}</div>
+                        </div>
                     </div>
                     <button
                         type="button"
@@ -1113,7 +1139,7 @@ function AboutDialog() {
                 ) : null}
                 <div className="text-[11px] text-fg-muted mb-1">
                     <span className="text-fg-secondary">Assets: </span>
-                    Shader Ball and Cloth mesh (CC BY 4.0), MaterialX Shader Ball (Apache-2.0), HDRIs (CC BY 4.0 / CC0), UV checker texture and Motley Patchwork Rug (MIT). See the{' '}
+                    Shader Ball and Cloth mesh (CC BY 4.0), MaterialX Shader Ball (Apache-2.0), Dragon (Stanford scan via the Khronos glTF Sample Assets, non-commercial), HDRIs (CC BY 4.0 / CC0), UV checker texture and Motley Patchwork Rug (MIT). See the{' '}
                     {links.repo ? (
                         <a href={links.repo + '#asset-credits'} target="_blank" rel="noopener noreferrer"
                             className="text-accent-fg hover:text-accent-fg-strong underline">README</a>
@@ -1218,9 +1244,11 @@ function Shell() {
         scene: { mounted: false, status: 'idle' },
         builder: { mounted: false, status: 'idle' },
         vscode: { mounted: false, status: 'idle' },
+        desktop: { mounted: false, status: 'idle' },
         whatIsMaterialx: { mounted: false, status: 'idle' },
         gallery: { mounted: false, status: 'idle' },
         roadmap: { mounted: false, status: 'idle' },
+        about: { mounted: false, status: 'idle' },
     });
     // Dismissible amber WebGL2 warning banner shown above docs content
     // (docs itself works fine without WebGL2 — only its embedded 3D node
@@ -1334,9 +1362,11 @@ function Shell() {
             compare: 'MaterialX Playground — Material Compare',
             builder: 'MaterialX Playground - Embed Builder',
             vscode: 'MaterialX Playground - VS Code extension',
+            desktop: 'MaterialX Playground - Desktop app',
             whatIsMaterialx: 'MaterialX Playground - What is MaterialX?',
             gallery: 'MaterialX Playground - Material Gallery',
             roadmap: 'MaterialX Playground - Roadmap',
+            about: 'MaterialX Playground - The MaterialX Playground',
         };
         document.title = titles[activeView] || 'MaterialX Playground — Node Library, Material Viewer & Graph Editor';
     }, [activeView]);
@@ -1370,9 +1400,12 @@ function Shell() {
             // sidebar and snippets the same breathing room they have between cards.
             builder: 'p-2 sm:p-6 md:pb-3 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
             vscode: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
+            desktop: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
             whatIsMaterialx: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
             gallery: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
             roadmap: 'p-2 sm:p-6 flex-1 md:min-h-0 md:overflow-y-auto custom-scrollbar',
+            // A full-viewport slide deck: no page padding, no page scroll.
+            about: 'flex-1 min-h-0 relative overflow-hidden',
         }[view] + (isActive ? '' : ' hidden');
 
         let content = null;
@@ -1458,7 +1491,7 @@ function Shell() {
                 // BuilderApp fills this and owns its own internal height
                 // chain so only its settings sidebar scrolls, not the page.
                 content = <div className="max-w-[1600px] mx-auto md:h-full">{rendered}</div>;
-            } else if (view === 'vscode') {
+            } else if (view === 'vscode' || view === 'desktop') {
                 // Same wrapper contract as home: a static, scrollable
                 // content page, not a full-bleed canvas.
                 content = <div className="max-w-[1600px] mx-auto">{rendered}</div>;
@@ -1503,9 +1536,11 @@ function Shell() {
             {renderView('scene')}
             {renderView('builder')}
             {renderView('vscode')}
+            {renderView('desktop')}
             {renderView('whatIsMaterialx')}
             {renderView('gallery')}
             {renderView('roadmap')}
+            {renderView('about')}
             <DesktopCloseConfirmDialog />
             <DesktopNoticeBar />
             <DesktopSettingsDialog />

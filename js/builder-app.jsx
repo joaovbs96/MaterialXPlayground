@@ -123,6 +123,7 @@ function builderLocalSrcForIdentity(id) {
 // its repo-relative path - both fetchable outside the app, unlike the local
 // forms above (which can be an unfetchable app:// URL under Electron).
 function builderPublicSrcForIdentity(id) {
+    if (id.origin === 'local') return id.docPath;
     return id.origin === 'materialx' ? window.MtlxAssets.publicRepoUrl(id.docPath) : BUILDER_PUBLIC_BASE + id.docPath;
 }
 
@@ -1179,7 +1180,8 @@ function BuilderApp({ active } = {}) {
             setErrors((prev) => [...prev.slice(-5), { id: Math.random(), message }]);
             if (/fetch|network|cors/i.test(message)) pushHint(BUILDER_CORS_HINT);
         };
-        const handleReady = () => setReady(true);
+        // Each ready is a fresh embed document, so a hand-off is sent again.
+        const handleReady = () => { setReady(true); el.__mtlxHandoff = null; sendHandoff(el); };
         const handleRenderables = (e) => setRenderables(Array.isArray(e.detail) ? e.detail : []);
         el.addEventListener('mtlx-error', handleError);
         el.addEventListener('mtlx-ready', handleReady);
@@ -1265,6 +1267,40 @@ function BuilderApp({ active } = {}) {
         if (blobHint) pushHint(blobHint);
     };
     const commitSrc = () => commitSrcValue(src);
+
+    // Document hand-off from another view (the About page): a pending
+    // { xml, name } in window.__mtlxPendingBuilderImport, announced by
+    // 'mtlx-builder-document'. Sent with load(), and again after each reload;
+    // it lives in pickedDoc, so any other document choice ends it.
+    const handoffRef = React.useRef(null);
+    handoffRef.current = pickedDoc && pickedDoc.origin === 'local' ? pickedDoc : null;
+    const readyRef = React.useRef(false);
+    readyRef.current = ready;
+    const sendHandoff = (el) => {
+        const d = handoffRef.current;
+        if (!el || !d || el.src || el.__mtlxHandoff === d) return;
+        el.__mtlxHandoff = d;
+        el.load(d.xml, { name: d.docPath }).catch(() => { /* reported through mtlx-error */ });
+    };
+    React.useEffect(() => {
+        const take = () => {
+            const d = window.__mtlxPendingBuilderImport;
+            window.__mtlxPendingBuilderImport = null;
+            if (!d || typeof d.xml !== 'string') return;
+            const file = ((d.name || 'material').replace(/[^a-z0-9_\-]+/gi, '_') || 'material') + '.mtlx';
+            const doc = { origin: 'local', docPath: file, xml: d.xml };
+            handoffRef.current = doc;
+            setPickedDoc(doc);
+            patch({ src: '', material: '' });
+            const el = previewElRef.current;
+            if (el && el.src) commitSrcValue('');
+            else if (readyRef.current) sendHandoff(el);
+        };
+        take();
+        window.addEventListener('mtlx-builder-document', take);
+        return () => window.removeEventListener('mtlx-builder-document', take);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // envmap is LIVE but every change fetches/decodes inside the iframe, so
     // commit on blur/Enter only, same as src. Empty commits a removal via
@@ -1464,7 +1500,7 @@ function BuilderApp({ active } = {}) {
     const matchedAspect = builderMatchedAspect(width, height);
     const themeSummary = themeLabel;
     const hudSwatch = themeSwatchOf(theme);
-    const docSummary = src.trim() ? builderFileNameFromUrl(src.trim()) : 'Built-in default material';
+    const docSummary = src.trim() ? builderFileNameFromUrl(src.trim()) : handoffRef.current ? handoffRef.current.docPath : 'Built-in default material';
     const lightingAtDefault = (env.trim() === '' || Number(env) === 0) && (exposure.trim() === '' || Number(exposure) === 1);
     // Std. Shader Ball w/ Backdrop is an opaque authored room; several
     // controls below are dead against it, all keyed on this condition.

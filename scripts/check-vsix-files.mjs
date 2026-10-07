@@ -76,7 +76,7 @@ function splitViewDeps(viewDepsSrc) {
 // Views the webview can never open: js/site-header.js drops Home and the
 // Learn/Integrate groups there. Their deps need not ship; every other view,
 // including dependency-only bundles such as galleryDetail, is checked.
-const WEBVIEW_UNREACHABLE_VIEWS = ["home", "whatIsMaterialx", "gallery", "roadmap", "builder", "vscode"];
+const WEBVIEW_UNREACHABLE_VIEWS = ["home", "whatIsMaterialx", "gallery", "roadmap", "builder", "vscode", "desktop", "about"];
 
 // Every vendor/materialx/ path the packaged extension actually reaches:
 // spec docs/manifest/license (fixed), plus every gallery material's own
@@ -184,7 +184,8 @@ const FORBIDDEN_PREFIXES = [
     .filter((v) => v !== DEFAULT_MTLX_VERSION)
     .map((v) => `js/materialx/${v}/`),
 ];
-const FORBIDDEN_FILES = ["CLAUDE.md"];
+// The About page's dragon is web and desktop only (Stanford non-commercial terms, About is unreachable here).
+const FORBIDDEN_FILES = ["CLAUDE.md", "models/dragon.glb", "models/LICENSE_dragon.txt"];
 
 // gallery/ is mostly forbidden too, but the package job trims it down to
 // exactly two allowed shapes before `vsce package` runs (see .vscodeignore

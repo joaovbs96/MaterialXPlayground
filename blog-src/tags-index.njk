@@ -1,0 +1,28 @@
+---
+layout: layouts/base.njk
+title: Tags
+description: Browse MaterialX Playground blog posts by tag.
+permalink: /tags/
+eleventyExcludeFromCollections: true
+---
+<div class="blog-wrap">
+    <nav aria-label="Breadcrumb" class="blog-crumbs">
+        <a href="{{ appRoot }}#!home">Home</a>
+        <span aria-hidden="true">/</span>
+        <a href="{{ '/' | url }}">Blog</a>
+        <span aria-hidden="true">/</span>
+        <span aria-current="page">Tags</span>
+    </nav>
+
+    <header class="blog-page-head">
+        <h1 class="blog-title">Tags</h1>
+    </header>
+
+    <ul class="blog-tagindex">
+        {%- for tag in collections.tagList %}
+        <li><a class="blog-chip" href="{{ ('/tags/' + (tag | slugify) + '/') | url }}">{{ tag }} <span class="blog-chip-count">{{ collections[tag].length }}</span></a></li>
+        {%- else %}
+        <li class="blog-empty">No tags yet.</li>
+        {%- endfor %}
+    </ul>
+</div>

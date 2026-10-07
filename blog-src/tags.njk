@@ -1,0 +1,31 @@
+---
+layout: layouts/base.njk
+pagination:
+  data: collections.tagList
+  size: 1
+  alias: tag
+permalink: "/tags/{{ tag | slugify }}/"
+eleventyExcludeFromCollections: true
+eleventyComputed:
+  title: "Posts tagged \"{{ tag }}\""
+  description: "Blog posts about {{ tag }} from the MaterialX Playground."
+---
+<div class="blog-wrap">
+    <nav aria-label="Breadcrumb" class="blog-crumbs">
+        <a href="{{ appRoot }}#!home">Home</a>
+        <span aria-hidden="true">/</span>
+        <a href="{{ '/' | url }}">Blog</a>
+        <span aria-hidden="true">/</span>
+        <a href="{{ '/tags/' | url }}">Tags</a>
+        <span aria-hidden="true">/</span>
+        <span aria-current="page">{{ tag }}</span>
+    </nav>
+
+    <header class="blog-page-head">
+        <h1 class="blog-title">Tagged <span class="blog-title-tag">{{ tag }}</span></h1>
+        <p class="blog-lede"><a href="{{ '/' | url }}">All posts</a> <span aria-hidden="true">&middot;</span> <a href="{{ '/tags/' | url }}">All tags</a></p>
+    </header>
+
+    {%- set postsToList = collections[tag] | newestFirst %}
+    {%- include "partials/post-list.njk" %}
+</div>

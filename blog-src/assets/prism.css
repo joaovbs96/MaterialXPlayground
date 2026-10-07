@@ -1,0 +1,69 @@
+/* Prism token colors mapped onto the site's code theme tokens, same mapping
+   as the app's highlight.js theme in js/mtlx-engine.js, so every preset applies. */
+
+pre[class*="language-"],
+code[class*="language-"] {
+    color: rgb(var(--mtlx-code-fg));
+    background: none;
+    font-family: var(--site-font-mono);
+    text-align: left;
+    white-space: pre;
+    word-spacing: normal;
+    word-break: normal;
+    word-wrap: normal;
+    hyphens: none;
+}
+
+pre[class*="language-"] { background: rgb(var(--mtlx-code-block-bg)); }
+
+pre[class*="language-"]::selection,
+pre[class*="language-"] ::selection { background: rgb(var(--mtlx-code-syntax-selection)); }
+
+.token.comment,
+.token.cdata { color: rgb(var(--mtlx-code-muted)); font-style: italic; }
+
+.token.doctype,
+.token.punctuation,
+.token.tag > .token.punctuation,
+.token.attr-value > .token.punctuation { color: rgb(var(--mtlx-code-muted)); }
+
+.token.tag { color: rgb(var(--mtlx-code-name)); }
+.token.attr-name { color: rgb(var(--mtlx-code-attr)); }
+.token.attr-value,
+.token.string,
+.token.char,
+.token.template-string { color: rgb(var(--mtlx-code-string)); }
+
+.token.keyword,
+.token.boolean,
+.token.important,
+.token.atrule,
+.token.selector { color: rgb(var(--mtlx-code-syntax-keyword)); }
+
+.token.number,
+.token.constant,
+.token.symbol { color: rgb(var(--mtlx-code-syntax-number)); }
+
+.token.builtin,
+.token.class-name { color: rgb(var(--mtlx-code-syntax-type)); }
+
+.token.function { color: rgb(var(--mtlx-code-syntax-function)); }
+
+.token.property,
+.token.variable,
+.token.parameter { color: rgb(var(--mtlx-code-syntax-param)); }
+
+.token.entity,
+.token.url,
+.token.regex { color: rgb(var(--mtlx-code-syntax-link)); }
+
+.token.operator { color: rgb(var(--mtlx-code-syntax-text)); }
+
+.token.prolog,
+.token.directive { color: rgb(var(--mtlx-code-syntax-directive)); }
+
+.token.deleted { color: rgb(var(--mtlx-code-syntax-error)); }
+.token.inserted { color: rgb(var(--mtlx-code-string)); }
+
+.token.bold { font-weight: 700; }
+.token.italic { font-style: italic; }

@@ -12,7 +12,10 @@
 !environment_map.mtlx
 !examples/**
 !materials/**
-!models/**
+# models/: listed by name, since vsce cannot re-exclude a `!` match; the About
+# page's dragon (and its license) stays out, the About view is web and desktop only.
+!models/{shaderball,shaderball_simple,shaderball_mtlx,cloth_base_mesh}.glb
+!models/LICENSE_{shaderball,shaderball_mtlx,cloth}.txt
 !env_maps/**
 !libraries/**
 !images/icon.png

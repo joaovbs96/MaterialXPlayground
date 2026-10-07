@@ -1,0 +1,6 @@
+{
+  "layout": "layouts/post.njk",
+  "tags": ["posts"],
+  "permalink": "/{{ page.fileSlug }}/",
+  "author": "João Vítor Silva"
+}

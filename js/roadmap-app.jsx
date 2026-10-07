@@ -192,7 +192,7 @@ function MtlxRoadmapApp({ active } = {}) {
             <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs text-fg-subtle">
                 <a href="#!home" className="hover:text-fg-secondary transition-colors">Home</a>
                 <MtlxIcon name="chevron-right" className="w-3 h-3" />
-                <span>Learn</span>
+                <span>About</span>
                 <MtlxIcon name="chevron-right" className="w-3 h-3" />
                 <span className="text-fg-muted">Roadmap</span>
             </nav>

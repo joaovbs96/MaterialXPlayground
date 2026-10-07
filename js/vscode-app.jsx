@@ -1,52 +1,67 @@
 // vscode-app.jsx - the "VS Code extension" view (hash route "#!vscode"),
 // reached from the home card and the Integrate menu. A static, scrollable
-// page like home-app.jsx: hero, facts strip, how-it-works through bottom CTA.
-
-// Amber "Experimental" pill, byte-identical to home-app.jsx's
-// badgeClassFor('Experimental') string.
-const EXPERIMENTAL_BADGE_CLASS = 'text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full border border-experimental-hue/40 bg-experimental-hue/10 text-experimental';
-// Small uppercase pill used for feature/soon tags ("Read only", "Soon"...).
-const TAG_PILL_CLASS = 'text-[10px] font-medium uppercase tracking-wide px-[7px] py-px rounded-full border border-line-strong text-fg-muted';
-const STRONG_CLASS = 'text-fg-soft font-medium';
-const CODE_BLOCK_CLASS = 'bg-code-block-bg border border-line rounded-[10px] px-3.5 py-3 font-mono text-[12.5px] leading-[18px] text-fg-soft';
-// Inline `<code>` styling: the site has no global rule for bare <code>.
-const CODE_CLASS = 'font-mono text-[0.9em] text-code-inline-fg bg-code-inline-bg/50 border border-line rounded px-1 py-px';
+// page; shared building blocks come from js/shared/product-page.jsx.
 
 // "How it works" flow-diagram cards, in mockup order.
 const VSCODE_HOW = [
     {
         icon: 'layout-columns',
         title: '1. Open a .mtlx file',
-        desc: (<>The Playground <strong className={STRONG_CLASS}>opens beside the text editor</strong> automatically (or via right-click, <em>Open With</em>, or the Command Palette). It reuses the right-hand editor group instead of splitting again on every open.</>),
+        desc: (<>The Playground <strong className={STRONG_CLASS}>opens beside the text editor</strong> automatically (or via right-click, <em>Open With</em>, the sidebar, or the Command Palette). It reuses the right-hand editor group instead of splitting again on every open.</>),
     },
     {
         icon: 'refresh',
         title: '2. Edit on either side',
-        desc: (<>Typing in the text editor <strong className={STRONG_CLASS}>live-reloads</strong> the Playground. Graph edits are written <strong className={STRONG_CLASS}>straight into the open .mtlx buffer</strong> as they settle (a slider lands once, shortly after you release it), so the text editor updates too and the tab shows unsaved changes. <Kbd>Ctrl</Kbd>+<Kbd>S</Kbd> saves to disk from either side; <Kbd>Ctrl</Kbd>+<Kbd>Z</Kbd> / <Kbd>Ctrl</Kbd>+<Kbd>Y</Kbd> in the graph use VS Code's own document undo, so graph and text share one history.</>),
+        desc: (<>Typing in the text editor <strong className={STRONG_CLASS}>live-reloads</strong> the Playground. Graph edits are written <strong className={STRONG_CLASS}>straight into the open .mtlx buffer</strong> as they settle, changing only what you edited, so the text editor updates too and the tab shows unsaved changes. <Kbd>Ctrl</Kbd>+<Kbd>S</Kbd> saves from either side; <Kbd>Ctrl</Kbd>+<Kbd>Z</Kbd> / <Kbd>Ctrl</Kbd>+<Kbd>Y</Kbd> in the graph use VS Code's own document undo, so graph and text share one history.</>),
     },
     {
         icon: 'wifi-off',
         title: '3. Nothing leaves your machine',
-        desc: (<>The webview loads the <strong className={STRONG_CLASS}>bundled site, libraries, and MaterialX WASM</strong> from the extension itself. The .vsix ships an offline snapshot of the MaterialX spec and examples, so it works with no network at all.</>),
+        desc: (<>The webview loads the <strong className={STRONG_CLASS}>bundled site, libraries, and MaterialX WASM</strong> from the extension itself. The .vsix ships the MaterialX spec and example materials too, so it works with no network at all.</>),
     },
 ];
 
-// "Features" items, two columns on desktop, in mockup order.
-const VSCODE_FEATURES = [
-    { icon: 'share', title: 'Node Graph Editor', desc: 'The full graph editor: nested nodegraphs, live 3D preview, validation, node docs dialog. Every edit lands in the .mtlx buffer immediately; Ctrl+S saves the file.' },
-    { icon: 'camera', title: 'Material Viewer', tag: 'Read only', desc: (<>Image-based lighting, geometry picker, turntable, save as PNG. Switching to it always shows the graph editor's current state, unsaved edits included.</>) },
-    { icon: 'download', title: 'Exports use a native Save dialog', desc: "Screenshots, turntable GIFs, .mtlx and zip exports, and generated shader code all open VS Code's own Save dialog, defaulting to the open document's folder." },
-    { icon: 'file-code', title: 'Syntax highlighting and file icon', desc: (<>.mtlx files get a "MaterialX" language mode with XML highlighting, <code className={CODE_CLASS}>{'<!-- -->'}</code> comment toggling, auto-closing quotes, a matching file icon, and an Open Preview button on the editor toolbar.</>) },
-    { icon: 'list-details', title: 'Outline and navigation', desc: 'Materials, node graphs, node definitions and their inputs and outputs show up in the Outline, breadcrumbs and Go to Symbol. Go to Definition and Find All References work for node, nodegraph, output, interfacename and nodedef references.' },
-    { icon: 'color-swatch', title: 'Color swatches and picker', desc: "Color3 and color4 values show an inline swatch in the text editor. Opening the picker writes the new color back converted into that value's own color space." },
-    { icon: 'sparkles', title: 'Snippets', desc: 'Ready-made snippets for a new document, a standard_surface or OpenPBR material, a texture chain, a normal map chain, a node graph, and a typed input.' },
-    { icon: 'code', title: 'Auto-complete', desc: "Suggests node categories, an element's inputs with their types, and only the attributes that element actually supports, plus valid attribute values: types, color spaces, units, versions, node definitions, targets and references." },
-    { icon: 'file-check', title: 'Live validation', desc: 'Runs off the editor thread as you type: XML well-formedness first, then MaterialX validate() through the bundled WASM build. Documents using xi:include get XML checks only. Results show in the Problems panel and a status bar item.' },
-    { icon: 'book', title: 'Hover docs', tag: 'In the text editor', desc: (<>In the .mtlx text editor, hover a node tag like <code className={CODE_CLASS}>{'<standard_surface>'}</code> or a <code className={CODE_CLASS}>{'node="..."'}</code> value to see its description and port table from the MaterialX spec, with links to the Interactive Documentation panel and the official spec.</>) },
-    { icon: 'external-link', title: 'Node Library Documentation panel', desc: 'Browse the whole node library without a file open, from the Command Palette or a .mtlx context menu. Hover deep-links land on the exact node and signature. Its 3D previews start switched off to keep the webview light.' },
-    { icon: 'folder', title: 'Textures load straight from disk', desc: (<>Sibling textures and <code className={CODE_CLASS}>{'xi:include'}</code> documents are found automatically, including large 4K and 8K textures. References must stay inside the workspace folder that contains the document.</>) },
-    { icon: 'file-plus', title: 'New Material from Example', desc: 'Copies one of 14 ready-made materials, four from the Playground and ten from the MaterialX examples, into your workspace along with any textures it needs, then opens it.' },
-    { icon: 'cube', title: 'Scene Viewer', tag: 'Read only', desc: 'Open .usd, .usda, .usdc, .usdz, .gltf, .glb and .obj files: sublayers, references, payloads, buffers, materials, and the MaterialX materials and textures they use load straight from the workspace.' },
+// "Features", split into three sub-groups.
+const VSCODE_FEATURE_GROUPS = [
+    {
+        title: 'Playground views',
+        items: [
+            { icon: 'share', title: 'Node Graph Editor', desc: 'The full graph editor: nested node graphs, live 3D preview, validation, node docs dialog. Every edit lands in the .mtlx buffer as it settles; Ctrl+S saves the file.' },
+            { icon: 'file-check', title: 'Keeps your formatting', desc: 'Graph edits change only what you actually edited. Your attribute order, indentation, comments and node order stay exactly as you wrote them.' },
+            { icon: 'camera', title: 'Material Viewer', tag: 'Read only', desc: "Image-based lighting, geometry picker, turntable, save as PNG. Switching to it always shows the graph editor's current state, unsaved edits included." },
+            { icon: 'cube', title: 'Scene Viewer', tag: 'Read only', desc: 'Open USD (.usd, .usda, .usdc, .usdz), glTF (.gltf, .glb) and OBJ files with their materials and textures. Only the opened file and what it references are loaded; binary USD files fetch their references on demand. A progress bar shows files and MB loaded, with Cancel. Materials open view only in the graph, with Export .mtlx to save an editable copy.' },
+            { icon: 'palette', title: 'Themes', desc: (<>The views and the sidebar match your VS Code color theme by default. Pick any Playground theme instead, or build your own with <strong className={STRONG_CLASS}>Customize Theme</strong>; your themes are saved in your settings and travel with Settings Sync.</>) },
+            { icon: 'download', title: 'Exports use a native Save dialog', desc: "Screenshots, turntable GIFs, .mtlx and zip exports, and generated shader code all open VS Code's own Save dialog, defaulting to the open document's folder." },
+            { icon: 'folder', title: 'Textures load straight from disk', desc: (<>Sibling textures and <code className={CODE_CLASS}>{'xi:include'}</code> documents are found automatically, including large 4K and 8K textures. References must stay inside the workspace folder that contains the document.</>) },
+        ],
+    },
+    {
+        title: 'Editing .mtlx text',
+        items: [
+            { icon: 'file-code', title: 'Syntax highlighting and file icon', desc: (<>.mtlx files get a "MaterialX" language mode with XML highlighting, <code className={CODE_CLASS}>{'<!-- -->'}</code> comment toggling, auto-closing quotes, a matching file icon, and an Open Preview button on the editor toolbar.</>) },
+            { icon: 'code', title: 'Auto-complete', desc: "Suggests node categories, an element's inputs with their types, and only the attributes that element actually supports, plus valid attribute values: types, color spaces, units, versions, node definitions, targets and references." },
+            { icon: 'sparkles', title: 'Snippets', desc: 'Ready-made snippets for a new document, a standard_surface or OpenPBR material, a texture chain, a normal map chain, a node graph, and a typed input.' },
+            { icon: 'file-check', title: 'Live validation', desc: 'Runs off the editor thread as you type: XML well-formedness first, then MaterialX validate() through the bundled WASM build. Documents using xi:include get XML checks only. Results show in the Problems panel and a status bar item.' },
+            { icon: 'book', title: 'Hover docs', desc: (<>Hover a node tag like <code className={CODE_CLASS}>{'<standard_surface>'}</code> or a <code className={CODE_CLASS}>{'node="..."'}</code> value to see its description and port table from the MaterialX spec, with links to the Node Library Documentation panel and the official spec.</>) },
+            { icon: 'list-details', title: 'Outline and navigation', desc: 'Materials, node graphs, node definitions and their inputs and outputs show up in the Outline, breadcrumbs and Go to Symbol. Go to Definition and Find All References work for node, nodegraph, output, interfacename and nodedef references.' },
+            { icon: 'pencil', title: 'Rename symbol', desc: 'Press F2 on a name or a reference to it to rename the element and update every reference to it in the document. Invalid names and names already taken in the same scope are refused.' },
+            { icon: 'adjustments', title: 'Format Document and Format Selection', desc: 'Shift+Alt+F re-indents the whole file or just the selection. Attribute order and values, comments and self-closing tags are left exactly as they are.' },
+            { icon: 'link', title: 'Document links', desc: 'Texture and include file names become links: Ctrl+click one to open the file. Only files inside the workspace folder get a link.' },
+            { icon: 'color-swatch', title: 'Color swatches and picker', desc: "Color3 and color4 values show an inline swatch in the text editor. Opening the picker writes the new color back converted into that value's own color space." },
+        ],
+    },
+    {
+        title: 'Sidebar and commands',
+        items: [
+            { icon: 'layout-navbar', title: 'MaterialX Playground sidebar', desc: (<>An activity bar icon opens three views: <strong className={STRONG_CLASS}>Actions</strong> (open the current file in each view, new documents, examples, and an <strong className={STRONG_CLASS}>Insert Node</strong> panel that searches the node library and adds a node at the cursor), <strong className={STRONG_CLASS}>Textures & Files in Document</strong> (open, replace or reveal each referenced file), and an <strong className={STRONG_CLASS}>Outline</strong> of the current document.</>) },
+            { icon: 'layout-grid', title: 'Example gallery', desc: 'New Material from Example opens a gallery of ready-made materials with thumbnails, a search box and filters. Pick one and it is copied into your workspace with the textures it needs, then opened.' },
+            { icon: 'file-plus', title: 'New MaterialX Document', desc: 'Starts a new, untitled .mtlx document from a starter skeleton. Also listed under File > New File.' },
+            { icon: 'external-link', title: 'Node Library Documentation panel', desc: 'Browse the whole node library without a file open, from the Command Palette, the sidebar or a .mtlx context menu. Hover links land on the exact node and signature. Its 3D previews start switched off to keep the webview light.' },
+            { icon: 'color-filter', title: 'Filter Docs by File', desc: 'Narrows the Node Library Documentation panel to just the node categories used in the current .mtlx file.' },
+            { icon: 'file-text', title: 'Open in Text Editor', desc: 'From a Playground tab, jump back to the same file in the text editor, from the tab menu or the Command Palette.' },
+            { icon: 'lock', title: 'Restricted Mode', desc: 'In a folder you have not trusted, the views do not open on their own. Open them with the Open in Graph Editor, Open in Material Viewer or Open in Scene Viewer commands; validation, hovers and the node library work normally.' },
+        ],
+    },
 ];
 
 // Three equal-width cards below the install steps.
@@ -62,7 +77,8 @@ const VSCODE_ASIDE = [
         body: (
             <>
                 <p className="text-[13.5px] leading-[19px] text-fg-muted">In the Extensions view, find <strong className={STRONG_CLASS}>MaterialX Playground</strong>, open its gear menu, and choose <strong className={STRONG_CLASS}>Uninstall</strong>. Or from a terminal:</p>
-                <pre className={CODE_BLOCK_CLASS + ' whitespace-pre-wrap break-normal [overflow-wrap:anywhere]'}>code --uninstall-extension local.materialx-playground</pre>
+                <pre className={CODE_BLOCK_CLASS + ' whitespace-pre-wrap break-normal [overflow-wrap:anywhere]'}>code --uninstall-extension MaterialXPlayground.materialx-playground</pre>
+                <p className="text-[13.5px] leading-[19px] text-fg-muted">Installed a .vsix from an older release? Its ID was <code className={CODE_CLASS}>local.materialx-playground</code>: uninstall that one first, before installing a new version.</p>
             </>
         ),
     },
@@ -71,138 +87,103 @@ const VSCODE_ASIDE = [
         title: 'Optional: Playground-only mode',
         body: (
             <>
-                <p className="text-[13.5px] leading-[19px] text-fg-muted">Nothing to configure for the default split view: .mtlx files open in the text editor and the Playground auto-opens beside them. If you would rather have .mtlx files open <strong className={STRONG_CLASS}>straight into the Playground with no text editor</strong>, make it the default editor in <code className={CODE_CLASS}>settings.json</code> (the text editor stays reachable via Open With...):</p>
+                <p className="text-[13.5px] leading-[19px] text-fg-muted">Nothing to configure for the default split view: .mtlx files open in the text editor and the Playground auto-opens beside them. If you would rather have .mtlx files open <strong className={STRONG_CLASS}>straight into the Playground with no text editor</strong>, make it the default editor in <code className={CODE_CLASS}>settings.json</code> (the text editor stays reachable via Open in Text Editor):</p>
                 <pre className={CODE_BLOCK_CLASS + ' whitespace-pre-wrap break-normal [overflow-wrap:anywhere]'}>{'"workbench.editorAssociations": {\n  "*.mtlx": "materialxPlayground.editor"\n}'}</pre>
             </>
         ),
     },
 ];
 
-// Settings table rows, in mockup order. `values` marks each default inline.
+// Settings table rows; `values` marks each default inline.
 const VSCODE_SETTINGS = [
     {
+        setting: 'materialxPlayground.theme',
+        values: (<>"vscode" <DefaultMark />, "system", "light", "dark", "hc-dark", "hc-light", "dim", "paper", "custom:&lt;name&gt;"</>),
+        desc: 'Color theme of the Playground views and the sidebar. "vscode" matches the current VS Code color theme; "system" follows whether that theme is light or dark; any other value picks that Playground theme, or one of your own.',
+    },
+    {
+        setting: 'materialxPlayground.customThemes',
+        values: (<>[] <DefaultMark /></>),
+        desc: 'Themes you made with Customize Theme. Edited for you by the theme editor and synced by Settings Sync.',
+    },
+    {
         setting: 'materialxPlayground.defaultView',
-        values: (<>"graph" <span className="text-fg-subtle text-xs font-mono">(default)</span>, "viewer"</>),
+        values: (<>"graph" <DefaultMark />, "viewer"</>),
         desc: 'Which view is visible first when a .mtlx file opens. Both views load the document either way; the header nav switches between them.',
     },
     {
         setting: 'materialxPlayground.openBehavior',
-        values: (<>"splitRight" <span className="text-fg-subtle text-xs font-mono">(default)</span>, "sameGroup"</>),
+        values: (<>"splitRight" <DefaultMark />, "sameGroup"</>),
         desc: 'Open the Playground beside the text editor, reusing the right-hand group on repeat opens, or in the active editor group.',
     },
     {
         setting: 'materialxPlayground.autoOpenPlayground',
-        values: (<>true <span className="text-fg-subtle text-xs font-mono">(default)</span>, false</>),
+        values: (<>true <DefaultMark />, false</>),
         desc: 'Automatically open the Playground beside the text editor whenever a .mtlx file is opened. Fires once per file open; closing the Playground does not re-trigger it.',
     },
     {
         setting: 'materialxPlayground.pickFileOnFilenameInput',
-        values: (<>true <span className="text-fg-subtle text-xs font-mono">(default)</span>, false</>),
+        values: (<>true <DefaultMark />, false</>),
         desc: 'When a filename input is added from auto-complete, open a file picker right away to choose the file.',
     },
     {
         setting: 'materialxPlayground.syncSelection',
-        values: (<>true <span className="text-fg-subtle text-xs font-mono">(default)</span>, false</>),
+        values: (<>true <DefaultMark />, false</>),
         desc: 'Keep the text cursor, the MaterialX Outline and the Graph Editor selection in sync.',
     },
     {
         setting: 'materialxPlayground.autoOpenSceneViewer',
-        values: (<>true <span className="text-fg-subtle text-xs font-mono">(default)</span>, false</>),
+        values: (<>true <DefaultMark />, false</>),
         desc: 'Automatically open the Scene Viewer whenever a USD, glTF, GLB or OBJ scene file is opened: beside the text editor for a file VS Code opens as text, or replacing the tab for a file VS Code shows as binary. Fires once per file open.',
     },
 ];
 
-// Six limitation cards, all sharing the amber alert-triangle icon.
+// Limitation cards.
 const VSCODE_LIMITS = [
-    { title: 'Manual installs and updates', desc: 'Distributed as a .vsix from GitHub Releases only. No Marketplace listing yet, so no automatic updates: check this page or the releases feed for new versions.' },
-    { title: 'Graph edits re-serialize the document', desc: (<>Only the Node Graph Editor edits the file; the Material Viewer is read-only. Any graph edit replaces the buffer with the app's own serialization of the whole document, so attribute order and formatting can differ from what you typed by hand.</>) },
+    { title: 'Manual installs and updates', desc: 'Distributed as a .vsix from GitHub Releases for now. Listings on the VS Code Marketplace and Open VSX are coming; until then there are no automatic updates, so check this page or the releases feed for new versions.' },
     { title: 'One MaterialX version, no Compare view', desc: 'The .vsix bundles only the default MaterialX build (v1.39.5). The Material Comparison view, the one feature that needs several versions side by side, stays web-only; the webview nav has just Material Viewer and Graph.' },
     { title: 'References must stay in the workspace folder', desc: 'Textures and included files must be inside the workspace folder that contains the document, or next to the document itself when no folder is open.' },
-    { title: 'Some web-app UI is hidden', desc: 'Home, New/Import/Presets, drag-and-drop, the Material Viewer\'s file sidebar, and Send-to buttons do not apply to a single open file, so the webview hides them. The Docs tab is replaced by the separate docs command.' },
+    { title: 'Some web-app UI is hidden', desc: "Home, New/Import/Presets, drag-and-drop, the Material Viewer's file sidebar, and Send-to buttons do not apply to a single open file, so the webview hides them. The Docs tab is replaced by the separate docs panel." },
     { title: 'Memory scales with open tabs', desc: 'Each open .mtlx tab is its own webview with its own MaterialX WASM instance and WebGL context, kept alive while backgrounded so switching tabs is instant. The first shader compile after opening a file can take a few seconds while the WASM build warms up.' },
     { title: 'Semantic squiggle positions are best-effort', desc: 'MaterialX validate() reports messages without character offsets, so the extension places each squiggle by locating the named element in the text. Very large documents and ones using xi:include get XML checks only.' },
-    { title: 'Scene Viewer limits', desc: 'Read only, shows the opened file only, and loads at most 4,000 referenced files up to 4 GiB. Graph edits to a material from a scene cannot be saved back into the scene file; use Export .mtlx instead.' },
+    { title: 'Scene Viewer limits', desc: 'Read only, shows the opened file only, and loads at most 4,000 referenced files up to 4 GiB. A material opened from a scene is view only in the Graph Editor; use Export .mtlx to save an editable copy.' },
 ];
 
-// "Requirements and privacy" items, all sharing the green check icon.
+// "Requirements and privacy" items.
 const VSCODE_REQUIREMENTS = [
     { title: 'VS Code 1.100 or newer', desc: 'Desktop VS Code on Windows, macOS, or Linux, with GPU-accelerated webviews (WebGL2) for the 3D views.' },
-    { title: 'No dependencies, no build step', desc: 'Plain JavaScript with zero npm dependencies. Everything the webview needs ships inside the .vsix.' },
-    { title: 'Works offline, no telemetry', desc: 'No data leaves your machine. The package includes an offline snapshot of the MaterialX spec, templates, and examples.' },
+    { title: 'Nothing else to install', desc: 'Everything the extension needs, including its libraries and the MaterialX WASM build, ships inside the .vsix.' },
+    { title: 'Works offline, no telemetry', desc: 'No data leaves your machine. The package includes the MaterialX spec, templates, and example materials.' },
 ];
 
 // The four breadcrumb-style chips shown for the Extensions view path.
 const VSCODE_PATH_CHIPS = ['Extensions', '···', 'Install from VSIX...', 'pick the downloaded file'];
 
-// One key combo, e.g. <Kbd>Ctrl</Kbd>+<Kbd>S</Kbd>.
-function Kbd({ children }) {
-    return <kbd className="font-mono text-[12px] text-fg-soft bg-surface-raised border border-line-strong border-b-2 rounded px-1.5">{children}</kbd>;
-}
-
-// Section heading, matching home's section-header look; `center` is used
-// only by the Install section, which the mockup centers.
-function SectionHead({ id, title, blurb, center }) {
+// Disabled "coming soon" store control, shared by the hero and bottom CTA.
+function VscodeStoreSoon({ tooltip }) {
     return (
-        <div className={'space-y-0.5' + (center ? ' text-center' : '')}>
-            <h2 id={id} className="text-xl sm:text-2xl font-semibold text-fg">{title}</h2>
-            {blurb && <p className={'text-sm text-fg-subtle max-w-[40em]' + (center ? ' mx-auto' : '')}>{blurb}</p>}
-        </div>
-    );
-}
-
-// One "Features" grid entry: icon tile, title (+ optional tag pill), desc.
-function FeatureItem({ f }) {
-    return (
-        <div className="grid grid-cols-[36px_minmax(0,1fr)] gap-3 py-3.5 border-t border-line-subtle">
-            <div className="w-9 h-9 rounded-[9px] bg-accent-wash/10 border border-accent-wash/25 flex items-center justify-center text-accent-fg">
-                <MtlxIcon name={f.icon} className="w-[18px] h-[18px]" />
-            </div>
-            <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap text-[15px] font-semibold text-fg mb-0.5">
-                    {f.title}
-                    {f.tag && <span className={TAG_PILL_CLASS}>{f.tag}</span>}
-                </div>
-                <p className="text-[13.5px] leading-[19px] text-fg-muted">{f.desc}</p>
-            </div>
-        </div>
-    );
-}
-
-// Small icon-only clipboard button; flips to a checkmark for ~1.5s after a
-// successful (or attempted) copy. Silently no-ops without Clipboard API.
-function CopyButton({ text, className }) {
-    const [copied, setCopied] = React.useState(false);
-    const timerRef = React.useRef(null);
-
-    React.useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
-
-    const onCopy = () => {
-        try {
-            if (navigator.clipboard) navigator.clipboard.writeText(text);
-        } catch (e) {
-            // Clipboard unavailable (permissions, insecure context); ignore.
-        }
-        setCopied(true);
-        if (timerRef.current) clearTimeout(timerRef.current);
-        timerRef.current = setTimeout(() => setCopied(false), 1500);
-    };
-
-    return (
-        <button
-            type="button"
-            onClick={onCopy}
-            aria-label="Copy to clipboard"
-            className={'w-[26px] h-[26px] rounded-md border border-line-control bg-control/80 text-fg-secondary hover:text-fg flex items-center justify-center transition-colors ' + (className || '')}
+        <span
+            role="link"
+            aria-disabled="true"
+            tabIndex={0}
+            className="group relative inline-flex items-center gap-2 h-11 px-4 rounded-[10px] border border-line bg-control/80 text-fg-subtle text-sm font-medium cursor-not-allowed"
         >
-            <MtlxIcon name={copied ? 'copy-check' : 'copy'} className="w-3.5 h-3.5" />
-        </button>
+            <MtlxIcon name="brand-vscode" className="w-[18px] h-[18px] text-fg-subtle" />
+            Coming to the Marketplace and Open VSX
+            {tooltip && (
+                <span className="pointer-events-none absolute left-1/2 top-[calc(100%+8px)] -translate-x-1/2 translate-y-1 opacity-0 group-hover:opacity-100 group-hover:translate-y-0 group-focus-visible:opacity-100 group-focus-visible:translate-y-0 transition-all bg-surface-raised border border-line-strong text-fg-secondary text-xs font-normal px-2.5 py-1.5 rounded-lg whitespace-nowrap shadow-2xl">
+                    Not listed yet. Install from the .vsix for now.
+                </span>
+            )}
+        </span>
     );
 }
 
 function VscodeApp({ active } = {}) {
     const links = window.SITE_LINKS;
 
-    const [rel, setRel] = React.useState(null);
+    // Latest release facts (version, vsix asset), the same promise the header uses.
+    const rel = useReleaseFacts();
     const [expanded, setExpanded] = React.useState(false);
 
     const rootRef = React.useRef(null);
@@ -210,16 +191,6 @@ function VscodeApp({ active } = {}) {
     const thumbRef = React.useRef(null);
     const closeRef = React.useRef(null);
     const wasExpandedRef = React.useRef(false);
-
-    // Resolves the latest release facts (version, stars, forks, vsix asset)
-    // once, the same promise the header uses for its GitHub widget.
-    React.useEffect(() => {
-        let alive = true;
-        if (window.mtlxSourceFacts) {
-            window.mtlxSourceFacts.then((f) => { if (alive) setRel(f); });
-        }
-        return () => { alive = false; };
-    }, []);
 
     // Esc closes the lightbox while it's open.
     React.useEffect(() => {
@@ -250,13 +221,13 @@ function VscodeApp({ active } = {}) {
     const version = (rel && rel.version) || null;
     const downloadHref = vsix ? vsix.url : links.releases;
     const fileName = vsix ? vsix.name : (version ? 'materialx-playground-vscode-' + version + '.vsix' : 'materialx-playground-vscode-<version>.vsix');
-    const sizeLabel = vsix && typeof vsix.size === 'number' ? (vsix.size / 1048576).toFixed(1) + ' MB' : null;
+    const sizeLabel = formatAssetSize(vsix);
 
     const facts = [
         { k: 'Latest', v: version || 'latest' },
         { k: 'Package', v: '.vsix' + (sizeLabel ? ' · ' + sizeLabel : '') },
         { k: 'VS Code', v: '1.100 or newer' },
-        { k: 'Distribution', v: '.vsix only, for now' },
+        { k: 'Distribution', v: '.vsix now, stores soon' },
         { k: 'License', v: 'Apache 2.0' },
         {
             k: 'Source',
@@ -275,14 +246,7 @@ function VscodeApp({ active } = {}) {
             <HeroGrid rootRef={rootRef} fadeRef={fadeRef} fadeFrom="top" />
             <div className="relative max-w-5xl mx-auto px-2 sm:px-0 py-8 sm:py-14 space-y-12 sm:space-y-16">
 
-                {/* Breadcrumb */}
-                <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs text-fg-subtle">
-                    <a href="#!home" className="hover:text-fg-secondary transition-colors">Home</a>
-                    <MtlxIcon name="chevron-right" className="w-3 h-3" />
-                    <span>Integrate</span>
-                    <MtlxIcon name="chevron-right" className="w-3 h-3" />
-                    <span className="text-fg-muted">VS Code extension</span>
-                </nav>
+                <ProductBreadcrumb current="VS Code extension" />
 
                 {/* Hero */}
                 <section aria-labelledby="vscode-h1" className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_420px] gap-8 items-center">
@@ -297,30 +261,19 @@ function VscodeApp({ active } = {}) {
                         </div>
                         <p className="text-fg-muted text-base leading-6 max-w-[34em]">
                             Open <strong className={STRONG_CLASS}>.mtlx</strong> files inside VS Code with the same
-                            Material Viewer and Node Graph Editor as the web app, plus <strong className={STRONG_CLASS}>live validation</strong> and{' '}
-                            <strong className={STRONG_CLASS}>hover docs</strong> right in the text editor. Everything runs
+                            Node Graph Editor, Material Viewer and Scene Viewer as the web app, plus{' '}
+                            <strong className={STRONG_CLASS}>live validation</strong>, <strong className={STRONG_CLASS}>hover docs</strong>{' '}
+                            and smart completion right in the text editor. Everything runs
                             locally: the extension bundles the site and the MaterialX WebAssembly build, and it works fully offline.
                         </p>
 
                         <div className="flex flex-wrap gap-3 items-stretch pt-1">
-                            <a href={downloadHref} className="inline-flex items-center gap-2 h-11 px-4 rounded-[10px] bg-accent-fill hover:bg-accent-fill-hover text-on-accent text-sm font-medium shadow-[0_0_0_4px_rgb(var(--mtlx-accent-wash)_/_calc(26_/_255))] transition-colors">
+                            <a href={downloadHref} className={PRIMARY_CTA_CLASS + PRIMARY_CTA_HALO}>
                                 <MtlxIcon name="download" className="w-[18px] h-[18px]" />
                                 Download .vsix
                                 <span className="font-normal text-on-accent/75 text-xs ml-0.5 pl-2.5 border-l border-on-accent/30">{version || 'latest release'}</span>
                             </a>
-                            <span
-                                role="link"
-                                aria-disabled="true"
-                                tabIndex={0}
-                                className="group relative inline-flex items-center gap-2 h-11 px-4 rounded-[10px] border border-line bg-control/80 text-fg-subtle text-sm font-medium cursor-not-allowed"
-                            >
-                                <MtlxIcon name="brand-vscode" className="w-[18px] h-[18px] text-fg-subtle" />
-                                VS Code Marketplace
-                                <span className="text-[10px] font-semibold uppercase tracking-wide px-[7px] py-px rounded-full border border-line text-fg-subtle bg-surface-sunken/60">Soon</span>
-                                <span className="pointer-events-none absolute left-1/2 top-[calc(100%+8px)] -translate-x-1/2 translate-y-1 opacity-0 group-hover:opacity-100 group-hover:translate-y-0 group-focus-visible:opacity-100 group-focus-visible:translate-y-0 transition-all bg-surface-raised border border-line-strong text-fg-secondary text-xs font-normal px-2.5 py-1.5 rounded-lg whitespace-nowrap shadow-2xl">
-                                    Not published to the Marketplace yet. Install from the .vsix for now.
-                                </span>
-                            </span>
+                            <VscodeStoreSoon tooltip />
                         </div>
 
                         <div className="flex items-center gap-2 flex-wrap text-xs text-fg-subtle">
@@ -363,20 +316,12 @@ function VscodeApp({ active } = {}) {
                     </div>
                 </section>
 
-                {/* Facts strip */}
-                <div ref={fadeRef} aria-label="At a glance" className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-px bg-line border border-line-subtle rounded-xl overflow-hidden">
-                    {facts.map((f) => (
-                        <div key={f.k} className="bg-surface-raised p-3.5 sm:p-4 flex flex-col gap-0.5 min-w-0">
-                            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">{f.k}</span>
-                            <span className="text-sm font-medium text-fg truncate">{f.v}</span>
-                        </div>
-                    ))}
-                </div>
+                <FactsStrip facts={facts} fadeRef={fadeRef} />
 
                 {/* How it works */}
-                <section aria-labelledby="how-h" className="space-y-5">
+                <section aria-labelledby="vscode-how-h" className="space-y-5">
                     <SectionHead
-                        id="how-h"
+                        id="vscode-how-h"
                         title="How it works"
                         blurb="The extension is the web app running in a VS Code webview, bound to the .mtlx document you have open. Text editor and Playground edit the same document buffer, so there is one source of truth and one undo history."
                     />
@@ -421,181 +366,104 @@ function VscodeApp({ active } = {}) {
                 </section>
 
                 {/* Features */}
-                <section aria-labelledby="feat-h" className="space-y-5">
+                <section aria-labelledby="vscode-feat-h" className="space-y-5">
                     <SectionHead
-                        id="feat-h"
+                        id="vscode-feat-h"
                         title="Features"
-                        blurb="Two halves: the Playground views in a webview, and language features that work in any editor for a .mtlx file, custom editor or not."
+                        blurb="The Playground views in a webview, language features that work in any editor for a .mtlx file, and a sidebar with commands to tie them together."
                     />
-                    <div className="grid grid-cols-1 [@media(min-width:720px)]:grid-cols-2 gap-x-6 gap-y-0">
-                        {VSCODE_FEATURES.map((f) => <FeatureItem key={f.title} f={f} />)}
-                    </div>
+                    <FeatureGroups groups={VSCODE_FEATURE_GROUPS} />
                 </section>
 
                 {/* Install */}
-                <section aria-labelledby="inst-h" className="space-y-9">
+                <section aria-labelledby="vscode-inst-h" className="space-y-9">
                     <SectionHead
-                        id="inst-h"
+                        id="vscode-inst-h"
                         title="Install from the .vsix"
-                        blurb="The extension is not on the VS Code Marketplace yet, so it installs from a downloaded package. It takes about a minute."
+                        blurb="The extension is not on the VS Code Marketplace or Open VSX yet, so it installs from a downloaded package. It takes about a minute."
                         center
                     />
 
                     <ol className="list-none m-0 p-0 flex flex-col w-full max-w-[660px] mx-auto">
-                        <li className="relative grid grid-cols-[32px_minmax(0,1fr)] gap-4 pb-6">
-                            <span className="absolute left-[15px] top-[34px] bottom-0 w-0.5 bg-line-subtle" aria-hidden="true" />
-                            <span className="w-8 h-8 rounded-full bg-surface-raised border border-line-strong text-accent-fg-strong text-[13px] font-semibold flex items-center justify-center tabular-nums">1</span>
-                            <div className="flex flex-col gap-2 pt-1 min-w-0">
-                                <h3 className="text-[15px] font-semibold text-fg">Download the package</h3>
-                                <p className="text-sm leading-[21px] text-fg-muted">Grab the latest <code className={CODE_CLASS}>.vsix</code> from the button above. It is a single file that bundles the whole app for offline use.</p>
-                                <div>
-                                    <a href={downloadHref} className="inline-flex items-center gap-1.5 h-[34px] px-3 rounded-lg border border-line-strong bg-control/80 hover:bg-hover text-[13px] font-medium text-fg max-w-full transition-colors">
-                                        <MtlxIcon name="download" className="w-[15px] h-[15px] text-accent-fg shrink-0" />
-                                        <span className="truncate">{fileName}</span>
-                                    </a>
-                                </div>
+                        <InstallStep n={1} title="Download the package">
+                            <p className="text-sm leading-[21px] text-fg-muted">Grab the latest <code className={CODE_CLASS}>.vsix</code> from the button above. It is a single file that bundles the whole app for offline use.</p>
+                            <div>
+                                <a href={downloadHref} className={SECONDARY_CTA_CLASS}>
+                                    <MtlxIcon name="download" className="w-[15px] h-[15px] text-accent-fg shrink-0" />
+                                    <span className="truncate">{fileName}</span>
+                                </a>
                             </div>
-                        </li>
-                        <li className="relative grid grid-cols-[32px_minmax(0,1fr)] gap-4 pb-6">
-                            <span className="absolute left-[15px] top-[34px] bottom-0 w-0.5 bg-line-subtle" aria-hidden="true" />
-                            <span className="w-8 h-8 rounded-full bg-surface-raised border border-line-strong text-accent-fg-strong text-[13px] font-semibold flex items-center justify-center tabular-nums">2</span>
-                            <div className="flex flex-col gap-2 pt-1 min-w-0">
-                                <h3 className="text-[15px] font-semibold text-fg">Install it in VS Code</h3>
-                                <p className="text-sm leading-[21px] text-fg-muted">Open the Extensions view, then use the <strong className={STRONG_CLASS}>...</strong> menu in its title bar:</p>
-                                <div className="flex items-center flex-wrap gap-1.5 text-[13px] text-fg-secondary">
-                                    {VSCODE_PATH_CHIPS.map((label, i) => (
-                                        <React.Fragment key={label}>
-                                            <span className="px-2 py-0.5 rounded-md bg-surface-raised border border-line text-xs">{label}</span>
-                                            {i < VSCODE_PATH_CHIPS.length - 1 && <MtlxIcon name="chevron-right" className="w-3 h-3 text-fg-faint" />}
-                                        </React.Fragment>
-                                    ))}
-                                </div>
-                                <div className="flex items-center gap-2.5 text-[11px] font-semibold uppercase tracking-wide text-fg-faint">
-                                    <span className="h-px flex-1 bg-line-subtle" aria-hidden="true" />
-                                    or from a terminal
-                                    <span className="h-px flex-1 bg-line-subtle" aria-hidden="true" />
-                                </div>
-                                <div className="relative">
-                                    <div className={CODE_BLOCK_CLASS + ' pr-11 overflow-x-auto whitespace-nowrap'}>{installSnippet}</div>
-                                    <CopyButton text={installSnippet} className="absolute top-2 right-2" />
-                                </div>
-                                <p className="text-sm leading-[21px] text-fg-muted">You can also drag the file onto the Extensions view. Reload the window if VS Code asks.</p>
+                        </InstallStep>
+                        <InstallStep n={2} title="Install it in VS Code">
+                            <p className="text-sm leading-[21px] text-fg-muted">Open the Extensions view, then use the <strong className={STRONG_CLASS}>...</strong> menu in its title bar:</p>
+                            <div className="flex items-center flex-wrap gap-1.5 text-[13px] text-fg-secondary">
+                                {VSCODE_PATH_CHIPS.map((label, i) => (
+                                    <React.Fragment key={label}>
+                                        <span className="px-2 py-0.5 rounded-md bg-surface-raised border border-line text-xs">{label}</span>
+                                        {i < VSCODE_PATH_CHIPS.length - 1 && <MtlxIcon name="chevron-right" className="w-3 h-3 text-fg-faint" />}
+                                    </React.Fragment>
+                                ))}
                             </div>
-                        </li>
-                        <li className="relative grid grid-cols-[32px_minmax(0,1fr)] gap-4">
-                            <span className="w-8 h-8 rounded-full bg-surface-raised border border-line-strong text-accent-fg-strong text-[13px] font-semibold flex items-center justify-center tabular-nums">3</span>
-                            <div className="flex flex-col gap-2 pt-1 min-w-0">
-                                <h3 className="text-[15px] font-semibold text-fg">Open a .mtlx file</h3>
-                                <p className="text-sm leading-[21px] text-fg-muted">
-                                    The Playground opens beside the text editor automatically (setting <code className={CODE_CLASS}>materialxPlayground.autoOpenPlayground</code>).
-                                    If it does not, right-click the file and choose <strong className={STRONG_CLASS}>Open With... {'→'} MaterialX Playground</strong>,
-                                    or run <strong className={STRONG_CLASS}>MaterialX Playground: Open in Graph Editor</strong> or
-                                    <strong className={STRONG_CLASS}> Open in Material Viewer</strong> from the Command
-                                    Palette (<Kbd>Ctrl</Kbd>+<Kbd>Shift</Kbd>+<Kbd>P</Kbd>).
-                                </p>
+                            <div className="flex items-center gap-2.5 text-[11px] font-semibold uppercase tracking-wide text-fg-faint">
+                                <span className="h-px flex-1 bg-line-subtle" aria-hidden="true" />
+                                or from a terminal
+                                <span className="h-px flex-1 bg-line-subtle" aria-hidden="true" />
                             </div>
-                        </li>
+                            <CopyBlock text={installSnippet} />
+                            <p className="text-sm leading-[21px] text-fg-muted">You can also drag the file onto the Extensions view. Reload the window if VS Code asks.</p>
+                        </InstallStep>
+                        <InstallStep n={3} title="Open a .mtlx file" last>
+                            <p className="text-sm leading-[21px] text-fg-muted">
+                                Open a folder and choose <strong className={STRONG_CLASS}>Trust</strong> when VS Code asks; the Playground then opens beside the text editor automatically
+                                (setting <code className={CODE_CLASS}>materialxPlayground.autoOpenPlayground</code>).
+                                If it does not, right-click the file and choose <strong className={STRONG_CLASS}>Open in Graph Editor</strong> or
+                                <strong className={STRONG_CLASS}> Open in Material Viewer</strong>, use the MaterialX Playground sidebar,
+                                or run the same commands from the Command Palette (<Kbd>Ctrl</Kbd>+<Kbd>Shift</Kbd>+<Kbd>P</Kbd>).
+                            </p>
+                        </InstallStep>
                     </ol>
 
-                    <div className="grid grid-cols-1 [@media(min-width:860px)]:grid-cols-3 gap-3.5">
-                        {VSCODE_ASIDE.map((a) => (
-                            <div key={a.title} className="bg-surface-raised border border-line-subtle rounded-xl px-[18px] py-4 flex flex-col gap-2 min-w-0">
-                                <h3 className="flex items-center gap-2 text-[15px] font-semibold text-fg">
-                                    <MtlxIcon name={a.icon} className="w-4 h-4 text-accent-fg" />
-                                    {a.title}
-                                </h3>
-                                {a.body}
-                            </div>
-                        ))}
-                    </div>
+                    <AsideCards items={VSCODE_ASIDE} />
                 </section>
 
                 {/* Settings */}
-                <section aria-labelledby="set-h" className="space-y-5">
-                    <SectionHead id="set-h" title="Settings" blurb={<>All under <code className={CODE_CLASS}>MaterialX Playground</code> in VS Code's Settings UI.</>} />
-                    <div className="overflow-x-auto border border-line-subtle rounded-xl">
-                        <table className="border-collapse w-full min-w-[640px] text-[13.5px] leading-[19px]">
-                            <thead>
-                                <tr>
-                                    <th className="text-left text-[10px] uppercase tracking-wide text-fg-subtle font-semibold px-3.5 py-2.5 bg-surface-raised border-b border-line">Setting</th>
-                                    <th className="text-left text-[10px] uppercase tracking-wide text-fg-subtle font-semibold px-3.5 py-2.5 bg-surface-raised border-b border-line">Values</th>
-                                    <th className="text-left text-[10px] uppercase tracking-wide text-fg-subtle font-semibold px-3.5 py-2.5 bg-surface-raised border-b border-line">What it does</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {VSCODE_SETTINGS.map((row, i) => {
-                                    const borderCls = i === VSCODE_SETTINGS.length - 1 ? '' : ' border-b border-line-subtle';
-                                    return (
-                                        <tr key={row.setting}>
-                                            <td className={'px-3.5 py-3 align-top font-mono text-[12.5px] text-fg-soft whitespace-nowrap' + borderCls}>{row.setting}</td>
-                                            <td className={'px-3.5 py-3 align-top text-fg-muted' + borderCls}>{row.values}</td>
-                                            <td className={'px-3.5 py-3 align-top text-fg-muted' + borderCls}>{row.desc}</td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
+                <section aria-labelledby="vscode-set-h" className="space-y-5">
+                    <SectionHead id="vscode-set-h" title="Settings" blurb={<>All under <code className={CODE_CLASS}>MaterialX Playground</code> in VS Code's Settings UI. Settings from earlier versions (<code className={CODE_CLASS}>materialx.*</code>) keep working.</>} />
+                    <SettingsTable rows={VSCODE_SETTINGS} />
                 </section>
 
                 {/* Limitations */}
-                <section aria-labelledby="lim-h" className="space-y-5">
+                <section aria-labelledby="vscode-lim-h" className="space-y-5">
                     <SectionHead
-                        id="lim-h"
+                        id="vscode-lim-h"
                         title="Limitations"
-                        blurb="This is a v1 and it is marked Experimental on purpose. Things you should know before relying on it."
+                        blurb="This is an early release and it is marked Experimental on purpose. Things you should know before relying on it."
                     />
-                    <div className="grid grid-cols-1 [@media(min-width:720px)]:grid-cols-2 gap-3">
-                        {VSCODE_LIMITS.map((l) => (
-                            <div key={l.title} className="grid grid-cols-[20px_minmax(0,1fr)] gap-3 bg-surface-raised border border-line-subtle rounded-xl px-4 py-3.5">
-                                <MtlxIcon name="alert-triangle" className="w-[18px] h-[18px] text-warning mt-0.5" />
-                                <div className="min-w-0">
-                                    <div className="text-sm font-semibold text-fg mb-0.5">{l.title}</div>
-                                    <p className="text-[13.5px] leading-[19px] text-fg-muted">{l.desc}</p>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
+                    <LimitsGrid items={VSCODE_LIMITS} />
                 </section>
 
                 {/* Requirements + privacy */}
-                <section aria-labelledby="req-h" className="space-y-5">
-                    <SectionHead id="req-h" title="Requirements and privacy" />
-                    <div className="grid grid-cols-1 [@media(min-width:720px)]:grid-cols-3 gap-3">
-                        {VSCODE_REQUIREMENTS.map((r) => (
-                            <div key={r.title} className="flex gap-2.5 items-start border border-line-subtle rounded-xl px-3.5 py-3">
-                                <MtlxIcon name="check" className="w-[18px] h-[18px] text-success mt-0.5" />
-                                <div className="min-w-0">
-                                    <div className="text-sm font-semibold text-fg">{r.title}</div>
-                                    <p className="text-xs leading-[18px] text-fg-muted">{r.desc}</p>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
+                <section aria-labelledby="vscode-req-h" className="space-y-5">
+                    <SectionHead id="vscode-req-h" title="Requirements and privacy" />
+                    <RequirementsGrid items={VSCODE_REQUIREMENTS} />
                 </section>
 
-                {/* Bottom CTA */}
-                <div className="border border-accent-wash/35 bg-surface-raised rounded-2xl px-6 sm:px-7 py-6 flex flex-wrap items-center justify-between gap-5 shadow-[0_0_0_4px_rgb(var(--mtlx-accent-wash)_/_calc(15_/_255))]">
-                    <div>
-                        <div className="text-lg font-semibold text-fg">Try it in VS Code</div>
-                        <div className="text-[13.5px] text-fg-muted mt-0.5">
+                <ProductCta
+                    title="Try it in VS Code"
+                    text={(
+                        <>
                             Download the .vsix, install it from the Extensions view, open a .mtlx file. Found a bug?{' '}
                             <a href={links.issues} target="_blank" rel="noopener noreferrer" className="text-accent-fg hover:text-accent-fg-strong">Open an issue on GitHub</a>.
-                        </div>
-                    </div>
-                    <div className="flex gap-2.5 flex-wrap items-center">
-                        <a href={downloadHref} className="inline-flex items-center gap-2 h-11 px-4 rounded-[10px] bg-accent-fill hover:bg-accent-fill-hover text-on-accent text-sm font-medium transition-colors">
-                            <MtlxIcon name="download" className="w-[18px] h-[18px]" />
-                            Download .vsix
-                            <span className="font-normal text-on-accent/75 text-xs ml-0.5 pl-2.5 border-l border-on-accent/30">{version || 'latest release'}</span>
-                        </a>
-                        <span role="link" aria-disabled="true" tabIndex={0} className="inline-flex items-center gap-2 h-11 px-4 rounded-[10px] border border-line bg-control/80 text-fg-disabled text-sm font-medium cursor-not-allowed">
-                            <MtlxIcon name="brand-vscode" className="w-[18px] h-[18px] text-fg-subtle" />
-                            VS Code Marketplace
-                            <span className="text-[10px] font-semibold uppercase tracking-wide px-[7px] py-px rounded-full border border-line text-fg-subtle bg-surface-sunken/60">Soon</span>
-                        </span>
-                    </div>
-                </div>
+                        </>
+                    )}
+                >
+                    <a href={downloadHref} className={PRIMARY_CTA_CLASS}>
+                        <MtlxIcon name="download" className="w-[18px] h-[18px]" />
+                        Download .vsix
+                        <span className="font-normal text-on-accent/75 text-xs ml-0.5 pl-2.5 border-l border-on-accent/30">{version || 'latest release'}</span>
+                    </a>
+                    <VscodeStoreSoon />
+                </ProductCta>
             </div>
 
             {/* Lightbox: clicking anywhere inside (image, close button, or the

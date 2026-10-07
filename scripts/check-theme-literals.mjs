@@ -25,12 +25,13 @@ const RULES = [
   ["0xhex", /\b0x[0-9a-fA-F]{6}\b/g],
 ];
 
-const INCLUDE = [/^js\//, /^index\.html$/, /^404\.html$/, /^embed\/[^/]+\.(js|css|html)$/, /^electron\/main\//, /^electron\/preload\.js$/];
-const EXCLUDE = [/^js\/gen\//, /^js\/vendor\//, /^js\/materialx\//, /^vendor\//];
-const TEXT_EXT = /\.(js|jsx|mjs|css|html)$/;
+const INCLUDE = [/^js\//, /^index\.html$/, /^404\.html$/, /^embed\/[^/]+\.(js|css|html)$/, /^electron\/main\//, /^electron\/preload\.js$/, /^blog-src\//];
+const EXCLUDE = [/^js\/gen\//, /^js\/vendor\//, /^js\/materialx\//, /^vendor\//, /^blog-src\/node_modules\//];
+const TEXT_EXT = /\.(js|jsx|mjs|css|html|njk)$/;
 
 function area(f) {
   if (/^(embed|electron)\//.test(f)) return "hosts";
+  if (/^blog-src\//.test(f)) return "blog";
   if (/^js\/shared\//.test(f)) return "shared";
   if (/^js\/usd\//.test(f) || /^js\/usd-scene-/.test(f)) return "usd";
   if (/^js\/graph\//.test(f) || f === "js/graph-app.jsx") return "graph";
@@ -179,7 +180,7 @@ for (const file of trackedFiles()) {
       if (allow.some((e) => e.file === file && (e.test ? e.test.test(m[0]) : m[0].includes(e.text)))) continue;
       alphaBad.push(`${file}: ${m[0]}`);
     }
-    if (/\.(jsx?|html)$/.test(file) && !/^js\/shared\/theme-(tokens|engine)\.js$/.test(file)) {
+    if (/\.(jsx?|html|njk)$/.test(file) &&!/^js\/shared\/theme-(tokens|engine)\.js$/.test(file)) {
       for (const m of line.matchAll(TOKEN_CLASS_RE)) {
         const r = m[1];
         if (TOKEN_KEYS.has(r) || !TOKEN_GROUPS.has(r.split("-")[0])) continue;
@@ -209,7 +210,7 @@ for (const file of trackedFiles()) {
 console.log("[check-theme-literals] hits per file:");
 for (const [f, n] of [...perFile].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))) console.log(`  ${String(n).padStart(5)}  ${f}`);
 console.log("[check-theme-literals] hits per area:");
-for (const a of ["shell", "docs", "viewer", "graph", "shared", "usd", "hosts"]) console.log(`  ${String(perArea.get(a) || 0).padStart(5)}  ${a}`);
+for (const a of ["shell", "docs", "viewer", "graph", "shared", "usd", "hosts", "blog"]) console.log(`  ${String(perArea.get(a) || 0).padStart(5)}  ${a}`);
 console.log("[check-theme-literals] hits per kind: " + [...kinds].map(([k, n]) => `${k}=${n}`).join(", "));
 console.log(`[check-theme-literals] total: ${total} (allowlisted: ${allowed})${STRICT ? " [strict]" : " [report only]"}`);
 if (alphaBad.length) {

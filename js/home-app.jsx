@@ -5,23 +5,27 @@
 
 // Nav groups for the chip filter and each section's heading below.
 const HOME_GROUPS = [
-    { id: 'tools', label: 'Tools', blurb: 'Preview, compare, and build MaterialX materials in the browser.' },
+    { id: 'tools', label: 'Tools', blurb: 'Preview, compare, and build MaterialX materials, and browse the standard node library.' },
     { id: 'learn', label: 'Learn', blurb: 'Reference and guided material for the MaterialX standard.' },
     { id: 'integrate', label: 'Integrate', blurb: 'Take the Playground into your own pages and tools.' },
+    { id: 'about', label: 'About', blurb: 'What the Playground is for, and where it is going.' },
 ];
 // All home page cards; `group` matches a HOME_GROUPS id. Cards without
 // `href` render as non-interactive "coming soon" placeholders.
 const HOME_CARDS = [
     { id: 'viewer', group: 'tools', href: '#!viewer', icon: 'camera', title: 'Material Viewer', desc: 'Drop in a .mtlx (with textures, a folder, or a .zip) or pick a preset, and see it rendered in real time with image-based lighting.', img: 'images/preview-material.jpg', cta: 'Open Material Viewer' },
+    { id: 'scene', group: 'tools', href: '#!scene', icon: 'cube', title: 'Scene Viewer', badge: 'Experimental', desc: 'Drop a USD, glTF, OBJ, PBRT v4 or Mitsuba scene with MaterialX materials and render it whole: scene lights, shadows, ambient occlusion, and a double-click material preview.', img: 'images/preview-scene.jpg', cta: 'Open Scene Viewer' },
     { id: 'compare', group: 'tools', href: '#!compare', icon: 'compare', title: 'Material Comparison', desc: 'Render two MaterialX documents side by side, with a swipe slider or a difference heatmap and SSIM/RMSE stats.', img: 'images/preview-compare.jpg', cta: 'Open Material Comparison' },
     { id: 'graph', group: 'tools', href: '#!graph', icon: 'share', title: 'Node Graph Editor', desc: 'Build MaterialX graphs visually, with nested nodegraphs, a live 3D preview, validation, and .mtlx export.', img: 'images/preview-nodegraph.jpg', cta: 'Open Node Graph Editor' },
-    { id: 'scene', group: 'tools', href: '#!scene', icon: 'cube', title: 'Scene Viewer', badge: 'Experimental', desc: 'Drop a USD, glTF, OBJ, PBRT v4 or Mitsuba scene with MaterialX materials and render it whole: scene lights, shadows, ambient occlusion, and a double-click material preview.', img: 'images/preview-scene.jpg', cta: 'Open Scene Viewer' },
+    { id: 'docs', group: 'tools', href: '#!docs', icon: 'file-code', title: 'Node Specs', desc: 'Every standard MaterialX node, with per-signature docs, port tables, live 3D previews, and shareable permalinks.', img: 'images/preview-docs.jpg', cta: 'Browse Node Specs' },
     { id: 'whatIsMaterialx', group: 'learn', href: '#!what-is-materialx', icon: 'world', iconImg: 'images/materialx-logo.svg', title: 'What is MaterialX?', desc: 'A guided introduction to the MaterialX standard: what it is, why it exists, and how its node graphs describe a material.', img: 'images/preview-what.jpg', cta: 'Read the introduction' },
     { id: 'gallery', group: 'learn', href: '#!gallery', icon: 'layout-grid', title: 'Material Gallery', desc: 'Browse, search, and preview every example material shipped with MaterialX plus our own showcase pieces, then reopen any of them in the Material Viewer or Graph Editor.', img: 'images/preview-gallery.jpg', cta: 'Browse materials' },
-    { id: 'docs', group: 'learn', href: '#!docs', icon: 'file-code', title: 'Node Specs', desc: 'Every standard MaterialX node, with per-signature docs, port tables, live 3D previews, and shareable permalinks.', img: 'images/preview-docs.jpg', cta: 'Browse Node Specs' },
     { id: 'tutorials', group: 'learn', status: 'soon', icon: 'book', title: 'Tutorials', badge: 'In progress', desc: 'Guided, hands-on MaterialX tutorials, from what MaterialX is to your first node graph, served alongside the app.', cta: 'Coming soon' },
     { id: 'builder', group: 'integrate', href: '#!builder', icon: 'code', title: 'Embed Builder', badge: 'Experimental', desc: 'Configure an embeddable viewer, preview it live, and copy an <iframe> or custom-element snippet for any web page.', img: 'images/preview-builder.jpg', cta: 'Open Embed Builder' },
     { id: 'vscode', group: 'integrate', href: '#!vscode', icon: 'brand-vscode', title: 'VS Code extension', badge: 'Experimental', desc: 'Edit .mtlx files in VS Code with live preview, validation, and hover docs, built on the same engine as the web app.', img: 'images/preview-vscode.jpg', cta: 'Get the extension' },
+    { id: 'desktop', group: 'integrate', href: '#!desktop', icon: 'device-desktop', title: 'Desktop app', badge: 'Experimental', desc: 'The whole Playground as an offline app for Windows, macOS and Linux, opening .mtlx files straight from your file manager.', media: 'brand', cta: 'Get the desktop app' },
+    { id: 'about', group: 'about', href: '#!about', icon: 'info-circle', title: 'The MaterialX Playground', desc: 'What the Playground is meant to be: its purpose, the principles behind it, where it runs, and how to get involved.', media: 'brand', mediaCaption: 'Web · VS Code · Desktop · Embeds', cta: 'Read about the Playground' },
+    { id: 'roadmap', group: 'about', href: '#!roadmap', icon: 'list-details', title: 'Roadmap', desc: 'Where the Playground is heading, grouped by area, with the status of every item. Open for discussion on GitHub.', media: 'brand', mediaCaption: 'Planned · In progress · Done', cta: 'See the roadmap' },
 ];
 // Featured gallery: 3 to 5 card ids, each with a free-text kicker (e.g.
 // 'New in v2026.9.0'). Cycles every FEATURED_MS; an empty list hides the band.
@@ -77,6 +81,24 @@ function ComingSoonMedia() {
     );
 }
 
+// Same stripe background with the logo mark and a caption (the supported
+// platforms by default), for a card that has no screenshot but is not "coming soon".
+function BrandMedia({ caption }) {
+    return (
+        <div
+            className="w-full aspect-video border-b border-line flex flex-col items-center justify-center gap-2.5"
+            style={{ backgroundImage: 'repeating-linear-gradient(135deg, rgb(var(--mtlx-line-heavy) / calc(41 / 255)) 0 10px, transparent 10px 20px)' }}
+        >
+            <svg
+                xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"
+                className="w-12 h-12 text-accent-fg"
+                dangerouslySetInnerHTML={{ __html: window.SITE_LOGO_PATHS }}
+            />
+            <span className="text-xs font-medium text-fg-muted">{caption || 'Windows · macOS · Linux'}</span>
+        </div>
+    );
+}
+
 // One grid card. Link cards (internal or external) get the hover
 // treatment; a card with no `href` renders as a static placeholder.
 // A wordmark with a baked-in fill cannot inherit currentColor as an <img>,
@@ -93,6 +115,8 @@ function HomeCard({ card }) {
     const isLink = !!card.href;
     const media = card.img ? (
         <img src={card.img} alt="" loading="lazy" className="w-full aspect-video object-cover border-b border-line" />
+    ) : card.media === 'brand' ? (
+        <BrandMedia caption={card.mediaCaption} />
     ) : (
         <ComingSoonMedia />
     );
@@ -215,7 +239,7 @@ function FeaturedGallery({ items, active, fadeRef }) {
                         />
                     ) : (
                         <div className="w-full lg:w-[440px] shrink-0 rounded-[10px] overflow-hidden border border-line">
-                            <ComingSoonMedia />
+                            {card.media === 'brand' ? <BrandMedia /> : <ComingSoonMedia />}
                         </div>
                     )}
                 </div>
@@ -372,6 +396,82 @@ function HeroStage({ active, busy, onOpen }) {
     );
 }
 
+// Blog posts for the "Latest posts" strip: the blog build writes
+// blog/posts.json. Anything off (fetch, shape, url) keeps the strip hidden.
+const BLOG_POSTS_URL = 'blog/posts.json';
+const BLOG_POST_URL_RE = /^blog\/[a-z0-9/-]*$/;
+const BLOG_POSTS_MAX = 3;
+
+function validBlogPosts(data) {
+    if (!Array.isArray(data)) return [];
+    return data.filter((p) => p && typeof p === 'object'
+        && typeof p.title === 'string' && p.title.trim()
+        && typeof p.url === 'string' && BLOG_POST_URL_RE.test(p.url))
+        .slice(0, BLOG_POSTS_MAX);
+}
+
+// Post date as e.g. "5 Oct 2026"; the raw string when it does not parse.
+function formatPostDate(d) {
+    if (typeof d !== 'string') return '';
+    const t = Date.parse(d);
+    if (isNaN(t)) return d;
+    try { return new Date(t).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' }); } catch (e) { return d; }
+}
+
+// Fetched once per page load, web only (the blog is not shipped in the
+// extension or the desktop app, and embeds have no home view).
+function useBlogPosts() {
+    const [posts, setPosts] = React.useState([]);
+    React.useEffect(() => {
+        if (window.__MTLX_VSCODE__ || window.__MTLX_ELECTRON__ || window.__MTLX_EMBED) return undefined;
+        let alive = true;
+        fetch(BLOG_POSTS_URL, { cache: 'no-cache' })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data) => { if (alive) setPosts(validBlogPosts(data)); })
+            .catch(() => {});
+        return () => { alive = false; };
+    }, []);
+    return posts;
+}
+
+function LatestPosts({ posts }) {
+    if (!posts.length) return null;
+    return (
+        <section aria-labelledby="home-posts-h" className="space-y-4">
+            <div className="flex items-end justify-between gap-3 flex-wrap">
+                <div className="space-y-0.5">
+                    <h2 id="home-posts-h" className="text-xl font-semibold text-fg">Latest posts</h2>
+                    <p className="text-sm text-fg-subtle">News and notes from the Playground blog.</p>
+                </div>
+                <a href="blog/" className="inline-flex items-center gap-1 text-sm font-medium text-accent-fg hover:text-accent-fg-strong transition-colors">
+                    All posts <MtlxIcon name="arrow-right" className="w-3.5 h-3.5" />
+                </a>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
+                {posts.map((p) => (
+                    <a
+                        key={p.url}
+                        href={p.url}
+                        className="group flex flex-col gap-2 bg-surface-raised border border-line-subtle rounded-xl p-5 transition-colors hover:border-accent-base/50 hover:bg-hover-subtle"
+                    >
+                        <div className="flex items-center gap-1.5 text-xs text-fg-subtle">
+                            <MtlxIcon name="news" className="w-3.5 h-3.5" />
+                            <span>{formatPostDate(p.date)}</span>
+                        </div>
+                        <span className="text-base font-semibold text-fg">{p.title}</span>
+                        {typeof p.description === 'string' && p.description && (
+                            <p className="text-sm text-fg-muted flex-1">{p.description}</p>
+                        )}
+                        <span className="mt-1 inline-flex items-center gap-1 text-sm font-medium text-accent-fg group-hover:text-accent-fg-strong transition-colors">
+                            Read post <MtlxIcon name="arrow-right" className="w-3.5 h-3.5" />
+                        </span>
+                    </a>
+                ))}
+            </div>
+        </section>
+    );
+}
+
 function HomeApp({ active } = {}) {
     const title = window.SITE_TITLE || 'MaterialX Playground';
     // js/site-header.js sets window.SITE_LINKS synchronously before any app
@@ -380,6 +480,7 @@ function HomeApp({ active } = {}) {
 
     const [filter, setFilter] = React.useState('all');
     const [busy, setBusy] = React.useState(null);
+    const posts = useBlogPosts();
 
     // Loads the target view's deps (mtlx-ui.jsx + the app itself), then
     // hands the hero's preset off to it via the same session-stash path
@@ -462,6 +563,9 @@ function HomeApp({ active } = {}) {
 
             {/* Featured gallery */}
             {featured.length > 0 && <FeaturedGallery items={featured} active={active} fadeRef={fadeRef} />}
+
+            {/* Latest blog posts (hidden until blog/posts.json loads) */}
+            <LatestPosts posts={posts} />
 
             {/* Group filter */}
             <div className="flex justify-center gap-2 flex-wrap">

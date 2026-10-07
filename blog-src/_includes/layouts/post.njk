@@ -1,0 +1,81 @@
+---
+layout: layouts/base.njk
+ogType: article
+---
+{%- set headings = content | toc %}
+{%- set showToc = toc !== false and (toc or headings.length >= 3) and headings.length > 0 %}
+{%- set prevPost = collections.posts | getPreviousCollectionItem %}
+{%- set nextPost = collections.posts | getNextCollectionItem %}
+<div class="blog-wrap{% if showToc %} blog-wrap--toc{% endif %}">
+    <nav aria-label="Breadcrumb" class="blog-crumbs">
+        <a href="{{ appRoot }}#!home">Home</a>
+        <span aria-hidden="true">/</span>
+        <a href="{{ '/' | url }}">Blog</a>
+        <span aria-hidden="true">/</span>
+        <span aria-current="page">{{ title }}</span>
+    </nav>
+
+    <article class="blog-article" aria-labelledby="post-title">
+        <header class="blog-article-head">
+            {%- if draft %}<p class="blog-draft">Draft: not included in production builds</p>{% endif %}
+            <h1 id="post-title" class="blog-title">{{ title }}</h1>
+            {%- if description %}<p class="blog-lede">{{ description }}</p>{% endif %}
+            <p class="blog-meta">
+                <time datetime="{{ page.date | isoDate }}">{{ page.date | readableDate }}</time>
+                <span aria-hidden="true">&middot;</span>
+                <span>{{ content | readingTime }} min read</span>
+                {%- if author %}<span aria-hidden="true">&middot;</span><span>{{ author }}</span>{% endif %}
+            </p>
+            {%- set postTags = tags | userTags %}
+            {%- if postTags.length %}
+            <ul class="blog-tags" aria-label="Tags">
+                {%- for tag in postTags %}
+                <li><a class="blog-tag" href="{{ ('/tags/' + (tag | slugify) + '/') | url }}">{{ tag }}</a></li>
+                {%- endfor %}
+            </ul>
+            {%- endif %}
+        </header>
+
+        {%- if showToc %}
+        {#- Two copies: a collapsible one for narrow screens, a sticky list for wide ones (CSS picks). #}
+        {%- set tocList %}
+                <ol class="blog-toc-list">
+                    {%- for h in headings %}
+                    <li class="blog-toc-l{{ h.level }}"><a href="#{{ h.id }}">{{ h.text }}</a></li>
+                    {%- endfor %}
+                </ol>
+        {%- endset %}
+        <details class="blog-toc-narrow">
+            <summary>On this page</summary>
+            {{ tocList | safe }}
+        </details>
+        <aside class="blog-toc-wide" aria-labelledby="toc-title">
+            <p id="toc-title" class="blog-toc-title">On this page</p>
+            {{ tocList | safe }}
+        </aside>
+        {%- endif %}
+
+        <div class="blog-prose">
+            {{ content | safe }}
+        </div>
+    </article>
+
+    {%- if prevPost or nextPost %}
+    <nav class="blog-pager" aria-label="More posts">
+        {%- if prevPost %}
+        <a class="blog-pager-link" href="{{ prevPost.url | url }}" rel="prev">
+            <span class="blog-pager-label">Previous post</span>
+            <span class="blog-pager-title">{{ prevPost.data.title }}</span>
+        </a>
+        {%- else %}<span></span>{% endif %}
+        {%- if nextPost %}
+        <a class="blog-pager-link blog-pager-link--next" href="{{ nextPost.url | url }}" rel="next">
+            <span class="blog-pager-label">Next post</span>
+            <span class="blog-pager-title">{{ nextPost.data.title }}</span>
+        </a>
+        {%- endif %}
+    </nav>
+    {%- endif %}
+
+    <p class="blog-back"><a href="{{ '/' | url }}">All posts</a> <span aria-hidden="true">&middot;</span> <a href="{{ '/feed.xml' | url }}">Atom feed</a></p>
+</div>

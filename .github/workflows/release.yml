@@ -277,6 +277,8 @@ jobs:
             --exclude='node_modules' \
             --exclude='tutorials-src' \
             --exclude='scripts' \
+            --exclude='/blog-src' \
+            --exclude='/blog' \
             ./ "$DEST"/
 
       - name: Sanity-check staged tree

@@ -139,9 +139,9 @@ localStorage.setItem('mtlx_scene_prefilter_fix', '0');     // use the GGX-prefil
 
 ## VS Code extension (experimental)
 
-The playground also ships as a VS Code extension: opening a `.mtlx` file brings up the Node Graph Editor and Material Viewer beside the text editor, with edits synced live in both directions, plus in-editor validation diagnostics, hover documentation, outline and go-to-definition/find-references, snippets, auto-complete, color swatches with a picker, and the node library documentation as its own panel. A read-only USD Scene Viewer handles `.usd`, `.usda`, `.usdc` and `.usdz` files, and a "New Material from Example" command drops a ready-made material into your workspace.
+The playground also ships as a VS Code extension: opening a `.mtlx` file brings up the Node Graph Editor and Material Viewer beside the text editor, with edits synced live in both directions (graph edits keep your file's formatting and comments), plus in-editor validation diagnostics, hover documentation, outline and go-to-definition/find-references, rename, document formatting, file links, snippets, auto-complete, color swatches with a picker, and the node library documentation as its own panel. A MaterialX Playground sidebar holds quick actions, an Insert Node panel, the document's textures and files, and an outline. A read-only Scene Viewer opens USD (`.usd`, `.usda`, `.usdc`, `.usdz`), glTF (`.gltf`, `.glb`) and OBJ files, and a "New Material from Example" gallery drops a ready-made material into your workspace. The views follow your VS Code color theme by default.
 
-> ⚠️ **Early, experimental release.** The extension is a work in progress and hasn't had wide testing yet — things may not be 100%, so expect rough edges and please report anything broken on the [issue tracker](https://github.com/joaovbs96/MaterialXPlayground/issues). It is currently distributed only as a `.vsix` file on the releases page (not the Visual Studio Marketplace) and does not auto-update.
+> ⚠️ **Early, experimental release.** The extension is a work in progress and hasn't had wide testing yet, so expect rough edges and please report anything broken on the [issue tracker](https://github.com/joaovbs96/MaterialXPlayground/issues). For now it is distributed as a `.vsix` file on the releases page and does not auto-update; listings on the VS Code Marketplace and Open VSX are coming.
 
 ### Install
 
@@ -157,7 +157,7 @@ The packaged extension is fully self-contained: it bundles the MaterialX librari
 
 ### Update / uninstall
 
-There are no auto-updates: to update, download the `.vsix` from a newer release and install it over the existing one the same way. To uninstall, remove "MaterialX Playground" from the Extensions view, or run `code --uninstall-extension local.materialx-playground`.
+There are no auto-updates: to update, download the `.vsix` from a newer release and install it over the existing one the same way. To uninstall, remove "MaterialX Playground" from the Extensions view, or run `code --uninstall-extension MaterialXPlayground.materialx-playground`. If you installed a `.vsix` from an older release, its ID was `local.materialx-playground`: uninstall that one first, before installing a new version.
 
 ## Desktop app (experimental)
 
@@ -260,6 +260,8 @@ Releases use calendar versioning in the form `YYYY.M.patch`: for example, `2026.
 **MaterialX Shader Ball.** `models/shaderball_mtlx.glb` is an unmodified copy of [`Geometry/shaderball.glb`](https://github.com/AcademySoftwareFoundation/MaterialX/tree/gh-pages/Geometry) from the [MaterialX](https://github.com/AcademySoftwareFoundation/MaterialX) project's gh-pages branch, licensed [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). See [`models/LICENSE_shaderball_mtlx.txt`](models/LICENSE_shaderball_mtlx.txt).
 
 **Cloth mesh.** `models/cloth_base_mesh.glb` is ["Cloth base mesh"](https://sketchfab.com/3d-models/cloth-base-mesh-3892a25754c7452eabe772ff691e4c6f) by Javier.Herrera, via Sketchfab, licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). See [`models/LICENSE_cloth.txt`](models/LICENSE_cloth.txt).
+
+**Dragon.** `models/dragon.glb`, shown on the About page, is sourced from the [DragonAttenuation](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/DragonAttenuation) model in the Khronos glTF Sample Assets repository. The dragon model is based on the one from [Morgan McGuire's Computer Graphics Archive](https://casual-effects.com/data). Original dragon mesh data based on a [Stanford Scan](http://www.graphics.stanford.edu/data/3Dscanrep/) © 1996 Stanford University (conversion and cleanup © 2017 Morgan McGuire). It is not covered by this repository's Apache 2.0 license: Stanford allows redistribution and research use with acknowledgement, but not commercial use without its permission. See [`models/LICENSE_dragon.txt`](models/LICENSE_dragon.txt).
 
 **HDRI.** The default environment lighting (`env_maps/standard_shader_ball_env_512.exr`) is a studio environment built to match the Standard Shader Ball scene's geometry, see license above. The repo also ships ["Studio Kontrast 04"](https://polyhaven.com/a/studio_kontrast_04) by Grzegorz Wronkowski, via [Poly Haven](https://polyhaven.com/), licensed [CC0](https://polyhaven.com/license). See [`env_maps/LICENSE.txt`](env_maps/LICENSE.txt).
 

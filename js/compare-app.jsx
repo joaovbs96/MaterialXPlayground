@@ -759,6 +759,28 @@ function MaterialCompareApp({ active = true } = {}) {
         loadLocalIntoSlot(slotB, EXAMPLE_PAIR_B_URL);
     };
 
+    // Two-document hand-off from another view (the About page's timeline):
+    // window.__mtlxPendingCompareImport = { a: { xml, name }, b: { xml, name } },
+    // announced by 'mtlx-compare-documents'. Each side loads like a single-file drop.
+    const slotsRef = React.useRef(null);
+    slotsRef.current = { A: slotA, B: slotB };
+    React.useEffect(() => {
+        const take = () => {
+            const payload = window.__mtlxPendingCompareImport;
+            window.__mtlxPendingCompareImport = null;
+            if (!payload) return;
+            [['A', payload.a], ['B', payload.b]].forEach(([slotKey, d]) => {
+                if (!d || typeof d.xml !== 'string') return;
+                const rootKey = ((d.name || 'material').replace(/[^a-z0-9_\-]+/gi, '_') || 'material') + '.mtlx';
+                setPresetPick((s) => ({ ...s, [slotKey]: '' }));
+                slotsRef.current[slotKey].ingest({ [rootKey]: new Blob([d.xml], { type: 'application/xml' }) }, rootKey);
+            });
+        };
+        take();
+        window.addEventListener('mtlx-compare-documents', take);
+        return () => window.removeEventListener('mtlx-compare-documents', take);
+    }, []);
+
     useCameraSync(() => [slotA.viewRef.current, slotB.viewRef.current], slotA.viewEpoch + slotB.viewEpoch);
     const [isFullscreen, toggleFullscreen] = useFullscreen(stageContentRef);
 

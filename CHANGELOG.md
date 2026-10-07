@@ -6,6 +6,9 @@ Full notes for every release, including every fix, are on the [GitHub Releases p
 
 ## Unreleased
 
+- Added a Desktop app page with downloads for Windows, macOS and Linux, install steps for each system, and a list of what the app can do.
+- The VS Code extension page is up to date again: it now covers the sidebar, formatting, rename, themes, the example gallery and the Scene Viewer, and shows the right install and uninstall steps.
+- Added a blog, linked from the header, with a "Latest posts" strip on the home page.
 - The Scene Viewer now honours clamp and mirror texture address modes on PNG and JPG textures.
 - A material opened from the Scene Viewer's "Open in Graph Editor" now opens as view only, with a banner and an Export .mtlx button to save an editable copy.
 - The Scene Viewer's wording is now generic instead of USD-specific: "Scene" instead of "Stage", "Scene selection" instead of "Root layer", "objects" instead of "prims", and so on.
@@ -27,7 +30,7 @@ Full notes for every release, including every fix, are on the [GitHub Releases p
 - Attribute auto-complete now offers only the attributes valid for the element you're editing (a node, a node definition input, a look, and so on), instead of one generic list.
 - The VS Code extension now has a toolbar preview button, a file icon for `.mtlx` files, an outline with go to definition and find references, and color swatches with a picker in the text editor.
 - Large 4K and 8K textures now load in the VS Code extension.
-- VS Code extension published to the Marketplace as a preview. If you installed it from a GitHub release before, uninstall `local.materialx-playground` first.
+- The VS Code extension is ready for publishing to the VS Code Marketplace and Open VSX as a preview; until it is listed, install the `.vsix` from the releases page. If you installed it from a GitHub release before, uninstall `local.materialx-playground` first, because the extension ID changed.
 - Referenced textures and includes must now stay inside the opened workspace folder (or next to the file, if no folder is open).
 - Validation now runs off the editor thread and no longer reads files named by an `xi:include`.
 - Added support for VS Code's Restricted Mode.
