@@ -50,3 +50,19 @@ test('Quality preset has two segments, persists and rebuilds the view', async ({
   expect(before).toBeDefined();
   expect(errors).toEqual([]);
 });
+
+test('sidebar Info rows and Statistics footer show the loaded document', async ({ page, embedURL }) => {
+  const errors = await gotoViewer(page, embedURL);
+  await expect(page.getByTestId('viewer-info-file')).toHaveText(/\.mtlx$/);
+  await expect(page.getByTestId('viewer-info-images')).toHaveText(/^\d+$/);
+  await expect(page.getByTestId('viewer-info-version')).toBeVisible();
+  await page.getByTestId('viewer-files-toggle').click();
+  await expect(page.getByTestId('viewer-files-list')).toBeVisible();
+  await expect(page.getByText('or drag-and-drop anywhere on the page')).toHaveCount(0);
+  await expect(page.getByTestId('viewer-stat-shader-size')).toHaveText(/^\d+(\.\d)? (KB|MB)$/, { timeout: WAIT_TIMEOUT });
+  await expect(page.getByTestId('viewer-stat-uniforms')).toHaveText(/^[1-9]\d*$/);
+  await expect(page.getByTestId('viewer-stat-textures')).toHaveText(/^\d+$/);
+  await expect(page.getByTestId('viewer-stat-build-ms')).toHaveText(/^\d+ ms$/);
+  await expect(page.getByRole('button', { name: 'Presets' })).toHaveCount(1);
+  expect(errors).toEqual([]);
+});

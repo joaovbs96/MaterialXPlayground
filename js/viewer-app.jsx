@@ -380,6 +380,8 @@
                 if (onErrorRef.current) onErrorRef.current(msg);
             };
             const [texReport, setTexReport] = React.useState(null);
+            const [filesOpen, setFilesOpen] = React.useState(false);
+            const [viewStats, setViewStats] = React.useState(null); // shader size, uniforms, textures, build ms
             // "Loading textures\u2026" badge while bindDroppedTextures' async
             // loads are in flight. texLoadGenRef guards races: a newer
             // call always wins over a stale one settling later.
@@ -918,7 +920,7 @@
                             // the user's own load is already in flight.
                             if (hasSession() || loadedRef.current) return;
                             setBusy(false);
-                            setStatus(IN_VSCODE || IN_ELECTRON ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx or .mxsl anywhere on the page, or pick a Preset from the toolbar.");
+                            setStatus(IN_VSCODE || IN_ELECTRON ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx or .mxsl anywhere on the page, or pick a Preset from the sidebar.");
                         });
                     return;
                 }
@@ -950,7 +952,7 @@
                         // the user's own load is already in flight.
                         if (hasSession() || loadedRef.current) return;
                         setBusy(false);
-                        setStatus(IN_VSCODE || IN_ELECTRON ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx or .mxsl anywhere on the page, or pick a Preset from the toolbar.");
+                        setStatus(IN_VSCODE || IN_ELECTRON ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx or .mxsl anywhere on the page, or pick a Preset from the sidebar.");
                     });
             }, []);
 
@@ -1044,10 +1046,12 @@
                     setTexReport(null);
                     setTexturesLoading(false);
                     setMaterialNotices(null);
+                    setViewStats(null);
                     setBusy(true);
                     setStatus('Generating shader…');
                     try {
                         const target = loaded.renderables[Math.min(chosenMat, loaded.renderables.length - 1)];
+                        const buildT0 = performance.now();
                         const view = await createMtlxRenderView({
                             canvas: canvasRef.current,
                             mx: loaded.mx, gen: loaded.gen, genContext: loaded.genContext,
@@ -1071,6 +1075,7 @@
                         if (!view) return; // superseded: the new run drives `busy`
                         if (!mounted) { view.release(); return; }
                         viewRef.current = view;
+                        if (!chromeless) setViewStats({ fsBytes: (view.fs || '').length, uniforms: Object.keys(view.uniforms || {}).length, ms: Math.round(performance.now() - buildT0) });
                         window.__mtlxViewerHandle = view; // test and console access to the live shaderball handle.
                         if (view.setBackdrop) view.setBackdrop(backdropModeRef.current);
                         // Initial env rotation/exposure controlled props —
@@ -1239,6 +1244,13 @@
             }, [viewEpoch]);
 
             const fileCount = Object.keys(fileMap).length;
+            const fmtBytes = (n) => (!n ? '-' : n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
+            const statRows = [
+                ['Shader size', viewStats ? fmtBytes(viewStats.fsBytes) : '-', 'viewer-stat-shader-size', 'Generated fragment shader source'],
+                ['Uniforms', viewStats ? viewStats.uniforms : '-', 'viewer-stat-uniforms'],
+                ['Textures', viewStats ? (texReport ? texReport.bound.length : 0) : '-', 'viewer-stat-textures', 'Images bound to the material'],
+                ['Build time', viewStats ? viewStats.ms + ' ms' : '-', 'viewer-stat-build-ms', 'Last shader generation and compile'],
+            ];
             const texCount = Object.keys(fileMap).filter((k) => IMG_EXT.test(k)).length;
 
             // Embed HUD opt-in: which ViewportControls buttons chromeless
@@ -1285,12 +1297,12 @@
                 ? [
                     ['geom', 'rotate', 'cameraReset'],
                     ['screenshot', 'record', 'shaderCode', 'sendToGraph'],
-                    ['presets', 'fullscreen'],
+                    ['fullscreen'],
                 ]
                 : [
                     ['rotate', 'cameraReset'],
                     ['screenshot', 'record', 'shaderCode', 'sendToGraph'],
-                    ['presets', 'fullscreen'],
+                    ['fullscreen'],
                 ];
             // Page-transparency CSS: requested AND resolved away from the
             // room. Belt-and-suspenders alongside resolveViewerGeom's own
@@ -1313,7 +1325,7 @@
 
             // 28px HUD chip classes, shared by ViewportControls' built-in
             // slots (via buttonClassName) and the custom sendToGraph/
-            // presets/shaderCode buttons below. VS Code stays icon-only and
+            // shaderCode buttons below. VS Code stays icon-only and
             // square; the browser HUD grows labels via HUD_PILL/HUD_PILL_ACTIVE.
             const hudChipClass = (active) => IN_VSCODE
                 ? `h-7 w-7 justify-center inline-flex items-center rounded-lg border transition-colors ${
@@ -1348,36 +1360,54 @@
                                 <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={onPickFiles} />
                             </label>
                         </div>
-                        <div className="text-xs text-fg-subtle">or drag-and-drop anywhere on the page</div>
-
-                        {chosenMtlx && (
-                            <div className="text-xs text-fg-subtle">
-                                {mtlxPaths.length} .mtlx, {texCount} image{texCount === 1 ? '' : 's'}
-                            </div>
-                        )}
-
-                        <div>
-                            <div className="flex items-center justify-between gap-2">
-                                <span className="text-xs font-medium text-fg-muted">MaterialX version</span>
+                        <div data-testid="viewer-info" className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-0.5">
+                            <HUD.InfoRow label="File" testId="viewer-info-file" title={currentMtlxPath || undefined}>{currentMtlxPath ? docBasename : '-'}</HUD.InfoRow>
+                            <HUD.InfoRow label="Images" testId="viewer-info-images">{chosenMtlx ? texCount : '-'}</HUD.InfoRow>
+                            <span className={HUD.ROW_LABEL}>Version</span>
+                            <div className="flex justify-end" data-testid="viewer-info-version">
                                 <MtlxSelect
-                                    value={version}
-                                    options={mtlxVersions}
-                                    labels={versionLabels}
-                                    defValue={mtlxDefaultVersion}
-                                    disabledOptions={versionDisabledOptions}
-                                    titles={versionTitles}
-                                    popWidth={VERSION_POP_W}
-                                    onChange={(v) => {
-                                        setVersion(v);
-                                        // A Document belongs to the mx instance that parsed
-                                        // it, so switching versions re-parses the already
-                                        // chosen file. Nothing to reload if none is chosen yet.
-                                        if (chosenMtlx) loadDocument(chosenMtlx, undefined, v);
-                                    }}
-                                    size="sm"
-                                    disabled={busy}
-                                />
+                                value={version}
+                                options={mtlxVersions}
+                                labels={versionLabels}
+                                defValue={mtlxDefaultVersion}
+                                disabledOptions={versionDisabledOptions}
+                                titles={versionTitles}
+                                popWidth={VERSION_POP_W}
+                                onChange={(v) => {
+                                    setVersion(v);
+                                    // A Document belongs to the mx instance that parsed
+                                    // it, so switching versions re-parses the already
+                                    // chosen file. Nothing to reload if none is chosen yet.
+                                    if (chosenMtlx) loadDocument(chosenMtlx, undefined, v);
+                                }}
+                                size="sm"
+                                disabled={busy}
+                            />
                             </div>
+                        </div>
+                        <div>
+                            <button
+                                type="button"
+                                data-testid="viewer-files-toggle"
+                                aria-expanded={filesOpen}
+                                onClick={() => setFilesOpen((o) => !o)}
+                                className="w-full h-5 flex items-center justify-between gap-3 -mx-1 px-1 rounded text-left hover:bg-hover-subtle/60"
+                            >
+                                <span className={HUD.ROW_LABEL + ' inline-flex items-center gap-1 shrink-0'}>
+                                    <MtlxIcon name={filesOpen ? 'chevron-down' : 'chevron-right'} className="w-3 h-3" />Files loaded
+                                </span>
+                                <span data-testid="viewer-files-summary" className="min-w-0 truncate text-right text-[11px] text-fg-secondary">{fileCount} file{fileCount === 1 ? '' : 's'}</span>
+                            </button>
+                            {filesOpen && (
+                                <div data-testid="viewer-files-list" className="mt-1 max-h-40 overflow-y-auto custom-scrollbar rounded-md border border-line bg-surface-sunken/60 py-1">
+                                    {Object.keys(fileMap).map((k) => (
+                                        <div key={k} className="flex items-baseline justify-between gap-2 px-2 py-0.5 text-[11px]">
+                                            <span className="min-w-0 truncate font-mono text-fg-secondary" title={k}>{k}</span>
+                                            <span className="shrink-0 font-mono tabular-nums text-fg-subtle">{fmtBytes(fileMap[k] && fileMap[k].size)}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
 
                         {mtlxPaths.length > 1 && (
@@ -1560,7 +1590,7 @@
                                     />
                                 )}
                                 {/* Rendered even with nothing loaded (browser only) so
-                                    the Presets button stays reachable if the default-material
+                                    the toolbar stays reachable if the default-material
                                     fetch failed. IN_VSCODE keeps the original renderables-only gate.
                                     Chromeless: only rendered at all once `controls` opts at least
                                     one button in — showCtl() below then picks which ones. */}
@@ -1663,18 +1693,6 @@
                                                 >
                                                     <MtlxIcon name="transfer" className="w-3.5 h-3.5" />
                                                     {!IN_VSCODE && <span className="ml-1.5 whitespace-nowrap">Send to Editor</span>}
-                                                </button>
-                                            ) : null,
-                                            // Presets: browser-only (VS Code is bound to the open file).
-                                            presets: !IN_VSCODE ? (
-                                                <button
-                                                    key="presets"
-                                                    onClick={openPresetPicker}
-                                                    title="Load a preset from the Material Gallery"
-                                                    className={hudChipClass(false)}
-                                                >
-                                                    <MtlxIcon name="presets" className="w-3.5 h-3.5" />
-                                                    {!IN_VSCODE && <span className="ml-1.5 whitespace-nowrap">Presets</span>}
                                                 </button>
                                             ) : null,
                                             // Not VS Code-gated: generating shader source
@@ -1790,6 +1808,20 @@
                                 ><MtlxIcon name="chevrons-left" className="w-4 h-4" /></button>
                             </div>
                             {filesPanelBody}
+                            <div data-testid="viewer-statistics" className="shrink-0 border-t border-line px-3.5 py-3.5 space-y-1 bg-surface-card">
+                                <div className="flex items-center gap-2 mb-1.5">
+                                    <MtlxIcon name="cube" className="w-4 h-4 text-fg-muted shrink-0" />
+                                    <span className="text-[13px] font-semibold text-fg shrink-0">Statistics</span>
+                                </div>
+                                <div className="space-y-1 text-[11px] text-fg-secondary">
+                                    {statRows.map(([label, value, testId, title]) => (
+                                        <div key={label} className="flex justify-between" title={title}>
+                                            <span className={HUD.ROW_LABEL}>{label}</span>
+                                            <span className="font-mono tabular-nums" data-testid={testId}>{value}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
                             <div className="flex-none border-t border-line px-3 py-2 text-[11px] text-fg-subtle">
                                 Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to the image node's default color.
                             </div>
