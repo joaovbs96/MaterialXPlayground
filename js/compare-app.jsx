@@ -79,6 +79,8 @@ const useCompareSlot = () => {
     const [status, setStatus] = React.useState(null);
     const [error, setError] = React.useState(null);
     const [texReport, setTexReport] = React.useState(null);
+    const [viewStats, setViewStats] = React.useState(null); // shader size, uniforms, build ms
+    const [notices, setNotices] = React.useState(null);
     // "Loading textures\u2026" badge while bindDroppedTextures' async loads are
     // in flight. texLoadGenRef guards races: a newer call always wins
     // over a stale one settling later.
@@ -229,7 +231,7 @@ const useCompareSlot = () => {
         renderables, chosenMat, setChosenMat,
         version, setVersion, renderedVersion, setRenderedVersion,
         busy, setBusy, status, setStatus, error, setError,
-        texReport, setTexReport, texturesLoading, setTexturesLoading, trackTexReport, texLoadGenRef,
+        texReport, setTexReport, viewStats, setViewStats, notices, setNotices, texturesLoading, setTexturesLoading, trackTexReport, texLoadGenRef,
         viewRef, canvasRef, viewEpoch, setViewEpoch, loadedRef,
         ingest, onPickFiles, onPickFileList, loadDocument,
     };
@@ -256,11 +258,14 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
             slot.setError(null);
             slot.texLoadGenRef.current++;
             slot.setTexReport(null);
+            slot.setViewStats(null);
+            slot.setNotices(null);
             slot.setTexturesLoading(false);
             slot.setBusy(true);
             slot.setStatus('Generating shader…');
             try {
                 const target = loaded.renderables[Math.min(slot.chosenMat, loaded.renderables.length - 1)];
+                const buildT0 = performance.now();
                 const view = await createMtlxRenderView({
                     canvas: slot.canvasRef.current,
                     mx: loaded.mx, gen: loaded.gen, genContext: loaded.genContext,
@@ -302,6 +307,8 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
                 // flight landed on the disposed predecessor, not on us.
                 if (view.setBackdrop) view.setBackdrop(envUIRef.current.backdrop);
                 slot.viewRef.current = view;
+                slot.setViewStats({ fsBytes: (view.fs || '').length, uniforms: Object.keys(view.uniforms || {}).length, ms: Math.round(performance.now() - buildT0) });
+                slot.setNotices(view.notices && view.notices.length ? view.notices : null);
                 // Adopt the surviving peer's camera framing, never the
                 // reverse — the fresh view matches whatever's on screen.
                 const peer = peerViewRef && peerViewRef.current;
@@ -500,6 +507,7 @@ function MaterialCompareApp({ active = true } = {}) {
     const swipeDiffPosRef = React.useRef(swipeDiffPos);
     swipeDiffPosRef.current = swipeDiffPos;
     const [stats, setStats] = React.useState(null); // { metrics, size:[w,h] } | null
+    const [statsTab, setStatsTab] = React.useState('A');
     const [statsHelpOpen, setStatsHelpOpen] = React.useState(false); // pinned Statistics panel's help popover
     const [sidebarOpen, setSidebarOpen] = React.useState(true);
     // Seeded from the global geometry shared across the four tools,
@@ -1352,6 +1360,7 @@ function MaterialCompareApp({ active = true } = {}) {
                         <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={(e) => { setPresetPick((s) => ({ ...s, [slotKey]: '' })); slot.onPickFiles(e); }} />
                     </label>
                 </div>
+                <HUD.FilesLoaded testId={'compare-files-' + slotKey} files={Object.keys(slot.fileMap).map((k) => ({ path: k, size: slot.fileMap[k] && slot.fileMap[k].size }))} />
                 {slot.mtlxPaths.length > 1 && (
                     <MtlxSelect
                         value={slot.chosenMtlx || ''}
@@ -1714,17 +1723,34 @@ function MaterialCompareApp({ active = true } = {}) {
                         </section>
                     </div>
 
-                    {/* Pinned Statistics panel: always expanded and non-scrolling,
-                        a sibling BELOW the scrollable cards column above (not one
-                        more card inside it). */}
-                    <div className="shrink-0 border-t border-line px-3.5 py-3.5 space-y-2.5 bg-surface-card">
-                        <div className="flex items-center gap-2">
-                            <MtlxIcon name="compare" className="w-4 h-4 text-fg-muted shrink-0" />
+                    {/* Pinned boxes below the scrollable cards column: per-document
+                        Statistics (tabs A/B) above the Difference Metrics. */}
+                    <div data-testid="compare-statistics" className="shrink-0 border-t border-line px-3.5 py-3 space-y-2 bg-surface-card">
+                        <div className="flex items-center gap-2 h-6">
+                            <MtlxIcon name="cube" className="w-4 h-4 text-fg-muted shrink-0" />
                             <span className="text-[13px] font-semibold text-fg shrink-0">Statistics</span>
-                            {bothLive && <span className="shrink-0 text-[10px] text-fg-faint">·</span>}
+                            <HUD.DiagnosticsButton testId={'compare-diagnostics-' + statsTab} notices={(statsTab === 'A' ? slotA : slotB).notices} />
+                        </div>
+                        <div className="flex gap-1">
+                            {[['A', 'Document A'], ['B', 'Document B']].map(([id, label]) => (
+                                <button
+                                    key={id}
+                                    type="button"
+                                    data-testid={'compare-stats-tab-' + id}
+                                    aria-pressed={statsTab === id}
+                                    onClick={() => setStatsTab(id)}
+                                    className={'flex-1 h-6 rounded-md border text-[11px] font-medium whitespace-nowrap transition-colors ' + (statsTab === id ? 'bg-pressed border-line-heavy text-hud-fg-strong' : 'bg-hud-raised/80 border-line text-hud-fg hover:bg-hud-hover/80')}
+                                >{label}</button>
+                            ))}
+                        </div>
+                        <HUD.MaterialStatRows prefix={'compare-' + statsTab} stats={(statsTab === 'A' ? slotA : slotB).viewStats} textures={(statsTab === 'A' ? slotA : slotB).texReport ? (statsTab === 'A' ? slotA : slotB).texReport.bound.length : 0} />
+                    </div>
+                    <div data-testid="compare-metrics" className="shrink-0 border-t border-line px-3.5 py-3 space-y-2 bg-surface-card">
+                        <div className="flex items-center gap-2 h-6">
+                            <MtlxIcon name="compare" className="w-4 h-4 text-fg-muted shrink-0" />
+                            <span className="text-[13px] font-semibold text-fg shrink-0">Difference Metrics</span>
                             {bothLive && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">live</span>}
-                            {bothLive && stats && <span className="shrink-0 text-[10px] text-fg-faint">·</span>}
-                            {stats && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">{'computed at ' + stats.size[0] + '×' + stats.size[1]}</span>}
+                            {stats && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">{'at ' + stats.size[0] + '\u00d7' + stats.size[1]}</span>}
                             <div className="flex-1" />
                             <div className="relative shrink-0">
                                 <button
@@ -1756,13 +1782,17 @@ function MaterialCompareApp({ active = true } = {}) {
                             </div>
                         </div>
                         <div className="space-y-1 text-[11px] text-fg-secondary">
-                            <div className="flex justify-between"><span>SSIM</span><span className="font-mono tabular-nums">{stats ? stats.metrics.ssim.toFixed(3) : '—'}</span></div>
-                            <div className="flex justify-between"><span>RMSE</span><span className="font-mono tabular-nums">{stats ? stats.metrics.rmse.toFixed(2) : '—'}</span></div>
-                            <div className="flex justify-between">
-                                <span>PSNR</span>
-                                <span className="font-mono tabular-nums">{stats ? (stats.metrics.psnr === Infinity ? '∞ dB' : stats.metrics.psnr.toFixed(1) + ' dB') : '—'}</span>
-                            </div>
-                            <div className="flex justify-between"><span>Mean abs diff</span><span className="font-mono tabular-nums">{stats ? stats.metrics.meanAbsDiff.toFixed(2) : '—'}</span></div>
+                            {[
+                                ['SSIM', stats ? stats.metrics.ssim.toFixed(3) : '-', 'ssim'],
+                                ['RMSE', stats ? stats.metrics.rmse.toFixed(2) : '-', 'rmse'],
+                                ['PSNR', stats ? (stats.metrics.psnr === Infinity ? '\u221e dB' : stats.metrics.psnr.toFixed(1) + ' dB') : '-', 'psnr'],
+                                ['Mean abs diff', stats ? stats.metrics.meanAbsDiff.toFixed(2) : '-', 'mean-abs-diff'],
+                            ].map(([label, value, id]) => (
+                                <div key={label} className="flex justify-between">
+                                    <span className={HUD.ROW_LABEL}>{label}</span>
+                                    <span className="font-mono tabular-nums" data-testid={'compare-stat-' + id}>{value}</span>
+                                </div>
+                            ))}
                         </div>
                     </div>
 

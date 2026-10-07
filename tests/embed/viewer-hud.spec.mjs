@@ -64,3 +64,41 @@ test('sidebar Info rows and Statistics footer show the loaded document', async (
   await expect(page.getByRole('button', { name: 'Presets' })).toHaveCount(1);
   expect(errors).toEqual([]);
 });
+
+test('Diagnostics button lists material notices and the preset label is gone', async ({ page, embedURL }) => {
+  await page.addInitScript(() => { window.__mtlxForceDisplacementFailure = true; });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const errors = await gotoViewer(page, embedURL);
+  await expect(page.getByText('Or pick a preset')).toHaveCount(0);
+  await page.locator('input[type=file]').first().setInputFiles('tests/fixtures/ui-notice-displacement.mtlx');
+  const btn = page.getByTestId('viewer-diagnostics-button');
+  await expect(page.getByTestId('viewer-diagnostics-count')).toHaveText(/^[1-9]/, { timeout: WAIT_TIMEOUT });
+  await btn.click();
+  await expect(page.getByTestId('viewer-diagnostics-popover')).toContainText('Displacement');
+  await page.screenshot({ path: 'C:/Users/joaov/AppData/Local/Temp/mxpt-renders/release-batch/ui-polish/round3-viewer-diagnostics.png' });
+  expect(errors).toEqual([]);
+});
+
+test('Compare Statistics tabs show per-document values above the Difference Metrics', async ({ page, embedURL }) => {
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(embedURL + '/index.html#!compare');
+  await expect(page.getByTestId('compare-stats-tab-A')).toBeVisible({ timeout: WAIT_TIMEOUT });
+  await expect(page.getByText('Or pick a preset')).toHaveCount(0);
+  await expect(page.getByTestId('compare-metrics')).toContainText('Difference Metrics');
+  await page.getByRole('button', { name: 'Load an example pair' }).click();
+  const out = 'C:/Users/joaov/AppData/Local/Temp/mxpt-renders/release-batch/ui-polish/round3-compare-';
+  await expect(page.getByTestId('compare-stat-ssim')).toHaveText(/^\d/, { timeout: WAIT_TIMEOUT });
+  const h = async () => (await page.getByTestId('compare-statistics').boundingBox()).height;
+  const h0 = await h();
+  for (const k of ['A', 'B']) {
+    await page.getByTestId('compare-stats-tab-' + k).click();
+    await expect(page.getByTestId('compare-' + k + '-stat-shader-size')).toHaveText(/^\d+(\.\d)? (KB|MB)$/, { timeout: WAIT_TIMEOUT });
+    await expect(page.getByTestId('compare-' + k + '-stat-build-ms')).toHaveText(/^\d+ ms$/);
+    await expect(page.getByTestId('compare-diagnostics-' + k + '-button')).toBeVisible();
+    expect(Math.abs((await h()) - h0)).toBeLessThanOrEqual(1);
+    await page.screenshot({ path: out + 'tab-' + k + '.png' });
+  }
+  expect(errors).toEqual([]);
+});

@@ -380,7 +380,6 @@
                 if (onErrorRef.current) onErrorRef.current(msg);
             };
             const [texReport, setTexReport] = React.useState(null);
-            const [filesOpen, setFilesOpen] = React.useState(false);
             const [viewStats, setViewStats] = React.useState(null); // shader size, uniforms, textures, build ms
             // "Loading textures\u2026" badge while bindDroppedTextures' async
             // loads are in flight. texLoadGenRef guards races: a newer
@@ -1244,13 +1243,6 @@
             }, [viewEpoch]);
 
             const fileCount = Object.keys(fileMap).length;
-            const fmtBytes = (n) => (!n ? '-' : n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
-            const statRows = [
-                ['Shader size', viewStats ? fmtBytes(viewStats.fsBytes) : '-', 'viewer-stat-shader-size', 'Generated fragment shader source'],
-                ['Uniforms', viewStats ? viewStats.uniforms : '-', 'viewer-stat-uniforms'],
-                ['Textures', viewStats ? (texReport ? texReport.bound.length : 0) : '-', 'viewer-stat-textures', 'Images bound to the material'],
-                ['Build time', viewStats ? viewStats.ms + ' ms' : '-', 'viewer-stat-build-ms', 'Last shader generation and compile'],
-            ];
             const texCount = Object.keys(fileMap).filter((k) => IMG_EXT.test(k)).length;
 
             // Embed HUD opt-in: which ViewportControls buttons chromeless
@@ -1383,30 +1375,7 @@
                                 <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={onPickFiles} />
                             </label>
                         </div>
-                        <div>
-                            <button
-                                type="button"
-                                data-testid="viewer-files-toggle"
-                                aria-expanded={filesOpen}
-                                onClick={() => setFilesOpen((o) => !o)}
-                                className="w-full h-5 flex items-center justify-between gap-3 -mx-1 px-1 rounded text-left hover:bg-hover-subtle/60"
-                            >
-                                <span className={HUD.ROW_LABEL + ' inline-flex items-center gap-1 shrink-0'}>
-                                    <MtlxIcon name={filesOpen ? 'chevron-down' : 'chevron-right'} className="w-3 h-3" />Files loaded
-                                </span>
-                                <span data-testid="viewer-files-summary" className="min-w-0 truncate text-right text-[11px] text-fg-secondary">{fileCount} file{fileCount === 1 ? '' : 's'}</span>
-                            </button>
-                            {filesOpen && (
-                                <div data-testid="viewer-files-list" className="mt-1 max-h-40 overflow-y-auto custom-scrollbar rounded-md border border-line bg-surface-sunken/60 py-1">
-                                    {Object.keys(fileMap).map((k) => (
-                                        <div key={k} className="flex items-baseline justify-between gap-2 px-2 py-0.5 text-[11px]">
-                                            <span className="min-w-0 truncate font-mono text-fg-secondary" title={k}>{k}</span>
-                                            <span className="shrink-0 font-mono tabular-nums text-fg-subtle">{fmtBytes(fileMap[k] && fileMap[k].size)}</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
+                        <HUD.FilesLoaded testId="viewer-files" files={Object.keys(fileMap).map((k) => ({ path: k, size: fileMap[k] && fileMap[k].size }))} />
 
                         {mtlxPaths.length > 1 && (
                             <div>
@@ -1430,7 +1399,6 @@
                         )}
 
                         <div>
-                            <FieldLabel label="Or pick a preset" />
                             <button
                                 type="button"
                                 onClick={openPresetPicker}
@@ -1502,18 +1470,6 @@
                         </section>
                     )}
 
-                    {materialNotices && materialNotices.length > 0 && (
-                        <section data-testid="viewer-section-material-notices" className="flex-none px-3.5 py-3 space-y-2 border-t border-line">
-                        <SidebarSectionHeader icon="info" title="Material notices" summary={materialNotices.length + ''} />
-                            <div className="space-y-2">
-                                {materialNotices.map((n, i) => (
-                                    <div key={'n' + i} className="flex items-start gap-1 text-warning/90 font-mono text-xs break-all">
-                                        <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-0.5" /><span>{n}</span>
-                                    </div>
-                                ))}
-                            </div>
-                        </section>
-                    )}
                 </div>
             );
 
@@ -1810,15 +1766,9 @@
                                 <div className="flex items-center gap-2 mb-1.5">
                                     <MtlxIcon name="cube" className="w-4 h-4 text-fg-muted shrink-0" />
                                     <span className="text-[13px] font-semibold text-fg shrink-0">Statistics</span>
+                                    <HUD.DiagnosticsButton testId="viewer-diagnostics" notices={materialNotices} />
                                 </div>
-                                <div className="space-y-1 text-[11px] text-fg-secondary">
-                                    {statRows.map(([label, value, testId, title]) => (
-                                        <div key={label} className="flex justify-between" title={title}>
-                                            <span className={HUD.ROW_LABEL}>{label}</span>
-                                            <span className="font-mono tabular-nums" data-testid={testId}>{value}</span>
-                                        </div>
-                                    ))}
-                                </div>
+                                <HUD.MaterialStatRows prefix="viewer" stats={viewStats} textures={texReport ? texReport.bound.length : 0} />
                             </div>
                             <div className="flex-none border-t border-line px-3 py-2 text-[11px] text-fg-subtle">
                                 Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to the image node's default color.
