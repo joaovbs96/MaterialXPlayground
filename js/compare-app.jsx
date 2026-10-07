@@ -1303,14 +1303,16 @@ function MaterialCompareApp({ active = true } = {}) {
         </React.Fragment>
     );
 
-    const renderSlotSection = (slot, slotKey, title, dropHint) => {
+    const renderSlotSection = (slot, slotKey, title) => {
         const docBasename = slot.chosenMtlx ? slot.chosenMtlx.split('/').pop() : 'No document';
         return (
             <section data-testid={'compare-section-' + slotKey} className={'flex-none px-3.5 py-3 space-y-2' + (slotKey === 'A' ? '' : ' border-t border-line')}>
-                <SidebarSectionHeader icon="file-text" title={title} pill={<SlotDot color={SLOT_COLORS[slotKey]} />} summary={docBasename} />
-                <div>
-                    <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-medium text-fg-muted">MaterialX version</span>
+                <div className="flex items-center gap-2 min-w-0">
+                    <MtlxIcon name="file-text" className="w-4 h-4 text-fg-muted shrink-0" />
+                    <span className="text-[13px] font-semibold text-fg shrink-0">{title}</span>
+                    <SlotDot color={SLOT_COLORS[slotKey]} />
+                    <div className="flex-1" />
+                    <div className="shrink-0" title="MaterialX version">
                         <MtlxSelect
                             value={slot.version}
                             options={mtlxVersions}
@@ -1350,7 +1352,6 @@ function MaterialCompareApp({ active = true } = {}) {
                         <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={(e) => { setPresetPick((s) => ({ ...s, [slotKey]: '' })); slot.onPickFiles(e); }} />
                     </label>
                 </div>
-                <div className="text-xs text-fg-subtle">{dropHint}</div>
                 {slot.mtlxPaths.length > 1 && (
                     <MtlxSelect
                         value={slot.chosenMtlx || ''}
@@ -1363,18 +1364,15 @@ function MaterialCompareApp({ active = true } = {}) {
                         block
                     />
                 )}
-                <div>
-                    <FieldLabel label="Or pick a preset" />
-                    <button
-                        type="button"
-                        onClick={() => openPresetPickerForSlot(slotKey)}
-                        disabled={presetBusy[slotKey] || slot.busy}
-                        className={BTN_SECONDARY + ' w-full justify-start gap-1.5'}
-                    >
-                        <MtlxIcon name="presets" className="w-3.5 h-3.5" />
-                        Presets
-                    </button>
-                </div>
+                <button
+                    type="button"
+                    onClick={() => openPresetPickerForSlot(slotKey)}
+                    disabled={presetBusy[slotKey] || slot.busy}
+                    className={BTN_SECONDARY + ' w-full justify-start gap-1.5'}
+                >
+                    <MtlxIcon name="presets" className="w-3.5 h-3.5" />
+                    Presets
+                </button>
                 {slot.renderables.length > 1 && (
                     <MtlxSelect
                         value={slot.chosenMat}
@@ -1635,8 +1633,8 @@ function MaterialCompareApp({ active = true } = {}) {
                         ><MtlxIcon name="chevrons-left" className="w-4 h-4" /></button>
                     </div>
                     <div className="flex-1 min-h-0 flex flex-col overflow-y-auto custom-scrollbar">
-                        {renderSlotSection(slotA, 'A', 'Document A', 'or drag-and-drop on the left half')}
-                        {renderSlotSection(slotB, 'B', 'Document B', 'or drag-and-drop on the right half')}
+                        {renderSlotSection(slotA, 'A', 'Document A')}
+                        {renderSlotSection(slotB, 'B', 'Document B')}
 
                         <section data-testid="compare-section-display" className="flex-none px-3.5 py-3 space-y-2 border-t border-line">
                             <SidebarSectionHeader icon="layout-columns" title="Display" summary={modeLabel} />
