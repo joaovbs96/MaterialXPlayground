@@ -2182,6 +2182,8 @@ function collectLights(api, root, graph, warn, evaluatedTransforms = null) {
       type: typeName,
       matrix: evaluatedTransforms?.get(primPath) ?? matrix,
       textureFile: valueOf("inputs:texture:file") ?? null,
+      // Authored with an empty value is not the same as absent (flat dome).
+      textureAuthored: leafMap.get("inputs:texture:file")?.isAuthored === true,
       textureFormat: valueOf("inputs:texture:format") ?? "automatic",
       intensity: numberOf("inputs:intensity", LIGHT_DEFAULTS.intensity),
       exposure: numberOf("inputs:exposure", LIGHT_DEFAULTS.exposure),

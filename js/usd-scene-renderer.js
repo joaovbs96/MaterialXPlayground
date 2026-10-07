@@ -512,33 +512,55 @@ const sceneDomeOrientation = (matrix) => {
     return { tilt, rotationDeg: ((euler.y * 180 / Math.PI) % 360 + 360) % 360 };
 };
 
+// How a dome's texture attribute reads: a file path, authored but empty, or not authored.
+const sceneDomeTextureMode = (dome) => (dome && dome.textureFile ? 'file' : (dome && dome.textureAuthored ? 'empty' : 'flat'));
+
 // Builds the environment a stage's own dome light describes, so a stage
 // renders under the lighting it was authored with. Returns null when the
 // stage has no dome; never throws, since a light must not block a load.
-const sceneDomeEnvironment = async (stage, fileMap, warnings) => {
+const sceneDomeEnvironment = async (stage, fileMap, warnings, defaultEnv) => {
     const dome = sceneArray(stage && stage.lights)
         .find((light) => String(light && light.type || '').toLowerCase() === 'domelight');
     if (!dome) return null;
     const warn = (message) => { if (warnings && warnings.indexOf(message) < 0) warnings.push(message); };
+    // A texture that is authored but empty, missing or undecodable keeps the
+    // default environment, still driven by the dome's orientation and exposure.
+    const fallback = (reason) => {
+        if (!defaultEnv) return null;
+        warn('Dome light ' + dome.primPath + ': texture ' + reason + '; using the default environment');
+        return { env: defaultEnv, fallback: true, fileName: 'default environment' };
+    };
     try {
         let env = null;
         let fileName = null;
-        if (dome.textureFile) {
+        const mode = sceneDomeTextureMode(dome);
+        const useDefault = (reason) => {
+            const hit = fallback(reason);
+            if (hit) { env = hit.env; fileName = hit.fileName; }
+        };
+        if (mode === 'empty') {
+            useDefault('is empty or could not be loaded');
+        } else if (mode === 'file') {
             const resolved = sceneResolveDomeTexture(fileMap, stage, dome.textureFile);
             if (!resolved.path) {
-                warn(resolved.reason === 'ambiguous'
-                    ? 'Dome light texture "' + resolved.ref + '" is ambiguous, using the default environment'
-                    : 'Dome light texture not found: "' + String(dome.textureFile) + '"');
-                return null;
+                useDefault(resolved.reason === 'ambiguous'
+                    ? '"' + resolved.ref + '" is ambiguous'
+                    : 'is empty or could not be loaded');
+            } else {
+                const ext = resolved.path.slice(resolved.path.lastIndexOf('.')).toLowerCase();
+                if (ext !== '.hdr' && ext !== '.exr') {
+                    warn('Dome light texture "' + resolved.path + '" is not a .hdr or .exr environment');
+                    return null;
+                }
+                const buffer = await fileMap[resolved.path].arrayBuffer();
+                try {
+                    env = await window.loadEnvironmentFromBuffer(buffer, ext, resolved.path, false);
+                } catch (decodeError) {
+                    env = null;
+                }
+                if (env) fileName = resolved.path.split('/').pop();
+                else useDefault('is empty or could not be loaded');
             }
-            const ext = resolved.path.slice(resolved.path.lastIndexOf('.')).toLowerCase();
-            if (ext !== '.hdr' && ext !== '.exr') {
-                warn('Dome light texture "' + resolved.path + '" is not a .hdr or .exr environment');
-                return null;
-            }
-            const buffer = await fileMap[resolved.path].arrayBuffer();
-            env = await window.loadEnvironmentFromBuffer(buffer, ext, resolved.path, false);
-            fileName = resolved.path.split('/').pop();
         } else {
             if (!window.makeFlatEnvironment) return null;
             env = window.makeFlatEnvironment(dome.color);
@@ -3006,7 +3028,7 @@ const scenePruneUnreachableNodes = (xml) => {
         // A stage's own dome light is its authored lighting, so apply it
         // unless the user already imported an environment this session.
         if (!userEnv) {
-            const domeResult = await sceneDomeEnvironment(stage, fileMap, warnings);
+            const domeResult = await sceneDomeEnvironment(stage, fileMap, warnings, env);
             if (domeResult && domeResult.env) {
                 env = domeResult.env;
                 domeEnv = domeResult.env;
