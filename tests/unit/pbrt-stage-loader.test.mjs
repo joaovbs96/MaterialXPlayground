@@ -28,6 +28,9 @@ import {
   pbrtRoughnessToOpenPbr,
   pbrtMaterialRoughness,
   pbrtMaterialDocument,
+  pbrtCoatedDiffuseAlbedo,
+  pbrtCoatedDiffuseBaseColor,
+  openPbrCoatTerms,
 } from '../../js/usd/mtlx-material-docs.js';
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) <= eps, a + ' != ' + b);
@@ -134,7 +137,7 @@ test('material documents: coateddiffuse, named conductor and emission', () => {
   const coated = pbrtMaterialDocument({ name: 'Plastic', material: { type: 'coateddiffuse', params: { reflectance: { type: 'rgb', values: [1, 0.5, 0] } } } });
   assert.match(coated.xml, /name="coat_weight" type="float" value="1"/);
   assert.match(coated.xml, /name="coat_ior" type="float" value="1.5"/);
-  assert.match(coated.xml, /name="base_color" type="color3" value="1, 0.5, 0"/);
+  assert.match(coated.xml, /name="base_color" type="color3" value="0.875763, 0.486221, 0"/);
   const metal = pbrtMaterialDocument({ name: 'Metal', material: { type: 'conductor', params: { eta: { type: 'spectrum', values: ['metal-Ag-eta'] }, k: { type: 'spectrum', values: ['metal-Ag-k'] } } } });
   assert.match(metal.xml, /name="base_metalness" type="float" value="1"/);
   assert.deepEqual(metal.notes, []);
@@ -209,4 +212,46 @@ test('loadPbrtStage: payload from trianglemesh, gzipped plymesh, area light and 
   // Camera eye at pbrt (0, 0, -5) lands at (0, 0, 5) after the Z mirror.
   nearAll(stage.cameras[0].matrix.slice(12, 15), [0, 0, 5]);
   assert.ok(stage.warnings.includes('Shape "sphere" is not supported, skipped'));
+});
+
+// Diffuse albedo (total minus the R = 0 specular) of grey coateddiffuse strips rendered
+// by pbrt-v4 in a white furnace, head-on, maxdepth 10 (coatfit sweep, 256 spp).
+test('coateddiffuse albedo model matches the pbrt-v4 sweep', () => {
+  const points = [
+    // R, eta, alpha, thickness, pbrt
+    [0.5, 1.5, 0.001, 0.01, 0.3037 - 0.0385],
+    [1, 1.5, 0.3, 0.01, 0.6565 - 0.0344],
+    [0.9, 2, 0.1, 0.1, 0.3568 - 0.1067],
+    [0.75, 1.33, 0.1, 0.001, 0.5888 - 0.0198],
+    [1, 2, 0.001, 0.01, 0.6831 - 0.1081],
+    [1, 1.5, 0.001, 0.1, 0.544 - 0.0385],
+  ];
+  for (const [R, eta, alpha, t, pbrt] of points) near(pbrtCoatedDiffuseAlbedo(R, eta, alpha, t), pbrt, 0.015);
+  // maxdepth 100 against 10: the walk is no longer cut after five base bounces.
+  near(pbrtCoatedDiffuseAlbedo(1, 1.5, 0.001, 0.01, 100) + 0.0385, 0.910, 0.01);
+});
+
+test('coateddiffuse spectral match: pbrt orange through its RGBAlbedoSpectrum', () => {
+  const orange = [1, 0.378676, 0.013473];
+  const md10 = pbrtCoatedDiffuseBaseColor(orange, 1.5, 0.001, 0.01, 10);
+  assert.ok(md10.spectral);
+  nearAll(md10.target.map((v) => v + 0.0385), [0.744, 0.2284, 0.0341], 0.005);
+  // OpenPBR's albedo for the solved base_color reproduces the target.
+  const { c, kc } = openPbrCoatTerms(1.5, 0.001);
+  [0, 1].forEach((i) => { const b = md10.color[i]; near(c * b / (1 - kc * b), md10.target[i], 1e-6); });
+  near(md10.color[2], 0);
+  // Greys are flat spectra: the match is per channel.
+  const grey = pbrtCoatedDiffuseBaseColor([0.5, 0.5, 0.5], 1.5, 0.001, 0.01);
+  assert.equal(grey.spectral, false);
+  near(grey.target[0], pbrtCoatedDiffuseAlbedo(0.5, 1.5, 0.001, 0.01));
+});
+
+test('coateddiffuse textured reflectance builds the per-channel match graph', () => {
+  const img = { kind: 'image', file: 't.png', colorspace: 'srgb_texture', uaddress: 'periodic', vaddress: 'periodic', uv: null, scale: 1, invert: false, floatChannel: 'first' };
+  const doc = pbrtMaterialDocument({ name: 'T', material: { type: 'coateddiffuse', params: {
+    reflectance: { type: 'texture', values: ['T'], texture: img }, thickness: { type: 'float', values: [0.05] }, maxdepth: { type: 'integer', values: [20] } } } });
+  assert.match(doc.xml, /<power name="coat_rk_n[^"]*" type="color3"/);
+  assert.match(doc.xml, /<clamp name="coat_base_color[^"]*" type="color3"/);
+  assert.match(doc.xml, /name="in2" type="color3" value="10, 10, 10"/);
+  assert.ok(doc.notes.some((n) => /per RGB channel/.test(n)));
 });

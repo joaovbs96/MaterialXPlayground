@@ -973,7 +973,7 @@ const asType = (ctx, x, type) => (type === "color3" ? asColor(ctx, x) : asFloat(
 const foldK = (type, a, b, fn) => (type === "color3"
   ? [0, 1, 2].map((i) => fn(Array.isArray(a) ? a[i] : a, Array.isArray(b) ? b[i] : b))
   : fn(Array.isArray(a) ? a[0] : a, Array.isArray(b) ? b[0] : b));
-const BINARY = { multiply: (a, b) => a * b, add: (a, b) => a + b, subtract: (a, b) => a - b, divide: (a, b) => a / b, min: Math.min, max: Math.max };
+const BINARY = { power: Math.pow, multiply: (a, b) => a * b, add: (a, b) => a + b, subtract: (a, b) => a - b, divide: (a, b) => a / b, min: Math.min, max: Math.max };
 
 function binary(ctx, category, a, b, name) {
   const type = typeOf(a) === "color3" || typeOf(b) === "color3" ? "color3" : "float";
@@ -1273,10 +1273,26 @@ export function pbrtMaterialDocument({ name, material, emission, textureFile } =
     const base = color("reflectance", [0.5, 0.5, 0.5]);
     const rough = roughness();
     const eta = pbrtEta(take("eta"), notes);
-    for (const key of ["thickness", "albedo", "g", "maxdepth", "nsamples"]) {
-      if (params[key]) { used.add(key); notes.push(key + " (coating layer) is not imported"); }
+    const thicknessParam = take("thickness");
+    if (thicknessParam && thicknessParam.type === "texture") notes.push("textured coating thickness is not imported, 0.01 is used for the albedo match");
+    const thickness = Math.max(0, pbrtFloat(thicknessParam, 0.01));
+    const maxDepth = pbrtFloat(take("maxdepth"), 10);
+    take("nsamples");
+    const albedoParam = take("albedo"), gParam = take("g");
+    const albedoValues = albedoParam && (pbrtRgb(albedoParam, [], "albedo") || [1]);
+    if (albedoValues && albedoValues.some((v) => Number(v) !== 0)) notes.push("the scattering coating medium (albedo, g) is not imported");
+    else if (gParam && pbrtFloat(gParam, 0) !== 0) notes.push("g has no effect without a coating albedo");
+    // Match pbrt's diffuse albedo (thickness, maxdepth, the coat in and out) through base_color.
+    const alpha = isK(rough) ? rough.k * rough.k : 0.1;
+    if (!isK(rough)) notes.push("textured roughness: the coated albedo match uses alpha 0.1");
+    if (isK(base)) {
+      const matched = pbrtCoatedDiffuseBaseColor(base.k, eta, alpha, thickness, maxDepth);
+      if (matched.clamped) notes.push("reflectance needs an albedo outside OpenPBR's base_color range in " + matched.clamped + " channel(s), clamped");
+      set("base_color", "color3", { k: matched.color.map((v) => Number(v.toFixed(6))) });
+    } else {
+      notes.push("textured reflectance is matched per RGB channel, without pbrt's spectral coat");
+      set("base_color", "color3", pbrtCoatedDiffuseBaseColorOp(ctx, base, eta, alpha, thickness, maxDepth));
     }
-    set("base_color", "color3", base);
     set("specular_weight", "float", { k: 0 });
     set("coat_weight", "float", { k: 1 });
     set("coat_ior", "float", { k: eta });
@@ -1457,14 +1473,214 @@ const GGX_ALBEDO_FIT = [
 // Hemispherical albedo of OpenPBR's dielectric specular layer as MaterialX
 // renders it: mx_ggx_dir_albedo_analytic times mx_ggx_energy_compensation.
 export function openPbrDielectricAlbedo(eta, alpha) {
-  const y = Math.min(1, Math.max(alpha, 1e-8)), y2 = y * y;
+  return cosineAverage((x) => openPbrDielectricDirAlbedo(x, eta, alpha));
+}
+
+// The same albedo for one view cosine x (the layer throughput is 1 minus this).
+export function openPbrDielectricDirAlbedo(x, eta, alpha) {
+  const y = Math.min(1, Math.max(alpha, 1e-8)), y2 = y * y, x2 = x * x;
   const f0 = ((eta - 1) / (eta + 1)) ** 2;
-  return cosineAverage((x) => {
-    const x2 = x * x;
-    const r = GGX_ALBEDO_FIT.map((k) => k[0] + k[1] * x + k[2] * y + k[3] * x * y + k[4] * x2 + k[5] * y2 + k[6] * x2 * y + k[7] * x * y2 + k[8] * x2 * y2);
-    const a = Math.min(1, Math.max(0, r[0] / r[2])), b = Math.min(1, Math.max(0, r[1] / r[3]));
-    return (f0 * a + b) * (1 + dielectricFresnel(x, eta) * (1 - (a + b)) / (a + b));
+  const r = GGX_ALBEDO_FIT.map((k) => k[0] + k[1] * x + k[2] * y + k[3] * x * y + k[4] * x2 + k[5] * y2 + k[6] * x2 * y + k[7] * x * y2 + k[8] * x2 * y2);
+  const a = Math.min(1, Math.max(0, r[0] / r[2])), b = Math.min(1, Math.max(0, r[1] / r[3]));
+  return (f0 * a + b) * (1 + dielectricFresnel(x, eta) * (1 - (a + b)) / (a + b));
+}
+
+// ---------------------------------------------------------------- pbrt coateddiffuse
+
+// Smith Lambda of pbrt's TrowbridgeReitzDistribution (isotropic alpha) at cosine mu.
+function ggxLambda(mu, alpha) {
+  const tan2 = (1 - mu * mu) / Math.max(mu * mu, 1e-12);
+  return (Math.sqrt(1 + alpha * alpha * tan2) - 1) / 2;
+}
+
+// pbrt's DielectricBxDF hit at cosine mu (relative ior eta), integrated over visible
+// normals (n x n stratified, Heitz 2018 sampling as in pbrt's Sample_wm). Calls
+// visit(weight, |cos out|, reflected) for every reflected or refracted direction kept.
+function pbrtDielectricScatter(mu, eta, alpha, visit, n = 32) {
+  const s = Math.sqrt(Math.max(0, 1 - mu * mu));
+  let vx = alpha * s, vz = mu;
+  const vl = Math.hypot(vx, vz); vx /= vl; vz /= vl;
+  const lamO = ggxLambda(mu, alpha), g1 = 1 / (1 + lamO), w = 1 / (n * n);
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      const r = Math.sqrt((i + 0.5) / n), phi = 2 * Math.PI * (j + 0.5) / n;
+      const t1 = r * Math.cos(phi), h = Math.sqrt(Math.max(0, 1 - t1 * t1)), q = 0.5 * (1 + vz);
+      const t2 = (1 - q) * h + q * r * Math.sin(phi), t3 = Math.sqrt(Math.max(0, 1 - t1 * t1 - t2 * t2));
+      // T1 = (0, 1, 0), T2 = vh x T1 = (-vz, 0, vx); visible normal back to the ellipsoid.
+      let mx = alpha * (-t2 * vz + t3 * vx), my = alpha * t1, mz = Math.max(1e-6, t2 * vx + t3 * vz);
+      const ml = Math.hypot(mx, my, mz); mx /= ml; my /= ml; mz /= ml;
+      const c = s * mx + mu * mz, F = dielectricFresnel(c, eta);
+      const rz = 2 * c * mz - mu;
+      if (rz > 0) visit(F / (1 + lamO + ggxLambda(rz, alpha)) / g1 * w, rz, true);
+      const sin2t = (1 - c * c) / (eta * eta);
+      if (sin2t < 1) {
+        const tz = -mu / eta + (c / eta - Math.sqrt(1 - sin2t)) * mz;
+        if (tz < 0) visit((1 - F) / (1 + lamO + ggxLambda(-tz, alpha)) / g1 * w, -tz, false);
+      }
+    }
+  }
+}
+
+const pbrtCoatTermsCache = new Map();
+
+// Constants of pbrt-v4's CoatedDiffuseBxDF (bxdfs.h LayeredBxDF, albedo 0) seen head-on:
+// t0 enters and crosses the slab once, e leaves after a Lambertian bounce, k returns to
+// the base (internal reflection, two crossings); each crossing is exp(-thickness/|cos|).
+export function pbrtCoatedDiffuseTerms(eta, alpha, thickness) {
+  const key = eta + "|" + alpha + "|" + thickness;
+  if (pbrtCoatTermsCache.has(key)) return pbrtCoatTermsCache.get(key);
+  const tr = (mu) => Math.exp(-thickness / Math.max(mu, 1e-9));
+  let terms;
+  if (alpha < 1e-3) {
+    // EffectivelySmooth: perfect specular interface.
+    const fi = (mu) => dielectricFresnel(mu, 1 / eta);
+    terms = {
+      t0: (1 - dielectricFresnel(1, eta)) * Math.exp(-thickness),
+      e: cosineAverage((mu) => tr(mu) * (1 - fi(mu)), 2048),
+      k: cosineAverage((mu) => tr(mu) * tr(mu) * fi(mu), 2048),
+    };
+  } else {
+    let t0 = 0, e = 0, k = 0;
+    pbrtDielectricScatter(1, eta, alpha, (w, mu, refl) => { if (!refl) t0 += w * tr(mu); });
+    const nmu = 32;
+    for (let i = 0; i < nmu; i++) {
+      const mu = Math.sqrt((i + 0.5) / nmu); // cosine-distributed internal directions
+      pbrtDielectricScatter(mu, 1 / eta, alpha, (w, out, refl) => {
+        if (refl) k += tr(mu) * w * tr(out) / nmu; else e += tr(mu) * w / nmu;
+      });
+    }
+    terms = { t0, e, k };
+  }
+  pbrtCoatTermsCache.set(key, terms);
+  return terms;
+}
+
+// Diffuse albedo leaving pbrt's coateddiffuse head-on in a white furnace: maxdepth
+// steps of the random walk give ceil(maxdepth / 2) base bounces (geometric series cut).
+export function pbrtCoatedDiffuseAlbedo(R, eta, alpha, thickness, maxDepth = 10) {
+  const { t0, e, k } = pbrtCoatedDiffuseTerms(eta, alpha, thickness);
+  let sum = 0, x = 1;
+  for (let i = 0; i < pbrtCoatBounces(maxDepth); i++) { sum += x; x *= R * k; }
+  return t0 * e * R * sum;
+}
+
+const pbrtCoatBounces = (maxDepth) => Math.min(1000, Math.max(1, Math.ceil(maxDepth / 2)));
+
+// OpenPBR's head-on diffuse albedo under coat_weight 1 (open_pbr_surface.mtlx, 1.39.5):
+// b (1 - Kcoat) / (1 - b Kcoat) times the coat layer throughput 1 - E_coat(1).
+export function openPbrCoatTerms(eta, alpha) {
+  const kc = 1 - (1 - ((eta - 1) / (eta + 1)) ** 2) / (eta * eta);
+  return { c: (1 - openPbrDielectricDirAlbedo(1, eta, alpha)) * (1 - kc), kc };
+}
+
+// base_color whose OpenPBR albedo matches pbrt's coateddiffuse with reflectance R: the
+// pbrt series in R, (1 - (R k)^n) / (1 - R k), then b = D / (c + Kcoat D), clamped to [0, 1]. Works on
+// constants (folded) and on texture graphs alike.
+function pbrtCoatedDiffuseBaseColorOp(ctx, base, eta, alpha, thickness, maxDepth) {
+  const { t0, e, k } = pbrtCoatedDiffuseTerms(eta, alpha, thickness);
+  const { c, kc } = openPbrCoatTerms(eta, alpha);
+  const rk = binary(ctx, "multiply", base, { k: k }, "coat_rk");
+  const cut = binary(ctx, "subtract", { k: 1 }, binary(ctx, "power", rk, { k: pbrtCoatBounces(maxDepth) }, "coat_rk_n"), "coat_cut");
+  const series = binary(ctx, "divide", cut, binary(ctx, "subtract", { k: 1 }, rk, "coat_one_minus_rk"), "coat_series");
+  const d = binary(ctx, "multiply", binary(ctx, "multiply", base, { k: t0 * e }, "coat_entry"), series, "coat_albedo");
+  const denom = binary(ctx, "add", { k: c }, binary(ctx, "multiply", d, { k: kc }, "coat_darkening"), "coat_denominator");
+  return clampOp(ctx, binary(ctx, "divide", d, denom, "coat_base_raw"), 0, 1, "coat_base_color");
+}
+
+// CIE 1931 2-degree observer, CIE D65 and the sRGB matrices at 5 nm over 360..830 nm,
+// as tabulated in pbrt-v4's src/pbrt/cmd/rgb2spec_opt.cpp (cie_x/y/z, cie_d65).
+const PBRT_CIE = {
+  X: [0.0001299, 0.0002321, 0.0004149, 0.0007416, 0.001368, 0.002236, 0.004243, 0.00765, 0.01431, 0.02319, 0.04351, 0.07763, 0.13438, 0.21477, 0.2839, 0.3285, 0.34828, 0.34806, 0.3362, 0.3187, 0.2908, 0.2511, 0.19536, 0.1421, 0.09564, 0.05795, 0.03201, 0.0147, 0.0049, 0.0024, 0.0093, 0.0291, 0.06327, 0.1096, 0.1655, 0.22575, 0.2904, 0.3597, 0.43345, 0.51205, 0.5945, 0.6784, 0.7621, 0.8425, 0.9163, 0.9786, 1.0263, 1.0567, 1.0622, 1.0456, 1.0026, 0.9384, 0.85445, 0.7514, 0.6424, 0.5419, 0.4479, 0.3608, 0.2835, 0.2187, 0.1649, 0.1212, 0.0874, 0.0636, 0.04677, 0.0329, 0.0227, 0.01584, 0.0113592, 0.00811092, 0.00579035, 0.00410946, 0.00289933, 0.00204919, 0.00143997, 0.000999949, 0.000690079, 0.000476021, 0.000332301, 0.000234826, 0.000166151, 0.000117413, 8.30753e-05, 5.87065e-05, 4.15099e-05, 2.93533e-05, 2.06738e-05, 1.45598e-05, 1.0254e-05, 7.22146e-06, 5.08587e-06, 3.58165e-06, 2.52253e-06, 1.77651e-06, 1.25114e-06],
+  Y: [3.917e-06, 6.965e-06, 1.239e-05, 2.202e-05, 3.9e-05, 6.4e-05, 0.00012, 0.000217, 0.000396, 0.00064, 0.00121, 0.00218, 0.004, 0.0073, 0.0116, 0.01684, 0.023, 0.0298, 0.038, 0.048, 0.06, 0.0739, 0.09098, 0.1126, 0.13902, 0.1693, 0.20802, 0.2586, 0.323, 0.4073, 0.503, 0.6082, 0.71, 0.7932, 0.862, 0.91485, 0.954, 0.9803, 0.99495, 1, 0.995, 0.9786, 0.952, 0.9154, 0.87, 0.8163, 0.757, 0.6949, 0.631, 0.5668, 0.503, 0.4412, 0.381, 0.321, 0.265, 0.217, 0.175, 0.1382, 0.107, 0.0816, 0.061, 0.04458, 0.032, 0.0232, 0.017, 0.01192, 0.00821, 0.005723, 0.004102, 0.002929, 0.002091, 0.001484, 0.001047, 0.00074, 0.00052, 0.0003611, 0.0002492, 0.0001719, 0.00012, 8.48e-05, 6e-05, 4.24e-05, 3e-05, 2.12e-05, 1.499e-05, 1.06e-05, 7.4657e-06, 5.2578e-06, 3.7029e-06, 2.6078e-06, 1.8366e-06, 1.2934e-06, 9.1093e-07, 6.4153e-07, 4.5181e-07],
+  Z: [0.0006061, 0.001086, 0.001946, 0.003486, 0.00645, 0.01055, 0.02005, 0.03621, 0.06785, 0.1102, 0.2074, 0.3713, 0.6456, 1.03905, 1.3856, 1.62296, 1.74706, 1.7826, 1.77211, 1.7441, 1.6692, 1.5281, 1.28764, 1.0419, 0.81295, 0.6162, 0.46518, 0.3533, 0.272, 0.2123, 0.1582, 0.1117, 0.07825, 0.05725, 0.04216, 0.02984, 0.0203, 0.0134, 0.00875, 0.00575, 0.0039, 0.00275, 0.0021, 0.0018, 0.00165, 0.0014, 0.0011, 0.001, 0.0008, 0.0006, 0.00034, 0.00024, 0.00019, 0.0001, 5e-05, 3e-05, 2e-05, 1e-05, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+  D65: [46.6383, 49.3637, 52.0891, 51.0323, 49.9755, 52.3118, 54.6482, 68.7015, 82.7549, 87.1204, 91.486, 92.4589, 93.4318, 90.057, 86.6823, 95.7736, 104.865, 110.936, 117.008, 117.41, 117.812, 116.336, 114.861, 115.392, 115.923, 112.367, 108.811, 109.082, 109.354, 108.578, 107.802, 106.296, 104.79, 106.239, 107.689, 106.047, 104.405, 104.225, 104.046, 102.023, 100, 98.1671, 96.3342, 96.0611, 95.788, 92.2368, 88.6856, 89.3459, 90.0062, 89.8026, 89.5991, 88.6489, 87.6987, 85.4936, 83.2886, 83.4939, 83.6992, 81.863, 80.0268, 80.1207, 80.2146, 81.2462, 82.2778, 80.281, 78.2842, 74.0027, 69.7213, 70.6652, 71.6091, 72.979, 74.349, 67.9765, 61.604, 65.7448, 69.8856, 72.4863, 75.087, 69.3398, 63.5927, 55.0054, 46.4182, 56.6118, 66.8054, 65.0941, 63.3828, 63.8434, 64.304, 61.8779, 59.4519, 55.7054, 51.959, 54.6998, 57.4406, 58.8765, 60.3125],
+  XYZ_TO_SRGB: [3.24048, -1.53715, -0.498535, -0.969256, 1.87599, 0.041556, 0.055648, -0.204043, 1.05731],
+  SRGB_TO_XYZ: [0.412453, 0.35758, 0.180423, 0.212671, 0.71516, 0.072169, 0.019334, 0.119193, 0.950227],
+};
+
+let pbrtSpectralTables = null;
+
+// rgb2spec_opt.cpp init_tables(SRGB): Simpson 3/8 weights on the 3x refined grid,
+// sRGB response per sample under D65, normalized so a flat spectrum maps to white.
+function pbrtSpectral() {
+  if (pbrtSpectralTables) return pbrtSpectralTables;
+  const n = 94 * 3 + 1, h = 470 / (n - 1);
+  const interp = (data, l) => {
+    const x = (l - 360) / 5, o = Math.min(93, Math.max(0, Math.floor(x))), f = x - o;
+    return (1 - f) * data[o] + f * data[o + 1];
+  };
+  const M = PBRT_CIE.XYZ_TO_SRGB, rgb = [[], [], []], lt = [], wp = [0, 0, 0];
+  for (let i = 0; i < n; i++) {
+    const l = 360 + i * h, I = interp(PBRT_CIE.D65, l);
+    let w = (3 / 8) * h * (i === 0 || i === n - 1 ? 1 : (i - 1) % 3 === 2 ? 2 : 3);
+    const xyz = [interp(PBRT_CIE.X, l), interp(PBRT_CIE.Y, l), interp(PBRT_CIE.Z, l)];
+    for (let k = 0; k < 3; k++) rgb[k].push((M[3 * k] * xyz[0] + M[3 * k + 1] * xyz[1] + M[3 * k + 2] * xyz[2]) * I * w);
+    for (let k = 0; k < 3; k++) wp[k] += xyz[k] * I * w;
+    lt.push((l - 360) / 470);
+  }
+  for (let k = 0; k < 3; k++) rgb[k] = rgb[k].map((v) => v / wp[1]);
+  pbrtSpectralTables = { rgb, lt, wp: wp.map((v) => v / wp[1]) };
+  return pbrtSpectralTables;
+}
+
+const pbrtSigmoid = (x) => 0.5 * x / Math.sqrt(1 + x * x) + 0.5;
+const pbrtSpectrum = (c) => pbrtSpectral().lt.map((l) => pbrtSigmoid((c[0] * l + c[1]) * l + c[2]));
+const pbrtSpectrumRgb = (s) => pbrtSpectral().rgb.map((row) => row.reduce((a, v, i) => a + v * s[i], 0));
+
+function pbrtLab(rgb) {
+  const M = PBRT_CIE.SRGB_TO_XYZ, wp = pbrtSpectral().wp, d = 6 / 29;
+  const f = (t) => (t > d * d * d ? Math.cbrt(t) : t / (d * d * 3) + 4 / 29);
+  const v = [0, 1, 2].map((k) => (M[3 * k] * rgb[0] + M[3 * k + 1] * rgb[1] + M[3 * k + 2] * rgb[2]) / wp[k]);
+  return [116 * f(v[1]) - 16, 500 * (f(v[0]) - f(v[1])), 200 * (f(v[1]) - f(v[2]))];
+}
+
+// pbrt-v4's RGBAlbedoSpectrum for an sRGB reflectance: the sigmoid-polynomial spectrum
+// rgb2spec_opt.cpp fits (Gauss-Newton on the CIELAB residual, warm-started along brightness).
+export function pbrtAlbedoSpectrum(rgb) {
+  const target = rgb.map((v) => Math.min(1, Math.max(0, v)));
+  let c = [0, 0, 0];
+  const residual = (cc, tgt) => { const a = pbrtLab(tgt), b = pbrtLab(pbrtSpectrumRgb(pbrtSpectrum(cc))); return a.map((v, i) => v - b[i]); };
+  for (let step = 1; step <= 9; step++) {
+    const tgt = target.map((v) => v * (0.1 + 0.1 * step));
+    for (let it = 0; it < 15; it++) {
+      const r = residual(c, tgt);
+      const J = [0, 1, 2].map(() => [0, 0, 0]);
+      for (let i = 0; i < 3; i++) {
+        const lo = c.slice(), hi = c.slice(); lo[i] -= 1e-4; hi[i] += 1e-4;
+        const r0 = residual(lo, tgt), r1 = residual(hi, tgt);
+        for (let j = 0; j < 3; j++) J[j][i] = (r1[j] - r0[j]) / 2e-4;
+      }
+      const x = solve3(J, r);
+      if (!x) return null;
+      c = c.map((v, i) => v - x[i]);
+    }
+  }
+  const s = pbrtSpectrum(c);
+  return pbrtSpectrumRgb(s).every((v, i) => Math.abs(v - target[i]) < 1e-3) ? s : null;
+}
+
+function solve3(A, b) {
+  const det = (m) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+  const d = det(A);
+  if (!Number.isFinite(d) || Math.abs(d) < 1e-300) return null;
+  return [0, 1, 2].map((k) => det(A.map((row, i) => row.map((v, j) => (j === k ? b[i] : v)))) / d);
+}
+
+// Constant reflectance: pbrt applies the coat per wavelength, so a saturated colour is
+// matched through its spectrum (the series is nonlinear in R). Returns the base_color.
+export function pbrtCoatedDiffuseBaseColor(rgb, eta, alpha, thickness, maxDepth = 10) {
+  const albedo = (R) => pbrtCoatedDiffuseAlbedo(R, eta, alpha, thickness, maxDepth);
+  const flat = rgb[0] === rgb[1] && rgb[1] === rgb[2];
+  const s = flat ? null : pbrtAlbedoSpectrum(rgb);
+  const target = s ? pbrtSpectrumRgb(s.map(albedo)) : rgb.map((r) => albedo(Math.min(1, Math.max(0, r))));
+  const { c, kc } = openPbrCoatTerms(eta, alpha);
+  let clamped = 0;
+  const color = target.map((d) => {
+    const b = d / (c + kc * d);
+    if (b > 1.005 || b < -0.005) clamped++;
+    return Math.min(1, Math.max(0, b));
   });
+  return { color, clamped, target, spectral: !!s };
 }
 
 // The constants of the plastic match below: base_color = R / (1 - k Fdr_int) * scale.

@@ -56,6 +56,8 @@ export const materialDocCases = () => {
     }
     add('pbrt coateddiffuse textured anisotropic roughness', pbrtMaterialDocument({ name: 'R', material: { type: 'coateddiffuse', params: {
       uroughness: tex(img({ colorspace: null }), 'U'), vroughness: { type: 'float', values: [0.1] } } } }).xml);
+    add('pbrt coateddiffuse textured reflectance, thickness and maxdepth', pbrtMaterialDocument({ name: 'C', material: { type: 'coateddiffuse', params: {
+      reflectance: tex(img()), thickness: { type: 'float', values: [0.05] }, maxdepth: { type: 'integer', values: [100] }, eta: { type: 'float', values: [2] } } } }).xml);
     add('pbrt dielectric textured roughness (sRGB float read)', pbrtMaterialDocument({ name: 'R', material: { type: 'dielectric', params: {
       roughness: tex(img()), remaproughness: { type: 'bool', values: [false] } } } }).xml);
     add('pbrt conductor textured roughness checker', pbrtMaterialDocument({ name: 'R', material: { type: 'conductor', params: {
