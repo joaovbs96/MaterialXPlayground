@@ -4153,27 +4153,13 @@
                     <SceneTreeGroupSegments value={treeGroup} onChange={setTreeGroup} disabled={!stage} />
                     </div>
                     {!stage ? (
-                        <React.Fragment>
-                            {/* Placeholder: the four group headers, inert until a scene loads. */}
-                            <SceneTree
-                                rows={sceneTree.roots}
-                                expanded={new Set()}
-                                selectedId=""
-                                hidden={treeHidden}
-                                hiddenLights={lightsHidden}
-                                lightsOff={false}
-                                envLightingOff={false}
-                                envEyeAvailable={false}
-                                activeCamera={selectedCamera}
-                                revealToken={0}
-                                onToggleExpand={() => {}}
-                                onSelect={() => {}}
-                                onRowClick={() => {}}
-                                onToggleHidden={() => {}}
-                                onActivate={() => {}}
-                            />
-                            <div data-testid="usd-scene-tree-empty" className="flex-none text-[11px] text-fg-subtle">Load a scene to list its objects, materials, cameras and lights.</div>
-                        </React.Fragment>
+                        <div
+                            data-testid="usd-scene-tree"
+                            className="flex items-center justify-center px-3 rounded-md border border-line bg-surface-sunken/60"
+                            style={{ flex: '1 1 0px', minHeight: SCENE_TREE_MIN_H }}
+                        >
+                            <div data-testid="usd-scene-tree-empty" className="text-[11px] text-fg-subtle text-center">Load a scene to see its hierarchy.</div>
+                        </div>
                     ) : treeRows.length ? (
                         <SceneTree
                             rows={treeRows}

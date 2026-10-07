@@ -187,8 +187,9 @@ test('@scene the sidebar sections show empty placeholders before a scene loads',
   await expect(headers).toHaveCount(2);
   await expect(headers.nth(1)).toContainText('0 objects');
   await expect(page.getByTestId('usd-scene-section-hierarchy')).toBeVisible();
-  await expect(page.getByTestId('usd-scene-tree-empty')).toBeVisible();
-  await expect(page.getByTestId('usd-scene-tree').locator('[role="treeitem"]')).toHaveCount(4);
+  await expect(page.getByTestId('usd-scene-tree-empty')).toHaveText('Load a scene to see its hierarchy.');
+  await expect(page.getByTestId('usd-scene-tree')).toHaveText('Load a scene to see its hierarchy.');
+  await expect(page.getByTestId('usd-scene-tree').locator('[role="treeitem"]')).toHaveCount(0);
   await expect(page.getByTestId('usd-scene-tree-filter')).toBeDisabled();
   await expect(page.getByTestId('usd-scene-tree-group').locator('button').first()).toBeDisabled();
   await expect(page.getByTestId('usd-scene-info-file')).toHaveText('-');

@@ -14,6 +14,8 @@
         const RF = window.ReactFlow;
         const ReactFlowComp = RF.ReactFlow || RF.default;
         const { Background, MiniMap, Panel, Handle, Position, MarkerType } = RF;
+        // Rendered inside <ReactFlow> to reach its internal store (nodesSelectionActive).
+        const RfStoreBridge = ({ storeRef }) => { storeRef.current = RF.useStoreApi(); return null; };
 
         // Port-picker popover (item 2): shown when a connection drag ends
         // on a node body (not a precise handle) so the user can pick which
@@ -1141,6 +1143,8 @@
 
             const pushUndoSnapshot = (tag) => {
                 if (restoringRef.current) return;
+                // A Shift+drag duplicate holds its snapshot until release (one undo step).
+                if (holdUndoRef.current) { holdUndoRef.current.pending = true; return; }
                 snapshotRetryRef.current = UNDO_RETRY_MAX;
                 if (snapshotTimerRef.current) clearTimeout(snapshotTimerRef.current);
                 snapshotTimerRef.current = setTimeout(() => {
@@ -1149,6 +1153,15 @@
                 }, UNDO_DEBOUNCE_MS);
             };
 
+            const holdUndoRef = React.useRef(null);
+            const beginUndoHold = () => {
+                if (snapshotTimerRef.current) {
+                    clearTimeout(snapshotTimerRef.current);
+                    snapshotTimerRef.current = null;
+                    flushUndoSnapshot(null);
+                }
+                holdUndoRef.current = { pending: false };
+            };
             const markDirty = (undoTag) => {
                 // Thumbnails read the document themselves once the edit settles, ahead of the undo snapshot.
                 if (thumbClientRef.current) thumbClientRef.current.noteEdit(() => serializeDocXml(parsedRef.current));
@@ -2766,7 +2779,17 @@
                         (prev && prev.id === node.id && prev.scope === scope) ? prev : { scope, id: node.id });
                 }
                 // A modifier click extends a multi-selection: nothing single to sync.
-                if (!(evt && (evt.shiftKey || evt.ctrlKey || evt.metaKey))) notifyHostSelection(node.id);
+                if (evt && (evt.shiftKey || evt.ctrlKey || evt.metaKey)) return;
+                // A plain click inside a multi-selection collapses it to the clicked node.
+                if (flowRef.current.nodes.some((n) => n.selected && n.id !== node.id)) {
+                    setFlow((prev) => ({
+                        edges: prev.edges,
+                        nodes: prev.nodes.map((n) => (n.selected === (n.id === node.id) ? n
+                            : Object.assign({}, n, { selected: n.id === node.id }))),
+                    }));
+                    if (rfStoreRef.current) rfStoreRef.current.setState({ nodesSelectionActive: false });
+                }
+                notifyHostSelection(node.id);
             };
 
             // Click an edge → select it (Del disconnects); click the pane →
@@ -7813,23 +7836,13 @@
                 (nodes || []).forEach((n) => { if (n && n.position) m[n.id] = { x: n.position.x, y: n.position.y }; });
                 return m;
             };
-            // Shift+drag duplicates on release: { start } holds the pre-drag positions, null otherwise.
-            const shiftDupRef = React.useRef(null);
-            const beginShiftDup = (evt, nodes) => {
-                const ids = (nodes || []).map((n) => n.id).filter((id) => id.indexOf('n:') === 0 || id.indexOf('g:') === 0);
-                shiftDupRef.current = (evt && evt.shiftKey && !scopeLockedRef.current && ids.length)
-                    ? { start: dragPositions(nodes) } : null;
-            };
             const onNodeDragStart = (evt, node, nodes) => {
                 thumbActivity();
-                const list = nodes && nodes.length ? nodes : [node];
-                dragStartPosRef.current = dragPositions(list);
-                beginShiftDup(evt, list);
+                dragStartPosRef.current = dragPositions(nodes && nodes.length ? nodes : [node]);
             };
             const onSelectionDragStart = (evt, nodes) => {
                 thumbActivity();
                 dragStartPosRef.current = dragPositions(nodes);
-                beginShiftDup(evt, nodes);
             };
             const pointerTravel = (evt) => {
                 const down = pointerDownRef.current;
@@ -7851,33 +7864,14 @@
                 }));
                 return false;
             };
-            // Shift-drag release: originals back to their start, copies at the drop positions, one undo step.
-            const finishShiftDup = (nodes) => {
-                const dup = shiftDupRef.current;
-                shiftDupRef.current = null;
-                if (!dup || !parsed) return false;
-                const end = dragPositions(nodes);
-                const ids = Object.keys(dup.start).filter((id) => end[id]
-                    && flow.nodes.some((n) => n.id === id && isCopyableNode(n)));
-                if (!ids.length) return false;
-                const entries = entriesForIds(ids, end);
-                if (!entries.length) return false;
-                const restore = (n) => (dup.start[n.id] ? Object.assign({}, n, { position: dup.start[n.id] }) : n);
-                writeLayoutToDoc(flow.nodes.map(restore));
-                setFlow((prev) => ({ edges: prev.edges, nodes: prev.nodes.map(restore) }));
-                duplicateEntries(entries, { mode: 'absolute', copyThumbs: true });
-                return true;
-            };
             const onNodeDragStopMoved = (evt, node, nodes) => {
                 const list = nodes && nodes.length ? nodes : [node];
-                if (dragMoved(evt, list)) { if (!finishShiftDup(list)) onNodeDragStop(); return; }
-                shiftDupRef.current = null;
+                if (dragMoved(evt, list)) { onNodeDragStop(); return; }
                 // d3-drag swallows the click after any pointer travel, so a jittery click selects here.
                 if (node && pointerTravel(evt) > 0) onNodeClick(evt, node);
             };
             const onSelectionDragStopMoved = (evt, nodes) => {
-                if (dragMoved(evt, nodes)) { if (!finishShiftDup(nodes)) onNodeDragStop(); return; }
-                shiftDupRef.current = null;
+                if (dragMoved(evt, nodes)) onNodeDragStop();
             };
             // Snapshots the given on-screen layout into the document as xpos/ypos; true when anything was written.
             const writeLayoutToDoc = (nodeList) => {
@@ -7905,6 +7899,133 @@
                 if (scopeLockedRef.current) return;
                 if (writeLayoutToDoc(flow.nodes)) markDirty();
             };
+
+            // Shift+press on a node never reaches React Flow: a click drops a selected node from the
+            // selection; a drag past DRAG_SLOP_PX duplicates once (the node, or the selection it is in)
+            // and moves the copies while the originals stay. One undo step for the whole gesture.
+            const rfStoreRef = React.useRef(null);
+            const swallowClickRef = React.useRef(0);
+            const gestureApiRef = React.useRef(null);
+            const shiftDeselect = (id) => {
+                const nodes = flowRef.current.nodes;
+                const self = nodes.find((n) => n.id === id);
+                if (!self || !self.selected) return;
+                const remaining = nodes.filter((n) => n.selected && n.id !== id).map((n) => n.id);
+                setFlow((prev) => ({
+                    edges: prev.edges,
+                    nodes: prev.nodes.map((n) => (n.id === id && n.selected ? Object.assign({}, n, { selected: false }) : n)),
+                }));
+                if (remaining.length === 1) setSelectedId(remaining[0]);
+                else if (selectedIdRef.current === id) setSelectedId(null);
+            };
+            gestureApiRef.current = {
+                entriesForIds, duplicateEntries, writeLayoutToDoc, onNodeClick, shiftDeselect, beginUndoHold,
+                endUndoHold: () => { holdUndoRef.current = null; markDirty(); },
+                zoom: () => {
+                    const inst = rfInstRef.current;
+                    const z = inst && typeof inst.getZoom === 'function' ? inst.getZoom() : 1;
+                    return z > 0 ? z : 1;
+                },
+            };
+            React.useEffect(() => {
+                const host = canvasHostRef.current;
+                if (!host) return undefined;
+                const api = () => gestureApiRef.current;
+                const nodeIdAt = (t, x, y) => {
+                    let el = t.closest('.react-flow__node');
+                    if (!el && t.closest('.react-flow__nodesselection-rect')) {
+                        const hit = (document.elementsFromPoint(x, y) || []).find((d) => d.closest && d.closest('.react-flow__node'));
+                        el = hit ? hit.closest('.react-flow__node') : null;
+                    }
+                    return el && host.contains(el) ? el.getAttribute('data-id') : null;
+                };
+                const track = (onMove, onUp) => {
+                    const up = (e) => {
+                        window.removeEventListener('mousemove', onMove, true);
+                        window.removeEventListener('mouseup', up, true);
+                        onUp(e);
+                    };
+                    window.addEventListener('mousemove', onMove, true);
+                    window.addEventListener('mouseup', up, true);
+                };
+                const onDown = (e) => {
+                    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.altKey) return;
+                    const t = e.target;
+                    if (!t || !t.closest || t.closest('.react-flow__handle, input, textarea, select, button, [contenteditable="true"], .nodrag')) return;
+                    const id = nodeIdAt(t, e.clientX, e.clientY);
+                    if (!id) return;
+                    const x0 = e.clientX, y0 = e.clientY;
+                    const travel = (ev) => Math.hypot(ev.clientX - x0, ev.clientY - y0);
+                    if (!e.shiftKey) {
+                        // The box-selection overlay hides the cards from onNodeClick: a plain click on it collapses here.
+                        if (!t.closest('.react-flow__nodesselection-rect')) return;
+                        track(() => {}, (ev) => {
+                            const node = travel(ev) < DRAG_SLOP_PX && flowRef.current.nodes.find((n) => n.id === id);
+                            if (node) api().onNodeClick(ev, node);
+                        });
+                        return;
+                    }
+                    e.stopPropagation();
+                    e.preventDefault();
+                    const self = flowRef.current.nodes.find((n) => n.id === id);
+                    const g = { wasSelected: !!(self && self.selected), started: false, dup: null, dx: 0, dy: 0 };
+                    const onMove = (ev) => {
+                        if (!g.started) {
+                            if (travel(ev) < DRAG_SLOP_PX) return;
+                            g.started = true;
+                            if (scopeLockedRef.current) return;
+                            const nodes = flowRef.current.nodes;
+                            const ids = nodes.filter((n) => (g.wasSelected ? n.selected : n.id === id) && isCopyableNode(n)).map((n) => n.id);
+                            const entries = ids.length ? api().entriesForIds(ids) : [];
+                            if (!entries.length) return;
+                            api().beginUndoHold();
+                            const pasted = api().duplicateEntries(entries, { mode: 'absolute', copyThumbs: true });
+                            if (!pasted || !pasted.size) { api().endUndoHold(); return; }
+                            g.dup = { ids: pasted, base: {} };
+                            thumbActivity();
+                        }
+                        if (!g.dup) return;
+                        const z = api().zoom();
+                        const dx = (ev.clientX - x0) / z, dy = (ev.clientY - y0) / z;
+                        g.dx = dx; g.dy = dy;
+                        const dup = g.dup;
+                        setFlow((prev) => ({
+                            edges: prev.edges,
+                            nodes: prev.nodes.map((n) => {
+                                if (!dup.ids.has(n.id)) return n;
+                                if (!dup.base[n.id]) dup.base[n.id] = { x: n.position.x, y: n.position.y };
+                                const b = dup.base[n.id];
+                                return Object.assign({}, n, { position: { x: b.x + dx, y: b.y + dy } });
+                            }),
+                        }));
+                    };
+                    track(onMove, (ev) => {
+                        swallowClickRef.current = performance.now() + 400;
+                        if (g.dup) {
+                            const list = flowRef.current.nodes.filter((n) => g.dup.ids.has(n.id)).map((n) => {
+                                const b = g.dup.base[n.id];
+                                return { id: n.id, position: b ? { x: b.x + g.dx, y: b.y + g.dy } : n.position };
+                            });
+                            api().writeLayoutToDoc(list);
+                            api().endUndoHold();
+                        } else if (!g.started && g.wasSelected) {
+                            api().shiftDeselect(id);
+                        }
+                    });
+                };
+                // The click that follows a Shift gesture must not reach onNodeClick.
+                const onClick = (e) => {
+                    if (performance.now() > swallowClickRef.current) return;
+                    swallowClickRef.current = 0;
+                    e.stopPropagation();
+                };
+                host.addEventListener('mousedown', onDown, true);
+                host.addEventListener('click', onClick, true);
+                return () => {
+                    host.removeEventListener('mousedown', onDown, true);
+                    host.removeEventListener('click', onClick, true);
+                };
+            }, [canvasHostRef.current]);
 
             // The document-default preview target: the surface shader, else
             // the material itself, else the end of a chain in the current
@@ -9156,6 +9277,7 @@
                                     // (repositioned, not hidden; see the style tag above).
                                     proOptions={{ account: '', hideAttribution: false }}
                                 >
+                                    <RfStoreBridge storeRef={rfStoreRef} />
                                     <Background color={MtlxTheme.get('graph-grid')} gap={18} size={1.5} />
                                     {/* Zoom + fit controls: a custom cluster docked
                                         to the TOP of the Types window instead of
