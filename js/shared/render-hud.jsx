@@ -279,8 +279,121 @@ const EnvRenderPills = ({ surface, containerRef, showLabels = true, leading, env
     );
 };
 
+const fmtBytes = (n) => (!n ? '-' : n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB' : (n / 1048576).toFixed(1) + ' MB');
+
+// Collapsible "Files loaded" disclosure: files = [{ path, size }].
+const FilesLoaded = ({ files, testId }) => {
+    const [open, setOpen] = React.useState(false);
+    return (
+        <div>
+            <button
+                type="button"
+                data-testid={testId + '-toggle'}
+                aria-expanded={open}
+                onClick={() => setOpen((o) => !o)}
+                className="w-full h-5 flex items-center justify-between gap-3 -mx-1 px-1 rounded text-left hover:bg-hover-subtle/60"
+            >
+                <span className={ROW_LABEL + ' inline-flex items-center gap-1 shrink-0'}>
+                    <MtlxIcon name={open ? 'chevron-down' : 'chevron-right'} className="w-3 h-3" />Files loaded
+                </span>
+                <span data-testid={testId + '-summary'} className="min-w-0 truncate text-right text-[11px] text-fg-secondary">{files.length} file{files.length === 1 ? '' : 's'}</span>
+            </button>
+            {open && (
+                <div data-testid={testId + '-list'} className="mt-1 max-h-40 overflow-y-auto custom-scrollbar rounded-md border border-line bg-surface-sunken/60 py-1">
+                    {files.map((f) => (
+                        <div key={f.path} className="flex items-baseline justify-between gap-2 px-2 py-0.5 text-[11px]">
+                            <span className="min-w-0 truncate font-mono text-fg-secondary" title={f.path}>{f.path}</span>
+                            <span className="shrink-0 font-mono tabular-nums text-fg-subtle">{fmtBytes(f.size)}</span>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+// Statistics rows for one built material: stats = { fsBytes, uniforms, ms } or null.
+const MaterialStatRows = ({ prefix, stats, textures }) => {
+    const rows = [
+        ['Shader size', stats ? fmtBytes(stats.fsBytes) : '-', 'shader-size', 'Generated fragment shader source'],
+        ['Uniforms', stats ? stats.uniforms : '-', 'uniforms'],
+        ['Textures', stats ? textures : '-', 'textures', 'Images bound to the material'],
+        ['Build time', stats ? stats.ms + ' ms' : '-', 'build-ms', 'Last shader generation and compile'],
+    ];
+    return (
+        <div className="space-y-1 text-[11px] text-fg-secondary">
+            {rows.map(([label, value, id, title]) => (
+                <div key={label} className="flex justify-between" title={title}>
+                    <span className={ROW_LABEL}>{label}</span>
+                    <span className="font-mono tabular-nums" data-testid={prefix + '-stat-' + id}>{value}</span>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+// Diagnostics button with its own popover listing a material's notices (strings).
+const DiagnosticsButton = ({ notices, testId }) => {
+    const list = notices || [];
+    const pop = useHudPopover();
+    const [pos, setPos] = React.useState(null);
+    const toggle = () => {
+        if (!pop.open && pop.btnRef.current) {
+            const r = pop.btnRef.current.getBoundingClientRect();
+            const w = 320;
+            setPos({ left: Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8)), bottom: Math.max(8, window.innerHeight - r.top + 8), width: w });
+        }
+        pop.toggle();
+    };
+    const tone = list.length ? 'text-warning' : 'text-fg-subtle';
+    const summary = list.length ? list.length + (list.length === 1 ? ' warning' : ' warnings') : 'no warnings';
+    return (
+        <React.Fragment>
+            <button
+                ref={pop.btnRef}
+                type="button"
+                data-testid={testId + '-button'}
+                data-severity={list.length ? 'warning' : 'none'}
+                aria-haspopup="dialog"
+                aria-expanded={pop.open}
+                title={'Diagnostics: ' + summary}
+                onClick={toggle}
+                className={'ml-auto -my-0.5 h-6 inline-flex items-center gap-1.5 px-1.5 rounded-md border text-[11px] font-medium whitespace-nowrap transition-colors '
+                    + (pop.open ? 'bg-pressed border-line-heavy text-hud-fg-strong' : 'bg-hud-raised/80 border-line text-hud-fg hover:bg-hud-hover/80 hover:text-hud-fg-strong')}
+            >
+                <span className={'inline-flex ' + tone}><MtlxIcon name={list.length ? 'alert-triangle' : 'check'} className="w-3.5 h-3.5" /></span>
+                Diagnostics
+                {list.length ? (
+                    <span data-testid={testId + '-count'} className={'text-[10px] font-mono font-normal tabular-nums bg-surface-sunken/60 border border-line rounded-full px-1.5 ' + tone}>{list.length}</span>
+                ) : null}
+            </button>
+            {pop.open && pos && ReactDOM.createPortal(
+                <div
+                    ref={pop.popRef}
+                    role="dialog"
+                    aria-label="Diagnostics"
+                    data-testid={testId + '-popover'}
+                    style={{ position: 'fixed', zIndex: 9999, backgroundColor: HUD_POPOVER_BG, left: pos.left, bottom: pos.bottom, width: pos.width, maxHeight: '60vh' }}
+                    className="flex flex-col backdrop-blur border border-line-strong rounded-lg shadow-2xl overflow-hidden"
+                >
+                    {popoverHeader('alert-triangle', 'Diagnostics', summary, pop.close)}
+                    <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-3 py-1.5 space-y-1.5">
+                        {list.length ? list.map((n, i) => (
+                            <div key={i} className="flex items-start gap-1 text-warning/90 font-mono text-xs break-all">
+                                <MtlxIcon name="alert-triangle" className="w-3.5 h-3.5 shrink-0 mt-0.5" /><span>{n}</span>
+                            </div>
+                        )) : <div className="py-1 text-xs text-fg-subtle">No warnings.</div>}
+                    </div>
+                </div>,
+                document.fullscreenElement || document.body
+            )}
+        </React.Fragment>
+    );
+};
+
 window.MtlxRenderHud = {
     HUD_POPOVER_BG, HUD_POPOVER_CLASS, ROW_LABEL, InfoRow, SidebarSectionHeader,
     popoverHeader, useHudPopover, HudPopover, QualitySegments, TabStrip,
     useRenderRebuildKey, EnvRenderPills, PREVIEW_QUALITY_LEVELS,
+    fmtBytes, FilesLoaded, MaterialStatRows, DiagnosticsButton,
 };

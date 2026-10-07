@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<materialx version="1.39">
+  <standard_surface name="SR_plain" type="surfaceshader">
+    <input name="base_color" type="color3" value="0.8, 0.3, 0.2" />
+  </standard_surface>
+  <displacement name="DISP_plain" type="displacementshader">
+    <input name="displacement" type="float" value="0.1" />
+    <input name="scale" type="float" value="1.0" />
+  </displacement>
+  <surfacematerial name="M_plain" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_plain" />
+    <input name="displacementshader" type="displacementshader" nodename="DISP_plain" />
+  </surfacematerial>
+</materialx>
