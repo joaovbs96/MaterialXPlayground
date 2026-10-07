@@ -101,6 +101,7 @@ ipcRenderer.on('mtlx-close-confirm-request', (event, payload) => {
 const api = {
     saveMtlx: (opts) => ipcRenderer.invoke('mtlx-save', opts),
     notifyEdit: (dirty) => ipcRenderer.send('mtlx-notify-edit', !!dirty),
+    detachDocument: () => ipcRenderer.send('mtlx-detach-document'),
     onOpenFile: (callback) => {
         openFileCallback = callback;
         if (pendingOpenFilePayload) {

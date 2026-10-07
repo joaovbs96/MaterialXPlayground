@@ -33,12 +33,17 @@
                 blobMap[key] = new Blob([rawFiles[key]]);
             });
         }
-        var loaded = { xml: payload.xml, name: payload.name, files: blobMap, reload: payload.reload };
+        var loaded = { xml: payload.xml, name: payload.name, files: blobMap, reload: payload.reload, host: true };
         window.__mtlxPendingImport = loaded;
         window.__mtlxPendingViewerImport = loaded;
         window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: loaded }));
         window.dispatchEvent(new CustomEvent('mtlx-view-document', { detail: loaded }));
     });
+
+    // Called by js/graph-app.jsx when a non-host handoff replaces the document, so Save cannot overwrite the old file.
+    window.__mtlxDetachDocument = function () {
+        window.mtlxDesktop.detachDocument();
+    };
 
     // js/graph-app.jsx calls this with the serialized XML STRING on every
     // settled edit (not a boolean): any call simply means "now dirty".

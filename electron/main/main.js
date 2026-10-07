@@ -311,6 +311,17 @@ ipcMain.handle('mtlx-save', async (event, opts) => {
     return saveMtlxForWindow(win, opts || {});
 });
 
+// A site handoff replaced the document: unbind the previous file so Save asks for a path instead of overwriting it.
+ipcMain.on('mtlx-detach-document', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) return;
+    const state = getWindowState(win);
+    stopWatcher(win);
+    state.currentPath = null;
+    state.dirty = false;
+    win.setTitle(win.webContents.getTitle() || 'MaterialX Playground');
+});
+
 ipcMain.on('mtlx-notify-edit', (event, dirty) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win) return;

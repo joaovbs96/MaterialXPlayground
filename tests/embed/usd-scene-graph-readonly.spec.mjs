@@ -178,3 +178,33 @@ test('@scene material opened from the Scene Viewer opens the Graph Editor view o
   await bannerExport.click();
   await expect(page.getByTestId('export-attribution')).toBeVisible();
 });
+
+test('@scene Reopen as copy turns the view-only material into an editable, unsaved copy', async ({ page, embedURL }) => {
+  test.setTimeout(180000);
+  await page.goto(embedURL + '/index.html#!scene');
+  await expect(page.getByTestId('usd-scene-viewer')).toBeVisible();
+  await page.getByTestId('usd-scene-file-picker').setInputFiles(usdFiles());
+  await expect(page.getByTestId('usd-scene-status')).toContainText('rendered', { timeout: 150000 });
+  await page.locator('[data-testid="usd-scene-tree-row"][data-path="/World/MeshA"]').dblclick();
+  const panel = page.getByTestId('usd-scene-material-preview');
+  await expect(panel).toBeVisible();
+  await panel.getByRole('button', { name: 'Open in Graph Editor' }).click();
+  await expect(page).toHaveURL(/#!graph/);
+
+  const banner = page.getByText(/View only: material from root\.usda/);
+  await expect(banner).toBeVisible({ timeout: 20000 });
+  await page.getByRole('button', { name: 'Reopen as copy' }).click();
+
+  // The lock and banner go, the document name carries _copy, and the copy counts as unsaved.
+  await expect(banner).toBeHidden({ timeout: 20000 });
+  await expect(page.getByText('View only', { exact: true })).toBeHidden();
+  await expect(page.getByRole('button', { name: /_copy.mtlx$/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Add Node/ })).toBeEnabled();
+  const xml = await page.evaluate(() => window.__mtlxGetGraphXml());
+  expect(xml).toContain('red_surface');
+
+  // Dirty proof: replacing it (New Material) now asks to confirm.
+  await page.getByRole('menuitem', { name: 'File' }).click();
+  await page.getByRole('menuitem', { name: 'New Material' }).click();
+  await expect(page.getByText('Unsaved changes')).toBeVisible({ timeout: 10000 });
+});
