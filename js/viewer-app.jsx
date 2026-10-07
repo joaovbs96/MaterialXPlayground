@@ -1340,7 +1340,30 @@
             const filesPanelBody = (
                 <div className="flex-1 min-h-0 flex flex-col overflow-y-auto custom-scrollbar">
                     <section data-testid="viewer-section-document" className="flex-none px-3.5 py-3 space-y-2">
-                        <SidebarSectionHeader icon="file-text" title="Document" summary={docBasename} />
+                        <div className="flex items-center gap-2 min-w-0">
+                            <MtlxIcon name="file-text" className="w-4 h-4 text-fg-muted shrink-0" />
+                            <span className="text-[13px] font-semibold text-fg shrink-0">Document</span>
+                            <div className="flex-1" />
+                            <div className="shrink-0" title="MaterialX version" data-testid="viewer-info-version">
+                                <MtlxSelect
+                                    value={version}
+                                    options={mtlxVersions}
+                                    labels={versionLabels}
+                                    defValue={mtlxDefaultVersion}
+                                    disabledOptions={versionDisabledOptions}
+                                    titles={versionTitles}
+                                    popWidth={VERSION_POP_W}
+                                    onChange={(v) => {
+                                        setVersion(v);
+                                        // A Document belongs to the mx instance that parsed
+                                        // it, so switching versions re-parses the chosen file.
+                                        if (chosenMtlx) loadDocument(chosenMtlx, undefined, v);
+                                    }}
+                                    size="sm"
+                                    disabled={busy}
+                                />
+                            </div>
+                        </div>
                         <div className="flex items-center gap-1">
                             <div className="flex-1 min-w-0">
                                 <FilePickerField
@@ -1359,31 +1382,6 @@
                                 <MtlxIcon name="folder" className="w-3.5 h-3.5" />
                                 <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={onPickFiles} />
                             </label>
-                        </div>
-                        <div data-testid="viewer-info" className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-0.5">
-                            <HUD.InfoRow label="File" testId="viewer-info-file" title={currentMtlxPath || undefined}>{currentMtlxPath ? docBasename : '-'}</HUD.InfoRow>
-                            <HUD.InfoRow label="Images" testId="viewer-info-images">{chosenMtlx ? texCount : '-'}</HUD.InfoRow>
-                            <span className={HUD.ROW_LABEL}>Version</span>
-                            <div className="flex justify-end" data-testid="viewer-info-version">
-                                <MtlxSelect
-                                value={version}
-                                options={mtlxVersions}
-                                labels={versionLabels}
-                                defValue={mtlxDefaultVersion}
-                                disabledOptions={versionDisabledOptions}
-                                titles={versionTitles}
-                                popWidth={VERSION_POP_W}
-                                onChange={(v) => {
-                                    setVersion(v);
-                                    // A Document belongs to the mx instance that parsed
-                                    // it, so switching versions re-parses the already
-                                    // chosen file. Nothing to reload if none is chosen yet.
-                                    if (chosenMtlx) loadDocument(chosenMtlx, undefined, v);
-                                }}
-                                size="sm"
-                                disabled={busy}
-                            />
-                            </div>
                         </div>
                         <div>
                             <button

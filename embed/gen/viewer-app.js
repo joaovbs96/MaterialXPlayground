@@ -1421,11 +1421,36 @@ function MaterialViewerApp({
   }, /*#__PURE__*/React.createElement("section", {
     "data-testid": "viewer-section-document",
     className: "flex-none px-3.5 py-3 space-y-2"
-  }, /*#__PURE__*/React.createElement(SidebarSectionHeader, {
-    icon: "file-text",
-    title: "Document",
-    summary: docBasename
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 min-w-0"
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: "file-text",
+    className: "w-4 h-4 text-fg-muted shrink-0"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "text-[13px] font-semibold text-fg shrink-0"
+  }, "Document"), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1"
   }), /*#__PURE__*/React.createElement("div", {
+    className: "shrink-0",
+    title: "MaterialX version",
+    "data-testid": "viewer-info-version"
+  }, /*#__PURE__*/React.createElement(MtlxSelect, {
+    value: version,
+    options: mtlxVersions,
+    labels: versionLabels,
+    defValue: mtlxDefaultVersion,
+    disabledOptions: versionDisabledOptions,
+    titles: versionTitles,
+    popWidth: VERSION_POP_W,
+    onChange: v => {
+      setVersion(v);
+      // A Document belongs to the mx instance that parsed
+      // it, so switching versions re-parses the chosen file.
+      if (chosenMtlx) loadDocument(chosenMtlx, undefined, v);
+    },
+    size: "sm",
+    disabled: busy
+  }))), /*#__PURE__*/React.createElement("div", {
     className: "flex items-center gap-1"
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex-1 min-w-0"
@@ -1449,38 +1474,6 @@ function MaterialViewerApp({
     multiple: true,
     className: "hidden",
     onChange: onPickFiles
-  }))), /*#__PURE__*/React.createElement("div", {
-    "data-testid": "viewer-info",
-    className: "grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-0.5"
-  }, /*#__PURE__*/React.createElement(HUD.InfoRow, {
-    label: "File",
-    testId: "viewer-info-file",
-    title: currentMtlxPath || undefined
-  }, currentMtlxPath ? docBasename : '-'), /*#__PURE__*/React.createElement(HUD.InfoRow, {
-    label: "Images",
-    testId: "viewer-info-images"
-  }, chosenMtlx ? texCount : '-'), /*#__PURE__*/React.createElement("span", {
-    className: HUD.ROW_LABEL
-  }, "Version"), /*#__PURE__*/React.createElement("div", {
-    className: "flex justify-end",
-    "data-testid": "viewer-info-version"
-  }, /*#__PURE__*/React.createElement(MtlxSelect, {
-    value: version,
-    options: mtlxVersions,
-    labels: versionLabels,
-    defValue: mtlxDefaultVersion,
-    disabledOptions: versionDisabledOptions,
-    titles: versionTitles,
-    popWidth: VERSION_POP_W,
-    onChange: v => {
-      setVersion(v);
-      // A Document belongs to the mx instance that parsed
-      // it, so switching versions re-parses the already
-      // chosen file. Nothing to reload if none is chosen yet.
-      if (chosenMtlx) loadDocument(chosenMtlx, undefined, v);
-    },
-    size: "sm",
-    disabled: busy
   }))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("button", {
     type: "button",
     "data-testid": "viewer-files-toggle",

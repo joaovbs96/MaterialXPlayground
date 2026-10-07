@@ -53,8 +53,6 @@ test('Quality preset has two segments, persists and rebuilds the view', async ({
 
 test('sidebar Info rows and Statistics footer show the loaded document', async ({ page, embedURL }) => {
   const errors = await gotoViewer(page, embedURL);
-  await expect(page.getByTestId('viewer-info-file')).toHaveText(/\.mtlx$/);
-  await expect(page.getByTestId('viewer-info-images')).toHaveText(/^\d+$/);
   await expect(page.getByTestId('viewer-info-version')).toBeVisible();
   await page.getByTestId('viewer-files-toggle').click();
   await expect(page.getByTestId('viewer-files-list')).toBeVisible();
