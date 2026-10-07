@@ -79,6 +79,11 @@
       "version": "0.147.0"
     },
     {
+      "id": "three-tga",
+      "kind": "npm",
+      "version": "0.128.0"
+    },
+    {
       "id": "usd-webview-bindings",
       "kind": "files",
       "version": "2026.10.1"
@@ -479,11 +484,25 @@
       "bytes": 26375
     },
     {
+      "path": "three/PLYLoader.js",
+      "dep": "three",
+      "source": "three@0.128.0",
+      "sha256": "0a75d83753f655fb8c1ab50ef2eacb1e31cd685aadfce31a9c5f6dc60a275961",
+      "bytes": 11558
+    },
+    {
       "path": "three/RGBELoader.js",
       "dep": "three",
       "source": "three@0.128.0",
       "sha256": "f6ba8cf5df528f1fd38b749d46cd7799a40b80d4eb1a5c5c072d31b1eae7f816",
       "bytes": 12572
+    },
+    {
+      "path": "three/TGALoader.js",
+      "dep": "three-tga",
+      "source": "three@0.128.0",
+      "sha256": "919899fb923e9c2f09e0bada9a5d9d0de1f4fffdedd91ca3d981abfeeaab1d1c",
+      "bytes": 11364
     },
     {
       "path": "three/basis/basis_transcoder.js",

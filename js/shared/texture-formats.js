@@ -2,23 +2,21 @@
 // extensions the app can actually decode. Dual-mode (window global + Node
 // require) so vscode_extension host code can require() it directly.
 //
-// Decodable set per js/mtlx-engine.js bindDroppedTextures (~4773-4806):
-// ktx2, exr, hdr, tif/tiff each have a dedicated decoder; the rest go
-// through createImageBitmap. TGA has never had a decoder here (some file
-// pickers used to accept it and it would just silently fail) so it is
-// deliberately excluded.
-const MTLX_TEXTURE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'exr', 'hdr', 'tif', 'tiff', 'ktx2'];
+// Decodable set per js/mtlx-engine.js bindDroppedTextures: ktx2, exr, hdr,
+// tif/tiff and tga (three's TGALoader) each have a dedicated decoder; the
+// rest go through createImageBitmap.
+const MTLX_TEXTURE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'exr', 'hdr', 'tif', 'tiff', 'tga', 'ktx2'];
 
 // Subset with a dedicated decoder path rather than createImageBitmap;
-// mirrors mtlx-engine.js's ext === 'exr'/'hdr'/'tif'/'tiff'/'ktx2' branches.
-const MTLX_DEDICATED_DECODER_EXTS = ['exr', 'hdr', 'tif', 'tiff', 'ktx2'];
+// mirrors mtlx-engine.js's ext === 'exr'/'hdr'/'tif'/'tiff'/'tga'/'ktx2' branches.
+const MTLX_DEDICATED_DECODER_EXTS = ['exr', 'hdr', 'tif', 'tiff', 'tga', 'ktx2'];
 
 // Extension -> MIME type, for wrapping raw bytes in a Blob with the right
 // type (js/usd-scene-renderer.js canonicalizeSceneTextures).
 const MTLX_TEXTURE_MIME = {
     png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
     gif: 'image/gif', bmp: 'image/bmp',
-    tif: 'image/tiff', tiff: 'image/tiff', exr: 'image/x-exr', hdr: 'image/vnd.radiance',
+    tif: 'image/tiff', tiff: 'image/tiff', tga: 'image/x-tga', exr: 'image/x-exr', hdr: 'image/vnd.radiance',
     ktx2: 'image/ktx2',
 };
 

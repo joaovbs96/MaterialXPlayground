@@ -314,6 +314,7 @@ const loadTexture = async (hit, samplerModes, shader, anisotropy) => {
     if (ext === 'exr') tex = await TM.loadExrTexture(blob);
     else if (ext === 'hdr') tex = await TM.loadHdrTexture(blob);
     else if (ext === 'tif' || ext === 'tiff') tex = await TM.loadTifTexture(blob, hit.key);
+    else if (ext === 'tga') tex = await TM.loadTgaTexture(blob, hit.key);
     else tex = await TM.loadBoundedBitmapTexture(blob, shader ? Infinity : TEXTURE_MAX_SIZE, samplerModes);
     if (tex) TM.configureLoadedTexture(tex, samplerModes, shader ? anisotropy : undefined);
     return tex;
