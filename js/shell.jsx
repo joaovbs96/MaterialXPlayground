@@ -167,6 +167,7 @@ const VIEW_DEPS = {
         ],
         babelScripts: [
             'js/shared/mtlx-ui.jsx',
+            'js/shared/render-hud.jsx',
             'js/shared/preset-picker.jsx',
         ],
         app: 'js/viewer-app.jsx',
@@ -321,14 +322,14 @@ const VIEW_DEPS = {
         // scene TIF/UDIM tiles, same dependency the viewer route already has.
         // Decodes .ktx2 compressed textures (loadKtx2Texture, js/mtlx-engine.js).
         scripts: ['vendor/utif/UTIF.js', 'vendor/three/KTX2Loader.js', 'vendor/three/PLYLoader.js', 'js/usd-scene-runtime.js', 'js/usd-scene-sources.js', 'js/usd-scene-lights.js', 'js/usd-scene-skyvis.js', 'js/usd-scene-localenv.js', 'js/shared/render-stage-environment.js', 'js/shared/fx-post.js', 'js/shared/fx-ssao.js', 'js/shared/fx-thickness.js', 'js/shared/fx-shadow-atlas.js', 'js/usd-scene-renderer.js', 'js/shared/gif-encoder.js', 'js/shared/mtlx-turntable.js'],
-        babelScripts: ['js/shared/mtlx-ui.jsx'],
+        babelScripts: ['js/shared/mtlx-ui.jsx', 'js/shared/render-hud.jsx'],
         app: 'js/usd-scene-app.jsx',
         globalName: 'SceneViewerApp',
     },
     compare: {
         css: [],
         scripts: ['vendor/jszip/jszip.min.js', 'js/shared/image-metrics.js'],
-        babelScripts: ['js/shared/mtlx-ui.jsx', 'js/shared/compare-ui.jsx', 'js/shared/preset-picker.jsx'],
+        babelScripts: ['js/shared/mtlx-ui.jsx', 'js/shared/render-hud.jsx', 'js/shared/compare-ui.jsx', 'js/shared/preset-picker.jsx'],
         app: 'js/compare-app.jsx',
         globalName: 'MaterialCompareApp',
     },

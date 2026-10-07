@@ -168,14 +168,10 @@ test.describe('pickSubdivisionLevel triangle budget', () => {
   });
 });
 
-// #!viewer's browser layout keeps Settings' only content (Force
-// Transparency, and now Displacement/Subdivision) inline in the sidebar's
-// always-open Rendering card instead of behind the cog: viewer-app.jsx
-// passes `showSettings={IN_VSCODE}` to ViewportControls, so the cog/
-// SettingsDialog popover never mounts in a plain browser tab. These tests
-// drive that real, always-visible sidebar surface instead of a dialog that
-// does not exist on this route in this mode.
-test.describe('Rendering card Displacement/Subdivision rows (#!viewer)', () => {
+// #!viewer keeps these rows in the Render settings pill's popover (Geometry
+// and Textures tab); the ViewportControls cog never mounts there. These tests
+// drive that popover on the real route.
+test.describe('Render settings popover Displacement/Subdivision rows (#!viewer)', () => {
   // Each test gets a fresh browser context (Playwright default), so the
   // module-level settings start at their documented defaults every time.
   async function gotoViewerWithMaterial(page, embedURL) {
@@ -197,12 +193,15 @@ test.describe('Rendering card Displacement/Subdivision rows (#!viewer)', () => {
       null, { timeout: WAIT_TIMEOUT }
     );
     await page.evaluate(() => window.__mtlxViewerHandle.whenDisplacementSettled());
+    await page.getByTestId('hud-render-pill').click();
+    await page.getByTestId('hud-tab-geometry').click();
+    return page.getByTestId('hud-render-popover');
   }
 
   test('the Displacement/Subdivision rows render without horizontal overflow at 1280x720', async ({ page, embedURL }) => {
     await page.setViewportSize({ width: 1280, height: 720 });
-    await gotoViewerWithMaterial(page, embedURL);
-    const dispRow = page.getByText('Displacement', { exact: true }).locator('xpath=ancestor::div[1]');
+    const popover = await gotoViewerWithMaterial(page, embedURL);
+    const dispRow = popover.getByText('Displacement', { exact: true }).locator('xpath=ancestor::div[1]');
     await expect(dispRow).toBeVisible();
     const box = await dispRow.boundingBox();
     expect(box).toBeTruthy();
@@ -211,10 +210,9 @@ test.describe('Rendering card Displacement/Subdivision rows (#!viewer)', () => {
   });
 
   test('toggling the Displacement row flips the setting and the live view state', async ({ page, embedURL }) => {
-    await gotoViewerWithMaterial(page, embedURL);
+    const popover = await gotoViewerWithMaterial(page, embedURL);
 
-    const dispToggle = page.getByText('Displacement', { exact: true }).locator('xpath=following-sibling::button');
-    await dispToggle.click();
+    await popover.locator('label', { hasText: 'Displacement' }).getByRole('switch').click();
 
     expect(await page.evaluate(() => window.getDisplacementEnabled())).toBe(false);
     await page.evaluate(() => window.__mtlxViewerHandle.whenDisplacementSettled());
@@ -223,9 +221,9 @@ test.describe('Rendering card Displacement/Subdivision rows (#!viewer)', () => {
   });
 
   test('changing Subdivision to 1 re-settles the live view at level 1', async ({ page, embedURL }) => {
-    await gotoViewerWithMaterial(page, embedURL);
+    const popover = await gotoViewerWithMaterial(page, embedURL);
 
-    const subdivRow = page.getByText('Subdivision', { exact: true }).locator('xpath=ancestor::div[1]');
+    const subdivRow = popover.getByText('Subdivision', { exact: true }).locator('xpath=ancestor::div[2]');
     await subdivRow.getByRole('combobox').click();
     await page.getByRole('option', { name: '1', exact: true }).click();
 
