@@ -18,11 +18,14 @@ The Scene Viewer started as a viewer for OpenUSD stages with MaterialX materials
 - **glTF and GLB.** Scenes load with their cameras and KHR_lights_punctual lights. Their PBR materials become MaterialX `gltf_pbr` shaders, including anisotropy, specular-glossiness and unlit materials.
 - **OBJ.** Meshes load with their MTL materials converted to OpenPBR (`open_pbr_surface`).
 - **UsdPreviewSurface.** USD stages that use UsdPreviewSurface instead of MaterialX now render too: their shader networks are converted to MaterialX UsdPreviewSurface documents and go through the same pipeline.
-- **PBRT v4.** Drop a `.pbrt` file together with the files it includes and its PLY meshes. Materials become OpenPBR, area lights become emissive surfaces and a constant infinite light becomes a dome light. This importer is new and covers the common cases: triangle and PLY meshes, the diffuse, coated diffuse, dielectric and conductor materials, and perspective cameras. Textures, instancing, participating media and most light types are not imported yet, and you get a warning when something is skipped.
+- **PBRT v4 and Mitsuba.** Scenes from these two research renderers open too. Drop a `.pbrt` file with the files it includes and its PLY meshes, or a Mitsuba scene `.xml` (Mitsuba 3 and 2, with older 0.5 and 0.6 files upgraded on load) with its OBJ meshes. A `.zip` of the whole scene works as well.
+  - **Materials** become OpenPBR, including diffuse, coated diffuse and plastic, glass and metals (with real-world metal colors), and their image and checkerboard textures become MaterialX texture graphs.
+  - **Lights:** area lights make their surfaces glow, and rectangular ones also light the scene. Distant lights, constant skies and environment maps come along, environment maps as a textured dome.
+  - **Not yet:** instancing, participating media, other shape and light types, and less common materials are skipped, with a warning for each.
 
 ## And writes USD
 
-There is a new **Export USD** option for scenes that came from glTF, GLB, OBJ or PBRT. You can write a USDA text file, a USDC binary file or a USDZ package, and choose how the materials travel: as USD with the `.mtlx` files referenced next to it, or as MaterialX written directly into the stage as UsdShade networks (the option to use for USDZ). Cameras, lights and double-sided meshes come along, with lights converted to UsdLux units.
+There is a new **Export USD** option for scenes that came from glTF, GLB, OBJ, PBRT or Mitsuba. You can write a USDA text file, a USDC binary file or a USDZ package, and choose how the materials travel: as USD with the `.mtlx` files referenced next to it, or as MaterialX written directly into the stage as UsdShade networks (the option to use for USDZ). Cameras, lights and double-sided meshes come along, with lights converted to UsdLux units. Dome lights and environment maps are not exported yet.
 
 ## A Scene Viewer that is nicer to work in
 
@@ -42,7 +45,7 @@ The Material Viewer, Compare, Node Specs, the Graph Editor previews, embeds and 
 - **Reflections are right the first time.** Rough metals blur their environment reflections as soon as a material loads, instead of looking mirror-like until the environment reloaded.
 - **Displacement, first version.** MaterialX displacement now renders by subdividing the mesh, in the Scene Viewer, the Material Viewer and embeds. It is still being refined.
 - **UDIM on your own models.** UDIM materials on imported models render every tile in the Material Viewer.
-- **Textures.** EXR textures are no longer flipped, Deflate-compressed TIFFs and single-channel EXRs decode correctly, clamp and mirror address modes are honored, a Texture Anisotropy setting is new, and a "Loading textures" badge shows while textures arrive.
+- **Textures.** TGA textures now load everywhere, EXR textures are no longer flipped, Deflate-compressed TIFFs and single-channel EXRs decode correctly, clamp and mirror address modes are honored, a Texture Anisotropy setting is new, and a "Loading textures" badge shows while textures arrive.
 - **Kinder to your GPU.** Views you are not looking at release or suspend their WebGL contexts, so having many tools open no longer exhausts the browser's context limit, and a lost context recovers the same way in every tool.
 
 ## Graph Editor, Node Specs and ShadingLanguageX
