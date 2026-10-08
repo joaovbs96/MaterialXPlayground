@@ -224,6 +224,71 @@ test('Shift+drag copies stay under the pointer at every step, for any selection 
   expect(Math.max(...errs)).toBeLessThanOrEqual(1);
 });
 
+// No xpos/ypos anywhere: the editor lays this document out itself.
+const DOC_NOPOS = DOC.replace(/ xpos="[^"]*" ypos="[^"]*"/g, '');
+const zoomOf = (page) => page.locator('.react-flow__viewport').first().evaluate((e) => new DOMMatrix(getComputedStyle(e).transform).a);
+
+// Shift+drags the current selection by grabbing grabId; returns the stand-ins' last screen boxes keyed by source id.
+async function shiftDragDrop(page, grabId, tx, ty) {
+  const g = await card(page, grabId).boundingBox();
+  const sx = g.x + HEAD.x, sy = g.y + HEAD.y;
+  await page.keyboard.down('Shift');
+  await page.mouse.move(sx, sy);
+  await page.mouse.down();
+  await page.mouse.move(sx + tx, sy + ty, { steps: 15 });
+  const ghosts = {};
+  for (const id of await cardIds(page)) {
+    if (id.indexOf('x:') === 0) ghosts[id.slice(2)] = await card(page, id).boundingBox();
+  }
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+  return ghosts;
+}
+
+test('Shift+drag drops the real copies exactly where the stand-ins were released, in any direction', async ({ page, embedURL }) => {
+  await openGraphWith(page, embedURL, DOC_NOPOS);
+  const known = new Set(['c1', 'm1', 'c2']);
+  // Every copy must land on its stand-in, on screen and in xpos/ypos relative to its source.
+  const checkDrop = async (ghosts, label) => {
+    const sources = Object.keys(ghosts);
+    expect(sources.length, label).toBeGreaterThan(0);
+    await expect.poll(() => nodeCount(page), { timeout: WAIT_TIMEOUT }).toBe(known.size + sources.length);
+    const nodes = await docNodes(page);
+    const fresh = nodes.filter((n) => !known.has(n.name));
+    const zoom = await zoomOf(page);
+    const origBoxes = {};
+    for (const src of sources) origBoxes[src] = await card(page, src).boundingBox();
+    for (const src of sources) {
+      const gb = ghosts[src];
+      const hit = [];
+      for (const n of fresh) {
+        const b = await card(page, 'n:' + n.name).boundingBox();
+        hit.push({ n, err: Math.hypot(b.x - gb.x, b.y - gb.y) });
+      }
+      hit.sort((p, q) => p.err - q.err);
+      expect(hit[0].err, label + ' screen ' + src).toBeLessThanOrEqual(1);
+      const srcDoc = byName(nodes, src.slice(2));
+      const ob = origBoxes[src];
+      expect(Math.abs((hit[0].n.x - srcDoc.x) * 240 * zoom - (gb.x - ob.x)), label + ' xpos ' + src).toBeLessThanOrEqual(1);
+      expect(Math.abs((hit[0].n.y - srcDoc.y) * 240 * zoom - (gb.y - ob.y)), label + ' ypos ' + src).toBeLessThanOrEqual(1);
+    }
+    fresh.forEach((n) => known.add(n.name));
+    return fresh.map((n) => 'n:' + n.name);
+  };
+
+  // Down, with two nodes selected.
+  await selectCard(page, 'n:c1');
+  await selectCard(page, 'n:m1', ['Shift']);
+  const firstCopies = await checkDrop(await shiftDragDrop(page, 'n:m1', 0, 260), 'down');
+  // Up, dragging the selection of earlier copies (selected after the drop) above the originals.
+  expect(await selectedIds(page)).toEqual(firstCopies.slice().sort());
+  const grab = firstCopies.find((id) => /^n:m/.test(id));
+  await checkDrop(await shiftDragDrop(page, grab, 10, -420), 'up');
+  // Left, single node.
+  await selectCard(page, 'n:c2');
+  await checkDrop(await shiftDragDrop(page, 'n:c2', -300, 20), 'left');
+});
+
 test('Shift+drag on a selected node duplicates the whole selection and keeps inner wires', async ({ page, embedURL }) => {
   await openGraphWith(page, embedURL, DOC);
   await selectCard(page, 'n:c1');

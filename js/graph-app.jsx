@@ -6549,6 +6549,8 @@
                         }
                     }
                 }
+                // The rebuild below re-lays out a scope unless every element has xpos/ypos: pin the live layout first.
+                writeLayoutToDoc(flowRef.current.nodes.filter((n) => n.id.indexOf('x:') !== 0));
                 // Paste centres the group in the viewport, keeping its relative layout.
                 let place;
                 if (mode === 'absolute') place = (e) => ({ x: e.pos.x, y: e.pos.y });
