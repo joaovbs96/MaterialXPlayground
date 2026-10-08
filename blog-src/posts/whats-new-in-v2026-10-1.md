@@ -1,6 +1,6 @@
 ---
 title: What's new in MaterialX Playground v2026.10.1
-description: New scene formats and USD export in the Scene Viewer, one renderer behind every tool, ShadingLanguageX in the Graph Editor, themes, a much bigger VS Code extension and a new home for the Playground on the web.
+description: New scene formats and USD export in the Scene Viewer, improvements to rendering parity across tools, ShadingLanguageX in the Graph Editor, themes, a much bigger VS Code extension and a new home for the Playground on the web.
 date: 2026-10-06
 draft: true
 image: blog/assets/release-2026-10/01-hero-social-1200x630.png
@@ -54,13 +54,13 @@ There is a new **Export USD** option for scenes that came from glTF, GLB, OBJ, P
   <figcaption>Double-click an object to open its material in a floating node graph and preview. Open Chess Set (CC BY 4.0, Academy Software Foundation), authored by Moeen and Mujtaba Sayed, contributed to MaterialX by SideFX.</figcaption>
 </figure>
 
-## One renderer behind every tool
+## Rendering parity across tools
 
-The Material Viewer, Compare, Node Specs, the Graph Editor previews, embeds and the Scene Viewer now share one renderer and one set of render settings, with Performance, Default and Quality levels and the same settings panel everywhere.
+The Material Viewer, Compare, Node Specs, the Graph Editor previews, embeds and the Scene Viewer now render more consistently, with the same render settings, Performance, Default and Quality levels, and the same settings panel everywhere.
 
 <figure>
   <img src="{{ pathPrefix }}assets/release-2026-10/01-hero-1600w.webp" alt="Three panels, each with the Render settings popover open: the Material Viewer showing a brick material on the shader ball (top left), Compare showing two carpaint balls side by side (top right) and the Scene Viewer showing the Open Chess Set close up (bottom)." width="1600" height="1455" loading="lazy">
-  <figcaption>One renderer and one set of render settings in every tool. Top left: Material Viewer. Top right: Compare. Bottom: Scene Viewer. Open Chess Set (CC BY 4.0, Academy Software Foundation), authored by Moeen and Mujtaba Sayed.</figcaption>
+  <figcaption>The same render settings in every tool. Top left: Material Viewer. Top right: Compare. Bottom: Scene Viewer. Open Chess Set (CC BY 4.0, Academy Software Foundation), authored by Moeen and Mujtaba Sayed.</figcaption>
 </figure>
 
 - **Quality level.** The material previews gain colored transmission, HDR presentation, screen space ambient occlusion and specular anti-aliasing at the Quality level. Performance and Default look exactly as before.
