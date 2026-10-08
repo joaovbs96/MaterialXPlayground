@@ -71,7 +71,7 @@
     "@playwright/test": "1.62.1",
     "dagre": "0.8.5",
     "jszip": "3.10.1",
-    "katex": "0.16.47",
+    "katex": "0.18.11",
     "marked": "18.0.9",
     "react": "18.3.1",
     "react-dom": "18.3.1",
