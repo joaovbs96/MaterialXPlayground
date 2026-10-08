@@ -1531,8 +1531,7 @@
     // Kept as one array so the list is easy to edit without touching the
     // popover markup below.
     const SCENE_KNOWN_ISSUES = [
-        'A malformed object in a USD file can crash the USD runtime.',
-        'UsdPreviewSurface is only flattened to basic constants and textures, not converted to MaterialX.',
+        'A malformed prim in a USD file makes that stage fail to load. The viewer restarts its USD runtime afterwards.',
         'Reloading scenes many times in one session has hung twice.',
     ];
     const KNOWN_ISSUES_POPOVER_W = 260;
