@@ -1664,7 +1664,7 @@ function openRouteRouted(route) {
 
 // Window Controls Overlay theming: matches .mtlx-header's rgba(17,24,39,.95)
 // blended over the same #111827 page background, and the gray-200 icon
-// color from js/site-tokens.css; height matches --site-header-height.
+// color; height matches --site-header-height.
 // Values come from the site's token data (dark theme), staged with js/ under the site root.
 const THEME_DATA = require(path.join(getSiteRoot(), 'js', 'shared', 'theme-tokens.js'));
 const THEMES = THEME_DATA.themes;

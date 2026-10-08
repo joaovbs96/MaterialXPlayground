@@ -50,9 +50,9 @@
                that's outside MaterialViewerApp's own JSX (its root div
                never sets a font utility, relying on inheriting this from
                body), so it has to be set explicitly here too — same stack
-               as js/site-tokens.css's --site-font-sans, not reused only
-               because this page doesn't load that file (see its header
-               comment for why). Without this the HUD/dialog text falls
+               as the --site-font-sans in js/site-header.css, not reused only
+               because this page doesn't load that file (the site stylesheet
+               is Tailwind-free by design). Without this the HUD/dialog text falls
                back to the browser's default serif font. */
             font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
             color: rgb(var(--mtlx-fg)); /* gray-100, matches index.html body's text-gray-100 */

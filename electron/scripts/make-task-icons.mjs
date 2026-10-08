@@ -39,7 +39,7 @@ app.disableHardwareAcceleration();
 const { Jimp, ResizeStrategy } = await import('jimp');
 const pngToIco = (await import('png-to-ico')).default;
 
-// Brand blue (--site-blue-400 in js/site-tokens.css), matched exactly so
+// Brand blue (Tailwind blue-400), matched exactly so
 // the taskbar tasks read as the same tool color as the site nav.
 const BLUE = '#60a5fa';
 
