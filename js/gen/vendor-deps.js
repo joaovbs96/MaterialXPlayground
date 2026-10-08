@@ -45,7 +45,7 @@ window.MTLX_VENDOR_DEPS = {
   "katex": {
     "dir": "katex",
     "name": "KaTeX",
-    "version": "0.16.47",
+    "version": "0.18.11",
     "licenseUrl": "https://github.com/KaTeX/KaTeX/blob/HEAD/LICENSE"
   },
   "mxslc": {

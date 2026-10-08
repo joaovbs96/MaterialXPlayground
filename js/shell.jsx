@@ -433,6 +433,29 @@ async function loadViewDeps(viewName) {
     return p;
 }
 
+// Decides what a crashed view does about a possibly stale page. `result`
+// is the build probe's {stale, serverId}; `guardId` is the server id a
+// reload was already tried for. Returns 'none' | 'reload' | 'prompt'.
+function staleCrashAction(result, guardId) {
+    if (!result || !result.stale || !result.serverId) return 'none';
+    return guardId === result.serverId ? 'prompt' : 'reload';
+}
+
+// Re-runs the shared build probe (no-store fetch, already skipped for
+// dev, file:, offline and embed builds) when a view crashes.
+async function probeStaleCrash() {
+    if (IN_ELECTRON || IN_VSCODE || EMBED || typeof window.__mtlxCheckBuild !== 'function') return { action: 'none' };
+    let result = null;
+    try { result = await window.__mtlxCheckBuild(true); } catch (e) { return { action: 'none' }; }
+    let guard = null;
+    try { guard = sessionStorage.getItem('mtlx_build_reload'); } catch (e) { /* unavailable */ }
+    const action = staleCrashAction(result, guard);
+    if (action === 'reload') {
+        try { sessionStorage.setItem('mtlx_build_reload', result.serverId); } catch (e) { /* best-effort */ }
+    }
+    return { action };
+}
+
 // ------------------------------------------------------------------
 // Per-view error boundary. PreviewErrorBoundary (js/shared/mtlx-ui.jsx)
 // already documents the problem: "The site ships production React with
@@ -457,7 +480,7 @@ async function loadViewDeps(viewName) {
 class ViewErrorBoundary extends React.Component {
     constructor(props) {
         super(props);
-        this.state = { error: null, info: null, copied: false };
+        this.state = { error: null, info: null, copied: false, stale: null };
         this.handleReload = () => window.location.reload();
         this.handleCopy = () => {
             const text = this.diagnosticsText();
@@ -483,6 +506,11 @@ class ViewErrorBoundary extends React.Component {
                 + (info && info.componentStack ? '\nComponent stack:' + info.componentStack : ''));
         }
         console.error('[mtlx] ViewErrorBoundary caught an error in view "' + (this.props.view || '?') + '":', error, info);
+        probeStaleCrash().then(({ action }) => {
+            if (action === 'none') return;
+            this.setState({ stale: action });
+            if (action === 'reload') window.location.reload();
+        });
     }
     componentWillUnmount() { clearTimeout(this._copiedTimer); }
     diagnosticsText() {
@@ -493,6 +521,22 @@ class ViewErrorBoundary extends React.Component {
         return window.mtlxDiagnosticsText ? window.mtlxDiagnosticsText(detail) : detail;
     }
     render() {
+        if (this.state.error && this.state.stale) {
+            return (
+                <div className="flex flex-col items-center justify-center h-40 gap-3 text-sm text-center px-4 text-fg-soft" data-testid="stale-crash">
+                    <span>A new version of the Playground was just published. {this.state.stale === 'reload' ? 'Reloading...' : 'Please reload the page.'}</span>
+                    {this.state.stale === 'prompt' && (
+                        <button
+                            type="button"
+                            onClick={this.handleReload}
+                            className="text-xs px-3 py-1.5 rounded-lg border bg-control/80 border-line-strong text-fg-soft hover:bg-hover transition-colors"
+                        >
+                            Reload page
+                        </button>
+                    )}
+                </div>
+            );
+        }
         if (this.state.error) {
             const { error, info } = this.state;
             return (
