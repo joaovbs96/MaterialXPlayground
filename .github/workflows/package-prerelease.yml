@@ -173,7 +173,10 @@ jobs:
           NOSHIP="$(node -e 'globalThis.window={};require(require("path").resolve("js/gen/vendor-deps.js"));console.log(Object.values(window.MTLX_VENDOR_DEPS).filter((d)=>d.vscode===false).map((d)=>d.dir).join("|"))')"
           if echo "$L" | grep -qE "extension/(node_modules|scripts|tests|electron|docs|embed|\\.github|vendor/($NOSHIP))/"; then echo "::error::ignored dirs leaked into the vsix"; exit 1; fi
           if echo "$L" | grep -E '^extension/gallery/' | grep -vE '^extension/gallery/(manifest\.json|thumbs/[^/]+\.jpg)$' | grep -q .; then echo "::error::unexpected gallery/ file leaked into the vsix"; exit 1; fi
-          if echo "$L" | grep -q 'extension/vendor/materialx/resources/Images/'; then echo "::error::vendor/materialx/resources/Images leaked into the vsix"; exit 1; fi
+          # Only the vendor/materialx keep list ships: every packaged file there must be allowlisted by name
+          # in .vscodeignore (generated from scripts/check-vsix-files.mjs's MATERIALX_KEEP_LIST).
+          STRAY="$(echo "$L" | grep -oE 'extension/vendor/materialx/[^ ]+$' | sed 's#^extension/##' | while read -r p; do grep -qxF "!$p" .vscodeignore || echo "$p"; done)"
+          [ -z "$STRAY" ] || { echo "::error::vendor/materialx files outside the keep list leaked into the vsix: $STRAY"; exit 1; }
 
           PKG="$(unzip -p "$VSIX" extension/package.json)"
           PUB="$(jq -r .publisher <<<"$PKG")"
