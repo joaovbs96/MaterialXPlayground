@@ -1705,6 +1705,8 @@
     window.SITE_TITLE = SITE_TITLE;
     window.SITE_LINKS = LINKS;
     window.SITE_LOGO_PATHS = LOGO_PATHS;
+    // The About menu's Playground mark, reused by the home page card.
+    window.SITE_NAV_PLAYGROUND_ICON = ICON_NAV_PLAYGROUND;
     window.SITE_DISCLAIMER_HTML = DISCLAIMER_BODY_HTML;
     // Split paragraphs for shell.jsx's AboutDialog, which styles the
     // experimental notice as its own warning box.

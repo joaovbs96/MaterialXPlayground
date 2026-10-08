@@ -24,7 +24,7 @@ const HOME_CARDS = [
     { id: 'builder', group: 'integrate', href: '#!builder', icon: 'code', title: 'Embed Builder', badge: 'Experimental', desc: 'Configure an embeddable viewer, preview it live, and copy an <iframe> or custom-element snippet for any web page.', img: 'images/preview-builder.jpg', cta: 'Open Embed Builder' },
     { id: 'vscode', group: 'integrate', href: '#!vscode', icon: 'brand-vscode', title: 'VS Code extension', badge: 'Experimental', desc: 'Edit .mtlx files with auto-complete and live preview, and open USD, glTF and OBJ scenes.', img: 'images/preview-vscode.jpg', cta: 'Get the extension' },
     { id: 'desktop', group: 'integrate', href: '#!desktop', icon: 'device-desktop', title: 'Desktop app', badge: 'Experimental', desc: 'The Playground offline on Windows, macOS and Linux, opening .mtlx files and scenes straight from disk.', img: 'images/preview-desktop.jpg', cta: 'Get the desktop app' },
-    { id: 'about', group: 'about', href: '#!about', icon: 'info-circle', title: 'The MaterialX Playground', desc: 'What the Playground is for, with an interactive tour through every tool.', img: 'images/preview-about.jpg', cta: 'Read about the Playground' },
+    { id: 'about', group: 'about', href: '#!about', icon: 'info-circle', iconSvg: 'SITE_NAV_PLAYGROUND_ICON', title: 'The MaterialX Playground', desc: 'What the Playground is for, the principles behind it and where it runs, with an interactive tour that writes one material and takes it through every tool.', img: 'images/preview-about.jpg', cta: 'Read about the Playground' },
     { id: 'roadmap', group: 'about', href: '#!roadmap', icon: 'list-details', title: 'Roadmap', desc: 'Where the Playground is heading, grouped by area, with the status of every item. Open for discussion on GitHub.', img: 'images/preview-roadmap.jpg', cta: 'See the roadmap' },
 ];
 // Featured gallery: 3 to 5 card ids, each with a free-text kicker (e.g.
@@ -122,7 +122,10 @@ function HomeCard({ card }) {
     );
     const body = (
         <div className="flex flex-col flex-1 p-5">
-            {card.iconImg
+            {card.iconSvg && window[card.iconSvg]
+                ? <span aria-hidden="true" className="w-8 h-8 self-start text-accent-fg [&>svg]:w-full [&>svg]:h-full"
+                    dangerouslySetInnerHTML={{ __html: window[card.iconSvg] }} />
+                : card.iconImg
                 ? <span aria-hidden="true" className="w-8 h-8 self-start bg-current text-accent-fg"
                     style={maskIconStyle(card.iconImg)} />
                 : <MtlxIcon name={card.icon} className="w-8 h-8 text-accent-fg" />}
