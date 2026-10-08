@@ -3,6 +3,8 @@ title: What's new in MaterialX Playground v2026.10.1
 description: New scene formats and USD export in the Scene Viewer, one renderer behind every tool, ShadingLanguageX in the Graph Editor, themes, a much bigger VS Code extension and a new home for the Playground on the web.
 date: 2026-10-06
 draft: true
+image: blog/assets/release-2026-10/01-hero-social-1200x630.png
+imageAlt: "Three tiles side by side: a brick material on the shader ball, two glossy blue carpaint balls in Compare, and the Open Chess Set in the Scene Viewer."
 tags:
   - releases
   - scene-viewer
@@ -23,9 +25,19 @@ The Scene Viewer started as a viewer for OpenUSD stages with MaterialX materials
   - **Lights:** area lights make their surfaces glow, and rectangular ones also light the scene. Distant lights, constant skies and environment maps come along, environment maps as a textured dome.
   - **Not yet:** instancing, participating media, other shape and light types, and less common materials are skipped, with a warning for each.
 
+<figure>
+  <img src="{{ pathPrefix }}assets/release-2026-10/02-pbrt-mitsuba-1600w.webp" alt="A grid of coffee maker renders, two rows of three. Each row compares a reference renderer, PrismRT and the Playground on the same scene." width="1600" height="1328">
+  <figcaption>Top row: the Mitsuba scene. Bottom row: the pbrt-v4 scene. Left to right: the reference renderer (Mitsuba 3.9.1 at 4096 spp, pbrt-v4 at 1024 spp), PrismRT (exported USD and MaterialX, 2048 spp), and the Playground in real time (floor hidden, backdrop None). Coffee Maker scene by cekuhnen (CC BY 3.0), from Benedikt Bitterli's Rendering Resources.</figcaption>
+</figure>
+
 ## And writes USD
 
 There is a new **Export USD** option for scenes that came from glTF, GLB, OBJ, PBRT or Mitsuba. You can write a USDA text file, a USDC binary file or a USDZ package, and choose how the materials travel: as USD with the `.mtlx` files referenced next to it, or as MaterialX written directly into the stage as UsdShade networks (the option to use for USDZ). Cameras, lights and double-sided meshes come along, with lights converted to UsdLux units. Dome lights and environment maps are not exported yet.
+
+<figure>
+  <img src="{{ pathPrefix }}assets/release-2026-10/03-export-usd-1600w.webp" alt="The Scene Viewer with the Mitsuba coffee maker scene loaded and the Export USD dialog open, offering USD plus referenced .mtlx files and the USDA format." width="1600" height="1000" loading="lazy">
+  <figcaption>Export USD from a Mitsuba scene: choose how materials travel and which USD format to write. Coffee Maker scene by cekuhnen (CC BY 3.0), from Benedikt Bitterli's Rendering Resources.</figcaption>
+</figure>
 
 ## A Scene Viewer that is nicer to work in
 
@@ -37,9 +49,19 @@ There is a new **Export USD** option for scenes that came from glTF, GLB, OBJ, P
 - **Faster and sturdier loading.** Materials compile in parallel and textures decode concurrently. Scenes with gigabytes of textures no longer crash the tab, procedural materials with more than a thousand nodes no longer reset the GPU while compiling, and heavily textured glTF scenes stay within the GPU's texture sampler limit. Only the file you open and what it references are loaded, not every scene file in the folder.
 - **Small fixes that add up.** Autodesk LookdevX converter nodes are repaired, the right root file is picked when you drop several, the authored camera is used on load, the shadow catcher grounds the model properly and the selection outline is smooth on high density displays.
 
+<figure>
+  <img src="{{ pathPrefix }}assets/release-2026-10/04-material-preview-1600w.webp" alt="The Scene Viewer showing the Open Chess Set with the black pawns outlined, and a floating panel with the pawn material graph next to a shader ball preview." width="1600" height="1000" loading="lazy">
+  <figcaption>Double-click an object to open its material in a floating node graph and preview. Open Chess Set (CC BY 4.0, Academy Software Foundation), authored by Moeen and Mujtaba Sayed, contributed to MaterialX by SideFX.</figcaption>
+</figure>
+
 ## One renderer behind every tool
 
 The Material Viewer, Compare, Node Specs, the Graph Editor previews, embeds and the Scene Viewer now share one renderer and one set of render settings, with Performance, Default and Quality levels and the same settings panel everywhere.
+
+<figure>
+  <img src="{{ pathPrefix }}assets/release-2026-10/01-hero-1600w.webp" alt="Three panels, each with the Render settings popover open: the Material Viewer showing a brick material on the shader ball (top left), Compare showing two carpaint balls side by side (top right) and the Scene Viewer showing the Open Chess Set close up (bottom)." width="1600" height="1455" loading="lazy">
+  <figcaption>One renderer and one set of render settings in every tool. Top left: Material Viewer. Top right: Compare. Bottom: Scene Viewer. Open Chess Set (CC BY 4.0, Academy Software Foundation), authored by Moeen and Mujtaba Sayed.</figcaption>
+</figure>
 
 - **Quality level.** The material previews gain colored transmission, HDR presentation, screen space ambient occlusion and specular anti-aliasing at the Quality level. Performance and Default look exactly as before.
 - **Reflections are right the first time.** Rough metals blur their environment reflections as soon as a material loads, instead of looking mirror-like until the environment reloaded.
@@ -47,6 +69,11 @@ The Material Viewer, Compare, Node Specs, the Graph Editor previews, embeds and 
 - **UDIM on your own models.** UDIM materials on imported models render every tile in the Material Viewer.
 - **Textures.** TGA textures now load everywhere, EXR textures are no longer flipped, Deflate-compressed TIFFs and single-channel EXRs decode correctly, clamp and mirror address modes are honored, a Texture Anisotropy setting is new, and a "Loading textures" badge shows while textures arrive.
 - **Kinder to your GPU.** Views you are not looking at release or suspend their WebGL contexts, so having many tools open no longer exhausts the browser's context limit, and a lost context recovers the same way in every tool.
+
+<figure>
+  <img src="{{ pathPrefix }}assets/release-2026-10/05-disney-glass-1600w.webp" alt="Two views of the same shader ball, a Disney Principled glass material. On the left it looks like opaque white plastic, on the right it is see-through glass." width="1600" height="585" loading="lazy">
+  <figcaption>Disney Principled glass now renders transparent. Left: before. Right: v2026.10.1. Both use the Default preset with Force Transparency on.</figcaption>
+</figure>
 
 ## Graph Editor, Node Specs and ShadingLanguageX
 
@@ -58,6 +85,11 @@ The Material Viewer, Compare, Node Specs, the Graph Editor previews, embeds and 
   - A **code node** keeps its nodegraph as ShadingLanguageX right on the node.
 - **Node Specs.** A View implementation button shows a node's implementation graph inline, with a shortcut into the Graph Editor that brings you back to the same page. You can also filter the node list by port type, for example every node with a `surfaceshader` output.
 
+<figure>
+  <img src="{{ pathPrefix }}assets/release-2026-10/06-node-thumbnails-1600w.webp" alt="The Graph Editor inside a marble node graph of 19 nodes, every pattern node showing a small preview of its output with the final marble on the shader ball at the right." width="1600" height="1000" loading="lazy">
+  <figcaption>Node thumbnails: see what every node produces right in the graph (the marble example, Large Thumbnails on). Example: standard_surface_marble_solid from the MaterialX examples (Academy Software Foundation).</figcaption>
+</figure>
+
 ## Themes
 
 The Playground is no longer dark only.
@@ -67,6 +99,11 @@ The Playground is no longer dark only.
 - Your **own themes** from three base colors, with contrast and tint sliders and a contrast check to WCAG AA. Every theme travels as a short code you can share.
 - **Embeds** take a `theme` attribute, with a built-in name or a theme code.
 - In the **desktop app**, the window frame and title bar follow the theme.
+
+<figure>
+  <img src="{{ pathPrefix }}assets/release-2026-10/07-themes-1600w.webp" alt="The first slide of the MaterialX Playground tour, one picture cut into six vertical bands, each band in a different theme." width="1600" height="1000" loading="lazy">
+  <figcaption>Light, dark, presets and your own themes. Left to right: Light, Dark, Dim, Paper, High contrast dark, High contrast light. Captured in the desktop app.</figcaption>
+</figure>
 
 ## A much bigger VS Code extension
 

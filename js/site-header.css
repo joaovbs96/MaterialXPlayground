@@ -1,3 +1,11 @@
+/* Layout and font tokens shared by the app, the VS Code webview and the blog. */
+:root {
+  --site-font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --site-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --site-header-height: 56px;
+  --site-max-width: 1600px;
+}
+
 /* site-header.css — complete, self-contained styling for the shared site
    shell (header + footer) injected by js/site-header.js into
    <div id="site-header"> / <div id="site-footer"> on every surface: the
@@ -9,8 +17,7 @@
    .mtlx-about-* rules below are deliberately unscoped.
 
    Must render IDENTICALLY on all three, with or without Tailwind present
-   — this stylesheet is Tailwind-free and token-driven (see
-   js/site-tokens.css, loaded before this file) on purpose. It is
+   — this stylesheet is Tailwind-free and token-driven on purpose. It is
    vendored byte-for-byte into the tutorials build by
    scripts/build-tutorials.mjs, the same way js/site-header.js already
    is. Do not reintroduce a Tailwind/utility-class dependency here — that
@@ -26,7 +33,7 @@
 :where(#site-header, #site-header *, #site-footer, #site-footer *) {
     box-sizing: border-box;
     margin: 0;
-    border: 0 solid var(--site-gray-200);
+    border: 0 solid rgb(var(--mtlx-line-subtle));
 }
 
 :where(#site-header, #site-footer) :where(button) {

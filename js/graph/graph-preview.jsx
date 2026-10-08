@@ -119,7 +119,7 @@
         // through the embed's queued, promise-returning load() call (the
         // same postMessage path embed-boot.js's 'load' handler answers, and
         // js/viewer-app.jsx's "Send to Viewer" button also uses).
-        function GraphPreviewViewer({ src, xml, geometry, textures, docName, materialRequest }) {
+        function GraphPreviewViewer({ src, xml, geometry, textures, docName, materialRequest, initialMaterial }) {
             const mountRef = React.useRef(null);
             const elRef = React.useRef(null);
             const loadedRef = React.useRef(false);
@@ -131,6 +131,8 @@
             // element's live `material` attribute (see the effects below).
             const [renderables, setRenderables] = React.useState([]);
             const [material, setMaterial] = React.useState('');
+            // initialMaterial is applied once per document, when its renderables arrive.
+            const initialAppliedRef = React.useRef(false);
             // Defensive: mtlx-ui.jsx loads before this file for every
             // current host (js/shell.jsx VIEW_DEPS), but a future host
             // that skips it should just render without the dropdown.
@@ -185,6 +187,7 @@
                 // selection now rather than wait for the next 'mtlx-renderables'.
                 setRenderables([]);
                 setMaterial('');
+                initialAppliedRef.current = false;
                 if (src) {
                     elRef.current.src = src;
                 } else if (xml) {
@@ -210,6 +213,11 @@
             // longer include it, mirroring builder-app.jsx's Material control.
             React.useEffect(() => {
                 setMaterial((m) => (m && !renderables.some((r) => r.name === m)) ? '' : m);
+                if (initialAppliedRef.current || !initialMaterial || renderables.length <= 1) return;
+                if (renderables.some((r) => r.name === initialMaterial)) {
+                    initialAppliedRef.current = true;
+                    setMaterial(initialMaterial);
+                }
             }, [renderables]);
 
             // Bridged in from MtlxGraphPreview's onNodeClick (fresh object
@@ -353,6 +361,8 @@
                 previewGeometry = 'shaderball-scene',
                 previewTextures,
                 previewName,
+                // Material the shader ball shows first in a multi-material document.
+                previewMaterial,
                 // Opt-in: skips the width-based auto-collapse below so a
                 // narrow host (e.g. a floating panel) still opens expanded.
                 // Default false keeps every existing caller's behavior.
@@ -954,7 +964,7 @@
                         <div className={previewColumnClass + (previewCollapsed ? ' hidden' : '')} style={previewColumnStyle}>
                             {!previewCollapsed && previewToggleBtn}
                             {previewEverLoaded && (
-                                <GraphPreviewViewer src={src} xml={xml} geometry={previewGeometry} textures={previewTextures} docName={previewName} materialRequest={previewMaterialRequest} />
+                                <GraphPreviewViewer src={src} xml={xml} geometry={previewGeometry} textures={previewTextures} docName={previewName} materialRequest={previewMaterialRequest} initialMaterial={previewMaterial} />
                             )}
                         </div>
                     )}

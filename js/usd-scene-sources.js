@@ -123,6 +123,8 @@
         expandSceneZips,
         loadGltfStage: (options) => loadGltfModule().then((module) => module.loadGltfStage(options)),
         loadObjStage: (options) => loadObjModule().then((module) => module.loadObjStage(options)),
+        // A lone .mtl library as one MaterialX document: { xml, name, files } (desktop app).
+        convertMtlLibrary: (files, rootPath) => loadObjModule().then((module) => module.convertMtlLibrary({ files, rootPath })),
         loadPbrtStage: (options) => loadPbrtModule().then((module) => module.loadPbrtStage(options)),
         loadMitsubaStage: (options) => loadMitsubaModule().then((module) => module.loadMitsubaStage(options)),
     };

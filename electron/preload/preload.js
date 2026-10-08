@@ -98,9 +98,53 @@ ipcRenderer.on('mtlx-close-confirm-request', (event, payload) => {
     if (closeConfirmCallback) closeConfirmCallback(payload);
 });
 
+// Scene Viewer file sets (main.js "Scene Viewer disk access"): the latest
+// set and the latest collect progress are held until glue.js registers.
+let openSceneCallback = null;
+let pendingOpenScene = null;
+let sceneProgressCallback = null;
+let pendingSceneProgress = null;
+ipcRenderer.on('mtlx-open-scene', (event, payload) => {
+    if (openSceneCallback) openSceneCallback(payload);
+    else pendingOpenScene = payload;
+});
+ipcRenderer.on('mtlx-scene-progress', (event, payload) => {
+    if (sceneProgressCallback) sceneProgressCallback(payload);
+    else pendingSceneProgress = payload;
+});
+const sceneApi = {
+    onOpenScene: (callback) => {
+        openSceneCallback = callback;
+        if (pendingOpenScene) {
+            const payload = pendingOpenScene;
+            pendingOpenScene = null;
+            callback(payload);
+        }
+    },
+    onSceneProgress: (callback) => {
+        sceneProgressCallback = callback;
+        if (pendingSceneProgress) {
+            const payload = pendingSceneProgress;
+            pendingSceneProgress = null;
+            callback(payload);
+        }
+    },
+    // Main resolves the entries against the open scene only; there is no path argument.
+    sceneResolveMissing: (payload) => ipcRenderer.invoke('mtlx-scene-missing', {
+        seq: payload && payload.seq,
+        missing: Array.isArray(payload && payload.missing) ? payload.missing.slice(0, 512).map((m) => ({
+            asset: String(m && m.asset || ''), introducedBy: String(m && m.introducedBy || ''),
+        })) : [],
+    }),
+    sceneCancel: (seq) => ipcRenderer.send('mtlx-scene-cancel', { seq }),
+    sceneReload: () => ipcRenderer.send('mtlx-scene-reload'),
+};
+
 const api = {
+    ...sceneApi,
     saveMtlx: (opts) => ipcRenderer.invoke('mtlx-save', opts),
     notifyEdit: (dirty) => ipcRenderer.send('mtlx-notify-edit', !!dirty),
+    detachDocument: () => ipcRenderer.send('mtlx-detach-document'),
     onOpenFile: (callback) => {
         openFileCallback = callback;
         if (pendingOpenFilePayload) {

@@ -7,12 +7,14 @@ import test from 'node:test';
 import {
   formatNumber,
   gltfPbrDocument,
+  mtlLibraryDocument,
   objMtlDocument,
   parseMtl,
   sanitizeMtlxName,
   usdPreviewSurfaceDocument,
   xmlEscape,
 } from '../../js/usd/mtlx-material-docs.js';
+import { convertMtlLibrary } from '../../js/usd/obj-stage-loader.js';
 
 // Pulls the attributes of one <input> line out of a document.
 function elementPattern(nodeName) {
@@ -598,4 +600,60 @@ test('usd: two float slots reading the same file share one image node', () => {
   });
   assert.equal((xml.match(/<image /g) || []).length, 1);
   assert.match(inputLine(xml, 'SR_usd', 'metallic'), /nodename="roughness_image"/);
+});
+
+// A lone .mtl library (desktop app): every newmtl in one document.
+test('mtlLibraryDocument emits one SR_/M_ pair per newmtl with unique node names', () => {
+  const materials = parseMtl(`newmtl Red Paint
+Kd 1 0 0
+map_Kd tex/a.png
+newmtl 2nd
+Kd 0 1 0
+map_Kd tex/a.png
+Ns 10
+newmtl Red_Paint
+Kd 0 0 1
+`);
+  const { xml, materialNames, notes } = mtlLibraryDocument({ materials, textureRefs: (record) => record.path });
+  assert.deepEqual(materialNames, ['M_Red_Paint', 'M_2nd', 'M_Red_Paint_2']);
+  for (const name of ['SR_Red_Paint', 'SR_2nd', 'SR_Red_Paint_2']) assert.match(xml, new RegExp('<open_pbr_surface name="' + name + '"'));
+  const names = Array.from(xml.matchAll(/ name="([^"]+)" type="[^"]+"(?: \/)?>/g)).map((m) => m[1]);
+  assert.equal(new Set(names).size, names.length, 'node names are unique');
+  assert.equal((xml.match(/<surfacematerial /g) || []).length, 3);
+  assert.equal((xml.match(/value="tex\/a.png"/g) || []).length, 1, 'one shared image node for the same file');
+  assert.ok(Array.isArray(notes));
+});
+
+test('objMtlDocument output is unchanged by the library refactor', () => {
+  const mtl = parseMtl(`newmtl W
+Kd 0.5 0.5 0.5
+map_Kd w.png
+map_Bump -bm 2 h.png
+`).get('W');
+  const { xml } = objMtlDocument({ name: 'W', mtl, textureRefs: (r) => r.path });
+  assert.match(xml, /<image name="base_color_image" type="color3">/);
+  assert.match(xml, /<heighttonormal name="bump_to_normal" type="vector3">/);
+  assert.match(xml, /<surfacematerial name="M_W" type="material">/);
+});
+
+test('convertMtlLibrary resolves textures beside the .mtl and keeps values relative to it', async () => {
+  const files = [
+    { path: 'lib/set.mtl', data: new Blob([`newmtl A
+map_Kd tex/a.png
+newmtl B
+map_Kd L:/far/b.png
+newmtl C
+map_Kd missing.png
+`]) },
+    { path: 'lib/tex/a.png', data: new Blob(['a']) },
+    { path: '__abs/L/far/b.png', data: Object.assign(new Blob(['b']), { __mtlxAbsPath: 'L:/far/b.png' }) },
+  ];
+  const doc = await convertMtlLibrary({ files, rootPath: 'lib/set.mtl' });
+  assert.equal(doc.name, 'set');
+  assert.deepEqual(doc.materialNames, ['M_A', 'M_B', 'M_C']);
+  assert.match(doc.xml, /value="tex\/a.png"/);
+  assert.match(doc.xml, /value="__abs\/L\/far\/b.png"/);
+  assert.deepEqual(Object.keys(doc.files).sort(), ['__abs/L/far/b.png', 'tex/a.png']);
+  assert.ok(doc.notes.some((n) => /^M_C: /.test(n)), 'unresolved texture noted');
+  await assert.rejects(convertMtlLibrary({ files: [{ path: 'e.mtl', data: new Blob(['# empty']) }], rootPath: 'e.mtl' }), /no newmtl/);
 });

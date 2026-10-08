@@ -79,6 +79,8 @@ const useCompareSlot = () => {
     const [status, setStatus] = React.useState(null);
     const [error, setError] = React.useState(null);
     const [texReport, setTexReport] = React.useState(null);
+    const [viewStats, setViewStats] = React.useState(null); // shader size, uniforms, build ms
+    const [notices, setNotices] = React.useState(null);
     // "Loading textures\u2026" badge while bindDroppedTextures' async loads are
     // in flight. texLoadGenRef guards races: a newer call always wins
     // over a stale one settling later.
@@ -229,16 +231,20 @@ const useCompareSlot = () => {
         renderables, chosenMat, setChosenMat,
         version, setVersion, renderedVersion, setRenderedVersion,
         busy, setBusy, status, setStatus, error, setError,
-        texReport, setTexReport, texturesLoading, setTexturesLoading, trackTexReport, texLoadGenRef,
+        texReport, setTexReport, viewStats, setViewStats, notices, setNotices, texturesLoading, setTexturesLoading, trackTexReport, texLoadGenRef,
         viewRef, canvasRef, viewEpoch, setViewEpoch, loadedRef,
         ingest, onPickFiles, onPickFileList, loadDocument,
     };
 };
 
+// Shared HUD pieces (js/shared/render-hud.jsx), loaded by the app shell.
+const HUD = window.MtlxRenderHud;
+const SidebarSectionHeader = HUD.SidebarSectionHeader;
+
 // (Re)builds one slot's render view whenever its chosen document/material
 // or the shared geometry changes — mirrors viewer-app.jsx's render effect,
 // called once per slot from the app component below.
-const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayModeRef, showDiffRef, peerViewRef, swipeDiffPosRef, customKey, glEpoch, displayTransform) => {
+const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayModeRef, showDiffRef, peerViewRef, swipeDiffPosRef, customKey, glEpoch, displayTransform, rebuildKey) => {
     React.useEffect(() => {
         const loaded = slot.loadedRef.current;
         if (!loaded || !loaded.renderables.length) return undefined;
@@ -252,11 +258,14 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
             slot.setError(null);
             slot.texLoadGenRef.current++;
             slot.setTexReport(null);
+            slot.setViewStats(null);
+            slot.setNotices(null);
             slot.setTexturesLoading(false);
             slot.setBusy(true);
             slot.setStatus('Generating shader…');
             try {
                 const target = loaded.renderables[Math.min(slot.chosenMat, loaded.renderables.length - 1)];
+                const buildT0 = performance.now();
                 const view = await createMtlxRenderView({
                     canvas: slot.canvasRef.current,
                     mx: loaded.mx, gen: loaded.gen, genContext: loaded.genContext,
@@ -298,6 +307,8 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
                 // flight landed on the disposed predecessor, not on us.
                 if (view.setBackdrop) view.setBackdrop(envUIRef.current.backdrop);
                 slot.viewRef.current = view;
+                slot.setViewStats({ fsBytes: (view.fs || '').length, uniforms: Object.keys(view.uniforms || {}).length, ms: Math.round(performance.now() - buildT0) });
+                slot.setNotices(view.notices && view.notices.length ? view.notices : null);
                 // Adopt the surviving peer's camera framing, never the
                 // reverse — the fresh view matches whatever's on screen.
                 const peer = peerViewRef && peerViewRef.current;
@@ -335,7 +346,7 @@ const useCompareRenderEffect = (slot, label, geom, envUIRef, activeRef, displayM
             if (slot.viewRef.current) { slot.viewRef.current.release(); slot.viewRef.current = null; }
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [slot.renderables, slot.chosenMat, geom, customKey, glEpoch, displayTransform]);
+    }, [slot.renderables, slot.chosenMat, geom, customKey, glEpoch, displayTransform, rebuildKey]);
 };
 
 // Window-wide drag & drop, split into two zones (Document A / Document B)
@@ -496,6 +507,7 @@ function MaterialCompareApp({ active = true } = {}) {
     const swipeDiffPosRef = React.useRef(swipeDiffPos);
     swipeDiffPosRef.current = swipeDiffPos;
     const [stats, setStats] = React.useState(null); // { metrics, size:[w,h] } | null
+    const [statsTab, setStatsTab] = React.useState('A');
     const [statsHelpOpen, setStatsHelpOpen] = React.useState(false); // pinned Statistics panel's help popover
     const [sidebarOpen, setSidebarOpen] = React.useState(true);
     // Seeded from the global geometry shared across the four tools,
@@ -585,21 +597,6 @@ function MaterialCompareApp({ active = true } = {}) {
     const [envUI, setEnvUI] = React.useState({ rotation: 0, exposure: 1, backdrop: 'studio' });
     const [envImportError, setEnvImportError] = React.useState(null);
     const [envFileName, setEnvFileName] = React.useState('');
-    // Backs the Rendering card's summary text only now; the toggle itself
-    // is RenderSettingsSection, which writes straight through
-    // window.setForceTransparency; this stays synced by listening for the
-    // manifest's broadcast instead of owning the write.
-    const [forceTransparency, setForceTransparency] = React.useState(
-        () => !!(window.getForceTransparency && window.getForceTransparency())
-    );
-    React.useEffect(() => {
-        const onRenderSetting = (e) => {
-            if (!e.detail || e.detail.key !== 'transparency') return;
-            setForceTransparency(!!e.detail.value);
-        };
-        window.addEventListener('mtlx-render-setting', onRenderSetting);
-        return () => window.removeEventListener('mtlx-render-setting', onRenderSetting);
-    }, []);
     // The toggle itself is now RenderSettingsSection (key light is a true
     // engine-wide global, safe to route through the shared store); this
     // flag is kept only for the Reset button's guard.
@@ -659,8 +656,9 @@ function MaterialCompareApp({ active = true } = {}) {
         isHidden: surfaceHidden,
         onLost: (i) => (i === 0 ? slotA : slotB).setError(RENDER_CONTEXT_LOST_MESSAGE),
     });
-    useCompareRenderEffect(slotA, 'A', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotB.viewRef, swipeDiffPosRef, customKey, glEpochA, displayTransform);
-    useCompareRenderEffect(slotB, 'B', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotA.viewRef, swipeDiffPosRef, customKey, glEpochB, displayTransform);
+    const rebuildKey = HUD.useRenderRebuildKey('compare');
+    useCompareRenderEffect(slotA, 'A', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotB.viewRef, swipeDiffPosRef, customKey, glEpochA, displayTransform, rebuildKey);
+    useCompareRenderEffect(slotB, 'B', geom, envUIRef, activeRef, displayModeRef, effShowDiffRef, slotA.viewRef, swipeDiffPosRef, customKey, glEpochB, displayTransform, rebuildKey);
 
     // hashchange fires before/around the shell's display:none class flip,
     // so re-check visibility a tick later before flushing stashed work.
@@ -1187,9 +1185,6 @@ function MaterialCompareApp({ active = true } = {}) {
 
     // ---- Layout helpers ---------------------------------------------------
     const modeLabel = { side: 'Side by side', slider: 'Swipe', diff: 'Difference' }[displayMode];
-    const envSummary = (envUI.rotation === 0 && envUI.exposure === 1)
-        ? 'Default'
-        : Math.round(envUI.rotation) + '°, ' + formatEv(linearToEv(envUI.exposure));
 
     // 28px HUD chip classes for the stage's ViewportControls (camera reset,
     // fullscreen), matching viewer-app.jsx's own hudChipClass.
@@ -1316,19 +1311,16 @@ function MaterialCompareApp({ active = true } = {}) {
         </React.Fragment>
     );
 
-    const renderSlotSection = (slot, slotKey, title, dropHint) => {
+    const renderSlotSection = (slot, slotKey, title) => {
         const docBasename = slot.chosenMtlx ? slot.chosenMtlx.split('/').pop() : 'No document';
         return (
-            <SectionCard
-                icon="file-text"
-                title={title}
-                pill={<SlotDot color={SLOT_COLORS[slotKey]} />}
-                summary={docBasename}
-                defaultOpen
-            >
-                <div>
-                    <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-medium text-fg-muted">MaterialX version</span>
+            <section data-testid={'compare-section-' + slotKey} className={'flex-none px-3.5 py-3 space-y-2' + (slotKey === 'A' ? '' : ' border-t border-line')}>
+                <div className="flex items-center gap-2 min-w-0">
+                    <MtlxIcon name="file-text" className="w-4 h-4 text-fg-muted shrink-0" />
+                    <span className="text-[13px] font-semibold text-fg shrink-0">{title}</span>
+                    <SlotDot color={SLOT_COLORS[slotKey]} />
+                    <div className="flex-1" />
+                    <div className="shrink-0" title="MaterialX version">
                         <MtlxSelect
                             value={slot.version}
                             options={mtlxVersions}
@@ -1368,7 +1360,7 @@ function MaterialCompareApp({ active = true } = {}) {
                         <input type="file" webkitdirectory="" directory="" multiple className="hidden" onChange={(e) => { setPresetPick((s) => ({ ...s, [slotKey]: '' })); slot.onPickFiles(e); }} />
                     </label>
                 </div>
-                <div className="text-xs text-fg-subtle">{dropHint}</div>
+                <HUD.FilesLoaded testId={'compare-files-' + slotKey} files={Object.keys(slot.fileMap).map((k) => ({ path: k, size: slot.fileMap[k] && slot.fileMap[k].size }))} />
                 {slot.mtlxPaths.length > 1 && (
                     <MtlxSelect
                         value={slot.chosenMtlx || ''}
@@ -1381,18 +1373,15 @@ function MaterialCompareApp({ active = true } = {}) {
                         block
                     />
                 )}
-                <div>
-                    <FieldLabel label="Or pick a preset" />
-                    <button
-                        type="button"
-                        onClick={() => openPresetPickerForSlot(slotKey)}
-                        disabled={presetBusy[slotKey] || slot.busy}
-                        className={BTN_SECONDARY + ' w-full justify-start gap-1.5'}
-                    >
-                        <MtlxIcon name="presets" className="w-3.5 h-3.5" />
-                        Presets
-                    </button>
-                </div>
+                <button
+                    type="button"
+                    onClick={() => openPresetPickerForSlot(slotKey)}
+                    disabled={presetBusy[slotKey] || slot.busy}
+                    className={BTN_SECONDARY + ' w-full justify-start gap-1.5'}
+                >
+                    <MtlxIcon name="presets" className="w-3.5 h-3.5" />
+                    Presets
+                </button>
                 {slot.renderables.length > 1 && (
                     <MtlxSelect
                         value={slot.chosenMat}
@@ -1414,7 +1403,7 @@ function MaterialCompareApp({ active = true } = {}) {
                         <div className="text-xs text-fg-subtle">Only textures that failed to resolve are listed. This card disappears when everything loads.</div>
                     </div>
                 )}
-            </SectionCard>
+            </section>
         );
     };
 
@@ -1602,6 +1591,24 @@ function MaterialCompareApp({ active = true } = {}) {
                     </div>
                 )}
 
+                <HUD.EnvRenderPills
+                    surface="compare"
+                    containerRef={stageContentRef}
+                    leading={!sidebarOpen ? (
+                        <button onClick={() => setSidebarOpen(true)} title="Expand the panel" className={HUD_PILL}>
+                            <MtlxIcon name="chevrons-right" className="w-4 h-4" />
+                            <span className="max-w-[6rem] truncate">Compare</span>
+                        </button>
+                    ) : null}
+                    backdropDisabled={geom === 'shaderball-scene'}
+                    backdropTitle="The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting"
+                    env={{
+                        fileName: envFileName, error: envImportError, onFile: importEnv, onClear: clearEnvOverride,
+                        rotation: envUI.rotation, exposure: envUI.exposure,
+                        onRotation: setEnvRotationDeg, onExposure: setEnvExposureVal,
+                        backdrop: envUI.backdrop, onBackdrop: setBackdrop, onReset: resetEnv,
+                    }}
+                />
                 <ViewportControls
                     showGeomSelect={false}
                     showRotate={false}
@@ -1634,11 +1641,12 @@ function MaterialCompareApp({ active = true } = {}) {
                             className="flex-none ml-auto text-fg-muted hover:text-fg-soft px-1 leading-none text-sm"
                         ><MtlxIcon name="chevrons-left" className="w-4 h-4" /></button>
                     </div>
-                    <div className="flex-1 overflow-y-auto custom-scrollbar p-3.5 space-y-4">
-                        {renderSlotSection(slotA, 'A', 'Document A', 'or drag-and-drop on the left half')}
-                        {renderSlotSection(slotB, 'B', 'Document B', 'or drag-and-drop on the right half')}
+                    <div className="flex-1 min-h-0 flex flex-col overflow-y-auto custom-scrollbar">
+                        {renderSlotSection(slotA, 'A', 'Document A')}
+                        {renderSlotSection(slotB, 'B', 'Document B')}
 
-                        <SectionCard icon="layout-columns" title="Display" summary={modeLabel} defaultOpen>
+                        <section data-testid="compare-section-display" className="flex-none px-3.5 py-3 space-y-2 border-t border-line">
+                            <SidebarSectionHeader icon="layout-columns" title="Display" summary={modeLabel} />
                             <div className="flex rounded-lg border border-line overflow-hidden text-[11px]">
                                 {[['side', 'Side by side'], ['slider', 'Swipe'], ['diff', 'Difference']].map(([id, label]) => (
                                     <button
@@ -1679,9 +1687,10 @@ function MaterialCompareApp({ active = true } = {}) {
                                     Switch Views
                                 </button>
                             </div>
-                        </SectionCard>
+                        </section>
 
-                        <SectionCard icon="cube" title="Scene" summary={GEOM_LABELS[geom] || geom} defaultOpen>
+                        <section data-testid="compare-section-scene" className="flex-none px-3.5 py-3 space-y-2 border-t border-line">
+                            <SidebarSectionHeader icon="cube" title="Scene" summary={GEOM_LABELS[geom] || geom} />
                             <div className="grid grid-cols-2 gap-2">
                                 {GEOM_OPTIONS.map((g) => (
                                     <GeometryTile
@@ -1711,91 +1720,37 @@ function MaterialCompareApp({ active = true } = {}) {
                                 />
                             </div>
                             {modelImportError && <div className="text-xs text-error">{modelImportError}</div>}
-                        </SectionCard>
-
-                        <SectionCard icon="sun" title="Environment" summary={envSummary} defaultOpen dense>
-                            <FilePickerField
-                                value={envFileName}
-                                placeholder="Default environment"
-                                accept=".hdr,.exr"
-                                icon="file"
-                                onFiles={(files) => {
-                                    const f = files && files[0];
-                                    if (f) importEnv(f);
-                                }}
-                                onClear={clearEnvOverride}
-                            />
-                            {envImportError && <div className="text-xs text-error">{envImportError}</div>}
-                            {/* Rotation/exposure/backdrop stay caller-driven
-                                (real state shared by both panes, applied to
-                                both live views directly) but pull their
-                                label/range/options from the manifest via
-                                rowMeta so the numbers can't drift. */}
-                            <SliderField
-                                label={(rowMeta('envRotation', 'compare') || {}).label || 'Environment rotation'}
-                                unit={(rowMeta('envRotation', 'compare') || {}).unit || 'deg'}
-                                value={envUI.rotation} min={0} max={360} step={1}
-                                defaultValue={0}
-                                onSlider={(v) => setEnvRotationDeg(Number(v))}
-                                onNumber={(v) => setEnvRotationDeg(Number(v))}
-                            />
-                            <SliderField
-                                label={(rowMeta('envExposure', 'compare') || {}).label || 'Environment exposure'}
-                                unit={(rowMeta('envExposure', 'compare') || {}).unit || 'EV'}
-                                value={linearToEv(envUI.exposure)} min={EV_MIN} max={EV_MAX} step={EV_STEP}
-                                defaultValue={0}
-                                onSlider={(v) => setEnvExposureVal(evToLinear(v))}
-                                onNumber={(v) => setEnvExposureVal(evToLinear(v))}
-                            />
-                            <div className="flex items-center justify-between gap-2">
-                                <span className="text-xs font-medium text-fg-muted">{(rowMeta('backdrop', 'compare') || {}).label || 'Backdrop'}</span>
-                                <MtlxSelect
-                                    value={envUI.backdrop}
-                                    options={rowMeta('backdrop', 'compare').options}
-                                    labels={(rowMeta('backdrop', 'compare') || {}).optionLabels || {}}
-                                    onChange={setBackdrop}
-                                    defValue="studio"
-                                    disabled={geom === 'shaderball-scene'}
-                                    title={geom === 'shaderball-scene' ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : ((rowMeta('backdrop', 'compare') || {}).hint)}
-                                    size="sm"
-                                />
-                            </div>
-                            <RenderSettingsSection
-                                surface="compare"
-                                keys={['keyLight', 'diffuseEnv']}
-                                variant="sidebar"
-                                labelClassName="text-xs font-medium text-fg-muted"
-                            />
-                            <button
-                                onClick={resetEnv}
-                                title="Also clears an imported .hdr/.exr and restores the default environment"
-                                className={BTN_SECONDARY + ' w-full'}
-                            >
-                                Reset
-                            </button>
-                        </SectionCard>
-
-                        <SectionCard icon="settings-cog" title="Rendering" summary={forceTransparency ? 'Transparency forced' : 'Default'} defaultOpen>
-                            <RenderSettingsSection
-                                surface="compare"
-                                keys={['displayTransform', 'displayExposure', 'transparency', 'displacement', 'previewSubdivision']}
-                                variant="sidebar"
-                                labelClassName="text-xs font-medium text-fg-muted"
-                            />
-                        </SectionCard>
+                        </section>
                     </div>
 
-                    {/* Pinned Statistics panel: always expanded and non-scrolling,
-                        a sibling BELOW the scrollable cards column above (not one
-                        more card inside it). */}
-                    <div className="shrink-0 border-t border-line px-3.5 py-3.5 space-y-2.5 bg-surface-card">
-                        <div className="flex items-center gap-2">
-                            <MtlxIcon name="compare" className="w-4 h-4 text-fg-muted shrink-0" />
+                    {/* Pinned boxes below the scrollable cards column: per-document
+                        Statistics (tabs A/B) above the Difference Metrics. */}
+                    <div data-testid="compare-statistics" className="shrink-0 border-t border-line px-3.5 py-3 space-y-2 bg-surface-card">
+                        <div className="flex items-center gap-2 h-6">
+                            <MtlxIcon name="cube" className="w-4 h-4 text-fg-muted shrink-0" />
                             <span className="text-[13px] font-semibold text-fg shrink-0">Statistics</span>
-                            {bothLive && <span className="shrink-0 text-[10px] text-fg-faint">·</span>}
+                            <HUD.DiagnosticsButton testId={'compare-diagnostics-' + statsTab} notices={(statsTab === 'A' ? slotA : slotB).notices} />
+                        </div>
+                        <div className="flex gap-1">
+                            {[['A', 'Document A'], ['B', 'Document B']].map(([id, label]) => (
+                                <button
+                                    key={id}
+                                    type="button"
+                                    data-testid={'compare-stats-tab-' + id}
+                                    aria-pressed={statsTab === id}
+                                    onClick={() => setStatsTab(id)}
+                                    className={'flex-1 h-6 rounded-md border text-[11px] font-medium whitespace-nowrap transition-colors ' + (statsTab === id ? 'bg-pressed border-line-heavy text-hud-fg-strong' : 'bg-hud-raised/80 border-line text-hud-fg hover:bg-hud-hover/80')}
+                                >{label}</button>
+                            ))}
+                        </div>
+                        <HUD.MaterialStatRows prefix={'compare-' + statsTab} stats={(statsTab === 'A' ? slotA : slotB).viewStats} textures={(statsTab === 'A' ? slotA : slotB).texReport ? (statsTab === 'A' ? slotA : slotB).texReport.bound.length : 0} />
+                    </div>
+                    <div data-testid="compare-metrics" className="shrink-0 border-t border-line px-3.5 py-3 space-y-2 bg-surface-card">
+                        <div className="flex items-center gap-2 h-6">
+                            <MtlxIcon name="compare" className="w-4 h-4 text-fg-muted shrink-0" />
+                            <span className="text-[13px] font-semibold text-fg shrink-0">Difference Metrics</span>
                             {bothLive && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">live</span>}
-                            {bothLive && stats && <span className="shrink-0 text-[10px] text-fg-faint">·</span>}
-                            {stats && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">{'computed at ' + stats.size[0] + '×' + stats.size[1]}</span>}
+                            {stats && <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em] text-fg-subtle">{'at ' + stats.size[0] + '\u00d7' + stats.size[1]}</span>}
                             <div className="flex-1" />
                             <div className="relative shrink-0">
                                 <button
@@ -1827,13 +1782,17 @@ function MaterialCompareApp({ active = true } = {}) {
                             </div>
                         </div>
                         <div className="space-y-1 text-[11px] text-fg-secondary">
-                            <div className="flex justify-between"><span>SSIM</span><span className="font-mono tabular-nums">{stats ? stats.metrics.ssim.toFixed(3) : '—'}</span></div>
-                            <div className="flex justify-between"><span>RMSE</span><span className="font-mono tabular-nums">{stats ? stats.metrics.rmse.toFixed(2) : '—'}</span></div>
-                            <div className="flex justify-between">
-                                <span>PSNR</span>
-                                <span className="font-mono tabular-nums">{stats ? (stats.metrics.psnr === Infinity ? '∞ dB' : stats.metrics.psnr.toFixed(1) + ' dB') : '—'}</span>
-                            </div>
-                            <div className="flex justify-between"><span>Mean abs diff</span><span className="font-mono tabular-nums">{stats ? stats.metrics.meanAbsDiff.toFixed(2) : '—'}</span></div>
+                            {[
+                                ['SSIM', stats ? stats.metrics.ssim.toFixed(3) : '-', 'ssim'],
+                                ['RMSE', stats ? stats.metrics.rmse.toFixed(2) : '-', 'rmse'],
+                                ['PSNR', stats ? (stats.metrics.psnr === Infinity ? '\u221e dB' : stats.metrics.psnr.toFixed(1) + ' dB') : '-', 'psnr'],
+                                ['Mean abs diff', stats ? stats.metrics.meanAbsDiff.toFixed(2) : '-', 'mean-abs-diff'],
+                            ].map(([label, value, id]) => (
+                                <div key={label} className="flex justify-between">
+                                    <span className={HUD.ROW_LABEL}>{label}</span>
+                                    <span className="font-mono tabular-nums" data-testid={'compare-stat-' + id}>{value}</span>
+                                </div>
+                            ))}
                         </div>
                     </div>
 
@@ -1841,16 +1800,7 @@ function MaterialCompareApp({ active = true } = {}) {
                         Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to the image node's default color.
                     </div>
                 </div>
-            ) : (
-                <button
-                    onClick={() => setSidebarOpen(true)}
-                    title="Expand the panel"
-                    className={'absolute top-2 left-2 z-30 ' + HUD_PILL}
-                >
-                    <MtlxIcon name="chevrons-right" className="w-4 h-4" />
-                    <span className="max-w-[6rem] truncate">Compare</span>
-                </button>
-            )}
+            ) : null}
             {/* fixed + header carve-out, same reasoning as the Viewer's
                 own preset picker call (js/viewer-app.jsx) */}
             <MtlxPresetPicker

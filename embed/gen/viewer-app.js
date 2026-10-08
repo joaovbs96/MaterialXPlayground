@@ -10,6 +10,11 @@
 // Single source of truth: js/shared/texture-formats.js (window global).
 const IMG_EXT = window.textureExtRegex();
 
+// js/shared/render-hud.jsx is loaded by the app shell only; the embed has none of it.
+const HUD = window.MtlxRenderHud || {};
+const useRebuildKey = HUD.useRenderRebuildKey || (() => '');
+const SidebarSectionHeader = HUD.SidebarSectionHeader;
+
 // Geometry names this component actually knows how to render —
 // mirrors ViewportControls' own default `geomList` (js/shared/
 // mtlx-ui.jsx), since viewer-app.jsx never overrides that prop.
@@ -428,6 +433,7 @@ function MaterialViewerApp({
     if (onErrorRef.current) onErrorRef.current(msg);
   };
   const [texReport, setTexReport] = React.useState(null);
+  const [viewStats, setViewStats] = React.useState(null); // shader size, uniforms, textures, build ms
   // "Loading textures\u2026" badge while bindDroppedTextures' async
   // loads are in flight. texLoadGenRef guards races: a newer
   // call always wins over a stale one settling later.
@@ -455,6 +461,8 @@ function MaterialViewerApp({
   // and the Files sidebar auto-collapse. Declared above sidebarOpen
   // since its lazy initializer reads it (mirrors graph-app.jsx).
   const narrow = useNarrowPane();
+  // Quality level and level-governed rows rebuild the view (nothing else listens to them).
+  const rebuildKey = useRebuildKey('viewer');
   // Floating left "Files" sidebar (browser only) — ephemeral,
   // mirroring the graph editor's paramsOpen (not persisted).
   const [sidebarOpen, setSidebarOpen] = React.useState(!narrow);
@@ -994,7 +1002,7 @@ function MaterialViewerApp({
         // the user's own load is already in flight.
         if (hasSession() || loadedRef.current) return;
         setBusy(false);
-        setStatus(IN_VSCODE || IN_ELECTRON ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx or .mxsl anywhere on the page, or pick a Preset from the toolbar.");
+        setStatus(IN_VSCODE || IN_ELECTRON ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx or .mxsl anywhere on the page, or pick a Preset from the sidebar.");
       });
       return;
     }
@@ -1026,7 +1034,7 @@ function MaterialViewerApp({
       // the user's own load is already in flight.
       if (hasSession() || loadedRef.current) return;
       setBusy(false);
-      setStatus(IN_VSCODE || IN_ELECTRON ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx or .mxsl anywhere on the page, or pick a Preset from the toolbar.");
+      setStatus(IN_VSCODE || IN_ELECTRON ? null : "Couldn't reach GitHub for the default material. Drop a .mtlx or .mxsl anywhere on the page, or pick a Preset from the sidebar.");
     });
   }, []);
   const onPickFileList = fileList => {
@@ -1123,10 +1131,12 @@ function MaterialViewerApp({
       setTexReport(null);
       setTexturesLoading(false);
       setMaterialNotices(null);
+      setViewStats(null);
       setBusy(true);
       setStatus('Generating shader…');
       try {
         const target = loaded.renderables[Math.min(chosenMat, loaded.renderables.length - 1)];
+        const buildT0 = performance.now();
         const view = await createMtlxRenderView({
           canvas: canvasRef.current,
           mx: loaded.mx,
@@ -1145,7 +1155,9 @@ function MaterialViewerApp({
           backdrop: backdropMode,
           isMounted: () => mounted,
           isActive: () => activeRef.current,
-          debugKind: 'material'
+          debugKind: 'material',
+          // The embed keeps its own level (Performance), not the Viewer's.
+          surface: chromeless ? null : 'viewer'
         });
         if (!view) return; // superseded: the new run drives `busy`
         if (!mounted) {
@@ -1153,6 +1165,11 @@ function MaterialViewerApp({
           return;
         }
         viewRef.current = view;
+        if (!chromeless) setViewStats({
+          fsBytes: (view.fs || '').length,
+          uniforms: Object.keys(view.uniforms || {}).length,
+          ms: Math.round(performance.now() - buildT0)
+        });
         window.__mtlxViewerHandle = view; // test and console access to the live shaderball handle.
         if (view.setBackdrop) view.setBackdrop(backdropModeRef.current);
         // Initial env rotation/exposure controlled props —
@@ -1199,7 +1216,7 @@ function MaterialViewerApp({
         if (onViewRef.current) onViewRef.current(null);
       }
     };
-  }, [renderables, chosenMat, geom, customKey, glEpoch, displayTransform, heightToNormalTexel]);
+  }, [renderables, chosenMat, geom, customKey, glEpoch, displayTransform, heightToNormalTexel, rebuildKey]);
   React.useEffect(() => {
     const onDisplacementStatus = e => {
       const view = viewRef.current;
@@ -1208,20 +1225,6 @@ function MaterialViewerApp({
     };
     window.addEventListener('mtlx-displacement-status', onDisplacementStatus);
     return () => window.removeEventListener('mtlx-displacement-status', onDisplacementStatus);
-  }, []);
-
-  // Backs the Rendering card's summary text only now; the toggle
-  // itself is RenderSettingsSection, which writes straight through
-  // window.setForceTransparency; this stays synced by listening
-  // for the manifest's broadcast instead of owning the write.
-  const [forceTransparency, setForceTransparency] = React.useState(() => !!(window.getForceTransparency && window.getForceTransparency()));
-  React.useEffect(() => {
-    const onRenderSetting = e => {
-      if (!e.detail || e.detail.key !== 'transparency') return;
-      setForceTransparency(!!e.detail.value);
-    };
-    window.addEventListener('mtlx-render-setting', onRenderSetting);
-    return () => window.removeEventListener('mtlx-render-setting', onRenderSetting);
   }, []);
 
   // Scene card's custom-model import row (browser only) plus the
@@ -1325,13 +1328,11 @@ function MaterialViewerApp({
     // setter rebuilds the active environment, so only call it
     // when the light is actually off.
     if (keyLightAvail && !window.getKeyLightEnabled()) window.setKeyLightEnabled(true);
-    setKeyLightOn(true);
     if (viewRef.current) {
       if (viewRef.current.setEnvRotation) viewRef.current.setEnvRotation(0);
       if (viewRef.current.setEnvExposure) viewRef.current.setEnvExposure(1.0);
     }
   };
-  const envSummary = envUI.rotation === 0 && envUI.exposure === 1 ? 'Default' : Math.round(envUI.rotation) + '°, ' + formatEv(linearToEv(envUI.exposure));
 
   // Re-applies the sidebar's env sliders to a freshly (re)built
   // view; chromeless has no sidebar, so this no-ops there and the
@@ -1384,10 +1385,9 @@ function MaterialViewerApp({
   // hidden when there's nothing to switch between.
   const showMaterial = showCtl('material') && renderables.length > 1;
   const anyCtlVisible = Object.values(ctlFlags).some(Boolean) || showMaterial;
-  // Non-chromeless HUD cluster layout: geometry/env/settings moved
-  // into the sidebar's Scene/Environment cards in the browser, so
-  // only IN_VSCODE (no sidebar there) keeps those in its clusters.
-  const hudClusters = IN_VSCODE ? [['geom', 'rotate', 'cameraReset', 'env'], ['screenshot', 'record', 'shaderCode', 'sendToGraph'], ['presets', 'settings', 'fullscreen']] : [['rotate', 'cameraReset'], ['screenshot', 'record', 'shaderCode', 'sendToGraph'], ['presets', 'fullscreen']];
+  // Non-chromeless HUD cluster layout: geometry moved into the sidebar's
+  // Scene card in the browser, so only IN_VSCODE (no sidebar) keeps it.
+  const hudClusters = IN_VSCODE ? [['geom', 'rotate', 'cameraReset'], ['screenshot', 'record', 'shaderCode', 'sendToGraph'], ['fullscreen']] : [['rotate', 'cameraReset'], ['screenshot', 'record', 'shaderCode', 'sendToGraph'], ['fullscreen']];
   // Page-transparency CSS: requested AND resolved away from the
   // room. Belt-and-suspenders alongside resolveViewerGeom's own
   // guard above, in case geom ever drifts back to the room.
@@ -1407,20 +1407,47 @@ function MaterialViewerApp({
 
   // 28px HUD chip classes, shared by ViewportControls' built-in
   // slots (via buttonClassName) and the custom sendToGraph/
-  // presets/shaderCode buttons below. VS Code stays icon-only and
+  // shaderCode buttons below. VS Code stays icon-only and
   // square; the browser HUD grows labels via HUD_PILL/HUD_PILL_ACTIVE.
   const hudChipClass = active => IN_VSCODE ? `h-7 w-7 justify-center inline-flex items-center rounded-lg border transition-colors ${active ? 'mtlx-fill-accent-translucent border-accent-base text-on-accent' : 'border-hud-line/50 bg-hud/70 text-hud-fg-muted hover:bg-hud-hover hover:border-hud-line hover:text-hud-fg-strong'}` : active ? HUD_PILL_ACTIVE : HUD_PILL;
 
   // Files sidebar body: Document/Materials/Textures cards, split
   // out so the docked panel's own JSX (below) stays flat.
   const filesPanelBody = /*#__PURE__*/React.createElement("div", {
-    className: "flex-1 overflow-y-auto custom-scrollbar p-3.5 space-y-4"
-  }, /*#__PURE__*/React.createElement(SectionCard, {
-    icon: "file-text",
-    title: "Document",
-    summary: docBasename,
-    defaultOpen: true
+    className: "flex-1 min-h-0 flex flex-col overflow-y-auto custom-scrollbar"
+  }, /*#__PURE__*/React.createElement("section", {
+    "data-testid": "viewer-section-document",
+    className: "flex-none px-3.5 py-3 space-y-2"
   }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 min-w-0"
+  }, /*#__PURE__*/React.createElement(MtlxIcon, {
+    name: "file-text",
+    className: "w-4 h-4 text-fg-muted shrink-0"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "text-[13px] font-semibold text-fg shrink-0"
+  }, "Document"), /*#__PURE__*/React.createElement("div", {
+    className: "flex-1"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "shrink-0",
+    title: "MaterialX version",
+    "data-testid": "viewer-info-version"
+  }, /*#__PURE__*/React.createElement(MtlxSelect, {
+    value: version,
+    options: mtlxVersions,
+    labels: versionLabels,
+    defValue: mtlxDefaultVersion,
+    disabledOptions: versionDisabledOptions,
+    titles: versionTitles,
+    popWidth: VERSION_POP_W,
+    onChange: v => {
+      setVersion(v);
+      // A Document belongs to the mx instance that parsed
+      // it, so switching versions re-parses the chosen file.
+      if (chosenMtlx) loadDocument(chosenMtlx, undefined, v);
+    },
+    size: "sm",
+    disabled: busy
+  }))), /*#__PURE__*/React.createElement("div", {
     className: "flex items-center gap-1"
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex-1 min-w-0"
@@ -1444,32 +1471,13 @@ function MaterialViewerApp({
     multiple: true,
     className: "hidden",
     onChange: onPickFiles
-  }))), /*#__PURE__*/React.createElement("div", {
-    className: "text-xs text-fg-subtle"
-  }, "or drag-and-drop anywhere on the page"), chosenMtlx && /*#__PURE__*/React.createElement("div", {
-    className: "text-xs text-fg-subtle"
-  }, mtlxPaths.length, " .mtlx, ", texCount, " image", texCount === 1 ? '' : 's'), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center justify-between gap-2"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "text-xs font-medium text-fg-muted"
-  }, "MaterialX version"), /*#__PURE__*/React.createElement(MtlxSelect, {
-    value: version,
-    options: mtlxVersions,
-    labels: versionLabels,
-    defValue: mtlxDefaultVersion,
-    disabledOptions: versionDisabledOptions,
-    titles: versionTitles,
-    popWidth: VERSION_POP_W,
-    onChange: v => {
-      setVersion(v);
-      // A Document belongs to the mx instance that parsed
-      // it, so switching versions re-parses the already
-      // chosen file. Nothing to reload if none is chosen yet.
-      if (chosenMtlx) loadDocument(chosenMtlx, undefined, v);
-    },
-    size: "sm",
-    disabled: busy
-  }))), mtlxPaths.length > 1 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FieldLabel, {
+  }))), /*#__PURE__*/React.createElement(HUD.FilesLoaded, {
+    testId: "viewer-files",
+    files: Object.keys(fileMap).map(k => ({
+      path: k,
+      size: fileMap[k] && fileMap[k].size
+    }))
+  }), mtlxPaths.length > 1 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FieldLabel, {
     label: "Pick a document"
   }), /*#__PURE__*/React.createElement(MtlxSelect, {
     value: chosenMtlx || '',
@@ -1485,21 +1493,21 @@ function MaterialViewerApp({
     block: true
   }), error && !busy && chosenMtlx && renderedMtlx && chosenMtlx !== renderedMtlx && /*#__PURE__*/React.createElement("div", {
     className: "text-[11px] text-warning/90 mt-1.5"
-  }, "Showing ", renderedMtlx.split('/').pop(), " (last successful load)")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(FieldLabel, {
-    label: "Or pick a preset"
-  }), /*#__PURE__*/React.createElement("button", {
+  }, "Showing ", renderedMtlx.split('/').pop(), " (last successful load)")), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("button", {
     type: "button",
     onClick: openPresetPicker,
     className: BTN_SECONDARY + ' w-full justify-start gap-1.5'
   }, /*#__PURE__*/React.createElement(MtlxIcon, {
     name: "presets",
     className: "w-3.5 h-3.5"
-  }), "Presets"))), renderables.length > 1 && /*#__PURE__*/React.createElement(SectionCard, {
+  }), "Presets"))), renderables.length > 1 && /*#__PURE__*/React.createElement("section", {
+    "data-testid": "viewer-section-materials",
+    className: "flex-none px-3.5 py-3 space-y-2 border-t border-line"
+  }, /*#__PURE__*/React.createElement(SidebarSectionHeader, {
     icon: "color-swatch",
     title: "Materials",
-    summary: currentMaterialName,
-    defaultOpen: true
-  }, /*#__PURE__*/React.createElement(MtlxSelect, {
+    summary: currentMaterialName
+  }), /*#__PURE__*/React.createElement(MtlxSelect, {
     value: chosenMat,
     options: renderables.map((r, i) => ({
       value: i,
@@ -1510,12 +1518,14 @@ function MaterialViewerApp({
     size: "lg",
     variant: "field",
     block: true
-  })), /*#__PURE__*/React.createElement(SectionCard, {
+  })), /*#__PURE__*/React.createElement("section", {
+    "data-testid": "viewer-section-scene",
+    className: "flex-none px-3.5 py-3 space-y-2 border-t border-line"
+  }, /*#__PURE__*/React.createElement(SidebarSectionHeader, {
     icon: "cube",
     title: "Scene",
-    summary: GEOM_LABELS[geom] || geom,
-    defaultOpen: true
-  }, /*#__PURE__*/React.createElement("div", {
+    summary: GEOM_LABELS[geom] || geom
+  }), /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-2 gap-2"
   }, VIEWER_GEOM_NAMES.map(g => /*#__PURE__*/React.createElement(GeometryTile, {
     key: g,
@@ -1539,82 +1549,14 @@ function MaterialViewerApp({
     onClear: geomModelFooter.onClear
   })), modelError && /*#__PURE__*/React.createElement("div", {
     className: "text-xs text-error"
-  }, modelError)), /*#__PURE__*/React.createElement(SectionCard, {
-    icon: "sun",
-    title: "Environment",
-    summary: envSummary,
-    defaultOpen: true,
-    dense: true
-  }, /*#__PURE__*/React.createElement(FilePickerField, {
-    value: envFileName,
-    placeholder: "Default environment",
-    accept: ".hdr,.exr",
-    icon: "file",
-    onFiles: files => {
-      const f = files && files[0];
-      if (f) importEnv(f);
-    },
-    onClear: clearEnvOverride
-  }), envImportError && /*#__PURE__*/React.createElement("div", {
-    className: "text-xs text-error"
-  }, envImportError), /*#__PURE__*/React.createElement(SliderField, {
-    label: (rowMeta('envRotation', 'viewer') || {}).label || 'Environment rotation',
-    unit: (rowMeta('envRotation', 'viewer') || {}).unit || 'deg',
-    value: envUI.rotation,
-    min: 0,
-    max: 360,
-    step: 1,
-    defaultValue: 0,
-    onSlider: v => setEnvRotationDeg(Number(v)),
-    onNumber: v => setEnvRotationDeg(Number(v))
-  }), /*#__PURE__*/React.createElement(SliderField, {
-    label: (rowMeta('envExposure', 'viewer') || {}).label || 'Environment exposure',
-    unit: (rowMeta('envExposure', 'viewer') || {}).unit || 'EV',
-    value: linearToEv(envUI.exposure),
-    min: EV_MIN,
-    max: EV_MAX,
-    step: EV_STEP,
-    defaultValue: 0,
-    onSlider: v => setEnvExposureVal(evToLinear(v)),
-    onNumber: v => setEnvExposureVal(evToLinear(v))
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "flex items-center justify-between gap-2"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "text-xs font-medium text-fg-muted"
-  }, (rowMeta('backdrop', 'viewer') || {}).label || 'Backdrop'), /*#__PURE__*/React.createElement(MtlxSelect, {
-    value: backdropMode,
-    options: rowMeta('backdrop', 'viewer').options,
-    labels: (rowMeta('backdrop', 'viewer') || {}).optionLabels || {},
-    onChange: setBackdropMode,
-    defValue: "studio",
-    disabled: roomGeomActive,
-    title: roomGeomActive ? 'The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting' : (rowMeta('backdrop', 'viewer') || {}).hint,
-    size: "sm"
-  })), /*#__PURE__*/React.createElement(RenderSettingsSection, {
-    surface: "viewer",
-    keys: ['keyLight', 'diffuseEnv'],
-    variant: "sidebar",
-    labelClassName: "text-xs font-medium text-fg-muted"
-  }), /*#__PURE__*/React.createElement("button", {
-    onClick: resetEnv,
-    title: "Also clears an imported .hdr/.exr and restores the default environment",
-    className: BTN_SECONDARY + ' w-full'
-  }, "Reset")), /*#__PURE__*/React.createElement(SectionCard, {
-    icon: "settings-cog",
-    title: "Rendering",
-    summary: forceTransparency ? 'Transparency forced' : 'Default',
-    defaultOpen: true
-  }, /*#__PURE__*/React.createElement(RenderSettingsSection, {
-    surface: "viewer",
-    keys: ['displayTransform', 'displayExposure', 'transparency', 'displacement', 'previewSubdivision'],
-    variant: "sidebar",
-    labelClassName: "text-xs font-medium text-fg-muted"
-  })), texReport && texReport.missing.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
+  }, modelError)), texReport && texReport.missing.length > 0 && /*#__PURE__*/React.createElement("section", {
+    "data-testid": "viewer-section-textures",
+    className: "flex-none px-3.5 py-3 space-y-2 border-t border-line"
+  }, /*#__PURE__*/React.createElement(SidebarSectionHeader, {
     icon: "alert-triangle",
     title: "Textures",
-    summary: texReport.missing.length + ' unresolved',
-    defaultOpen: true
-  }, /*#__PURE__*/React.createElement("div", {
+    summary: texReport.missing.length + ' unresolved'
+  }), /*#__PURE__*/React.createElement("div", {
     className: "space-y-2"
   }, texReport.missing.map((m, i) => /*#__PURE__*/React.createElement("div", {
     key: 'm' + i,
@@ -1625,20 +1567,7 @@ function MaterialViewerApp({
     className: "w-3.5 h-3.5 shrink-0 mt-0.5"
   }), /*#__PURE__*/React.createElement("span", null, m))), /*#__PURE__*/React.createElement("div", {
     className: "text-xs text-fg-subtle"
-  }, "Only textures that failed to resolve are listed. This card disappears when everything loads."))), materialNotices && materialNotices.length > 0 && /*#__PURE__*/React.createElement(SectionCard, {
-    icon: "info",
-    title: "Material notices",
-    summary: materialNotices.length + '',
-    defaultOpen: true
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "space-y-2"
-  }, materialNotices.map((n, i) => /*#__PURE__*/React.createElement("div", {
-    key: 'n' + i,
-    className: "flex items-start gap-1 text-warning/90 font-mono text-xs break-all"
-  }, /*#__PURE__*/React.createElement(MtlxIcon, {
-    name: "alert-triangle",
-    className: "w-3.5 h-3.5 shrink-0 mt-0.5"
-  }), /*#__PURE__*/React.createElement("span", null, n))))));
+  }, "Only textures that failed to resolve are listed. This card disappears when everything loads."))));
 
   // Stage: canvas + HUD + collapsed-sidebar pill + status/error
   // banners. IN_VSCODE renders this fragment directly (unchanged
@@ -1679,7 +1608,7 @@ function MaterialViewerApp({
   }), texturesLoading && !busy && !error && /*#__PURE__*/React.createElement("div", {
     style: {
       position: 'absolute',
-      top: '8px',
+      top: chromeless ? '8px' : '44px',
       left: '8px',
       zIndex: 10,
       fontSize: '11px',
@@ -1689,7 +1618,36 @@ function MaterialViewerApp({
       color: 'rgb(var(--mtlx-hud-fg))',
       pointerEvents: 'none'
     }
-  }, 'Loading textures\u2026'), (renderables.length > 0 || !IN_VSCODE) && (!chromeless || anyCtlVisible) && (chromeless ?
+  }, 'Loading textures\u2026'), !chromeless && HUD.EnvRenderPills && /*#__PURE__*/React.createElement(HUD.EnvRenderPills, {
+    surface: "viewer",
+    containerRef: viewportRef,
+    showLabels: !narrow,
+    leading: !IN_VSCODE && !sidebarOpen && !isFullscreen ? /*#__PURE__*/React.createElement("button", {
+      onClick: () => setSidebarOpen(true),
+      title: "Expand the viewer panel",
+      className: HUD_PILL
+    }, /*#__PURE__*/React.createElement(MtlxIcon, {
+      name: "chevrons-right",
+      className: "w-4 h-4"
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "max-w-[7rem] md:max-w-[8rem] truncate"
+    }, "Material Viewer")) : null,
+    backdropDisabled: roomGeomActive,
+    backdropTitle: "The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting",
+    env: {
+      fileName: envFileName,
+      error: envImportError,
+      onFile: importEnv,
+      onClear: clearEnvOverride,
+      rotation: envUI.rotation,
+      exposure: envUI.exposure,
+      onRotation: setEnvRotationDeg,
+      onExposure: setEnvExposureVal,
+      backdrop: backdropMode,
+      onBackdrop: setBackdropMode,
+      onReset: resetEnv
+    }
+  }), (renderables.length > 0 || !IN_VSCODE) && (!chromeless || anyCtlVisible) && (chromeless ?
   /*#__PURE__*/
   // Purpose-built compact strip (js/embed-controls.jsx):
   // no portals, own CSS, degrades with width. See that
@@ -1762,10 +1720,9 @@ function MaterialViewerApp({
     showRotate: showCtl('rotate') && geom !== 'shaderball-scene',
     showBackdropPicker: geom !== 'shaderball-scene',
     onCameraReset: showCtl('reset') ? handleCameraReset : undefined
-    // Env cluster moved into the sidebar's Environment card in
-    // the browser; VS Code keeps the HUD's own env popover.
+    // Environment and Render settings are HUD pills (render-hud.jsx).
     ,
-    envAvail: IN_VSCODE,
+    envAvail: false,
     backdrop: backdropMode,
     onBackdropChange: setBackdropMode,
     viewRef: viewRef,
@@ -1773,11 +1730,8 @@ function MaterialViewerApp({
     onScreenshot: takeScreenshot,
     showScreenshot: showCtl('screenshot'),
     onRecord: () => setRecordOpen(true),
-    showRecord: showCtl('record') && canRecord
-    // Settings cog's only content (the transparency
-    // toggle) moved into the sidebar's Scene card.
-    ,
-    showSettings: IN_VSCODE,
+    showRecord: showCtl('record') && canRecord,
+    showSettings: false,
     isFullscreen: isFullscreen,
     onToggleFullscreen: showCtl('fullscreen') ? onToggleFullscreen : undefined,
     showLabels: !IN_VSCODE,
@@ -1798,18 +1752,6 @@ function MaterialViewerApp({
       }), !IN_VSCODE && /*#__PURE__*/React.createElement("span", {
         className: "ml-1.5 whitespace-nowrap"
       }, "Send to Editor")) : null,
-      // Presets: browser-only (VS Code is bound to the open file).
-      presets: !IN_VSCODE ? /*#__PURE__*/React.createElement("button", {
-        key: "presets",
-        onClick: openPresetPicker,
-        title: "Load a preset from the Material Gallery",
-        className: hudChipClass(false)
-      }, /*#__PURE__*/React.createElement(MtlxIcon, {
-        name: "presets",
-        className: "w-3.5 h-3.5"
-      }), !IN_VSCODE && /*#__PURE__*/React.createElement("span", {
-        className: "ml-1.5 whitespace-nowrap"
-      }, "Presets")) : null,
       // Not VS Code-gated: generating shader source
       // applies to the single opened file too.
       shaderCode: /*#__PURE__*/React.createElement("button", {
@@ -1861,16 +1803,7 @@ function MaterialViewerApp({
     className: "absolute top-2 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-hud-raised/90 backdrop-blur border border-hud-line text-hud-fg text-sm rounded-lg px-4 py-2 break-words shadow-lg"
   }, status), !IN_VSCODE && error && /*#__PURE__*/React.createElement("div", {
     className: "absolute top-12 left-1/2 -translate-x-1/2 z-30 max-w-[min(42rem,85%)] bg-error-bg/90 border border-error-border/60 text-error-text text-sm rounded-lg px-4 py-2.5 break-words shadow-lg"
-  }, error), !IN_VSCODE && !chromeless && !sidebarOpen && /*#__PURE__*/React.createElement("button", {
-    onClick: () => setSidebarOpen(true),
-    title: "Expand the viewer panel",
-    className: 'absolute top-2 left-2 z-30 ' + HUD_PILL
-  }, /*#__PURE__*/React.createElement(MtlxIcon, {
-    name: "chevrons-right",
-    className: "w-4 h-4"
-  }), /*#__PURE__*/React.createElement("span", {
-    className: "max-w-[7rem] md:max-w-[8rem] truncate"
-  }, "Material Viewer")));
+  }, error));
   return (
     /*#__PURE__*/
     // IN_VSCODE: absolute in #root, since a % height chain collapses to 0 after a resize. Browser: a
@@ -1901,6 +1834,23 @@ function MaterialViewerApp({
       name: "chevrons-left",
       className: "w-4 h-4"
     }))), filesPanelBody, /*#__PURE__*/React.createElement("div", {
+      "data-testid": "viewer-statistics",
+      className: "shrink-0 border-t border-line px-3.5 py-3.5 space-y-1 bg-surface-card"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-2 mb-1.5"
+    }, /*#__PURE__*/React.createElement(MtlxIcon, {
+      name: "cube",
+      className: "w-4 h-4 text-fg-muted shrink-0"
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "text-[13px] font-semibold text-fg shrink-0"
+    }, "Statistics"), /*#__PURE__*/React.createElement(HUD.DiagnosticsButton, {
+      testId: "viewer-diagnostics",
+      notices: materialNotices
+    })), /*#__PURE__*/React.createElement(HUD.MaterialStatRows, {
+      prefix: "viewer",
+      stats: viewStats,
+      textures: texReport ? texReport.bound.length : 0
+    })), /*#__PURE__*/React.createElement("div", {
       className: "flex-none border-t border-line px-3 py-2 text-[11px] text-fg-subtle"
     }, "Drag orbits, wheel/pinch zooms. Textures are matched by relative path; unresolved images fall back to the image node's default color.")), IN_VSCODE ? stage : /*#__PURE__*/React.createElement("div", {
       className: "relative flex-1 min-w-0"

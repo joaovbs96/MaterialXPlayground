@@ -15,6 +15,8 @@ const HOST_DEFAULTS = {
     samplerBudgetOverride: () => undefined,
     perfLog: () => false,
     debugShaders: () => false,
+    // Drive-letter/UNC refs as absolute paths; the engine turns it off in VS Code (unchanged there).
+    absoluteFsRefs: () => true,
 };
 const host = Object.assign({}, HOST_DEFAULTS);
 const setHost = (providers) => {
@@ -1717,14 +1719,17 @@ const patchTransmissionThickness = (fs, { dropThicknessMap = false } = {}) => {
 // return; refraction also needs the same HW varyings as the Fresnel rim
 // above plus the volumetric absorption anchor patchTransmissionThickness
 // keys off, so it shares both gates.
-const patchTransmissionAlpha = (fs, { skipRefraction = false } = {}) => {
+const patchTransmissionAlpha = (fs, { skipRefraction = false, weightExpr = null } = {}) => {
     // Already patched: the peel mode uniform only exists after this pass.
     if (fs.indexOf('uniform int u_peelMode;') !== -1) return fs;
     let weightName = null;
     if (/uniform\s+float\s+transmission_weight\s*;/.test(fs)) weightName = 'transmission_weight';
     else if (/uniform\s+float\s+transmission\s*;/.test(fs)) weightName = 'transmission';
+    // No known surface weight: the graph classifier's path weight (Disney, layered BSDFs).
+    let colorExpr = null;
+    if (!weightName && weightExpr) { weightName = weightExpr; colorExpr = 'vec3(1.0)'; }
     if (!weightName) return fs;
-    const colorExpr = /uniform\s+vec3\s+transmission_color\s*;/.test(fs) ? 'transmission_color' : 'vec3(1.0)';
+    if (!colorExpr) colorExpr = /uniform\s+vec3\s+transmission_color\s*;/.test(fs) ? 'transmission_color' : 'vec3(1.0)';
 
     const transFnIdx = fs.indexOf('vec3 mx_surface_transmission');
     if (transFnIdx === -1) return fs;
@@ -2691,7 +2696,9 @@ const selectDynamicIndexUniforms = (vs, fs, introspected) => {
 // else is left alone. Returns the rewritten sources plus the pruned
 // introspection list, so nothing tries to bind a uniform that is now gone.
 const SELECTOR_CONST_INPUTS = new Set(['mode', 'type', 'style']);
-const constifyInputUniforms = (vs, fs, introspected, names = CONST_INPUT_NAMES) => {
+const constifyInputUniforms = (vs, fs, introspected, names = CONST_INPUT_NAMES, extraDeny = null) => {
+    // extraDeny: this compile's transparency drivers, read live by the alpha fold.
+    const denied = (name) => CONST_INPUT_DENY.has(name) || (!!extraDeny && extraDeny.indexOf(name) >= 0);
     const constInputs = [];
     const kept = [];
     const byUsage = selectDynamicIndexUniforms(vs, fs, introspected);
@@ -2704,7 +2711,7 @@ const constifyInputUniforms = (vs, fs, introspected, names = CONST_INPUT_NAMES) 
         // `mode`, `type` and `style` are generic names: only take them when
         // the generator typed them as an enum selector (integer), never a
         // float or boolean input.
-        if ((!key && !usageHit) || CONST_INPUT_DENY.has(String(u.name))
+        if ((!key && !usageHit) || denied(String(u.name))
             || (key && !usageHit && SELECTOR_CONST_INPUTS.has(key) && u.type !== 'integer')) { kept.push(u); continue; }
         const literal = u.data == null ? null : constInputLiteral(u.type, u.data);
         if (literal == null) { kept.push(u); continue; }
@@ -3005,10 +3012,17 @@ const normPath = (p) => String(p || '')
 // Join a base directory and a reference into one path, resolving '.' and
 // '..' segments. Backslashes normalize and a leading './' or '/' strips,
 // but case is preserved (unlike normPath, which lowercases for fuzzy
-// matching). Moved from the Scene's sceneJoinPath for the exact resolvers.
-const joinRefPath = (fromDir, ref) => {
-    const casedNorm = (v) => String(v || '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\//, '');
-    return casedNorm((fromDir ? fromDir + '/' : '') + String(ref || ''))
+// matching). Drive-letter (L:/) and UNC (//server) refs are absolute: fromDir
+// is ignored and the prefix kept (off: opts/host absoluteFsRefs false). Moved from sceneJoinPath.
+const joinRefPath = (fromDir, ref, opts) => {
+    const slashed = (v) => String(v || '').replace(/\\/g, '/');
+    const absOn = (opts && typeof opts.absoluteFsRefs === 'boolean' ? opts.absoluteFsRefs : (typeof host === 'undefined' || host.absoluteFsRefs() !== false));
+    const absRe = absOn ? /^(?:[a-zA-Z]:\/|\/\/(?!\/))/ : /(?!)/;
+    const raw = slashed(ref);
+    const full = absRe.test(raw) ? raw : (fromDir ? slashed(fromDir) + '/' : '') + raw;
+    const abs = absRe.exec(full);
+    const body = abs ? full.slice(abs[0].length) : full.replace(/^\.\//, '').replace(/^\//, '');
+    return (abs ? abs[0] : '') + body
         .split('/').reduce((out, part) => {
             if (!part || part === '.') return out;
             if (part === '..') { out.pop(); return out; }
@@ -3023,9 +3037,26 @@ const joinRefPath = (fromDir, ref) => {
 // composed scene can have duplicate basenames, so a miss must stay a miss).
 const findFileForRef = (fileMap, ref, opts) => {
     if (opts && opts.exact) {
-        const want = joinRefPath(opts.fromDir, ref);
-        if (!want || !Object.prototype.hasOwnProperty.call(fileMap, want)) return null;
-        return { key: want, how: 'exact' };
+        const absOn = (opts && typeof opts.absoluteFsRefs === 'boolean' ? opts.absoluteFsRefs : (typeof host === 'undefined' || host.absoluteFsRefs() !== false));
+        const want = joinRefPath(opts.fromDir, ref, { absoluteFsRefs: absOn });
+        if (want && Object.prototype.hasOwnProperty.call(fileMap, want)) return { key: want, how: 'exact' };
+        if (!absOn) return null;
+        // Absolute filesystem refs: the host's index (fileMap.__absIndex, lowercased
+        // absolute path -> key, desktop app only), then a unique longest key suffix.
+        const rawRef = String(ref || '').replace(/\\/g, '/');
+        const absWant = /^(?:[a-zA-Z]:\/|\/\/)/.test(want) ? want : (fileMap.__absIndex && /^\/(?!\/)/.test(rawRef) ? '/' + joinRefPath('', rawRef) : '');
+        if (!absWant) return null;
+        const lower = absWant.toLowerCase();
+        const indexed = fileMap.__absIndex && fileMap.__absIndex[lower];
+        if (indexed && Object.prototype.hasOwnProperty.call(fileMap, indexed)) return { key: indexed, how: 'absolute' };
+        let best = null;
+        let tie = false;
+        for (const key of Object.keys(fileMap)) {
+            const k = String(key).toLowerCase();
+            if (!k || !lower.endsWith('/' + k)) continue;
+            if (!best || k.length > best.length) { best = key; tie = false; } else if (k.length === best.length) tie = true;
+        }
+        return best && !tie ? { key: best, how: 'suffix' } : null;
     }
     const want = normPath(ref);
     if (!want) return null;
@@ -3052,12 +3083,18 @@ const findFilesForRef = (fileMap, ref, opts) => {
         const raw = String(ref || '');
         const splitParts = raw.split(/<UDIM>/i);
         if (splitParts.length !== 2) return [];
-        const prefix = splitParts[0], suffix = splitParts[1];
+        // An absolute tile ref matches the host's absolute paths (fileMap.__absIndex) instead of keys.
+        const absOn = (opts && typeof opts.absoluteFsRefs === 'boolean' ? opts.absoluteFsRefs : (typeof host === 'undefined' || host.absoluteFsRefs() !== false));
+        const absIndex = absOn && /^(?:[a-zA-Z]:[\\/]|[\\/]{2})/.test(raw) && fileMap.__absIndex ? fileMap.__absIndex : null;
+        const prefix = absIndex ? joinRefPath('', splitParts[0] + '_').slice(0, -1).toLowerCase() : splitParts[0];
+        const suffix = absIndex ? splitParts[1].replace(/\\/g, '/').toLowerCase() : splitParts[1];
         const hits = [];
-        for (const key of Object.keys(fileMap)) {
-            if (!key.startsWith(prefix) || !key.endsWith(suffix)) continue;
-            const end = suffix.length ? key.length - suffix.length : key.length;
-            const codeText = key.slice(prefix.length, end);
+        for (const candidate of (absIndex ? Object.keys(absIndex) : Object.keys(fileMap))) {
+            const key = absIndex ? absIndex[candidate] : candidate;
+            if (!candidate.startsWith(prefix) || !candidate.endsWith(suffix)) continue;
+            if (absIndex && !Object.prototype.hasOwnProperty.call(fileMap, key)) continue;
+            const end = suffix.length ? candidate.length - suffix.length : candidate.length;
+            const codeText = candidate.slice(prefix.length, end);
             if (!/^\d{4}$/.test(codeText)) continue;
             const code = Number(codeText);
             if (code < 1001) continue;
@@ -3735,6 +3772,114 @@ const mergeDuplicateImageNodes = (doc) => {
     return { restore, merged, groups };
 };
 
+// Transparency the WASM verdict (mx.isTransparentSurface) misses: transmission inside a
+// nodedef graph (disney_principled) or a hand-built BSDF network. Walks mix, layer, add,
+// multiply and nodedef nodegraphs; a path counts when every weight on it is non-zero.
+const TRANSPARENT_SCATTER_MODES = new Set(['T', 'RT']);
+// A term is { value, uniform, invert, connected }; `weights` holds one term list per
+// transmissive leaf, `drivers` the shader uniforms those terms read.
+const classifyTransparentGraph = (renderable, mx, { maxNodes = 512 } = {}) => {
+    const none = { transparent: false, reason: null, drivers: [], weights: [] };
+    if (!renderable) return none;
+    let visited = 0;
+    const weights = [];
+    let opacityReason = null;
+    const num = (term) => (term.connected ? 1 : (term.invert ? 1 - Number(term.value) : Number(term.value)));
+    const pathAlive = (terms) => terms.every((t) => { const v = num(t); return !Number.isFinite(v) || v !== 0; });
+    // One input of `node`, resolved against the interface bindings of its graph.
+    const resolve = (node, name, scope, nodeDef) => {
+        const input = mxSafe(() => node.getInput(name), null);
+        if (input) {
+            const iface = mxSafe(() => input.getInterfaceName(), '');
+            if (iface) return scope ? (scope.get(iface) || { connected: true }) : { connected: true };
+            const nodeName = mxSafe(() => input.getNodeName(), '');
+            const graphName = mxSafe(() => (input.getNodeGraphString ? input.getNodeGraphString() : ''), '');
+            if (nodeName || graphName) return { connected: true, nodeName };
+            return { value: mxSafe(() => input.getValueString(), '') };
+        }
+        const def = nodeDef ? mxSafe(() => (nodeDef.getActiveInput ? nodeDef.getActiveInput(name) : nodeDef.getInput(name)), null) : null;
+        return { value: def ? mxSafe(() => def.getValueString(), '') : '' };
+    };
+    const visit = (node, graph, scope, terms) => {
+        if (!node || ++visited > maxNodes) return;
+        const category = mxSafe(() => node.getCategory(), '');
+        const nodeDef = mxSafe(() => node.getNodeDef(''), null);
+        const input = (name) => resolve(node, name, scope, nodeDef);
+        const upstream = (name) => {
+            const r = input(name);
+            if (!r.nodeName) return null;
+            if (graph) return mxSafe(() => graph.getNode(r.nodeName), null);
+            const port = mxSafe(() => node.getInput(name), null);
+            return port ? mxSafe(() => port.getConnectedNode(), null) : null;
+        };
+        if (category === 'surface') {
+            // Opacity fed by a node inside a definition graph (a convert) is not a verdict.
+            const opacity = input('opacity');
+            const fedInternally = !!opacity.nodeName && !!graph;
+            if (!opacityReason && !fedInternally && (opacity.connected || (opacity.value !== '' && Number(opacity.value) < 1))) opacityReason = 'opacity';
+            visit(upstream('bsdf'), graph, scope, terms);
+            return;
+        }
+        if (category === 'mix') {
+            const w = input('mix');
+            visit(upstream('fg'), graph, scope, terms.concat([w]));
+            visit(upstream('bg'), graph, scope, terms.concat([Object.assign({}, w, { invert: !w.invert })]));
+            return;
+        }
+        if (category === 'layer' || category === 'add') {
+            const pair = category === 'layer' ? ['top', 'base'] : ['in1', 'in2'];
+            visit(upstream(pair[0]), graph, scope, terms);
+            visit(upstream(pair[1]), graph, scope, terms);
+            return;
+        }
+        if (category === 'multiply' && mxSafe(() => node.getType(), '') === 'BSDF') {
+            const f = input('in2');
+            visit(upstream('in1'), graph, scope, /,/.test(String(f.value || '')) ? terms : terms.concat([f]));
+            return;
+        }
+        if (category === 'dielectric_bsdf' || category === 'generalized_schlick_bsdf') {
+            const mode = input('scatter_mode');
+            if (mode.connected || TRANSPARENT_SCATTER_MODES.has(String(mode.value || '').trim())) {
+                const path = terms.concat([input('weight')]);
+                if (pathAlive(path)) weights.push(path);
+            }
+            return;
+        }
+        // Anything implemented as a nodegraph (the shader node itself, custom BSDFs): descend.
+        const impl = nodeDef ? mxSafe(() => nodeDef.getImplementation(''), null) : null;
+        if (!impl || mxSafe(() => impl.getCategory(), '') !== 'nodegraph') return;
+        const inner = new Map();
+        for (const def of vecToArray(mxSafe(() => (nodeDef.getActiveInputs ? nodeDef.getActiveInputs() : nodeDef.getInputs()), null))) {
+            const name = mxSafe(() => def.getName(), '');
+            if (!name) continue;
+            const bound = input(name);
+            // Top level: an unconnected shader input is a uniform named after the input.
+            inner.set(name, graph || bound.connected ? bound : Object.assign({ uniform: name }, bound));
+        }
+        for (const out of vecToArray(mxSafe(() => impl.getOutputs(), null))) {
+            const nodeName = mxSafe(() => out.getNodeName(), '');
+            if (nodeName) visit(mxSafe(() => impl.getNode(nodeName), null), impl, inner, terms);
+        }
+    };
+    try { visit(renderable, null, null, []); } catch (e) { return none; }
+    if (!weights.length && !opacityReason) return none;
+    const drivers = Array.from(new Set([].concat(...weights).filter((t) => t.uniform).map((t) => t.uniform)));
+    return { transparent: true, reason: weights.length ? 'transmission' : opacityReason, drivers, weights };
+};
+// GLSL weight of the classifier's transmissive paths: shader uniforms the source still
+// declares, literals otherwise; a connected term counts as 1.
+const transmissionWeightExpr = (weights, fs) => {
+    const term = (t) => {
+        if (t.connected) return null;
+        const declared = !!t.uniform && new RegExp('uniform\\s+float\\s+' + t.uniform + '\\s*;').test(fs);
+        const base = declared ? t.uniform : (t.value !== '' && Number.isFinite(Number(t.value)) ? Number(t.value).toFixed(6) : null);
+        if (base == null) return null;
+        return t.invert ? '(1.0 - ' + base + ')' : base;
+    };
+    const paths = (weights || []).map((path) => path.map(term).filter(Boolean)).map((parts) => (parts.length ? parts.join(' * ') : '1.0'));
+    return paths.length ? 'clamp(' + paths.join(' + ') + ', 0.0, 1.0)' : null;
+};
+
 // ------------------------------------------------------------------
 // generatePreviewSources: shader-generation slice of createMtlxRenderView,
 // letting tryRefreshRenderView diff sources without a full rebuild.
@@ -3779,6 +3924,21 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
             transparent = t; // set only after the option write succeeded
         }
     } catch (e) { transparent = false; /* reset above already put the option at the deterministic false default */ }
+    // Graph classifier, consulted only when WASM says opaque, so every material the
+    // WASM already classifies generates byte-identical source.
+    let transparencyReason = transparent ? 'wasm' : null;
+    let graphTransparency = null;
+    if (!transparent) {
+        const verdict = classifyTransparentGraph(renderable, mx, { maxNodes: 512 });
+        if (verdict.transparent) {
+            try {
+                genContext.getOptions().hwTransparency = true;
+                transparent = true;
+                transparencyReason = verdict.reason;
+                graphTransparency = verdict;
+            } catch (e) { /* option absent: stays opaque */ }
+        }
+    }
     try {
         if (mx.ShaderInterfaceType) {
             genContext.getOptions().shaderInterfaceType =
@@ -3954,7 +4114,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // refraction/peel patches touch the shader.
     fs = patchScreenSpaceReflection(fs, { skipSsr, notices });
     // Folds transmission into peel-pass alpha; must precede injectPeelDiscard (see its u_peelMode guard).
-    fs = patchTransmissionAlpha(fs, { skipRefraction });
+    fs = patchTransmissionAlpha(fs, { skipRefraction, weightExpr: graphTransparency ? transmissionWeightExpr(graphTransparency.weights, fs) : null });
     let payloadSupported = false;
     if (rgbtPayload) {
         fs = patchRgbtPayload(fs);
@@ -4006,7 +4166,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
     // so nothing tries to bind a uniform that no longer exists.
     let constInputs = [];
     if (allowConstInputs !== false && readConstInputs()) {
-        const constified = constifyInputUniforms(vs, fs, introspected);
+        const constified = constifyInputUniforms(vs, fs, introspected, CONST_INPUT_NAMES, graphTransparency ? graphTransparency.drivers : null);
         vs = constified.vs;
         fs = constified.fs;
         introspected = constified.introspected;
@@ -4046,7 +4206,7 @@ const generatePreviewSourcesUnlocked = ({ mx, gen, genContext, renderable, label
         localEnv: skipLocalEnv,
         bounce: skipBounce,
     };
-    return { vs, fs, introspected, transparent, vertexInputs, geomprops, notices, payloadSupported, lightTransportSupported, displacement, maxLights, constInputs, featureSkips, shadowFaceSlots };
+    return { vs, fs, introspected, transparent, transparencyReason, vertexInputs, geomprops, notices, payloadSupported, lightTransportSupported, displacement, maxLights, constInputs, featureSkips, shadowFaceSlots };
 };
 
 // Follows one displacementshader-typed input to the element to generate
@@ -4410,7 +4570,109 @@ const SHADERBALL_GROUPS = ['pbr', 'translation', 'material', 'shader', 'light', 
 const defaultGeomFor = (nodegroup) => (
     SHADERBALL_GROUPS.indexOf(String(nodegroup || '').toLowerCase()) !== -1 ? 'shaderball-scene' : 'buffer2d'
 );
+// Single-material document pruning (Scene inspector and its Graph Editor handoff).
+// Plain text scan of the root's direct children, no DOMParser, so node --test covers it.
+const MTLX_DEFINITION_TAGS = new Set(['nodedef', 'implementation', 'typedef', 'unittypedef', 'unitdef', 'geompropdef', 'targetdef', 'attributedef', 'geominfo']);
+const MTLX_DROPPED_TAGS = new Set(['look', 'lookgroup', 'materialassign', 'collection', 'variantset', 'propertyset', 'propertysetassign', 'visibility']);
+// Index of the '>' closing the tag opened at `start`, skipping quoted attribute values.
+const mtlxTagEnd = (xml, start) => {
+    let quote = '';
+    for (let i = start + 1; i < xml.length; i++) {
+        const c = xml[i];
+        if (quote) { if (c === quote) quote = ''; } else if (c === '"' || c === "'") quote = c;
+        else if (c === '>') return i;
+    }
+    return -1;
+};
+const mtlxTagAttrs = (tag) => {
+    const attrs = {};
+    const re = /([\w:.-]+)\s*=\s*("([^"]*)"|'([^']*)')/g;
+    let m;
+    while ((m = re.exec(tag)) !== null) attrs[m[1]] = m[3] !== undefined ? m[3] : m[4];
+    return attrs;
+};
+// Elements in [from, to): { tag, attrs, start, end, depth } for every element tag,
+// depth relative to the range. Comments, PIs and CDATA are skipped.
+const mtlxScanElements = (xml, from, to) => {
+    const out = [];
+    const stack = [];
+    let i = from;
+    while (i < to) {
+        const lt = xml.indexOf('<', i);
+        if (lt < 0 || lt >= to) break;
+        if (xml.startsWith('<!--', lt)) { const e = xml.indexOf('-->', lt + 4); i = e < 0 ? to : e + 3; continue; }
+        if (xml.startsWith('<![CDATA[', lt)) { const e = xml.indexOf(']]>', lt); i = e < 0 ? to : e + 3; continue; }
+        if (xml.startsWith('<?', lt)) { const e = xml.indexOf('?>', lt); i = e < 0 ? to : e + 2; continue; }
+        if (xml.startsWith('<!', lt)) { const e = xml.indexOf('>', lt); i = e < 0 ? to : e + 1; continue; }
+        const gt = mtlxTagEnd(xml, lt);
+        if (gt < 0) break;
+        const raw = xml.slice(lt, gt + 1);
+        if (raw[1] === '/') {
+            const open = stack.pop();
+            if (open) open.end = gt + 1;
+        } else {
+            const tag = (/^<([\w:.-]+)/.exec(raw) || [])[1] || '';
+            const el = { tag, attrs: mtlxTagAttrs(raw), start: lt, end: gt + 1, depth: stack.length, openEnd: gt + 1 };
+            out.push(el);
+            if (!/\/\s*>$/.test(raw)) stack.push(el);
+        }
+        i = gt + 1;
+    }
+    return out;
+};
+// Keeps the named material and everything it reaches through nodename, nodegraph and
+// output refs, plus every definition (nodedefs, implementation nodegraphs, typedefs,
+// unit defs). Other materials, nodes, graphs, outputs and looks go. Unknown name: unchanged.
+const pruneDocumentToMaterial = (xml, materialName) => {
+    const text = String(xml || '');
+    const all = mtlxScanElements(text, 0, text.length);
+    const root = all.find((el) => el.depth === 0 && el.tag === 'materialx');
+    if (!root || !materialName) return text;
+    const rootClose = text.lastIndexOf('</materialx');
+    if (rootClose < 0) return text;
+    const children = all.filter((el) => el.depth === 1 && el.start >= root.openEnd && el.start < rootClose);
+    const material = children.find((el) => el.attrs.name === materialName && el.attrs.type === 'material');
+    if (!material) return text;
+    const byName = new Map();
+    children.forEach((el) => { if (el.attrs.name && !byName.has(el.attrs.name)) byName.set(el.attrs.name, el); });
+    const keep = new Set([material]);
+    const queue = [material];
+    const want = (name) => {
+        const el = name ? byName.get(name) : null;
+        if (el && !keep.has(el)) { keep.add(el); queue.push(el); }
+    };
+    while (queue.length) {
+        const el = queue.shift();
+        const inner = all.filter((d) => d.start > el.start && d.start < el.end);
+        // Inside a graph, refs to its own children stay local; anything else is top level.
+        const local = new Set(el.tag === 'nodegraph' ? inner.filter((d) => d.depth === el.depth + 1).map((d) => d.attrs.name) : []);
+        [el].concat(inner).forEach((d) => {
+            if (d !== el || el.tag === 'output') { if (d.attrs.nodename && !local.has(d.attrs.nodename)) want(d.attrs.nodename); }
+            if (d.attrs.nodegraph) want(d.attrs.nodegraph);
+            else if (d.attrs.output && !d.attrs.nodename && d !== el && el.tag !== 'nodegraph') want(d.attrs.output);
+        });
+    }
+    let out = text.slice(0, root.openEnd);
+    let cursor = root.openEnd;
+    children.forEach((el) => {
+        const lead = text.slice(cursor, el.start);
+        cursor = el.end;
+        const definition = MTLX_DEFINITION_TAGS.has(el.tag) || (el.tag === 'nodegraph' && !!el.attrs.nodedef);
+        if (keep.has(el) || definition || (!MTLX_DROPPED_TAGS.has(el.tag) && el.tag !== 'nodegraph' && el.tag !== 'output' && !el.attrs.type)) out += lead + text.slice(el.start, el.end);
+    });
+    out += text.slice(cursor, rootClose);
+    return out + text.slice(rootClose);
+};
+// Names of the type="material" elements at the root of a document.
+const documentMaterialNames = (xml) => {
+    const text = String(xml || '');
+    return mtlxScanElements(text, 0, text.length)
+        .filter((el) => el.depth === 1 && el.attrs.type === 'material' && el.attrs.name)
+        .map((el) => el.attrs.name);
+};
+
 const MtlxGenCoreApi = {
+    pruneDocumentToMaterial, documentMaterialNames, classifyTransparentGraph, transmissionWeightExpr,
     setHost, hostSnapshot, setHostFromSnapshot, createGenEnv,
     LIGHT_TYPE_DIRECTIONAL,
     LIGHT_TYPE_POINT,

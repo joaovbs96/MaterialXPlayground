@@ -411,8 +411,12 @@ const sceneArray = (value) => value == null ? [] : (Array.isArray(value) ? value
 
 const sceneFileMap = (files, stage) => {
     const map = {};
+    // Desktop app: lowercased absolute path -> key, from File.__mtlxAbsPath
+    // (electron/preload/glue.js); non-enumerable, read by findFileForRef.
+    const absIndex = {};
     const add = (entry) => {
         if (!entry || !entry.path || entry.data == null) return;
+        if (typeof entry.data.__mtlxAbsPath === 'string') absIndex[entry.data.__mtlxAbsPath.replace(/\\/g, '/').toLowerCase()] = String(entry.path).replace(/\\/g, '/');
         // MaterialX texture binding expects Blob-like values. Blob/File
         // inputs are immutable; avoid duplicating large user-provided
         // ArrayBuffers before wrapping them.
@@ -433,6 +437,7 @@ const sceneFileMap = (files, stage) => {
     };
     sceneArray(files).forEach(add);
     sceneArray(stage && stage.assets).forEach(add);
+    if (Object.keys(absIndex).length) Object.defineProperty(map, '__absIndex', { value: absIndex, enumerable: false });
     return map;
 };
 
@@ -471,6 +476,12 @@ const sceneDomeTextureCandidates = (fileMap, stage) => {
 };
 const sceneResolveDomeTexture = (fileMap, stage, rawRef) => {
     const match = String(rawRef || '').trim().match(/^@(.*)@$/);
+    const authored = String(match ? match[1] : rawRef || '').replace(/\\/g, '/');
+    // Drive-letter and UNC paths resolve as absolute filesystem paths.
+    if (sceneAbsoluteFsRefs() && SCENE_ABS_FS_REF_RE.test(authored)) {
+        const hit = window.findFileForRef(fileMap, authored, { exact: true });
+        if (hit) return { path: hit.key, ref: authored };
+    }
     const ref = sceneNormPath(match ? match[1] : rawRef);
     if (!ref) return { path: null, reason: 'empty' };
     for (const dir of sceneDomeTextureCandidates(fileMap, stage)) {
@@ -501,33 +512,57 @@ const sceneDomeOrientation = (matrix) => {
     return { tilt, rotationDeg: ((euler.y * 180 / Math.PI) % 360 + 360) % 360 };
 };
 
+// How a dome's texture attribute reads: a file path, authored but empty, or not authored.
+const sceneDomeTextureMode = (dome) => (dome && dome.textureFile ? 'file' : (dome && dome.textureExpected ? 'empty' : 'flat'));
+
 // Builds the environment a stage's own dome light describes, so a stage
 // renders under the lighting it was authored with. Returns null when the
 // stage has no dome; never throws, since a light must not block a load.
-const sceneDomeEnvironment = async (stage, fileMap, warnings) => {
+const sceneDomeEnvironment = async (stage, fileMap, warnings, defaultEnv) => {
     const dome = sceneArray(stage && stage.lights)
         .find((light) => String(light && light.type || '').toLowerCase() === 'domelight');
     if (!dome) return null;
     const warn = (message) => { if (warnings && warnings.indexOf(message) < 0) warnings.push(message); };
+    // A texture that is authored but empty, missing or undecodable keeps the
+    // default environment, still driven by the dome's orientation and exposure.
+    const fallback = (reason) => {
+        if (!defaultEnv) return null;
+        warn('Dome light ' + dome.primPath + ': texture ' + reason + '; using the default environment');
+        return { env: defaultEnv, fallback: true, fileName: 'default environment' };
+    };
     try {
         let env = null;
         let fileName = null;
-        if (dome.textureFile) {
+        const mode = sceneDomeTextureMode(dome);
+        const useDefault = (reason) => {
+            const hit = fallback(reason);
+            if (hit) { env = hit.env; fileName = hit.fileName; }
+        };
+        if (mode === 'empty') {
+            useDefault(dome.textureExpectedReason === 'vray'
+                ? 'is not available: the V-Ray dome is set to use a texture that was not exported'
+                : 'is empty or could not be loaded');
+        } else if (mode === 'file') {
             const resolved = sceneResolveDomeTexture(fileMap, stage, dome.textureFile);
             if (!resolved.path) {
-                warn(resolved.reason === 'ambiguous'
-                    ? 'Dome light texture "' + resolved.ref + '" is ambiguous, using the default environment'
-                    : 'Dome light texture not found: "' + String(dome.textureFile) + '"');
-                return null;
+                useDefault(resolved.reason === 'ambiguous'
+                    ? '"' + resolved.ref + '" is ambiguous'
+                    : 'is empty or could not be loaded');
+            } else {
+                const ext = resolved.path.slice(resolved.path.lastIndexOf('.')).toLowerCase();
+                if (ext !== '.hdr' && ext !== '.exr') {
+                    warn('Dome light texture "' + resolved.path + '" is not a .hdr or .exr environment');
+                    return null;
+                }
+                const buffer = await fileMap[resolved.path].arrayBuffer();
+                try {
+                    env = await window.loadEnvironmentFromBuffer(buffer, ext, resolved.path, false);
+                } catch (decodeError) {
+                    env = null;
+                }
+                if (env) fileName = resolved.path.split('/').pop();
+                else useDefault('is empty or could not be loaded');
             }
-            const ext = resolved.path.slice(resolved.path.lastIndexOf('.')).toLowerCase();
-            if (ext !== '.hdr' && ext !== '.exr') {
-                warn('Dome light texture "' + resolved.path + '" is not a .hdr or .exr environment');
-                return null;
-            }
-            const buffer = await fileMap[resolved.path].arrayBuffer();
-            env = await window.loadEnvironmentFromBuffer(buffer, ext, resolved.path, false);
-            fileName = resolved.path.split('/').pop();
         } else {
             if (!window.makeFlatEnvironment) return null;
             env = window.makeFlatEnvironment(dome.color);
@@ -625,6 +660,12 @@ const sceneUdimTiles = (ref, map) => {
 // included document still has its own declaring path; this keeps two
 // same-named textures in different layer directories distinct.
 const SCENE_CANONICAL_MARKER = '__MX_SCENE_CANONICAL__/';
+// Drive-letter (L:/, L:\) and UNC (//server, \\server) refs: absolute
+// filesystem paths, never URL schemes (which need two or more letters).
+const SCENE_ABS_FS_REF_RE = /^(?:[a-zA-Z]:[\\/]|[\\/]{2}(?![\\/]))/;
+const SCENE_URL_REF_RE = /^[a-z][a-z0-9+.-]+:/i;
+// VS Code keeps its earlier handling of absolute refs (treated as URLs, left as authored).
+const sceneAbsoluteFsRefs = () => !(typeof window !== 'undefined' && window.__MTLX_VSCODE__);
 const canonicalizeSceneFilenameInputs = (xml, declaringPath, map, finalize = false) => {
     // Some DCCs emit the USD/MaterialX UDIM token literally inside an XML
     // attribute. Escape it before parsing, while retaining the token for a
@@ -637,11 +678,13 @@ const canonicalizeSceneFilenameInputs = (xml, declaringPath, map, finalize = fal
     const base = sceneDir(declaringPath);
     const prefix = sceneFilePrefix(xml);
     const canonicalized = xml.replace(/<[^>]*\btype\s*=\s*(["'])filename\1[^>]*>/gi, (tag) => tag.replace(/\b(value|default)\s*=\s*(["'])(.*?)\2/i, (whole, attr, quote, ref) => {
-        if (!ref || ref.startsWith(SCENE_CANONICAL_MARKER) || /^(?:[a-z]+:|\/\/)/i.test(ref)) return whole;
+        const absOn = sceneAbsoluteFsRefs();
+        if (!ref || ref.startsWith(SCENE_CANONICAL_MARKER) || (absOn ? (SCENE_URL_REF_RE.test(ref) && !SCENE_ABS_FS_REF_RE.test(ref)) : /^(?:[a-z]+:|\/\/)/i.test(ref))) return whole;
         // Concatenate first, then normalize dot segments once. Normalizing
         // `../Texture` before adding the declaring directory loses the
         // document anchor and resolves Teapot/Looks/../Texture incorrectly.
-        const rooted = window.joinRefPath(base, String(prefix || '') + '/' + ref);
+        // An absolute ref ignores fileprefix, as MaterialX path joining does.
+        const rooted = window.joinRefPath(base, absOn && SCENE_ABS_FS_REF_RE.test(ref) ? ref : String(prefix || '') + '/' + ref);
         return attr + '=' + quote + SCENE_CANONICAL_MARKER + rooted + quote;
     }));
     // Once references are canonical, remove the active document prefix so
@@ -1593,6 +1636,10 @@ const createMtlxSceneView = async ({
     // The dome's tilt applies only while the dome is the active environment.
     let domeTilt = null;
     let envTilt = null;
+    // Environment rotation (mx_latlong yaw, radians) and exposure, seeded from a stage
+    // dome; read by every material build, the first one included.
+    let envRotationRad = 0;
+    let envExposure = 1;
     // True while the stage's dome is the active environment: global env
     // broadcasts (LIVE_VIEWS) then leave it alone unless sent with {user:true}.
     let domeActive = false;
@@ -2879,6 +2926,7 @@ const scenePruneUnreachableNodes = (xml) => {
             localEnvMap: localEnvEnabled ? localEnvTexture : null, localEnvMips, localEnvStrength, localEnvProbe, localEnvBoxMin, localEnvBoxMax, localEnvParallax,
             envTilt,
             thicknessScale, refractionTwoSided: true, sceneRadius,
+            envRotationRad, envExposure: environmentLightingEnabled ? envExposure : 0,
             environmentIndirectScale: shadowDiagnostic ? shadowDiagnostic.environmentIndirectScale : 1,
             environmentKeyScale: shadowDiagnostic ? shadowDiagnostic.environmentKeyScale : 1,
             lightScales: diagnosticLightScales(),
@@ -2982,7 +3030,7 @@ const scenePruneUnreachableNodes = (xml) => {
         // A stage's own dome light is its authored lighting, so apply it
         // unless the user already imported an environment this session.
         if (!userEnv) {
-            const domeResult = await sceneDomeEnvironment(stage, fileMap, warnings);
+            const domeResult = await sceneDomeEnvironment(stage, fileMap, warnings, env);
             if (domeResult && domeResult.env) {
                 env = domeResult.env;
                 domeEnv = domeResult.env;
@@ -2990,6 +3038,8 @@ const scenePruneUnreachableNodes = (xml) => {
                 domeTilt = domeResult.tilt || null;
                 envTilt = domeTilt;
                 domeActive = true;
+                envRotationRad = sceneDomeYawDegFromRotation(domeLight.rotationDeg) * Math.PI / 180;
+                envExposure = domeLight.exposure;
             }
         }
         // Splitting an area light across its surface needs to know how far it
@@ -3778,8 +3828,8 @@ const scenePruneUnreachableNodes = (xml) => {
         // authored lighting; the sidebar mirrors these through getDomeLight().
         // The authored rotationDeg is a USD dome-light yaw, converted to the
         // engine's mx_latlong yaw (see sceneDomeYawDegFromRotation above).
-        let envRotationRad = domeLight ? sceneDomeYawDegFromRotation(domeLight.rotationDeg) * Math.PI / 180 : 0;
-        let envExposure = domeLight ? domeLight.exposure : 1;
+        envRotationRad = domeLight ? sceneDomeYawDegFromRotation(domeLight.rotationDeg) * Math.PI / 180 : 0;
+        envExposure = domeLight ? domeLight.exposure : 1;
         // Renders moments maps from the dominant stage/environment emitters.
         // Rebuilds happen when the camera, environment, or light controls
         // change; a settled frame does not redraw the atlas.
@@ -5544,6 +5594,8 @@ const scenePruneUnreachableNodes = (xml) => {
                         pendingTextures.push(...part.material.userData.mtlxScenePendingTextures);
                         delete part.material.userData.mtlxScenePendingTextures;
                     }
+                    // GeomSubset paths by material, for the inspector header (pickAt).
+                    const subsetPicks = sceneArray(record.groups).filter((g) => g && g.path).map((g) => ({ path: String(g.path), materialPath: String(g.materialPath || '') }));
                     drawMatrices.forEach((instanceMatrix, instanceIndex) => {
                         const object = new THREE.Mesh(part.geometry, part.material);
                         const partSuffix = parts.length > 1 ? '-part-' + partIndex : '';
@@ -5557,6 +5609,7 @@ const scenePruneUnreachableNodes = (xml) => {
                         object.userData.instanceIndex = instanceMatrix ? instanceIndex : undefined;
                         object.visible = !hiddenPrimPaths.has(object.userData.primPath);
                         object.userData.materialPath = String(record.materialPath || '');
+                        object.userData.subsets = subsetPicks;
                         object.userData.castsShadow = record.castsShadow !== false;
                         // Fallback albedo source for the diffuse bounce bake
                         // (sceneBounceAlbedo): the same authored constant
@@ -7430,8 +7483,11 @@ const scenePruneUnreachableNodes = (xml) => {
                     const materialPath = (material && material.userData && material.userData.mtlxSceneMaterialPath)
                         || (object.userData && object.userData.materialPath) || '';
                     const record = materialRecords.get(String(materialPath));
+                    // The GeomSubset carrying the hit material, when exactly one does.
+                    const subsetMatches = ((object.userData && object.userData.subsets) || []).filter((s) => materialPath && s.materialPath === String(materialPath));
                     return {
                         primPath: (object.userData && object.userData.primPath) || null,
+                        subsetPath: subsetMatches.length === 1 ? subsetMatches[0].path : null,
                         geometryPath: (object.userData && object.userData.geometryPath) || null,
                         instanceIndex: (object.userData && object.userData.instanceIndex !== undefined) ? object.userData.instanceIndex : null,
                         materialPath: materialPath || null,

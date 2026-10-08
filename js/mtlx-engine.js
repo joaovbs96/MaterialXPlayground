@@ -37,7 +37,7 @@ const {
     patchShadowLightScope, patchLightSourceKindStruct, patchAreaLightSourceCosine, patchSpecularAA,
     ensureEnvOcclusionGlobal, patchAmbientOcclusion, patchDiffuseBounceAdd, patchSceneThinWalledTransmission,
     patchLightTransportPayload, patchTransmissionThickness, patchTransmissionAlpha, patchLocalEnvironmentRadiance,
-    patchScreenSpaceReflection, patchRgbtPayload, injectPeelDiscard, mxErr, mxWriteValue, vecToArray, mxSafe,
+    patchScreenSpaceReflection, patchRgbtPayload, injectPeelDiscard, classifyTransparentGraph, mxErr, mxWriteValue, vecToArray, mxSafe,
     mxElCat, mxElType, mxElName, mxElAttr, materialPowerNodeNames, materialGeompropDefaults, POWER_NODE_REAL_GLSL,
     patchMaterialPowerNodes, mxElHasAttr, mxSetAttr, mxRemoveAttr, mxSetColorspace, findConvertChain,
     ensureTypedInput, readConstInputs, CONST_INPUT_NAMES, CONST_INPUT_DENY, CONST_INPUT_GLSL_TYPES,
@@ -69,6 +69,7 @@ MtlxGenCore.setHost({
     samplerBudgetOverride: () => (typeof window !== 'undefined' ? window.__mtlxSamplerBudgetOverride : undefined),
     perfLog: () => !!window.MTLX_PERF_LOG,
     debugShaders: () => DEBUG_SHADERS,
+    absoluteFsRefs: () => !window.__MTLX_VSCODE__,
 });
 // The three.js side of a material (uniforms, textures, geometry, lights) lives
 // in js/shared/mtlx-three-material.js so the thumbnail worker can build it too.
@@ -2777,7 +2778,9 @@ const checkTargetTransparency = async ({ mx, gen, buildRenderable }) => {
             if (!built || !built.renderable) return null;
             try {
                 if (typeof mx.isTransparentSurface !== 'function') return null;
-                return !!mx.isTransparentSurface(built.renderable, gen.getTarget());
+                // Same verdict generation uses: WASM first, then the graph classifier.
+                return !!mx.isTransparentSurface(built.renderable, gen.getTarget())
+                    || classifyTransparentGraph(built.renderable, mx).transparent;
             } catch (e) {
                 return null;
             } finally {
@@ -2972,7 +2975,8 @@ const generateTargetSourcesUnlocked = ({ mx, renderable, label, targetKey }) => 
     if (target.isHw) {
         try {
             if (typeof mx.isTransparentSurface === 'function') {
-                ctx.getOptions().hwTransparency = mx.isTransparentSurface(renderable, gen.getTarget());
+                ctx.getOptions().hwTransparency = mx.isTransparentSurface(renderable, gen.getTarget())
+                    || classifyTransparentGraph(renderable, mx).transparent;
             }
         } catch (e) { /* keep previous value */ }
     }

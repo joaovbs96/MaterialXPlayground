@@ -140,11 +140,6 @@
     "reason": "shadow-lg Tailwind mirror (black shadow alpha), not a themed color."
   },
   {
-    "file": "js/site-tokens.css",
-    "match": "/./",
-    "reason": "legacy --site-* palette kept for the Learn/tutorials subsite, which is outside this repo; not loaded by the app"
-  },
-  {
     "file": "embed/mtlx-viewer.js",
     "match": "/^#(111827|9ca3af|f3f4f6|4b5563)$/i",
     "reason": "host-page shadow DOM has no token CSS; values mirror the theme tokens"

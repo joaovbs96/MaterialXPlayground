@@ -14,6 +14,8 @@
         const RF = window.ReactFlow;
         const ReactFlowComp = RF.ReactFlow || RF.default;
         const { Background, MiniMap, Panel, Handle, Position, MarkerType } = RF;
+        // Rendered inside <ReactFlow> to reach its internal store (nodesSelectionActive).
+        const RfStoreBridge = ({ storeRef }) => { storeRef.current = RF.useStoreApi(); return null; };
 
         // Port-picker popover (item 2): shown when a connection drag ends
         // on a node body (not a precise handle) so the user can pick which
@@ -1674,6 +1676,27 @@
                 return () => window.removeEventListener('keydown', onKey);
             }, []);
 
+            // V: toggle thumbnails of the selection. Ctrl/Cmd+V stays paste.
+            React.useEffect(() => {
+                const onKey = (e) => {
+                    if (!activeRef.current) return;
+                    if ((e.key !== 'v' && e.key !== 'V')
+                        || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+                    const t = e.target;
+                    const tag = ((t && t.tagName) || '').toLowerCase();
+                    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+                    if (t && t.isContentEditable) return;
+                    const inStage = t === document.body
+                        || (panelRef.current && t instanceof Node && panelRef.current.contains(t));
+                    if (!inStage) return;
+                    const sel = flowRef.current.nodes.filter((n) => n.selected).map((n) => n.id);
+                    const ids = sel.length ? sel : (selectedIdRef.current ? [selectedIdRef.current] : []);
+                    if (toggleThumbsForIds(ids)) e.preventDefault();
+                };
+                window.addEventListener('keydown', onKey);
+                return () => window.removeEventListener('keydown', onKey);
+            }, []);
+
             const loadDocument = async (path, mapArg) => {
                 const map = mapArg || fileMapRef.current;
                 setError(null);
@@ -1730,6 +1753,7 @@
             // then seeds the undo stack like loadDocument does for a
             // freshly loaded file, so the first edit has a baseline.
             const newDocument = async () => {
+                if (IN_ELECTRON && typeof window.__mtlxDetachDocument === 'function') window.__mtlxDetachDocument();
                 setError(null);
                 setBusy(true);
                 setStatus('Creating new document ' + '\u2026');
@@ -2032,6 +2056,10 @@
             React.useEffect(() => {
                 const handleImport = (payload) => {
                     if (!payload) return;
+                    // Site handoffs (not the host's own open/reload) must not stay bound to the previously opened file.
+                    if (IN_ELECTRON && !payload.reload && !payload.host && typeof window.__mtlxDetachDocument === 'function') {
+                        window.__mtlxDetachDocument();
+                    }
                     // Optional selection hint from a handoff (the docs page's
                     // "Send to Editor"). Reuses the post-scope-exit ref, which
                     // the [parsed, scope] effect below already consumes on a
@@ -2740,7 +2768,17 @@
                         (prev && prev.id === node.id && prev.scope === scope) ? prev : { scope, id: node.id });
                 }
                 // A modifier click extends a multi-selection: nothing single to sync.
-                if (!(evt && (evt.shiftKey || evt.ctrlKey || evt.metaKey))) notifyHostSelection(node.id);
+                if (evt && (evt.shiftKey || evt.ctrlKey || evt.metaKey)) return;
+                // A plain click inside a multi-selection collapses it to the clicked node.
+                if (flowRef.current.nodes.some((n) => n.selected && n.id !== node.id)) {
+                    setFlow((prev) => ({
+                        edges: prev.edges,
+                        nodes: prev.nodes.map((n) => (n.selected === (n.id === node.id) ? n
+                            : Object.assign({}, n, { selected: n.id === node.id }))),
+                    }));
+                    if (rfStoreRef.current) rfStoreRef.current.setState({ nodesSelectionActive: false });
+                }
+                notifyHostSelection(node.id);
             };
 
             // Click an edge → select it (Del disconnects); click the pane →
@@ -3702,6 +3740,25 @@
             // Hand the current document off to the material viewer (item
             // F2.2's "Send to Viewer"). Serializes through the same
             // resolveDocXml() as Export; `files` excludes the .mtlx itself.
+            // View-only scene material: reload the same document editable, unsaved, named <base>_copy.
+            const reopenAsCopy = async () => {
+                if (!parsed) return;
+                const { xml, error } = await resolveDocXml();
+                if (xml == null) {
+                    setError('Reopen as copy failed: ' + error);
+                    return;
+                }
+                const files = looseFilesFrom(fileMapRef.current);
+                const select = selectedId && selectedId.indexOf('n:') === 0 ? selectedId.slice(2) : null;
+                pendingRestoreDirtyRef.current = true;
+                const payload = {
+                    xml, name: defaultExportBase() + '_copy', files, select,
+                    implOf: null, readOnly: false, readOnlySource: null, mxsl: null,
+                };
+                window.__mtlxPendingImport = payload;
+                window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: payload }));
+            };
+
             const sendToViewer = async () => {
                 if (!parsed) return;
                 const { xml, error } = await resolveDocXml();
@@ -4641,6 +4698,26 @@
                     return changed ? { edges: prev.edges, nodes } : prev;
                 });
                 setThumbRev((r) => r + 1);
+            };
+            // Toggles thumbnails for the eligible nodes of ids; true when it acted.
+            const toggleThumbsForIds = (ids) => {
+                const c = getThumbs();
+                if (!c) return false;
+                const sc = scopeRef.current;
+                const nodes = flowRef.current.nodes;
+                const kindOf = (id) => ((nodes.find((n2) => n2.id === id) || {}).data || {}).thumbKind || 'pattern';
+                const elig = ids.filter((id) => {
+                    const n = nodes.find((n2) => n2.id === id);
+                    return !!(n && n.data && n.data.thumbElig);
+                });
+                if (!elig.length || c.menuState(sc).disabled) return false;
+                const allOn = elig.every((id) => c.isEnabled(sc, id, true, kindOf(id)));
+                for (const kind of ['pattern', 'shader']) {
+                    const group = elig.filter((id) => kindOf(id) === kind);
+                    if (group.length) c.setOverrides(sc, group, !allOn, kind);
+                }
+                patchThumbCards();
+                return true;
             };
             // Cards intersecting the viewport render first.
             const updateThumbVisible = () => {
@@ -6292,25 +6369,17 @@
             // copyable content: they're signatures, not graph nodes.
             const isCopyableNode = (n) => isCopyableId(n.id) && !n.data.functional && n.data.kind !== 'nodedef';
 
-            const copySelection = () => {
-                if (!parsed) return;
-                const selected = flow.nodes.filter((n) => n.selected);
-                const ids = selected.filter(isCopyableNode).map((n) => n.id);
-                if (!ids.length) {
-                    if (selected.some((n) => isCopyableId(n.id) && (n.data.functional || n.data.kind === 'nodedef'))) {
-                        setError('Definitions cannot be copied; use New Node Definition instead.');
-                    }
-                    return;
-                }
+            // Snapshot ids (copyable nodes or nodegraphs) as clipboard entries; posById overrides live positions.
+            const entriesForIds = (ids, posById) => {
                 const idSet = new Set(ids);
                 const container = scopeContainer();
-                if (!container) return;
+                if (!container) return [];
                 // Prefer React Flow's live position over xpos/ypos:
                 // auto-laid-out/never-dragged nodes have no xpos/ypos, so
                 // storedPos() would collapse them all onto { x:0, y:0 }.
-                const flowPosById = {};
+                const flowPosById = Object.assign({}, posById || {});
                 flow.nodes.forEach((n) => {
-                    if (n.selected && isCopyableNode(n)) flowPosById[n.id] = n.position;
+                    if (idSet.has(n.id) && !flowPosById[n.id]) flowPosById[n.id] = n.position;
                 });
                 const entries = [];
                 for (const id of ids) {
@@ -6354,16 +6423,32 @@
                         pos, inputs,
                     });
                 }
+                return entries;
+            };
+
+            const copySelection = () => {
+                if (!parsed) return;
+                const selected = flow.nodes.filter((n) => n.selected);
+                const ids = selected.filter(isCopyableNode).map((n) => n.id);
+                if (!ids.length) {
+                    if (selected.some((n) => isCopyableId(n.id) && (n.data.functional || n.data.kind === 'nodedef'))) {
+                        setError('Definitions cannot be copied; use New Node Definition instead.');
+                    }
+                    return;
+                }
+                const entries = entriesForIds(ids);
                 if (entries.length) {
                     clipboardRef.current = { nodes: entries };
                     setClipboardFilled(true);
                 }
             };
 
-            const pasteClipboard = () => {
+            // opts.mode: 'viewportCenter' (paste), 'absolute' (entry.pos) or 'offset' (entry.pos + dx, dy).
+            const duplicateEntries = (entries, opts) => {
+                const mode = (opts && opts.mode) || 'viewportCenter';
                 if (guardLocked()) return;
-                const clip = clipboardRef.current;
-                if (!clip || !clip.nodes.length || !parsed) return;
+                const clip = { nodes: entries || [] };
+                if (!clip.nodes.length || !parsed) return;
                 const container = scopeContainer();
                 if (!container) return;
                 const doc = parsed.doc;
@@ -6464,22 +6549,24 @@
                         }
                     }
                 }
-                // Position the pasted group at the viewport center,
-                // preserving the copied nodes' relative layout (same
-                // "drop at viewport center" convention as addNodeFromCatalog).
-                const xs = clip.nodes.map((e) => e.pos.x), ys = clip.nodes.map((e) => e.pos.y);
-                const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
-                const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-                let center = { x: 40, y: 40 };
-                const inst = rfInstRef.current;
-                const host = canvasHostRef.current;
-                const centered = viewportCenterFlow(inst, host);
-                if (centered) center = centered;
-                for (const { el, entry } of created) {
-                    writeFlowPos(el, center.x + (entry.pos.x - cx), center.y + (entry.pos.y - cy));
+                // The rebuild below re-lays out a scope unless every element has xpos/ypos: pin the live layout first.
+                writeLayoutToDoc(flowRef.current.nodes.filter((n) => n.id.indexOf('x:') !== 0));
+                // Paste centres the group in the viewport, keeping its relative layout.
+                let place;
+                if (mode === 'absolute') place = (e) => ({ x: e.pos.x, y: e.pos.y });
+                else if (mode === 'offset') place = (e) => ({ x: e.pos.x + (opts.dx || 0), y: e.pos.y + (opts.dy || 0) });
+                else {
+                    const xs = clip.nodes.map((e) => e.pos.x), ys = clip.nodes.map((e) => e.pos.y);
+                    const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+                    const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+                    let center = { x: 40, y: 40 };
+                    const centered = viewportCenterFlow(rfInstRef.current, canvasHostRef.current);
+                    if (centered) center = centered;
+                    place = (e) => ({ x: center.x + (e.pos.x - cx), y: center.y + (e.pos.y - cy) });
                 }
-                for (const { el, entry } of createdGraphs) {
-                    writeFlowPos(el, center.x + (entry.pos.x - cx), center.y + (entry.pos.y - cy));
+                for (const { el, entry } of created.concat(createdGraphs)) {
+                    const at = place(entry);
+                    writeFlowPos(el, at.x, at.y);
                 }
                 setDocRev((r) => r + 1);
                 markDirty();
@@ -6501,6 +6588,38 @@
                     : null);
                 setSelectedEdgeId(null);
                 setParamsOpen(true);
+                if (opts && opts.copyThumbs) {
+                    const tc = thumbClientRef.current;
+                    if (tc) {
+                        const nodesNow = flowRef.current.nodes;
+                        for (const { entry, newName } of created.concat(createdGraphs)) {
+                            const pre = entry.kind === 'nodegraph' ? 'g:' : 'n:';
+                            const kind = ((nodesNow.find((n) => n.id === pre + entry.name) || {}).data || {}).thumbKind || 'pattern';
+                            tc.setOverride(scope, pre + newName, tc.isEnabled(scope, pre + entry.name, true, kind), kind);
+                        }
+                        patchThumbCards();
+                    }
+                }
+                return pastedIds;
+            };
+
+            const pasteClipboard = () => {
+                if (guardLocked()) return;
+                const clip = clipboardRef.current;
+                if (!clip || !clip.nodes.length || !parsed) return;
+                duplicateEntries(clip.nodes, { mode: 'viewportCenter' });
+            };
+
+            // Duplicate the selection (or the single selected node) 40 px down-right; no clipboard use.
+            const duplicateSelection = () => {
+                if (!parsed || guardLocked()) return false;
+                const sel = flow.nodes.filter((n) => n.selected && isCopyableNode(n)).map((n) => n.id);
+                const ids = sel.length ? sel : flow.nodes.filter((n) => n.id === selectedId && isCopyableNode(n)).map((n) => n.id);
+                if (!ids.length) return false;
+                const entries = entriesForIds(ids);
+                if (!entries.length) return false;
+                duplicateEntries(entries, { mode: 'offset', dx: 40, dy: 40, copyThumbs: true });
+                return true;
             };
 
             // Create input `name` on `container` and clone `srcEl` onto
@@ -7157,6 +7276,8 @@
             copySelectionRef.current = copySelection;
             const pasteClipboardRef = React.useRef(pasteClipboard);
             pasteClipboardRef.current = pasteClipboard;
+            const duplicateSelectionRef = React.useRef(duplicateSelection);
+            duplicateSelectionRef.current = duplicateSelection;
             const encapsulateSelectionRef = React.useRef(encapsulateSelection);
             encapsulateSelectionRef.current = encapsulateSelection;
             const ungroupRef = React.useRef(ungroupSelection);
@@ -7179,6 +7300,24 @@
                     if (!inStage) return;
                     if (e.key === 'c' || e.key === 'C') copySelectionRef.current();
                     else pasteClipboardRef.current();
+                };
+                window.addEventListener('keydown', onKey);
+                return () => window.removeEventListener('keydown', onKey);
+            }, []);
+
+            // Shift+D: duplicate the selection. Same focus rules as the other single-key shortcuts.
+            React.useEffect(() => {
+                const onKey = (e) => {
+                    if (!activeRef.current) return;
+                    if ((e.key !== 'd' && e.key !== 'D') || !e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+                    const t = e.target;
+                    const tag = ((t && t.tagName) || '').toLowerCase();
+                    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+                    if (t && t.isContentEditable) return;
+                    const inStage = t === document.body
+                        || (panelRef.current && t instanceof Node && panelRef.current.contains(t));
+                    if (!inStage) return;
+                    if (duplicateSelectionRef.current()) e.preventDefault();
                 };
                 window.addEventListener('keydown', onKey);
                 return () => window.removeEventListener('keydown', onKey);
@@ -7494,6 +7633,8 @@
             // .selected flags (via onNodesChange below) are the single
             // source of truth for multi-select (shift-click, shift-drag).
             const selectedIds = flow.nodes.filter((n) => n.selected).map((n) => n.id);
+            const canDuplicate = !!parsed && !scopeLocked
+                && flow.nodes.some((n) => (n.selected || n.id === selectedId) && isCopyableNode(n));
 
             // Mirrors deleteSelectionRef.current()'s own target resolution
             // (selected edges — click or box — the multi-selection, or the
@@ -7686,8 +7827,14 @@
                 (nodes || []).forEach((n) => { if (n && n.position) m[n.id] = { x: n.position.x, y: n.position.y }; });
                 return m;
             };
-            const onNodeDragStart = (evt, node, nodes) => { thumbActivity(); dragStartPosRef.current = dragPositions(nodes && nodes.length ? nodes : [node]); };
-            const onSelectionDragStart = (evt, nodes) => { thumbActivity(); dragStartPosRef.current = dragPositions(nodes); };
+            const onNodeDragStart = (evt, node, nodes) => {
+                thumbActivity();
+                dragStartPosRef.current = dragPositions(nodes && nodes.length ? nodes : [node]);
+            };
+            const onSelectionDragStart = (evt, nodes) => {
+                thumbActivity();
+                dragStartPosRef.current = dragPositions(nodes);
+            };
             const pointerTravel = (evt) => {
                 const down = pointerDownRef.current;
                 const p = evt && evt.changedTouches && evt.changedTouches[0] ? evt.changedTouches[0] : evt;
@@ -7709,18 +7856,20 @@
                 return false;
             };
             const onNodeDragStopMoved = (evt, node, nodes) => {
-                if (dragMoved(evt, nodes && nodes.length ? nodes : [node])) { onNodeDragStop(); return; }
+                const list = nodes && nodes.length ? nodes : [node];
+                if (dragMoved(evt, list)) { onNodeDragStop(); return; }
                 // d3-drag swallows the click after any pointer travel, so a jittery click selects here.
                 if (node && pointerTravel(evt) > 0) onNodeClick(evt, node);
             };
-            const onSelectionDragStopMoved = (evt, nodes) => { if (dragMoved(evt, nodes)) onNodeDragStop(); };
-            const onNodeDragStop = () => {
-                thumbActivity();
-                if (scopeLockedRef.current) return;
+            const onSelectionDragStopMoved = (evt, nodes) => {
+                if (dragMoved(evt, nodes)) onNodeDragStop();
+            };
+            // Snapshots the given on-screen layout into the document as xpos/ypos; true when anything was written.
+            const writeLayoutToDoc = (nodeList) => {
                 const c = scopeContainer();
-                if (!c || !parsed) return;
+                if (!c || !parsed) return false;
                 let wrote = false;
-                for (const n of flow.nodes) {
+                for (const n of nodeList) {
                     const name = n.id.slice(2);
                     let el = null;
                     if (n.id.indexOf('n:') === 0) el = mxSafe(() => c.getNode(name), null) || mxSafe(() => c.getChild(name), null);
@@ -7734,8 +7883,167 @@
                     mxSetAttr(el, 'ypos', String(y));
                     wrote = true;
                 }
-                if (wrote) markDirty();
+                return wrote;
             };
+            const onNodeDragStop = () => {
+                thumbActivity();
+                if (scopeLockedRef.current) return;
+                if (writeLayoutToDoc(flow.nodes)) markDirty();
+            };
+
+            // Shift/Ctrl+press on a node never reaches React Flow. Shift+click adds, Ctrl+click removes;
+            // Shift+drag past DRAG_SLOP_PX duplicates once (the node, or its selection) on the spot and
+            // moves the copies while the originals stay. One undo step for the whole gesture.
+            const rfStoreRef = React.useRef(null);
+            const swallowClickRef = React.useRef(0);
+            const gestureApiRef = React.useRef(null);
+            const deselectNode = (id) => {
+                const nodes = flowRef.current.nodes;
+                const self = nodes.find((n) => n.id === id);
+                if (!self || !self.selected) return;
+                const remaining = nodes.filter((n) => n.selected && n.id !== id).map((n) => n.id);
+                setFlow((prev) => ({
+                    edges: prev.edges,
+                    nodes: prev.nodes.map((n) => (n.id === id && n.selected ? Object.assign({}, n, { selected: false }) : n)),
+                }));
+                if (remaining.length === 1) setSelectedId(remaining[0]);
+                else if (selectedIdRef.current === id) setSelectedId(null);
+            };
+            const addToSelection = (id) => {
+                const node = flowRef.current.nodes.find((n) => n.id === id);
+                if (!node) return;
+                if (!node.selected) {
+                    setFlow((prev) => ({
+                        edges: prev.edges,
+                        nodes: prev.nodes.map((n) => (n.id === id && !n.selected ? Object.assign({}, n, { selected: true }) : n)),
+                    }));
+                }
+                onNodeClick({ shiftKey: true }, node); // primary + inspector follow the added node
+            };
+            gestureApiRef.current = {
+                entriesForIds, duplicateEntries, onNodeClick, deselectNode, addToSelection,
+                zoom: () => {
+                    const inst = rfInstRef.current;
+                    const z = inst && typeof inst.getZoom === 'function' ? inst.getZoom() : 1;
+                    return z > 0 ? z : 1;
+                },
+            };
+            React.useEffect(() => {
+                const host = canvasHostRef.current;
+                if (!host) return undefined;
+                const api = () => gestureApiRef.current;
+                const nodeIdAt = (t, x, y) => {
+                    let el = t.closest('.react-flow__node');
+                    if (!el && t.closest('.react-flow__nodesselection-rect')) {
+                        const hit = (document.elementsFromPoint(x, y) || []).find((d) => d.closest && d.closest('.react-flow__node'));
+                        el = hit ? hit.closest('.react-flow__node') : null;
+                    }
+                    return el && host.contains(el) ? el.getAttribute('data-id') : null;
+                };
+                const track = (onMove, onUp) => {
+                    const up = (e) => {
+                        window.removeEventListener('mousemove', onMove, true);
+                        window.removeEventListener('mouseup', up, true);
+                        onUp(e);
+                    };
+                    window.addEventListener('mousemove', onMove, true);
+                    window.addEventListener('mouseup', up, true);
+                };
+                const onDown = (e) => {
+                    if (e.button !== 0 || e.altKey) return;
+                    const t = e.target;
+                    if (!t || !t.closest || t.closest('.react-flow__handle, input, textarea, select, button, [contenteditable="true"], .nodrag')) return;
+                    const id = nodeIdAt(t, e.clientX, e.clientY);
+                    if (!id) return;
+                    const x0 = e.clientX, y0 = e.clientY;
+                    const travel = (ev) => Math.hypot(ev.clientX - x0, ev.clientY - y0);
+                    const remove = e.ctrlKey || e.metaKey;
+                    if (!e.shiftKey && !remove) {
+                        // The box-selection overlay hides the cards from onNodeClick: a plain click on it collapses here.
+                        if (!t.closest('.react-flow__nodesselection-rect')) return;
+                        track(() => {}, (ev) => {
+                            const node = travel(ev) < DRAG_SLOP_PX && flowRef.current.nodes.find((n) => n.id === id);
+                            if (node) api().onNodeClick(ev, node);
+                        });
+                        return;
+                    }
+                    e.stopPropagation();
+                    e.preventDefault();
+                    const self = flowRef.current.nodes.find((n) => n.id === id);
+                    const g = { wasSelected: !!(self && self.selected), started: false, dup: null, dx: 0, dy: 0 };
+                    const onMove = (ev) => {
+                        if (!g.started) {
+                            if (travel(ev) < DRAG_SLOP_PX) return;
+                            g.started = true;
+                            if (remove || scopeLockedRef.current) return;
+                            const nodes = flowRef.current.nodes;
+                            const src = nodes.filter((n) => (g.wasSelected ? n.selected : n.id === id) && isCopyableNode(n));
+                            if (!src.length) return;
+                            // Cheap stand-ins (cloned cards, 'x:' ids) move during the gesture; the real copies
+                            // are created once, on release, at the dropped positions (one undo step).
+                            const base = {};
+                            src.forEach((n) => { base['x:' + n.id] = { x: n.position.x, y: n.position.y }; });
+                            g.dup = { src: src.map((n) => n.id), base };
+                            const ghostIds = new Set(Object.keys(base));
+                            setFlow((prev) => ({
+                                edges: prev.edges.concat(prev.edges
+                                    .filter((e) => ghostIds.has('x:' + e.source) && ghostIds.has('x:' + e.target))
+                                    .map((e) => Object.assign({}, e, { id: 'x:' + e.id, source: 'x:' + e.source, target: 'x:' + e.target, selected: false }))),
+                                nodes: prev.nodes.map((n) => (n.selected ? Object.assign({}, n, { selected: false }) : n))
+                                    .concat(prev.nodes.filter((n) => ghostIds.has('x:' + n.id)).map((n) => Object.assign({}, n, {
+                                        id: 'x:' + n.id, selected: true, dragging: false, position: { x: n.position.x, y: n.position.y },
+                                    }))),
+                            }));
+                            if (rfStoreRef.current) rfStoreRef.current.setState({ nodesSelectionActive: false });
+                            thumbActivity();
+                        }
+                        if (!g.dup) return;
+                        const z = api().zoom();
+                        const dx = (ev.clientX - x0) / z, dy = (ev.clientY - y0) / z;
+                        g.dx = dx; g.dy = dy;
+                        const base = g.dup.base;
+                        setFlow((prev) => ({
+                            edges: prev.edges,
+                            nodes: prev.nodes.map((n) => (base[n.id]
+                                ? Object.assign({}, n, { position: { x: base[n.id].x + dx, y: base[n.id].y + dy } }) : n)),
+                        }));
+                    };
+                    track(onMove, (ev) => {
+                        swallowClickRef.current = performance.now() + 400;
+                        if (g.dup) {
+                            const dropped = {};
+                            g.dup.src.forEach((sid) => {
+                                const b = g.dup.base['x:' + sid];
+                                dropped[sid] = { x: b.x + g.dx, y: b.y + g.dy };
+                            });
+                            const entries = api().entriesForIds(g.dup.src, dropped);
+                            const pasted = entries.length ? api().duplicateEntries(entries, { mode: 'absolute', copyThumbs: true }) : null;
+                            if (!pasted || !pasted.size) {
+                                setFlow((prev) => ({
+                                    edges: prev.edges.filter((e) => e.id.indexOf('x:') !== 0),
+                                    nodes: prev.nodes.filter((n) => n.id.indexOf('x:') !== 0),
+                                }));
+                            }
+                        } else if (!g.started && remove) {
+                            if (g.wasSelected) api().deselectNode(id);
+                        } else if (!g.started) {
+                            api().addToSelection(id);
+                        }
+                    });
+                };
+                // The click that follows a Shift gesture must not reach onNodeClick.
+                const onClick = (e) => {
+                    if (performance.now() > swallowClickRef.current) return;
+                    swallowClickRef.current = 0;
+                    e.stopPropagation();
+                };
+                host.addEventListener('mousedown', onDown, true);
+                host.addEventListener('click', onClick, true);
+                return () => {
+                    host.removeEventListener('mousedown', onDown, true);
+                    host.removeEventListener('click', onClick, true);
+                };
+            }, [canvasHostRef.current]);
 
             // The document-default preview target: the surface shader, else
             // the material itself, else the end of a chain in the current
@@ -8387,6 +8695,11 @@
                     disabled: !parsed || !clipboardFilled || scopeLocked,
                     title: 'Paste the copied nodes into the current scope',
                 },
+                {
+                    label: 'Duplicate', icon: 'copy', keys: 'Shift+D', onSelect: () => duplicateSelectionRef.current(),
+                    disabled: !canDuplicate,
+                    title: 'Duplicate the selected nodes next to the originals',
+                },
                 { separator: true },
                 {
                     label: 'Auto Layout', icon: 'reorder', keys: 'A', disabled: !parsed || scopeLocked, onSelect: () => reorganize(),
@@ -8502,19 +8815,13 @@
                 });
                 const label = multi ? 'Show Thumbnails' : 'Show Thumbnail';
                 if (!elig.length) {
-                    return { label, icon: 'color-swatch', disabled: true, title: 'Thumbnails are available for pattern, data, shader and material nodes' };
+                    return { label, icon: 'color-swatch', keys: 'V', disabled: true, title: 'Thumbnails are available for pattern, data, shader and material nodes' };
                 }
                 const kindOf = (id) => ((flow.nodes.find((n2) => n2.id === id) || {}).data || {}).thumbKind || 'pattern';
                 const allOn = elig.every((id) => c.isEnabled(scope, id, true, kindOf(id)));
                 return {
-                    label, icon: 'color-swatch', checked: allOn, disabled: thumbMenu.disabled,
-                    onSelect: () => {
-                        for (const kind of ['pattern', 'shader']) {
-                            const group = elig.filter((id) => kindOf(id) === kind);
-                            if (group.length) c.setOverrides(scope, group, !allOn, kind);
-                        }
-                        patchThumbCards();
-                    },
+                    label, icon: 'color-swatch', keys: 'V', checked: allOn, disabled: thumbMenu.disabled,
+                    onSelect: () => { toggleThumbsForIds(elig); },
                 };
             })();
 
@@ -8544,6 +8851,8 @@
                     onSelect: () => copySelectionRef.current() },
                 { label: 'Paste', icon: 'clipboard', keys: 'Ctrl+V', disabled: !parsed || !clipboardFilled || scopeLocked,
                     onSelect: () => pasteClipboard() },
+                { label: 'Duplicate', icon: 'copy', keys: 'Shift+D', disabled: !canDuplicate,
+                    onSelect: () => duplicateSelectionRef.current() },
                 { label: 'Delete', icon: 'trash', keys: 'Del', disabled: !canDelete || scopeLocked,
                     onSelect: () => deleteSelectionRef.current() },
                 { separator: true },
@@ -8571,6 +8880,8 @@
                     onSelect: () => copySelectionRef.current() },
                 { label: 'Paste', icon: 'clipboard', keys: 'Ctrl+V', disabled: !parsed || !clipboardFilled || scopeLocked,
                     onSelect: () => pasteClipboard() },
+                { label: 'Duplicate', icon: 'copy', keys: 'Shift+D', disabled: !canDuplicate,
+                    onSelect: () => duplicateSelectionRef.current() },
                 { label: 'Delete', icon: 'trash', keys: 'Del', disabled: !canDelete || scopeLocked,
                     onSelect: () => deleteSelectionRef.current() },
                 (ctxHasDefaults || canUngroupSelection || !!ctxThumbRow) && { separator: true },
@@ -8978,12 +9289,15 @@
                                     selectionOnDrag={true}
                                     selectionMode={(RF.SelectionMode && RF.SelectionMode.Partial) || 'partial'}
                                     selectionKeyCode={null}
-                                    multiSelectionKeyCode={['Meta', 'Control', 'Shift']}
+                                    // Node clicks with Shift/Ctrl are handled by the canvas capture listener; this only
+                                    // keeps Ctrl+box selection additive, as before.
+                                    multiSelectionKeyCode={['Meta', 'Control']}
                                     // React Flow's MIT text doesn't require on-screen credit, but
                                     // the bundle asks non-Pro users to keep it, so it stays visible
                                     // (repositioned, not hidden; see the style tag above).
                                     proOptions={{ account: '', hideAttribution: false }}
                                 >
+                                    <RfStoreBridge storeRef={rfStoreRef} />
                                     <Background color={MtlxTheme.get('graph-grid')} gap={18} size={1.5} />
                                     {/* Zoom + fit controls: a custom cluster docked
                                         to the TOP of the Types window instead of
@@ -9074,6 +9388,15 @@
                                             >
                                                 Export .mtlx
                                             </button>
+                                            {!IN_VSCODE && (
+                                                <button
+                                                    onClick={reopenAsCopy}
+                                                    title="Load an editable copy (unsaved until you save it)"
+                                                    className="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium bg-warning-bg/70 hover:bg-warning-bg text-warning-text-strong transition-colors"
+                                                >
+                                                    Reopen as copy
+                                                </button>
+                                            )}
                                         </>
                                     ) : (
                                         <span className="min-w-0">View only: {scope} is part of the standard library and cannot be edited.</span>
