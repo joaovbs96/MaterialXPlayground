@@ -1,8 +1,8 @@
 ---
 title: What's new in MaterialX Playground v2026.10.1
 description: New scene formats and USD export in the Scene Viewer, improvements to rendering parity across tools, ShadingLanguageX in the Graph Editor, themes, a much bigger VS Code extension and a new home for the Playground on the web.
-date: 2026-10-06
-draft: true
+date: 2026-10-08
+draft: false
 image: blog/assets/release-2026-10/01-hero-social-1200x630.png
 imageAlt: "Three tiles side by side: a brick material on the shader ball, two glossy blue carpaint balls in Compare, and the Open Chess Set in the Scene Viewer."
 tags:
