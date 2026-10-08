@@ -390,9 +390,10 @@ jobs:
           # gallery/ is allowed only as the trimmed manifest plus original-resolution
           # thumbnails (see .vscodeignore, scripts/check-vsix-files.mjs's isForbiddenGalleryPath).
           if echo "$L" | grep -E '^extension/gallery/' | grep -vE '^extension/gallery/(manifest\.json|thumbs/[^/]+\.jpg)$' | grep -q .; then echo "::error::unexpected gallery/ file leaked into the vsix"; exit 1; fi
-          # Negative: only the six-file keep-list ships from vendor/materialx/ (scripts/check-vsix-files.mjs's
-          # MATERIALX_KEEP_LIST). The full upstream snapshot, especially resources/Images/, must not leak in.
-          if echo "$L" | grep -q 'extension/vendor/materialx/resources/Images/'; then echo "::error::vendor/materialx/resources/Images leaked into the vsix"; exit 1; fi
+          # Only the vendor/materialx keep list ships: every packaged file there must be allowlisted by name
+          # in .vscodeignore (generated from scripts/check-vsix-files.mjs's MATERIALX_KEEP_LIST).
+          STRAY="$(echo "$L" | grep -oE 'extension/vendor/materialx/[^ ]+$' | sed 's#^extension/##' | while read -r p; do grep -qxF "!$p" .vscodeignore || echo "$p"; done)"
+          [ -z "$STRAY" ] || { echo "::error::vendor/materialx files outside the keep list leaked into the vsix: $STRAY"; exit 1; }
 
           PKG="$(unzip -p "$VSIX" extension/package.json)"
           PUB="$(jq -r .publisher <<<"$PKG")"
