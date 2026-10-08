@@ -1143,8 +1143,6 @@
 
             const pushUndoSnapshot = (tag) => {
                 if (restoringRef.current) return;
-                // A Shift+drag duplicate holds its snapshot until release (one undo step).
-                if (holdUndoRef.current) { holdUndoRef.current.pending = true; return; }
                 snapshotRetryRef.current = UNDO_RETRY_MAX;
                 if (snapshotTimerRef.current) clearTimeout(snapshotTimerRef.current);
                 snapshotTimerRef.current = setTimeout(() => {
@@ -1153,15 +1151,6 @@
                 }, UNDO_DEBOUNCE_MS);
             };
 
-            const holdUndoRef = React.useRef(null);
-            const beginUndoHold = () => {
-                if (snapshotTimerRef.current) {
-                    clearTimeout(snapshotTimerRef.current);
-                    snapshotTimerRef.current = null;
-                    flushUndoSnapshot(null);
-                }
-                holdUndoRef.current = { pending: false };
-            };
             const markDirty = (undoTag) => {
                 // Thumbnails read the document themselves once the edit settles, ahead of the undo snapshot.
                 if (thumbClientRef.current) thumbClientRef.current.noteEdit(() => serializeDocXml(parsedRef.current));
@@ -6586,9 +6575,6 @@
                 const rebuilt = toFlow(descs, edges, flowOpts(capturePortModes()));
                 const pastedIds = new Set(created.map((c) => 'n:' + c.newName)
                     .concat(createdGraphs.map((c) => 'g:' + c.newName)));
-                pastedIds.sourceOf = {};
-                created.forEach((c) => { pastedIds.sourceOf['n:' + c.newName] = 'n:' + c.entry.name; });
-                createdGraphs.forEach((c) => { pastedIds.sourceOf['g:' + c.newName] = 'g:' + c.entry.name; });
                 setFlow({
                     edges: rebuilt.edges,
                     nodes: rebuilt.nodes.map((n) => (n.selected === pastedIds.has(n.id) ? n
@@ -7933,8 +7919,7 @@
                 onNodeClick({ shiftKey: true }, node); // primary + inspector follow the added node
             };
             gestureApiRef.current = {
-                entriesForIds, duplicateEntries, writeLayoutToDoc, onNodeClick, deselectNode, addToSelection, beginUndoHold,
-                endUndoHold: () => { holdUndoRef.current = null; markDirty(); },
+                entriesForIds, duplicateEntries, onNodeClick, deselectNode, addToSelection,
                 zoom: () => {
                     const inst = rfInstRef.current;
                     const z = inst && typeof inst.getZoom === 'function' ? inst.getZoom() : 1;
@@ -7990,45 +7975,53 @@
                             g.started = true;
                             if (remove || scopeLockedRef.current) return;
                             const nodes = flowRef.current.nodes;
-                            const ids = nodes.filter((n) => (g.wasSelected ? n.selected : n.id === id) && isCopyableNode(n)).map((n) => n.id);
-                            const entries = ids.length ? api().entriesForIds(ids) : [];
-                            if (!entries.length) return;
-                            api().beginUndoHold();
-                            const pasted = api().duplicateEntries(entries, { mode: 'absolute', copyThumbs: true });
-                            if (!pasted || !pasted.size) { api().endUndoHold(); return; }
-                            // Copies start exactly on their originals; the move below then adds the pointer travel.
+                            const src = nodes.filter((n) => (g.wasSelected ? n.selected : n.id === id) && isCopyableNode(n));
+                            if (!src.length) return;
+                            // Cheap stand-ins (cloned cards, 'x:' ids) move during the gesture; the real copies
+                            // are created once, on release, at the dropped positions (one undo step).
                             const base = {};
-                            pasted.forEach((cid) => {
-                                const src = nodes.find((n) => n.id === (pasted.sourceOf || {})[cid]);
-                                if (src) base[cid] = { x: src.position.x, y: src.position.y };
-                            });
-                            g.dup = { ids: pasted, base };
+                            src.forEach((n) => { base['x:' + n.id] = { x: n.position.x, y: n.position.y }; });
+                            g.dup = { src: src.map((n) => n.id), base };
+                            const ghostIds = new Set(Object.keys(base));
+                            setFlow((prev) => ({
+                                edges: prev.edges.concat(prev.edges
+                                    .filter((e) => ghostIds.has('x:' + e.source) && ghostIds.has('x:' + e.target))
+                                    .map((e) => Object.assign({}, e, { id: 'x:' + e.id, source: 'x:' + e.source, target: 'x:' + e.target, selected: false }))),
+                                nodes: prev.nodes.map((n) => (n.selected ? Object.assign({}, n, { selected: false }) : n))
+                                    .concat(prev.nodes.filter((n) => ghostIds.has('x:' + n.id)).map((n) => Object.assign({}, n, {
+                                        id: 'x:' + n.id, selected: true, dragging: false, position: { x: n.position.x, y: n.position.y },
+                                    }))),
+                            }));
+                            if (rfStoreRef.current) rfStoreRef.current.setState({ nodesSelectionActive: false });
                             thumbActivity();
                         }
                         if (!g.dup) return;
                         const z = api().zoom();
                         const dx = (ev.clientX - x0) / z, dy = (ev.clientY - y0) / z;
                         g.dx = dx; g.dy = dy;
-                        const dup = g.dup;
+                        const base = g.dup.base;
                         setFlow((prev) => ({
                             edges: prev.edges,
-                            nodes: prev.nodes.map((n) => {
-                                if (!dup.ids.has(n.id)) return n;
-                                if (!dup.base[n.id]) dup.base[n.id] = { x: n.position.x, y: n.position.y };
-                                const b = dup.base[n.id];
-                                return Object.assign({}, n, { position: { x: b.x + dx, y: b.y + dy } });
-                            }),
+                            nodes: prev.nodes.map((n) => (base[n.id]
+                                ? Object.assign({}, n, { position: { x: base[n.id].x + dx, y: base[n.id].y + dy } }) : n)),
                         }));
                     };
                     track(onMove, (ev) => {
                         swallowClickRef.current = performance.now() + 400;
                         if (g.dup) {
-                            const list = flowRef.current.nodes.filter((n) => g.dup.ids.has(n.id)).map((n) => {
-                                const b = g.dup.base[n.id];
-                                return { id: n.id, position: b ? { x: b.x + g.dx, y: b.y + g.dy } : n.position };
+                            const dropped = {};
+                            g.dup.src.forEach((sid) => {
+                                const b = g.dup.base['x:' + sid];
+                                dropped[sid] = { x: b.x + g.dx, y: b.y + g.dy };
                             });
-                            api().writeLayoutToDoc(list);
-                            api().endUndoHold();
+                            const entries = api().entriesForIds(g.dup.src, dropped);
+                            const pasted = entries.length ? api().duplicateEntries(entries, { mode: 'absolute', copyThumbs: true }) : null;
+                            if (!pasted || !pasted.size) {
+                                setFlow((prev) => ({
+                                    edges: prev.edges.filter((e) => e.id.indexOf('x:') !== 0),
+                                    nodes: prev.nodes.filter((n) => n.id.indexOf('x:') !== 0),
+                                }));
+                            }
                         } else if (!g.started && remove) {
                             if (g.wasSelected) api().deselectNode(id);
                         } else if (!g.started) {

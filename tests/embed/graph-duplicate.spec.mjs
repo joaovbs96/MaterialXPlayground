@@ -114,11 +114,12 @@ test('Shift+drag duplicates once past the dead zone, the copy follows the pointe
   await page.mouse.move(sx + 2, sy + 1);
   await page.waitForTimeout(150);
   expect(await nodeCount(page)).toBe(3);
-  // Just past it, before release: the copy appears on the original, offset only by the pointer travel.
+  // Just past it, before release: the copy card appears on the original, offset only by the pointer
+  // travel; the document gets the real copy on release.
   await page.mouse.move(sx + 6, sy + 1);
-  await expect.poll(() => nodeCount(page), { timeout: WAIT_TIMEOUT }).toBe(4);
-  const copyId = (await cardIds(page)).find((id) => !['n:c1', 'n:m1', 'n:c2'].includes(id));
-  expect(copyId).toMatch(/^n:c\d+$/);
+  const copyId = 'x:n:c2';
+  await expect(card(page, copyId)).toBeVisible();
+  expect(await nodeCount(page)).toBe(3);
   const first = await card(page, copyId).boundingBox();
   expect(Math.abs(first.x - before.x - 6)).toBeLessThan(1);
   expect(Math.abs(first.y - before.y - 1)).toBeLessThan(1);
@@ -135,13 +136,17 @@ test('Shift+drag duplicates once past the dead zone, the copy follows the pointe
   await page.mouse.up();
   await page.keyboard.up('Shift');
 
+  await expect.poll(() => nodeCount(page), { timeout: WAIT_TIMEOUT }).toBe(4);
   const nodes = await docNodes(page);
-  expect(nodes.length).toBe(4);
   expect(byName(nodes, 'c2')).toMatchObject({ x: 0, y: 2 });
   expect(byName(nodes, 'c1')).toMatchObject({ x: 0, y: 0 });
-  // Dropped well to the right of the original (xpos is in 240 px units).
-  expect(byName(nodes, copyId.slice(2)).x).toBeGreaterThan(0.5);
-  expect(await selectedIds(page)).toEqual([copyId]);
+  const copy = nodes.find((n) => n.cat === 'constant' && !['c1', 'c2'].includes(n.name));
+  // Dropped well to the right of the original (xpos is in 240 px units), exactly where it was released.
+  expect(copy.x).toBeGreaterThan(0.5);
+  expect(await cardIds(page)).not.toContain(copyId);
+  const dropped = await card(page, 'n:' + copy.name).boundingBox();
+  expect(Math.abs(dropped.x - copyBox.x) + Math.abs(dropped.y - copyBox.y)).toBeLessThan(1);
+  expect(await selectedIds(page)).toEqual(['n:' + copy.name]);
 
   // Undo snapshots are debounced; wait, then one Ctrl+Z drops the copy and the move in one step.
   await page.waitForTimeout(800);
@@ -161,6 +166,62 @@ test('Shift+drag duplicates once past the dead zone, the copy follows the pointe
   await page.waitForTimeout(300);
   expect(await nodeCount(page)).toBe(4);
   expect(byName(await docNodes(page), 'c2')).toMatchObject({ x: 0, y: 2 });
+});
+
+// Shift+drags grabId along path; after every step the grabbed copy's card must sit at pointer - grab offset.
+async function shiftDragError(page, grabId, path) {
+  const g = await card(page, grabId).boundingBox();
+  const sx = g.x + HEAD.x, sy = g.y + HEAD.y;
+  const ghost = card(page, 'x:' + grabId);
+  await page.keyboard.down('Shift');
+  await page.mouse.move(sx, sy);
+  await page.mouse.down();
+  let maxErr = 0, seen = 0;
+  for (const [dx, dy] of path) {
+    await page.mouse.move(sx + dx, sy + dy);
+    if (Math.hypot(dx, dy) < 5) { expect(await ghost.count()).toBe(0); continue; }
+    const r = await ghost.boundingBox();
+    expect(r).toBeTruthy(); // visible from the first step past the dead zone
+    seen++;
+    maxErr = Math.max(maxErr, Math.hypot(r.x + HEAD.x - (sx + dx), r.y + HEAD.y - (sy + dy)));
+  }
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+  await expect(ghost).toHaveCount(0, { timeout: WAIT_TIMEOUT });
+  expect(seen).toBeGreaterThan(0);
+  return maxErr;
+}
+const linePath = (n, tx, ty) => Array.from({ length: n }, (_, i) => [Math.round(tx * (i + 1) / n), Math.round(ty * (i + 1) / n)]);
+
+test('Shift+drag copies stay under the pointer at every step, for any selection and zoom', async ({ page, embedURL }) => {
+  await openGraphWith(page, embedURL, DOC);
+  const errs = [];
+  // Single node, slow then fast.
+  errs.push(await shiftDragError(page, 'n:c2', [[2, 1], [4, 2], [6, 3]].concat(linePath(12, 80, 160))));
+  errs.push(await shiftDragError(page, 'n:c2', [[9, 9]].concat(linePath(3, 360, 40))));
+  // Two box-selected nodes.
+  const a = await card(page, 'n:c1').boundingBox();
+  const b = await card(page, 'n:m1').boundingBox();
+  await page.mouse.move(a.x - 15, a.y - 15);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width + 15, Math.max(a.y + a.height, b.y + b.height) + 15, { steps: 8 });
+  await page.mouse.up();
+  expect(await selectedIds(page)).toEqual(['n:c1', 'n:m1']);
+  errs.push(await shiftDragError(page, 'n:m1', [[3, 3], [6, 6]].concat(linePath(10, 30, 220))));
+  // A selection that includes a copy made by an earlier duplicate.
+  const copies = (await docNodes(page)).filter((n) => !['c1', 'm1', 'c2'].includes(n.name)).map((n) => 'n:' + n.name);
+  await selectCard(page, 'n:c2');
+  await selectCard(page, copies[0], ['Shift']);
+  errs.push(await shiftDragError(page, copies[0], linePath(10, -120, 140)));
+  // Zoomed out and in.
+  for (const dir of [1, -1, -1]) {
+    await page.mouse.move(300, 300);
+    await page.mouse.wheel(0, dir * 200);
+    await page.waitForTimeout(400);
+    await selectCard(page, 'n:c1');
+    errs.push(await shiftDragError(page, 'n:c1', linePath(10, 140, 60)));
+  }
+  expect(Math.max(...errs)).toBeLessThanOrEqual(1);
 });
 
 test('Shift+drag on a selected node duplicates the whole selection and keeps inner wires', async ({ page, embedURL }) => {
