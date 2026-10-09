@@ -36,9 +36,18 @@
     const defaultOn = (scope, kind) => scopeOn(scope) && (kindOf(kind) !== 'shader' || Gs);
     const setShaderGlobal = (on) => { Gs = !!on; };
     const getShaderGlobal = () => Gs;
-    const toggleShaderMenu = () => { Gs = !Gs; return Gs; };
+    // Like the main menu, the switch drops the per-node overrides of shader cards.
+    const toggleShaderMenu = () => {
+      for (const [k, v] of Array.from(overrides)) if (v.kind === 'shader') overrides.delete(k);
+      Gs = !Gs;
+      return Gs;
+    };
 
+    // The menu switches every card, so per-node overrides (V) go: of this scope for a
+    // big-scope opt-in, of every scope when G flips.
     const toggleMenu = (scope) => {
+      const prefix = isBig(scope) ? scope + SEP : '';
+      for (const k of Array.from(overrides.keys())) if (k.startsWith(prefix)) overrides.delete(k);
       if (scopeOn(scope)) {
         if (isBig(scope)) optIn.delete(scope);
         else G = false;
@@ -52,15 +61,14 @@
     const isEnabled = (scope, id, eligible, kind) => {
       if (!eligible) return false;
       const ov = overrides.get(okey(scope, id));
-      if (ov === 'on') return true;
-      if (ov === 'off') return false;
+      if (ov) return ov.on;
       return defaultOn(scope, kind);
     };
 
     const setOverride = (scope, id, desiredOn, kind) => {
       const k = okey(scope, id);
       if (!!desiredOn === defaultOn(scope, kind)) overrides.delete(k);
-      else overrides.set(k, desiredOn ? 'on' : 'off');
+      else overrides.set(k, { on: !!desiredOn, kind: kindOf(kind) });
     };
     const setOverrides = (scope, ids, on, kind) => { for (const id of ids) setOverride(scope, id, on, kind); };
 
@@ -84,8 +92,8 @@
       for (const item of eligibleIds) {
         const id = typeof item === 'object' ? item.id : item;
         const ov = overrides.get(okey(scope, id));
-        if (ov === 'on') return true;
-        if (ov !== 'off' && defaultOn(scope, typeof item === 'object' ? item.kind : 'pattern')) return true;
+        if (ov && ov.on) return true;
+        if (!ov && defaultOn(scope, typeof item === 'object' ? item.kind : 'pattern')) return true;
       }
       return false;
     };
