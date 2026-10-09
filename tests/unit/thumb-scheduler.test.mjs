@@ -101,6 +101,47 @@ test('override is deleted when equal to the scope default', () => {
   assert.equal(s.anyEnabled('S', ['n:a']), false);
 });
 
+test('toggleMenu clears per-node overrides, shader overrides included', () => {
+  const s = createScheduler();
+  s.enterScope('S', 3);
+  s.enterScope('T', 3);
+  s.setOverride('S', 'n:sr', true, 'shader');
+  s.setOverride('T', 'n:sr', true, 'shader');
+  s.setOverride('S', 'n:a', false);
+  s.toggleMenu('S');
+  assert.equal(s.isEnabled('S', 'n:sr', true, 'shader'), false);
+  assert.equal(s.isEnabled('T', 'n:sr', true, 'shader'), false);
+  s.toggleMenu('S');
+  assert.equal(s.isEnabled('S', 'n:a', true), true);
+  // V after the menu still works per node.
+  s.toggleMenu('S');
+  s.setOverride('S', 'n:a', true);
+  assert.equal(s.isEnabled('S', 'n:a', true), true);
+});
+
+test('toggleShaderMenu clears shader overrides only', () => {
+  const s = createScheduler();
+  s.enterScope('S', 3);
+  s.setOverride('S', 'n:sr', true, 'shader');
+  s.setOverride('S', 'n:a', false);
+  assert.equal(s.toggleShaderMenu(), true);
+  assert.equal(s.toggleShaderMenu(), false);
+  assert.equal(s.isEnabled('S', 'n:sr', true, 'shader'), false);
+  assert.equal(s.isEnabled('S', 'n:a', true), false);
+});
+
+test('big-scope toggleMenu clears only that scope\'s overrides', () => {
+  const s = createScheduler();
+  s.enterScope('B', 51);
+  s.enterScope('S', 3);
+  s.setOverride('B', 'n:a', true);
+  s.setOverride('S', 'n:sr', true, 'shader');
+  s.toggleMenu('B');
+  s.toggleMenu('B');
+  assert.equal(s.isEnabled('B', 'n:a', true), false);
+  assert.equal(s.isEnabled('S', 'n:sr', true, 'shader'), true);
+});
+
 test('multi-select overrides and anyEnabled', () => {
   const s = createScheduler();
   s.enterScope('S', 3);

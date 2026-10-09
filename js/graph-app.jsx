@@ -4650,16 +4650,20 @@
             // Registers every card of the scope (the 50-card rule counts all of them) and
             // decides the enable state before toFlow lays the cards out. Targets are built
             // exactly like the idle-warm walk's.
+            const thumbCardOf = (d) => {
+                const sc = scopeRef.current;
+                const origin = scopeOriginRef.current;
+                const hasOrigin = !!(origin && origin.graph === sc);
+                return {
+                    id: d.id, eligible: thumbEligible(d), kind: thumbKind(d) || 'pattern', x: 0, y: 0,
+                    target: { id: d.id, scope: sc, originId: hasOrigin ? origin.id : null, originScope: hasOrigin ? origin.scope : null },
+                };
+            };
             const prepThumbs = (descs) => {
                 const c = getThumbs();
                 if (!c) return;
                 const sc = scopeRef.current;
-                const origin = scopeOriginRef.current;
-                const hasOrigin = !!(origin && origin.graph === sc);
-                const cards = descs.map((d) => ({
-                    id: d.id, eligible: thumbEligible(d), kind: thumbKind(d) || 'pattern', x: 0, y: 0,
-                    target: { id: d.id, scope: sc, originId: hasOrigin ? origin.id : null, originScope: hasOrigin ? origin.scope : null },
-                }));
+                const cards = descs.map(thumbCardOf);
                 thumbCardsRef.current = cards;
                 const entered = thumbEnterRef.current;
                 thumbEnterRef.current = false;
@@ -4678,6 +4682,18 @@
                     on: c.isEnabled(scopeRef.current, d.id, eligible, kind || 'pattern'), eligible, kind, size: c.sizeOf(scopeRef.current, d.id),
                     key: c.keyOf(scopeRef.current, d.id), store: thumbStoreRef.current,
                 };
+            };
+            // Card added in place (no toFlow rebuild): registers it with the client and
+            // returns its data with the same thumbnail fields toFlow would set.
+            const withThumb = (data) => {
+                const c = getThumbs();
+                if (!c) return data;
+                thumbCardsRef.current = thumbCardsRef.current.filter((x) => x.id !== data.id).concat([thumbCardOf(data)]);
+                c.setScope(scopeRef.current, thumbCardsRef.current, { entered: false });
+                const th = thumbFor(data);
+                return Object.assign({}, data, {
+                    thumb: th.on, thumbSize: th.size, thumbElig: th.eligible, thumbKind: th.kind, thumbKey: th.key, thumbStore: th.store,
+                });
             };
             // After a menu or override change: flips data.thumb on the affected cards only.
             // Positions are kept (no relayout), so a card that grows may sit close to its neighbour.
@@ -5879,7 +5895,7 @@
                 // A fresh node starts with ALL inputs showing — every port is
                 // visible and connectable right away.
                 const mode = 'all';
-                const data = {
+                const data = withThumb({
                     id, kind: kindOfNode(el), name, category: entry.category, type: mxElType(el),
                     lib: ports.lib, group: ports.group,
                     allInputs: withConn,
@@ -5888,7 +5904,7 @@
                     portMode: mode,
                     onTogglePorts: () => togglePortsRef.current(id),
                     onPortAdd: (info) => onPortAddRef.current(info),
-                };
+                });
                 // Drop position (item A3): when resolving a drag-to-empty
                 // connection, place the node so the handle about to be
                 // WIRED lands under the cursor instead of viewport center.
@@ -6120,7 +6136,7 @@
                 }
 
                 const id = (kind === 'iface-input' ? 'i:' : 'o:') + name;
-                const data = kind === 'iface-input'
+                const data = withThumb(kind === 'iface-input'
                     ? {
                         id, kind: 'input', name, category: 'interface input', type,
                         inputs: [], allInputs: [], value: (ifaceLiteralType(type) && meta && meta.value) || '',
@@ -6138,7 +6154,7 @@
                         inputs: [{ name: 'in', type, value: '', connected: false }],
                         allInputs: [{ name: 'in', type, value: '', connected: false }],
                         outputs: [], portMode: 'authored',
-                    };
+                    });
 
                 // Drop it at the center of the current viewport (same block
                 // as addNodeFromCatalog).
