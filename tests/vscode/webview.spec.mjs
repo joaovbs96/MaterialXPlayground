@@ -109,6 +109,18 @@ test.describe('VS Code webview simulation', () => {
     expect(result.pageErrors).toEqual([]);
   });
 
+  // The worker runs from a blob: URL here, which cannot resolve MaterialX's relative paths.
+  test('Graph Editor node thumbnails render in the webview worker', async ({ page, vscodeServer }) => {
+    await page.addInitScript(() => { try { localStorage.setItem('mtlxGraphThumbnails', 'true'); } catch (e) { /* storage blocked */ } });
+    const result = await bootWebview(page, vscodeServer, { initialHash: '#!graph', docsOnly: false, globalName: 'NodeGraphApp' });
+    expect(result.outcome).toBe('ready');
+    await page.waitForFunction(() => typeof window.parseMtlxDocument === 'function', null, { timeout: 45000 });
+    const xml = '<?xml version="1.0"?><materialx version="1.39"><constant name="c1" type="color3"><input name="value" type="color3" value="1, 0, 0" /></constant></materialx>';
+    await page.evaluate((x) => window.dispatchEvent(new CustomEvent('mtlx-load-document', { detail: { xml: x, name: 'thumbs' } })), xml);
+    const thumb = page.locator('.react-flow__node[data-id="n:c1"] [data-mtlx-thumb]');
+    await expect(thumb).toHaveAttribute('data-mtlx-thumb', 'ready', { timeout: 60000 });
+  });
+
   test('Viewer view boots', async ({ page, vscodeServer }) => {
     const result = await bootWebview(page, vscodeServer, {
       initialHash: '#!viewer',
