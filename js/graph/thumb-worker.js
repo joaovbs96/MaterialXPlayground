@@ -649,15 +649,17 @@ const importOptional = async (name, url) => {
 
 // The MaterialX JS wrapper picks its XML path handling from typeof window and uses
 // document.createElement('a') to absolutize search paths. Installed after three and the
-// loaders evaluate, so they never see it.
-const installMaterialXShim = () => {
+// loaders evaluate, so they never see it. baseUrl is the page's: in VS Code the worker
+// runs from a blob: URL, which cannot resolve relative paths.
+const installMaterialXShim = (baseUrl) => {
+    const base = baseUrl || G.location.href;
     if (typeof G.window === 'undefined') G.window = G;
     if (typeof G.document === 'undefined') {
         G.document = {
             createElement: () => {
                 let u = null;
                 return {
-                    set href(v) { u = new URL(String(v), G.location.href); },
+                    set href(v) { u = new URL(String(v), base); },
                     get href() { return u ? u.href : ''; },
                     get origin() { return u ? u.origin : ''; },
                     get pathname() { return u ? u.pathname : ''; },
@@ -693,7 +695,7 @@ const handleInit = async (m) => {
         if (m.host.three) MtlxThreeMaterial.setHostFromSnapshot(m.host.three);
         if (m.host.assembly) MtlxSceneAssembly.setHostFromSnapshot(m.host.assembly);
     }
-    installMaterialXShim();
+    installMaterialXShim(m.baseUrl);
     const factory = (await import(m.mtlx.factoryUrl)).default;
     if (typeof factory !== 'function') throw new Error('This MaterialX build has no ES module factory.');
     mx = await factory({

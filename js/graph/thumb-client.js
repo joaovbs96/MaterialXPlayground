@@ -391,6 +391,7 @@
             scene,
             rigLights: (env.lightData || []).map((l) => ({ type: l.type, direction: arr(l.direction), color: arr(l.color), intensity: l.intensity })),
             buildId: String(G.__MTLX_BUILD || ''),
+            baseUrl: G.document.baseURI,
             host: { gen: host.gen, three: host.three, assembly: host.assembly },
           }, [wasm, data]);
           await ready;
