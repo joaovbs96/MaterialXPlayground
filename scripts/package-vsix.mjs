@@ -66,7 +66,7 @@ const SIGNATURES = [
   "extension/vendor/vendor-manifest.json",
   "MTLX_VENDOR_DEPS).filter((d)=>d.vscode===false)",
   "extension/gallery/(manifest\\.json|thumbs/[^/]+\\.jpg)",
-  "extension/vendor/materialx/resources/Images/",
+  'grep -qxF "!$p" .vscodeignore',
   'PUB" != "local"',
   "sed -n 1p",
   'Id="Microsoft.VisualStudio.Code.PreRelease" Value="true"',
