@@ -248,7 +248,7 @@ jobs:
       # offline zip carries it; rendered once by the gallery job above.
       - name: Populate gallery data
         if: needs.gallery.result == 'success'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: gallery-data
           path: gallery
@@ -477,7 +477,7 @@ jobs:
       # to MTLX_PRESETS. Same artifact the package job used.
       - name: Populate gallery data
         if: needs.gallery.result == 'success'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: gallery-data
           path: gallery
@@ -552,19 +552,19 @@ jobs:
       contents: write
     steps:
       - name: Download package artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ needs.package.outputs.name }}
 
       - name: Download vsix artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ needs.package.outputs.vsix_name }}
 
       # All three platforms land in one directory; each matrix artifact is
       # named separately so a platform that failed simply contributes none.
       - name: Download desktop artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: desktop-*
           merge-multiple: true
