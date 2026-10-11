@@ -136,7 +136,7 @@ jobs:
           node scripts/gallery-shots.mjs --reuse-from "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
 
       - name: Upload gallery artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: gallery-data
           path: gallery
@@ -331,7 +331,7 @@ jobs:
           ls -lh "$RUNNER_TEMP/${{ steps.pkg.outputs.name }}.zip" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload package artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.pkg.outputs.name }}
           path: ${{ runner.temp }}/${{ steps.pkg.outputs.name }}.zip
@@ -428,7 +428,7 @@ jobs:
           ls -lh "$VSIX" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload vsix artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.pkg.outputs.vsix_name }}
           path: ${{ runner.temp }}/${{ steps.pkg.outputs.vsix_name }}.vsix
@@ -533,7 +533,7 @@ jobs:
           find electron/dist -maxdepth 1 -type f \( -name "*.exe" -o -name "*.dmg" -o -name "*.zip" -o -name "*.AppImage" -o -name "*.deb" \) -exec ls -lh {} \;
 
       - name: Upload desktop artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: desktop-${{ matrix.os }}
           path: |
