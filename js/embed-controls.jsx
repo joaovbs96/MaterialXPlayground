@@ -233,8 +233,8 @@ const EmbedControls = ({
                             <MtlxIcon name="camera" className="mtlx-ec-icon" />
                             <span>Screenshot</span>
                         </button>
-                        <button type="button" className="mtlx-ec-btn mtlx-ec-split-record" data-testid="capture-record" onClick={onRecord} title="Record a 360° turntable GIF">
-                            <span>Turntable</span>
+                        <button type="button" className="mtlx-ec-btn mtlx-ec-split-record" data-testid="capture-record" onClick={onRecord} title="Record a GIF (turntable or current camera)">
+                            <span>Record</span>
                         </button>
                     </span>
                 )}
@@ -245,9 +245,9 @@ const EmbedControls = ({
                     </button>
                 )}
                 {!showScreenshot && showRecord && (
-                    <button type="button" className="mtlx-ec-btn" onClick={onRecord} title="Record a 360° turntable GIF">
+                    <button type="button" className="mtlx-ec-btn" onClick={onRecord} title="Record a GIF (turntable or current camera)">
                         <MtlxIcon name="camera" className="mtlx-ec-icon" />
-                        {!compact && <span>Turntable</span>}
+                        {!compact && <span>Record</span>}
                     </button>
                 )}
                 {showSettings && (

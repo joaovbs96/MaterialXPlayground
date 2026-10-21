@@ -1156,6 +1156,37 @@ function collectMtlxElementNames(mtlxText) {
   return names;
 }
 
+// A Scope that references many .mtlx files makes the runtime report the first
+// one for every material. When the hinted name is not defined in that source
+// but exactly one other uploaded .mtlx defines it, point the record there.
+function repointMaterialXSources(materials, mtlxFileTextsByPath) {
+  const namesByPath = new Map();
+  const namesOf = (path) => {
+    let names = namesByPath.get(path);
+    if (!names) {
+      names = collectMtlxElementNames(mtlxFileTextsByPath.get(path) ?? "");
+      namesByPath.set(path, names);
+    }
+    return names;
+  };
+  const encoder = new TextEncoder();
+  for (const material of materials) {
+    const mx = material?.materialX;
+    const wanted = text(mx?.materialName);
+    const current = normalizePath(material.sourceAsset);
+    if (!wanted || !mx.selectionIsInferred || !/\.mtlx$/i.test(current)) continue;
+    if (mtlxFileTextsByPath.has(current) && namesOf(current).has(wanted)) continue;
+    const hits = [];
+    for (const path of mtlxFileTextsByPath.keys()) {
+      if (path !== current && namesOf(path).has(wanted)) hits.push(path);
+    }
+    if (hits.length !== 1) continue;
+    material.sourceAsset = hits[0];
+    mx.path = hits[0];
+    mx.data = encoder.encode(mtlxFileTextsByPath.get(hits[0]));
+  }
+}
+
 // Text of the MaterialX document(s) relevant to one material record: the
 // native inline materialX.data payload when present (the resolved network
 // actually selected, includes composed from a usdMtlx nodegraph), plus the
@@ -3259,6 +3290,7 @@ async function load(request) {
   }
   const materialProbe = probeMaterialPayloads(api, root, result);
   result.warnings.push(...materialProbe.warnings);
+  repointMaterialXSources(result.materials.concat(materialProbe.unbound), mtlxFileTextsByPath);
   const connectionWarnedLayers = new Set();
   // Builds or annotates one record's MaterialX document; `warn` receives its notes.
   const synthesizeMaterialDocument = async (material, warn) => {

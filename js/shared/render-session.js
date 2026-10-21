@@ -726,10 +726,22 @@
             },
             // Renders one frame at the capture resolution and reads it back
             // as ImageData, same cached-canvas path as snapshotPixels.
-            captureFrame: () => {
+            // Optional { time, frame } pins u_time/u_frame for this frame
+            // only; the live wall clock is restored right after rendering.
+            captureFrame: (clockOpts) => {
                 if (!captureState) throw new Error('captureFrame() called with no active beginCapture().');
-                setUniforms();
-                renderFrame();
+                const clock = clockOpts && window.MTLX_CLOCK;
+                const saved = clock ? { time: clock.time, frame: clock.frame } : null;
+                if (clock) {
+                    if (typeof clockOpts.time === 'number') clock.time = clockOpts.time;
+                    if (typeof clockOpts.frame === 'number') clock.frame = clockOpts.frame >>> 0;
+                }
+                try {
+                    setUniforms();
+                    renderFrame();
+                } finally {
+                    if (saved) { clock.time = saved.time; clock.frame = saved.frame; }
+                }
                 if (!captureCanvas) {
                     captureCanvas = document.createElement('canvas');
                     captureCtx = captureCanvas.getContext('2d', { willReadFrequently: true });
@@ -1024,7 +1036,7 @@
             snapshotPixels: (w, h) => captureController.snapshotPixels(w, h),
             renderNow: (ts) => captureController.renderNow(ts),
             beginCapture: (opts) => stopped ? false : captureController.beginCapture(opts),
-            captureFrame: () => captureController.captureFrame(),
+            captureFrame: (clockOpts) => captureController.captureFrame(clockOpts),
             endCapture: () => captureController.endCapture(),
             dispose: () => {
                 if (liveViews) ENGINE.unregisterLiveView(handle);

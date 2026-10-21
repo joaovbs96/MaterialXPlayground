@@ -147,7 +147,8 @@ function RecSegRow({
   }, options.map(opt => /*#__PURE__*/React.createElement("button", {
     key: String(opt.value),
     type: "button",
-    disabled: disabled,
+    disabled: disabled || opt.disabled,
+    title: opt.title,
     className: 'mtlx-rec-seg-btn' + (value === opt.value ? ' is-active' : ''),
     onClick: () => onChange(opt.value)
   }, opt.label))));
@@ -173,7 +174,7 @@ const loadRecordGifSettings = transparentDefault => {
   return defaults;
 };
 
-// 360° turntable GIF recorder dialog: settings -> record -> download.
+// GIF recorder dialog (Turntable or Current camera): settings -> record -> download.
 // No Tailwind (its own mtlx-rec- CSS above) since this also mounts inside
 // the Tailwind-less embed via ViewportControls'/EmbedControls' Record button.
 const RecordGifDialog = ({
@@ -195,6 +196,7 @@ const RecordGifDialog = ({
   const previewRef = React.useRef(null);
   const offscreenRef = React.useRef(null);
   const abortRef = React.useRef(null);
+  const [modeChoice, setModeChoice] = React.useState(null);
   React.useEffect(() => {
     try {
       localStorage.setItem(RECORD_GIF_KEY, JSON.stringify(settings));
@@ -213,7 +215,28 @@ const RecordGifDialog = ({
   useEscapeToClose(handleClose, open);
   if (!open) return null;
   const view = viewRef && viewRef.current;
-  const canRecord = !!(view && typeof view.beginCapture === 'function' && typeof view.getCamera === 'function' && view.getCamera());
+  const hasRig = !!(view && typeof view.getCamera === 'function' && view.getCamera());
+  const animated = !!(view && typeof view.isAnimated === 'function' && view.isAnimated());
+  const canRecord = !!(view && typeof view.beginCapture === 'function' && (hasRig || animated));
+  // Current camera needs animated time; Turntable needs an orbit rig
+  // (absent in the 2D buffer view). Default: Current camera if animated.
+  const camOk = animated;
+  const turnOk = hasRig;
+  const modeOptions = [{
+    value: 'camera',
+    label: 'Current camera',
+    disabled: !camOk,
+    title: camOk ? undefined : 'Needs an animated material (time or frame nodes)'
+  }, {
+    value: 'turntable',
+    label: 'Turntable',
+    disabled: !turnOk,
+    title: turnOk ? undefined : 'Not available in the 2D buffer view'
+  }];
+  const pick = modeChoice && modeOptions.some(o => o.value === modeChoice && !o.disabled) ? modeChoice : null;
+  const uiMode = pick || (camOk ? 'camera' : 'turntable');
+  // Engine recorder mode: a turntable of an animated material also advances time.
+  const mode = uiMode === 'camera' ? 'animation' : animated ? 'both' : 'turntable';
   const setField = key => value => setSettings(s => Object.assign({}, s, {
     [key]: value
   }));
@@ -270,11 +293,12 @@ const RecordGifDialog = ({
         dither: settings.dither,
         transparent: !!settings.transparent,
         clockwise: true,
+        mode,
         onProgress: setProgress,
         onFrame: drawPreviewFrame,
         signal: controller.signal
       });
-      downloadBlob(blob, (baseName || 'material') + '-turntable.gif');
+      downloadBlob(blob, (baseName || 'material') + (uiMode === 'camera' ? '-animation.gif' : '-turntable.gif'));
       setSavedMB((blob.size / (1024 * 1024)).toFixed(1));
       setState('done');
     } catch (e) {
@@ -304,7 +328,7 @@ const RecordGifDialog = ({
     className: "mtlx-rec-header"
   }, /*#__PURE__*/React.createElement("span", {
     className: "mtlx-rec-title"
-  }, "Record 360\xB0 GIF"), /*#__PURE__*/React.createElement("button", {
+  }, "Record GIF"), /*#__PURE__*/React.createElement("button", {
     className: "mtlx-rec-close",
     onClick: handleClose,
     title: "Close"
@@ -315,7 +339,21 @@ const RecordGifDialog = ({
     className: "mtlx-rec-body"
   }, !canRecord && /*#__PURE__*/React.createElement("div", {
     className: "mtlx-rec-error"
-  }, "Recording needs an orbit camera view."), /*#__PURE__*/React.createElement(RecSegRow, {
+  }, "Nothing to record: the 2D buffer view needs an animated material."), /*#__PURE__*/React.createElement(RecSegRow, {
+    label: "Mode",
+    value: uiMode,
+    disabled: recording,
+    onChange: setModeChoice,
+    options: modeOptions
+  }), !camOk && /*#__PURE__*/React.createElement("div", {
+    className: "mtlx-rec-hint"
+  }, "Current camera is disabled: this material is not animated."), !turnOk && /*#__PURE__*/React.createElement("div", {
+    className: "mtlx-rec-hint"
+  }, "Turntable is disabled in the 2D buffer view."), animated && uiMode === 'camera' && /*#__PURE__*/React.createElement("div", {
+    className: "mtlx-rec-hint"
+  }, "Camera stays where it is; time advances 1/", settings.fps, " s per frame."), animated && uiMode === 'turntable' && /*#__PURE__*/React.createElement("div", {
+    className: "mtlx-rec-hint"
+  }, "Orbits while time advances 1/", settings.fps, " s per frame."), /*#__PURE__*/React.createElement(RecSegRow, {
     label: "Size",
     value: settings.size,
     disabled: recording,
@@ -2234,9 +2272,7 @@ const GEOM_LABELS = {
   'sphere': 'Sphere',
   'cube': 'Cube',
   'cloth': 'Cloth',
-  // Only offered where a caller passes an explicit geomList including
-  // it (node-preview) — deliberately absent from the default list
-  // above so the material viewer doesn't grow the option.
+  // Flat fullscreen quad with a fixed ortho camera.
   'buffer2d': '2D Buffer',
   // 'default' = the experimental per-node-type auto pick (see
   // defaultGeomFor). Only used by callers whose geomList includes
@@ -2266,6 +2302,7 @@ const GEOM_ICONS = {
   sphere: 'circle',
   cube: 'cube',
   cloth: 'wave',
+  buffer2d: 'layout-grid',
   custom: 'file'
 };
 
@@ -2810,9 +2847,14 @@ const ViewportControls = ({
   // this and keeps today's always-shown behavior.
   showScreenshot = true,
   onRecord,
-  // Record (360° turntable GIF) button: shown only when the caller
+  // Record (GIF) button: shown only when the caller
   // also passes onRecord, so existing callers see no new button.
   showRecord = true,
+  // The camera button opens a menu (Save Screenshot / Record GIF) instead
+  // of the divided pill (graph editor). Record GIF is disabled, not
+  // hidden, while showRecord is false; recordDisabledTitle explains why.
+  screenshotMenu = false,
+  recordDisabledTitle = 'Nothing to record: the 2D buffer view needs an animated material',
   isFullscreen,
   onToggleFullscreen,
   children,
@@ -2849,6 +2891,8 @@ const ViewportControls = ({
   // by EnvDialog's placement="left" to clear the whole panel.
   const panelEdgeRef = React.useRef(null);
   const settingsBtnRef = React.useRef(null);
+  const [shotMenuPt, setShotMenuPt] = React.useState(null);
+  const shotMenuClosedAt = React.useRef(0);
   const [envOpen, setEnvOpen] = React.useState(false);
   const [envRotation, setEnvRotation] = React.useState(0); // degrees, 0-360
   const [envExposure, setEnvExposure] = React.useState(1.0);
@@ -3007,6 +3051,56 @@ const ViewportControls = ({
         })) : null;
       case 'screenshot':
         {
+          if (screenshotMenu && showScreenshot) {
+            const canRec = !!(showRecord && onRecord);
+            return /*#__PURE__*/React.createElement(React.Fragment, {
+              key: "screenshot"
+            }, /*#__PURE__*/React.createElement("button", {
+              onClick: e => {
+                // The menu's outside-press already closed it on pointerdown.
+                if (!shotMenuPt && Date.now() - shotMenuClosedAt.current < 300) return;
+                const r = e.currentTarget.getBoundingClientRect();
+                setShotMenuPt(shotMenuPt ? null : {
+                  x: r.left,
+                  y: r.bottom + 4
+                });
+              },
+              title: "Screenshot or record a GIF",
+              "aria-haspopup": "menu",
+              "aria-expanded": !!shotMenuPt,
+              "data-testid": "capture-menu",
+              className: buttonClassName(!!shotMenuPt)
+            }, /*#__PURE__*/React.createElement(MtlxIcon, {
+              name: "camera",
+              className: "w-3.5 h-3.5"
+            }), showLabels && /*#__PURE__*/React.createElement("span", {
+              className: "ml-1.5 whitespace-nowrap"
+            }, "Screenshot"), /*#__PURE__*/React.createElement(MtlxIcon, {
+              name: "chevron-down",
+              className: "w-3 h-3 ml-1 opacity-70"
+            })), shotMenuPt && /*#__PURE__*/React.createElement(MtlxMenu, {
+              key: shotMenuPt.x + ':' + shotMenuPt.y,
+              open: true,
+              anchorPoint: shotMenuPt,
+              onClose: () => {
+                shotMenuClosedAt.current = Date.now();
+                setShotMenuPt(null);
+              },
+              ariaLabel: "Capture",
+              minWidth: 160,
+              items: [{
+                label: 'Save Screenshot',
+                icon: 'camera',
+                onSelect: onScreenshot
+              }, {
+                label: 'Record GIF',
+                icon: 'player-record',
+                onSelect: onRecord,
+                disabled: !canRec,
+                title: canRec ? undefined : recordDisabledTitle
+              }]
+            }));
+          }
           const recordAvail = !!(showRecord && onRecord);
           if (showScreenshot && recordAvail) {
             // One divided pill, labels always shown. Halves share the outer
@@ -3039,7 +3133,7 @@ const ViewportControls = ({
               className: "whitespace-nowrap"
             }, "Screenshot")), /*#__PURE__*/React.createElement("button", {
               onClick: onRecord,
-              title: "Record a 360\xB0 turntable GIF",
+              title: "Record a GIF (turntable or current camera)",
               "data-testid": "capture-record",
               className: buttonClassName(false),
               style: {
@@ -3052,7 +3146,7 @@ const ViewportControls = ({
               }
             }, /*#__PURE__*/React.createElement("span", {
               className: "whitespace-nowrap"
-            }, "Turntable")));
+            }, "Record")));
           }
           if (showScreenshot) {
             return /*#__PURE__*/React.createElement("button", {
@@ -3070,14 +3164,14 @@ const ViewportControls = ({
           return recordAvail ? /*#__PURE__*/React.createElement("button", {
             key: "screenshot",
             onClick: onRecord,
-            title: "Record a 360\xB0 turntable GIF",
+            title: "Record a GIF (turntable or current camera)",
             className: buttonClassName(false)
           }, /*#__PURE__*/React.createElement(MtlxIcon, {
             name: "camera",
             className: "w-3.5 h-3.5"
           }), showLabels && /*#__PURE__*/React.createElement("span", {
             className: "ml-1.5 whitespace-nowrap"
-          }, "Turntable")) : null;
+          }, "Record")) : null;
         }
       case 'record':
         return null;

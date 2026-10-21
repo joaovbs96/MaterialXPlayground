@@ -249,6 +249,14 @@
             const takeScreenshot = () => {
                 try { takeScreenshotRaw(); } catch (e) { /* best-effort */ }
             };
+            // Shared RecordGifDialog for the node being previewed. Recordable
+            // with an orbit rig, or flat2d when the material is animated.
+            // Re-read on every render; viewEpoch bumps whenever the view or
+            // material is rebuilt, which re-renders this component.
+            const [recordOpen, setRecordOpen] = React.useState(false);
+            const recView = viewRef.current;
+            const canRecord = !!(recView && typeof recView.beginCapture === 'function'
+                && ((recView.getCamera && recView.getCamera()) || (recView.isAnimated && recView.isAnimated())));
 
             // Fullscreen "fit to ball" (setFullscreenFit, mtlx-engine.js): a
             // wider aspect can crop the fixed-camera shaderball, so widen fov
@@ -643,6 +651,9 @@
                         viewRef={viewRef}
                         viewEpoch={viewEpoch}
                         onScreenshot={takeScreenshot}
+                        onRecord={() => setRecordOpen(true)}
+                        showRecord={canRecord}
+                        screenshotMenu
                         settingsChildren={
                             // compoundRoot is real state driving the compile
                             // path directly (see the effect deps above), with
@@ -689,6 +700,10 @@
                         // render's own camera-reset/fullscreen buttons.
                         showLabels={isFullscreen}
                     />
+                    {recordOpen && (
+                        <RecordGifDialog open={recordOpen} onClose={() => setRecordOpen(false)}
+                            viewRef={viewRef} baseName={snapshotBaseName(label, resolvedGeom || geomMode)} />
+                    )}
                     <div
                         className={`relative w-full bg-stage/60 ${isFullscreen ? 'flex-1 min-h-0' : 'aspect-square'}`}
                     >

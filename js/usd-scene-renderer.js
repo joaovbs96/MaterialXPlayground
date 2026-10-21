@@ -2610,6 +2610,11 @@ const scenePruneUnreachableNodes = (xml) => {
             // safe only for the native inferred-selection path; an authored
             // subidentifier that did not match must remain an error.
             if (renderables.length === 1 && !explicitName) {
+                if (record.materialName && renderables[0].name !== record.materialName) {
+                    const miss = 'MaterialX source ' + source + ' does not define ' + record.materialName
+                        + '; showing ' + renderables[0].name + ' instead';
+                    if (!udimWarnings.has(miss)) { udimWarnings.add(miss); warnings.push(miss); }
+                }
                 await window.mxExclusive(() => applyUsdOverrides(doc, renderables[0].node, record, usdaDir));
                 await storeMaterialDocument(record, doc, resolved, !doc.setDataLibrary);
                 return { node: renderables[0].node, document: doc, materialName: renderables[0].name };

@@ -190,6 +190,9 @@ const VIEW_DEPS = {
             'embed/mtlx-viewer.js',
             // Decodes .ktx2 compressed textures (loadKtx2Texture, js/mtlx-engine.js).
             'vendor/three/KTX2Loader.js',
+            // Record dialog (RecordGifDialog in mtlx-ui.jsx) encoder and recorder.
+            'js/shared/gif-encoder.js',
+            'js/shared/mtlx-turntable.js',
             // Plain JS (no JSX), shared with tests/unit via a direct Node eval.
             'js/graph/zip-export-paths.js',
             // Convert to Node Def naming and validation rules, also unit-tested in Node.

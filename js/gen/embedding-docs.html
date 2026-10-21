@@ -57,7 +57,7 @@ in-page, for reference while you work.</p>
 </tr>
 <tr>
 <td><code>geometry</code></td>
-<td><code>shaderball</code>, <code>shaderball-scene</code>, <code>shaderball-mtlx</code>, <code>sphere</code>, <code>cube</code>, <code>cloth</code></td>
+<td><code>shaderball</code>, <code>shaderball-scene</code>, <code>shaderball-mtlx</code>, <code>sphere</code>, <code>cube</code>, <code>cloth</code>, <code>buffer2d</code></td>
 <td><code>shaderball-scene</code></td>
 <td>Preview geometry. <code>shaderball-scene</code> includes its own authored backdrop room baked into the model itself and is the heaviest option (1.86 MB GLB); it ignores the <code>backdrop</code> param entirely, see the row below. Every other geometry instead gets whichever backdrop <code>backdrop</code> selects. <code>sphere</code> and <code>cube</code> need no model download at all. An unrecognized value falls back to the default and is also reported through the <code>mtlx-error</code> event (see <a href="#events">Events</a>), so a typo doesn&#39;t fail silently.</td>
 </tr>
@@ -224,6 +224,10 @@ not just a literal <code>1</code>). Anything else falls back to the default show
 <td><code>cloth</code></td>
 <td>Cloth</td>
 </tr>
+<tr>
+<td><code>buffer2d</code></td>
+<td>2D Buffer</td>
+</tr>
 </tbody></table>
 <p><code>controls</code> accepts any comma-separated combination of:</p>
 <table>
@@ -259,7 +263,7 @@ not just a literal <code>1</code>). Anything else falls back to the default show
 </tr>
 <tr>
 <td><code>record</code></td>
-<td>A &quot;Record&quot; button that exports a 360° turntable GIF of the current view.</td>
+<td>A &quot;Record&quot; button that exports a GIF. The dialog offers Turntable (orbit; time also advances per frame for animated materials) or Current camera (fixed camera, time advances per frame; only for animated materials). The 2D buffer geometry supports only Current camera.</td>
 </tr>
 <tr>
 <td><code>settings</code></td>
