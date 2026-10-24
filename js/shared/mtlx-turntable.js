@@ -37,9 +37,15 @@ function recordTurntableGif(view, options) {
         onProgress = () => {},
         onFrame = () => {},
         signal = null,
+        // 'turntable' (orbit only), 'animation' (camera fixed, u_time
+        // advances at 1/fps per frame) or 'both'.
+        mode = 'turntable',
     } = options || {};
+    const orbit = mode !== 'animation';
+    const animate = mode !== 'turntable';
 
-    const missing = ['beginCapture', 'captureFrame', 'endCapture', 'getCamera', 'setCamera']
+    const missing = ['beginCapture', 'captureFrame', 'endCapture']
+        .concat(orbit ? ['getCamera', 'setCamera'] : [])
         .filter((fn) => typeof view[fn] !== 'function');
     if (missing.length) {
         return Promise.reject(new Error('recordTurntableGif: view is missing ' + missing.join(', ') + '.'));
@@ -52,8 +58,8 @@ function recordTurntableGif(view, options) {
     }
 
     return (async () => {
-        const pose = view.getCamera();
-        if (!pose) throw new Error('recordTurntableGif: the view has no orbit rig (getCamera() returned null).');
+        const pose = typeof view.getCamera === 'function' ? view.getCamera() : null;
+        if (orbit && !pose) throw new Error('recordTurntableGif: the view has no orbit rig (getCamera() returned null).');
 
         const controls = view.controls || null;
         const prevAutoRotate = controls ? controls.autoRotate : undefined;
@@ -93,11 +99,13 @@ function recordTurntableGif(view, options) {
 
         try {
             for (let i = 0; i < frames; i++) {
-                const sign = clockwise ? -1 : 1;
-                const angle = sign * 2 * Math.PI * i / frames;
-                const position = rotateAroundTarget(pose.position, pose.target, angle);
-                view.setCamera({ position, target: pose.target });
-                const img = view.captureFrame();
+                if (orbit) {
+                    const sign = clockwise ? -1 : 1;
+                    const angle = sign * 2 * Math.PI * i / frames;
+                    const position = rotateAroundTarget(pose.position, pose.target, angle);
+                    view.setCamera({ position, target: pose.target });
+                }
+                const img = animate ? view.captureFrame({ time: i / fps, frame: i }) : view.captureFrame();
                 onFrame(img, i);
                 await recorder.addFrame(img);
                 onProgress({ phase: 'capture', done: i + 1, total: frames });
@@ -113,7 +121,7 @@ function recordTurntableGif(view, options) {
             }
         } finally {
             view.endCapture();
-            view.setCamera(pose);
+            if (orbit) view.setCamera(pose);
             if (canSwitchBackdrop && prevBackdrop) view.setBackdrop(prevBackdrop);
             if (controls) { controls.autoRotate = prevAutoRotate; controls.enabled = prevEnabled; }
         }

@@ -388,7 +388,7 @@ ipcMain.on('mtlx-relaunch', () => relaunchApp());
 ipcMain.handle('mtlx-get-recents', () => recentFiles.slice());
 
 // Opens a path chosen from the renderer's Open Recent dialog. Routed
-// through openMtlxRouted so it honors the Open Files in New Window
+// through openDocumentIn so it honors the Open Files in New Window
 // preference, unlike the native Open Recent submenu which always
 // reuses the window the click happened in.
 ipcMain.handle('mtlx-open-recent', (event, filePath) => {
@@ -406,7 +406,7 @@ ipcMain.handle('mtlx-open-recent', (event, filePath) => {
         buildJumpList();
         return { ok: false, missing: true, path: filePath };
     }
-    openMtlxRouted(filePath);
+    openDocumentInSafe({ filePath, kind: 'mtlx', sender: BrowserWindow.fromWebContents(event.sender) });
     return { ok: true };
 });
 
@@ -416,7 +416,7 @@ ipcMain.handle('mtlx-open-recent', (event, filePath) => {
 ipcMain.handle('mtlx-open-path', (event, filePath) => {
     // A dropped scene file (USD, glTF/GLB, OBJ, MTL, pbrt) opens in the Scene Viewer.
     if (typeof filePath === 'string' && sceneFileSet.isSceneRootPath(filePath) && isExistingFile(filePath)) {
-        openSceneFromDrop(BrowserWindow.fromWebContents(event.sender), path.resolve(filePath));
+        openDocumentInSafe({ filePath: path.resolve(filePath), kind: 'scene', sender: BrowserWindow.fromWebContents(event.sender) });
         return { ok: true };
     }
     if (typeof filePath !== 'string' || !filePath || !fsSync.existsSync(filePath) || !/\.mtlx$/i.test(filePath)) {
@@ -429,17 +429,7 @@ ipcMain.handle('mtlx-open-path', (event, filePath) => {
         });
         return { ok: false };
     }
-    if (openInNewWindow) {
-        openMtlxRouted(filePath);
-    } else {
-        const sender = BrowserWindow.fromWebContents(event.sender);
-        // main rebinds currentPath before the page confirms, so a dirty
-        // target must never be reused; open a fresh window instead.
-        const target = (sender && !getWindowState(sender).dirty)
-            ? sender
-            : (getRoutingTargetWindow() || createWindow(documentOpenView));
-        openMtlxFromDisk(filePath, target, false);
-    }
+    openDocumentInSafe({ filePath, kind: 'mtlx', sender: BrowserWindow.fromWebContents(event.sender) });
     return { ok: true };
 });
 
@@ -983,41 +973,6 @@ async function openSceneFromDisk(rootPath, win) {
     postSceneSet(win, state.scene);
 }
 
-// Shows the Scene Viewer in win and loads rootPath there.
-function openSceneIn(win, rootPath) {
-    if (win.isMinimized()) win.restore();
-    win.focus();
-    setWindowRoute(win, 'scene');
-    openSceneFromDisk(rootPath, win);
-}
-
-// A lone .mtl opens as a document in the Graph Editor, so a window with
-// unsaved graph edits is never reused for it.
-function sceneTargetUsable(win, rootPath) {
-    return !!win && !win.isDestroyed() && !(/\.mtl$/i.test(rootPath) && getWindowState(win).dirty);
-}
-
-// OS-driven scene opens (file association, second launch, macOS open-file).
-function openSceneRouted(rootPath) {
-    const target = openInNewWindow ? null : getRoutingTargetWindow();
-    if (!sceneTargetUsable(target, rootPath)) {
-        openSceneFromDisk(rootPath, createWindow('scene'));
-        return;
-    }
-    openSceneIn(target, rootPath);
-}
-
-// A scene file dropped on a window (glue.js's __mtlxDesktopPathDrop).
-function openSceneFromDrop(sender, rootPath) {
-    if (openInNewWindow) {
-        openSceneRouted(rootPath);
-        return;
-    }
-    const target = sceneTargetUsable(sender, rootPath) ? sender : null;
-    if (target) openSceneIn(target, rootPath);
-    else openSceneFromDisk(rootPath, createWindow('scene'));
-}
-
 // First argv entry naming an existing scene file (association launch args).
 function getSceneArg(argv) {
     for (const a of argv) {
@@ -1298,7 +1253,7 @@ function buildRecentSubmenu() {
                 buildJumpList();
                 return;
             }
-            openMtlxFromDisk(filePath, win || createWindow(documentOpenView), false);
+            openDocumentInSafe({ filePath, kind: 'mtlx', sender: win });
         },
     }));
     items.push({ type: 'separator' });
@@ -1334,7 +1289,7 @@ function buildMenuTemplate() {
                             ? await dialog.showOpenDialog(win, options)
                             : await dialog.showOpenDialog(options);
                         if (result.canceled || !result.filePaths[0]) return;
-                        openMtlxFromDisk(result.filePaths[0], win || createWindow(documentOpenView), false);
+                        openDocumentInSafe({ filePath: result.filePaths[0], kind: 'mtlx', sender: win });
                     },
                 },
                 { label: 'Open Recent', submenu: buildRecentSubmenu() },
@@ -1572,7 +1527,7 @@ function buildJumpList() {
 }
 
 // Updated by every window's own 'focus'/'closed' handlers (see
-// createWindow below); the single-window routing target for openMtlxRouted.
+// createWindow below); the single-window routing target for openDocumentIn.
 let lastFocusedWindow = null;
 
 // The existing window an openInNewWindow:false open should land in: the
@@ -1585,52 +1540,102 @@ function getRoutingTargetWindow() {
     return wins[0];
 }
 
-// OS-driven opens (file association, second launch) funnel through here:
-// a new window when the preference says so, otherwise the routing target
-// above, focused either way so the user sees where the file landed.
-function openMtlxRouted(filePath) {
-    if (openInNewWindow) {
-        openMtlxFromDisk(filePath, createWindow(documentOpenView), false);
-        return;
+// Windows with an open-conflict prompt showing, so a burst of opens cannot stack dialogs.
+const openPromptWindows = new Set();
+
+// Save flow for the open prompt: renderer XML round trip, then the normal
+// save (Save As dialog when unbound). True only when the file hit the disk.
+async function saveWindowBeforeOpen(win) {
+    try {
+        const xml = await requestSaveFromRenderer(win, SAVE_ON_CLOSE_TIMEOUT_MS);
+        const result = await saveMtlxForWindow(win, { xml });
+        if (win.isDestroyed()) return false;
+        if (result.ok) {
+            win.webContents.send('mtlx-save-committed');
+            return true;
+        }
+        if (result.error) dialog.showErrorBox('MaterialX Playground', 'Could not save: ' + result.error);
+    } catch (e) {
+        console.error('[main] save-before-open failed: ' + errMsg(e));
+        if (!win.isDestroyed()) dialog.showErrorBox('MaterialX Playground', 'Could not save this document: ' + errMsg(e));
     }
-    let target = getRoutingTargetWindow();
-    // main rebinds currentPath before the page confirms, so a dirty
-    // target must never be reused; open a fresh window instead.
-    if (!target || getWindowState(target).dirty) {
-        openMtlxFromDisk(filePath, createWindow(documentOpenView), false);
-        return;
-    }
-    if (target.isMinimized()) target.restore();
-    target.focus();
-    openMtlxFromDisk(filePath, target, false);
+    return false;
 }
 
-// Same as openMtlxRouted, but for a launch that carries BOTH a file and a
-// --mtlx-route (our cascading context-menu submenu entries): the window
-// lands on the requested route instead of losing it to the file argument.
-// A new window opens straight onto that route; a reused window is
-// hash-routed there first so the document lands in the view the user
-// actually asked for, not whatever the window already had loaded.
-function openMtlxRoutedTo(filePath, route) {
-    if (!route) {
-        openMtlxRouted(filePath);
-        return;
-    }
+// Dirty target with Open Files in New Window off: 'save' | 'discard' | 'new' | 'cancel'.
+async function askOpenConflict(win, filePath) {
+    const choice = await dialog.showMessageBox(win, {
+        type: 'question',
+        buttons: ['Save', 'Discard', 'Open in New Window', 'Cancel'],
+        defaultId: 0,
+        cancelId: 3,
+        title: 'MaterialX Playground',
+        message: 'This window has unsaved changes.',
+        detail: 'Opening "' + path.basename(filePath) + '" here replaces the current document.',
+    });
+    return ['save', 'discard', 'new', 'cancel'][choice.response] || 'cancel';
+}
+
+// THE open backend: every entry point (second launch, macOS open-file, cold
+// start, menu Open and Open Recent, renderer open-path, drops) ends here.
+// kind: 'mtlx' | 'scene' (inferred from the path); sender: the window the
+// request came from, preferred over the focus-based routing target.
+async function openDocumentIn({ filePath, kind, route, sender } = {}) {
+    if (!filePath) return;
+    const isScene = (kind || (sceneFileSet.isSceneRootPath(filePath) ? 'scene' : 'mtlx')) === 'scene';
+    const fresh = () => createWindow(isScene ? 'scene' : (route || documentOpenView));
+    const load = (win, inPlace) => {
+        if (isScene) {
+            if (inPlace) {
+                if (win.isMinimized()) win.restore();
+                win.focus();
+                setWindowRoute(win, 'scene');
+            }
+            return openSceneFromDisk(filePath, win);
+        }
+        if (inPlace) {
+            if (win.isMinimized()) win.restore();
+            win.focus();
+            if (route) setWindowRoute(win, route);
+        }
+        return openMtlxFromDisk(filePath, win, false);
+    };
     if (openInNewWindow) {
-        openMtlxFromDisk(filePath, createWindow(route), false);
+        await load(fresh(), false);
         return;
     }
-    const target = getRoutingTargetWindow();
-    // main rebinds currentPath before the page confirms, so a dirty
-    // target must never be reused; open a fresh window instead.
-    if (!target || getWindowState(target).dirty) {
-        openMtlxFromDisk(filePath, createWindow(route), false);
+    const usable = (w) => !!w && !w.isDestroyed();
+    const target = usable(sender) ? sender : getRoutingTargetWindow();
+    if (!usable(target)) {
+        await load(fresh(), false);
         return;
     }
-    if (target.isMinimized()) target.restore();
-    target.focus();
-    setWindowRoute(target, route);
-    openMtlxFromDisk(filePath, target, false);
+    // main rebinds currentPath before the page confirms, so unsaved graph
+    // edits need an explicit choice. A scene only replaces a lone .mtl document.
+    const guarded = !isScene || /\.mtl$/i.test(filePath);
+    if (guarded && getWindowState(target).dirty) {
+        if (openPromptWindows.has(target)) return;
+        openPromptWindows.add(target);
+        let choice;
+        try {
+            if (target.isMinimized()) target.restore();
+            target.focus();
+            choice = await askOpenConflict(target, filePath);
+            if (choice === 'save' && !(await saveWindowBeforeOpen(target))) choice = 'cancel';
+        } finally {
+            openPromptWindows.delete(target);
+        }
+        if (choice === 'cancel' || !usable(target)) return;
+        if (choice === 'new') {
+            await load(fresh(), false);
+            return;
+        }
+    }
+    await load(target, true);
+}
+
+function openDocumentInSafe(opts) {
+    openDocumentIn(opts).catch((e) => console.error('[main] open failed: ' + errMsg(e)));
 }
 
 // Changes an already-open window's tool without reloading the page (a
@@ -1645,7 +1650,7 @@ function setWindowRoute(win, route) {
 
 // Jump list task clicks (and any other route-only launch) funnel through
 // here: honors the same Open Files in New Window preference as
-// openMtlxRouted, switching the existing window's tool in-page instead of
+// openDocumentIn, switching the existing window's tool in-page instead of
 // reloading when the preference is off. Focused/restored either way.
 function openRouteRouted(route) {
     if (openInNewWindow) {
@@ -1913,7 +1918,7 @@ function createWindow(route) {
     getWindowState(win);
     trackWindowScenes(win);
 
-    // Tracks the single-window routing target (openMtlxRouted below):
+    // Tracks the single-window routing target (openDocumentIn):
     // the most recently focused window, cleared again once it closes.
     win.on('focus', () => { lastFocusedWindow = win; });
     win.on('closed', () => {
@@ -2197,12 +2202,12 @@ if (!gotLock) {
         const filePath = getMtlxArg(argv);
         const route = getRouteArg(argv);
         if (filePath) {
-            openMtlxRoutedTo(filePath, route);
+            openDocumentInSafe({ filePath, kind: 'mtlx', route });
             return;
         }
         const scenePath = getSceneArg(argv);
         if (scenePath) {
-            openSceneRouted(scenePath);
+            openDocumentInSafe({ filePath: scenePath, kind: 'scene' });
             return;
         }
         if (route) {
@@ -2226,8 +2231,7 @@ if (!gotLock) {
             pendingOpenFilePath = path.resolve(filePath);
             return;
         }
-        if (sceneFileSet.isSceneRootPath(filePath)) openSceneRouted(path.resolve(filePath));
-        else openMtlxRouted(path.resolve(filePath));
+        openDocumentInSafe({ filePath: path.resolve(filePath) });
     });
 
     // GPU-process crash notices, plus a safe-mode offer after repeated
@@ -2336,15 +2340,14 @@ if (!gotLock) {
         const argRoute = getRouteArg(process.argv);
         pendingOpenFilePath = null;
         // Always honor an explicit route: it must not be dropped just
-        // because a file argument is also present (see openMtlxRoutedTo
+        // because a file argument is also present (see openDocumentIn
         // above). With no route: a file open lands in documentOpenView,
         // and a bare launch lands on Home (the renderer itself hops to
         // the graph editor if a crash-recovery draft is waiting).
         // A scene file always lands in the Scene Viewer.
         const launchRoute = argScene ? 'scene' : (argRoute || (argFile ? documentOpenView : 'home'));
-        const win = createWindow(launchRoute);
-        if (argFile) openMtlxFromDisk(argFile, win, false);
-        else if (argScene) openSceneFromDisk(argScene, win);
+        if (argFile || argScene) openDocumentInSafe({ filePath: argFile || argScene, kind: argScene ? 'scene' : 'mtlx', route: argRoute });
+        else createWindow(launchRoute);
 
         app.on('activate', () => {
             if (BrowserWindow.getAllWindows().length === 0) createWindow('home');

@@ -7,6 +7,7 @@
     "ovsx": "1.2.0"
   },
   "overrides": {
-    "@vscode/vsce": "$@vscode/vsce"
+    "@vscode/vsce": "$@vscode/vsce",
+    "@azure/msal-node": "^7.1.1"
   }
 }

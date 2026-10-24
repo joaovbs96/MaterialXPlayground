@@ -236,8 +236,8 @@ const EmbedControls = ({
     className: "mtlx-ec-btn mtlx-ec-split-record",
     "data-testid": "capture-record",
     onClick: onRecord,
-    title: "Record a 360\xB0 turntable GIF"
-  }, /*#__PURE__*/React.createElement("span", null, "Turntable"))), showScreenshot && !showRecord && /*#__PURE__*/React.createElement("button", {
+    title: "Record a GIF (turntable or current camera)"
+  }, /*#__PURE__*/React.createElement("span", null, "Record"))), showScreenshot && !showRecord && /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: "mtlx-ec-btn",
     onClick: onScreenshot,
@@ -249,11 +249,11 @@ const EmbedControls = ({
     type: "button",
     className: "mtlx-ec-btn",
     onClick: onRecord,
-    title: "Record a 360\xB0 turntable GIF"
+    title: "Record a GIF (turntable or current camera)"
   }, /*#__PURE__*/React.createElement(MtlxIcon, {
     name: "camera",
     className: "mtlx-ec-icon"
-  }), !compact && /*#__PURE__*/React.createElement("span", null, "Turntable")), showSettings && /*#__PURE__*/React.createElement("button", {
+  }), !compact && /*#__PURE__*/React.createElement("span", null, "Record")), showSettings && /*#__PURE__*/React.createElement("button", {
     type: "button",
     className: 'mtlx-ec-btn' + (openPanel === 'settings' ? ' is-active' : ''),
     onClick: () => togglePanel('settings'),

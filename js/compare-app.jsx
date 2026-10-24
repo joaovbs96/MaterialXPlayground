@@ -5,7 +5,7 @@
 // shared primitives from js/shared/compare-ui.jsx (divider, labels, camera
 // sync) and js/shared/image-metrics.js (metrics, heatmap).
 
-const GEOM_OPTIONS = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube', 'cloth'];
+const GEOM_OPTIONS = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube', 'cloth', 'buffer2d'];
 
 // Sidebar width when open (w-80), used to inset the stage content wrapper
 // so the panel and the renders never overlap. Flush panel, so no gap.
@@ -547,7 +547,7 @@ function MaterialCompareApp({ active = true } = {}) {
         let g = window.getGlobalGeom ? window.getGlobalGeom() : null;
         if (g == null) return;
         if (g === 'custom' && !(window.getCustomPreviewGeom && window.getCustomPreviewGeom())) g = 'shaderball-scene';
-        if (g !== 'custom' && GEOM_OPTIONS.indexOf(g) === -1) return; // e.g. buffer2d, unsupported here
+        if (g !== 'custom' && GEOM_OPTIONS.indexOf(g) === -1) return; // unknown name
         if (g === geomRef.current) return;
         setGeom(g);
     }
@@ -1600,8 +1600,8 @@ function MaterialCompareApp({ active = true } = {}) {
                             <span className="max-w-[6rem] truncate">Compare</span>
                         </button>
                     ) : null}
-                    backdropDisabled={geom === 'shaderball-scene'}
-                    backdropTitle="The Std. Shader Ball w/ Backdrop scene is an authored room and ignores the backdrop setting"
+                    backdropDisabled={geom === 'shaderball-scene' || geom === 'buffer2d'}
+                    backdropTitle="This geometry ignores the backdrop setting"
                     env={{
                         fileName: envFileName, error: envImportError, onFile: importEnv, onClear: clearEnvOverride,
                         rotation: envUI.rotation, exposure: envUI.exposure,

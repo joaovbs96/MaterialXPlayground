@@ -21,7 +21,7 @@
         // viewer.html's ?geometry= query param, a later step); an
         // unrecognized value falls back to today's default rather than
         // being handed to the engine as-is.
-        const VIEWER_GEOM_NAMES = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube', 'cloth'];
+        const VIEWER_GEOM_NAMES = ['shaderball', 'shaderball-scene', 'shaderball-mtlx', 'sphere', 'cube', 'cloth', 'buffer2d'];
 
         // shaderball-scene is an authored room that fills the whole frame,
         // so it can never look transparent. transparent=1 against it falls
@@ -298,7 +298,7 @@
                 let g = window.getGlobalGeom ? window.getGlobalGeom() : null;
                 if (g == null) return;
                 if (g === 'custom' && !(window.getCustomPreviewGeom && window.getCustomPreviewGeom())) g = 'shaderball-scene';
-                if (g !== 'custom' && VIEWER_GEOM_NAMES.indexOf(g) === -1) return; // e.g. buffer2d, unsupported here
+                if (g !== 'custom' && VIEWER_GEOM_NAMES.indexOf(g) === -1) return; // unknown name
                 if (g === geomRef.current) return;
                 setGeom(g);
             };
@@ -1256,6 +1256,8 @@
             // REQUESTED control just stays hidden while that geometry is
             // active; it's the default, so reporting it would be noisy.
             const roomGeomActive = geom === TRANSPARENT_ROOM_GEOM;
+            // The 2D buffer is a fixed ortho quad: no rotate, no backdrop.
+            const flatGeomActive = geom === 'buffer2d';
             // Shared with both HUD flavors below (EmbedControls, then
             // ViewportControls) so an import can be picked back after a
             // geometryUrl embed load switched away from it.
@@ -1263,15 +1265,16 @@
             // Per-control effective visibility, computed once so the mount
             // gate and each EmbedControls prop agree (a control can be
             // requested but still suppressed, e.g. rotate on the room geom).
-            // Geometries without an orbit rig (flat2d) cannot record, so the
-            // Record button hides instead of opening a dialog that only
-            // shows the "needs an orbit camera" guard.
+            // Geometries without an orbit rig (flat2d) can only record the
+            // time animation, so the button hides there unless the material
+            // is animated.
             const recordView = viewRef.current;
             const canRecord = !!(recordView && typeof recordView.beginCapture === 'function'
-                && recordView.getCamera && recordView.getCamera());
+                && ((recordView.getCamera && recordView.getCamera())
+                    || (recordView.isAnimated && recordView.isAnimated())));
             const ctlFlags = {
                 geometry: showCtl('geometry'),
-                rotate: showCtl('rotate') && !roomGeomActive,
+                rotate: showCtl('rotate') && !roomGeomActive && !flatGeomActive,
                 reset: showCtl('reset'),
                 env: showCtl('env'),
                 screenshot: showCtl('screenshot'),
@@ -1576,7 +1579,7 @@
                                         showReset={ctlFlags.reset}
                                         backdrop={backdropMode}
                                         onBackdropChange={setBackdropMode}
-                                        showBackdropPicker={!roomGeomActive}
+                                        showBackdropPicker={!roomGeomActive && !flatGeomActive}
                                         showEnv={ctlFlags.env}
                                         initialEnvRotation={envRotation}
                                         initialEnvExposure={envExposure}
@@ -1615,8 +1618,8 @@
                                         // Engine no-ops auto-rotate for the full scene, and
                                         // shaderball-scene is an authored room that ignores
                                         // the backdrop entirely - hide both while it's selected.
-                                        showRotate={showCtl('rotate') && geom !== 'shaderball-scene'}
-                                        showBackdropPicker={geom !== 'shaderball-scene'}
+                                        showRotate={showCtl('rotate') && geom !== 'shaderball-scene' && !flatGeomActive}
+                                        showBackdropPicker={geom !== 'shaderball-scene' && !flatGeomActive}
                                         onCameraReset={showCtl('reset') ? handleCameraReset : undefined}
                                         // Environment and Render settings are HUD pills (render-hud.jsx).
                                         envAvail={false}
