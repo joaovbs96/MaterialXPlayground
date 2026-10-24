@@ -89,7 +89,7 @@ jobs:
 
       - name: Set up Python (tutorials subsite)
         if: hashFiles('tutorials-src/mkdocs.yml') != ''
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.12"
           cache: pip
